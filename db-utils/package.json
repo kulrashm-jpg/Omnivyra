@@ -1,0 +1,25 @@
+{
+  "name": "drishiq-db-utils",
+  "version": "1.0.0",
+  "description": "Database inspection utilities for DrishiQ project",
+  "main": "db-inspector.js",
+  "scripts": {
+    "inspect": "node db-inspector.js",
+    "check": "node quick-check.js",
+    "help": "node db-inspector.js --help"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.55.0"
+  },
+  "keywords": [
+    "database",
+    "supabase",
+    "inspection",
+    "schema",
+    "duplicates"
+  ],
+  "author": "DrishiQ",
+  "license": "MIT"
+}
+
+

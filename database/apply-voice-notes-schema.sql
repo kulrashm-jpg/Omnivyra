@@ -1,0 +1,110 @@
+-- Apply Voice Notes and Content Items Schema
+-- This script adds the new tables to the existing database without dropping existing data
+
+-- Voice Notes Table for Campaign Planning
+CREATE TABLE IF NOT EXISTS voice_notes (
+  id VARCHAR(255) PRIMARY KEY,
+  text TEXT NOT NULL,
+  audio_url TEXT,
+  duration INTEGER DEFAULT 0,
+  confidence DECIMAL(3,2) DEFAULT 0.95,
+  keywords TEXT[] DEFAULT '{}',
+  suggestions JSONB DEFAULT '[]',
+  context VARCHAR(50) NOT NULL CHECK (context IN ('campaign', 'weekly', 'daily')),
+  campaign_id VARCHAR(255),
+  week_number INTEGER,
+  day_number INTEGER,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Content Items Table for Enhanced Planning
+CREATE TABLE IF NOT EXISTS content_items (
+  id VARCHAR(255) PRIMARY KEY,
+  title VARCHAR(500),
+  content TEXT NOT NULL,
+  platform VARCHAR(50) NOT NULL,
+  content_type VARCHAR(50) NOT NULL,
+  hashtags TEXT[] DEFAULT '{}',
+  media_urls TEXT[] DEFAULT '{}',
+  scheduled_time TIMESTAMP WITH TIME ZONE,
+  status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'scheduled', 'published')),
+  ai_generated BOOLEAN DEFAULT FALSE,
+  voice_note_id VARCHAR(255),
+  context VARCHAR(50) NOT NULL CHECK (context IN ('campaign', 'weekly', 'daily')),
+  campaign_id VARCHAR(255),
+  week_number INTEGER,
+  day_number INTEGER,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes for voice notes
+CREATE INDEX IF NOT EXISTS idx_voice_notes_campaign ON voice_notes(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_voice_notes_context ON voice_notes(context);
+CREATE INDEX IF NOT EXISTS idx_voice_notes_week ON voice_notes(week_number);
+CREATE INDEX IF NOT EXISTS idx_voice_notes_day ON voice_notes(day_number);
+CREATE INDEX IF NOT EXISTS idx_voice_notes_created ON voice_notes(created_at);
+
+-- Indexes for content items
+CREATE INDEX IF NOT EXISTS idx_content_items_campaign ON content_items(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_content_items_context ON content_items(context);
+CREATE INDEX IF NOT EXISTS idx_content_items_platform ON content_items(platform);
+CREATE INDEX IF NOT EXISTS idx_content_items_status ON content_items(status);
+CREATE INDEX IF NOT EXISTS idx_content_items_week ON content_items(week_number);
+CREATE INDEX IF NOT EXISTS idx_content_items_day ON content_items(day_number);
+CREATE INDEX IF NOT EXISTS idx_content_items_created ON content_items(created_at);
+
+-- Enhanced Daily Activities Table (add columns if they don't exist)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'daily_content_plans' AND column_name = 'content_items') THEN
+        ALTER TABLE daily_content_plans ADD COLUMN content_items JSONB DEFAULT '[]';
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'daily_content_plans' AND column_name = 'voice_notes') THEN
+        ALTER TABLE daily_content_plans ADD COLUMN voice_notes JSONB DEFAULT '[]';
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'daily_content_plans' AND column_name = 'ai_enhanced') THEN
+        ALTER TABLE daily_content_plans ADD COLUMN ai_enhanced BOOLEAN DEFAULT FALSE;
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'daily_content_plans' AND column_name = 'content_created') THEN
+        ALTER TABLE daily_content_plans ADD COLUMN content_created BOOLEAN DEFAULT FALSE;
+    END IF;
+END $$;
+
+-- Enhanced Weekly Refinements Table (add columns if they don't exist)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'weekly_content_refinements' AND column_name = 'voice_notes') THEN
+        ALTER TABLE weekly_content_refinements ADD COLUMN voice_notes JSONB DEFAULT '[]';
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'weekly_content_refinements' AND column_name = 'content_items') THEN
+        ALTER TABLE weekly_content_refinements ADD COLUMN content_items JSONB DEFAULT '[]';
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'weekly_content_refinements' AND column_name = 'ai_enhanced') THEN
+        ALTER TABLE weekly_content_refinements ADD COLUMN ai_enhanced BOOLEAN DEFAULT FALSE;
+    END IF;
+END $$;
+
+-- Comments and documentation
+COMMENT ON TABLE voice_notes IS 'Stores voice notes captured during campaign planning with AI transcription';
+COMMENT ON TABLE content_items IS 'Stores individual content pieces created during planning phase';
+COMMENT ON COLUMN voice_notes.confidence IS 'Transcription confidence score (0.0 to 1.0)';
+COMMENT ON COLUMN voice_notes.keywords IS 'Extracted keywords from voice transcription';
+COMMENT ON COLUMN voice_notes.suggestions IS 'AI-generated suggestions based on voice content';
+COMMENT ON COLUMN content_items.ai_generated IS 'Whether content was generated by AI';
+COMMENT ON COLUMN content_items.voice_note_id IS 'Reference to voice note that inspired this content';
+
+-- Success message
+SELECT 'Voice notes and content items schema applied successfully!' as message;
+
+
+
+
+
+

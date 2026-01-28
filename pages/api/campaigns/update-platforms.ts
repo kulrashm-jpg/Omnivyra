@@ -1,0 +1,71 @@
+import { NextApiRequest, NextApiResponse } from 'next';
+import { supabase } from '../../../utils/supabaseClient';
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'PUT') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const { dayPlanId, platforms, contentType } = req.body;
+
+    if (!dayPlanId) {
+      return res.status(400).json({ error: 'Day plan ID required' });
+    }
+
+    // Platform mapping for smart suggestions
+    const platformMapping: { [key: string]: string[] } = {
+      'Educational Post': ['LinkedIn', 'Twitter'],
+      'Case Study': ['LinkedIn'],
+      'Question-based Content': ['Twitter', 'Facebook'],
+      'Tips & Tutorial': ['LinkedIn', 'YouTube'],
+      'Industry News': ['LinkedIn', 'Twitter'],
+      'Behind the Scenes': ['Instagram', 'LinkedIn'],
+      'Reflection': ['LinkedIn'],
+      'Random': ['LinkedIn', 'Twitter', 'Facebook', 'Instagram', 'YouTube', 'TikTok', 'Pinterest'],
+    };
+
+    // Update the daily plan with new platforms
+    const { data: updatedPlan, error } = await supabase
+      .from('daily_content_plans')
+      .update({
+        platforms: platforms,
+        posting_strategy: `Custom platforms: ${platforms.join(', ')}`,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', dayPlanId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating platforms:', error);
+      return res.status(500).json({ 
+        error: 'Failed to update platforms', 
+        details: error.message 
+      });
+    }
+
+    // Return suggested platforms based on content type
+    const suggestedPlatforms = platformMapping[contentType] || [];
+    const allPlatforms = ['LinkedIn', 'Twitter', 'Facebook', 'Instagram', 'YouTube', 'TikTok', 'Pinterest'];
+
+    return res.status(200).json({
+      success: true,
+      updatedPlan,
+      suggestedPlatforms,
+      allPlatforms,
+      contentType
+    });
+
+  } catch (error) {
+    console.error('Error in update platforms API:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+
+
+
+
+
+

@@ -1,0 +1,56 @@
+SPRINT 1 - MVP CORE DELIVERY PLAN (UPDATED)
+==========================================
+
+SPRINT GOAL: Deliver core MVP infrastructure: Queue Worker, OAuth Posting, Cron Scheduling, Media Upload, and Retry Logic to enable end-to-end scheduled post publishing with media support.
+
+DURATION: 14 days (Oct 31 - Nov 13, 2025)
+
+TICKETS (8 total: 4 P0 + 4 P1):
+
+P0 CRITICAL:
+  TCK-004: Encrypt OAuth Tokens (4 days) [backend] - Day 1-4
+  TCK-001: Queue Worker (9 days) [backend] - Day 1-9
+  TCK-005: Media Upload API & UI (4 days) [frontend] - Day 1-4 ⭐ NEW
+  TCK-002: Production OAuth Posting (9 days) [backend] - Day 5-13 (depends: TCK-004)
+  TCK-003: Cron Job Scheduling (5 days) [backend] - Day 10-14 (depends: TCK-001)
+
+P1 HIGH PRIORITY:
+  TCK-010: Retry Logic with Backoff (5 days) [backend] - Day 10-14 (depends: TCK-001)
+  TCK-008: Rate Limit Tracking (5 days) [backend] - Day 14+ (depends: TCK-002, TCK-001) [OVERFLOW]
+  TCK-007: Token Refresh Management (5 days) [backend] - Day 14+ (depends: TCK-002, TCK-004) [OVERFLOW]
+
+SUPPORT TICKETS (Shared across sprint):
+  TCK-025: QA & Monitoring Setup (2 days) [QA] - Day 12-13 (depends: TCK-001, TCK-004, TCK-005) ⭐
+  TCK-026: MVP Demo & Setup Docs (2 days) [Frontend/PM] - Day 13-14 (depends: TCK-001, TCK-004, TCK-005, TCK-003) ⭐
+
+DEPENDENCY CHAIN:
+  TCK-004 → TCK-002 → TCK-007/TCK-008
+  TCK-001 → TCK-003/TCK-010/TCK-008
+  TCK-005 (standalone - enables media publishing)
+
+PARALLEL WORK:
+  Day 1-4: TCK-004 (backend) + TCK-001 (backend) + TCK-005 (frontend) ⭐
+
+MILESTONES:
+  Day 4: Media Upload Ready (TCK-005) + Token Encryption Complete (TCK-004)
+  Day 9: Queue Worker Live (TCK-001 complete)
+  Day 12: QA & Monitoring Setup Complete (TCK-025) ⭐
+  Day 13: OAuth Posting Functional (TCK-002 complete) + QA Monitoring Live
+  Day 14: Cron Scheduling Ready (TCK-003 complete) + End-to-End Dry Run (with media) + Demo Ready (TCK-026) ⭐
+
+CRITICAL PATH: TCK-004 → TCK-002 (9 days total) || TCK-001 → TCK-003 (9 days total)
+
+WHY MEDIA UPLOAD (TCK-005) WAS ADDED:
+  ✅ P1 priority, no dependencies (can start Day 1)
+  ✅ Frontend work can run in parallel with backend
+  ✅ Enables publishing posts with images/videos
+  ✅ Needed for real-world content campaigns
+  ✅ Completes the content creation → publishing flow
+
+SUPPORT TICKETS BENEFITS:
+  ✅ TCK-025: Catches integration issues early (Queue + Media + OAuth)
+  ✅ TCK-025: Prevents silent job failures during demo dry run
+  ✅ TCK-026: Enables fast onboarding for Sprint 2 devs/testers
+  ✅ TCK-026: Provides tangible demo for stakeholders
+
+NOTE: TCK-008 and TCK-007 overflow to Sprint 2 due to dependency on TCK-002 completing on Day 13.

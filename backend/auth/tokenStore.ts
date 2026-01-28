@@ -1,0 +1,199 @@
+/**
+ * Token Store
+ * 
+ * Secure storage and retrieval of OAuth tokens with encryption at rest.
+ * 
+ * Uses AES-256-GCM encryption to store tokens in social_accounts table.
+ * 
+ * Environment Variables:
+ * - ENCRYPTION_KEY (required, 32-byte hex string or base64)
+ * - SUPABASE_URL (required)
+ * - SUPABASE_SERVICE_ROLE_KEY (required)
+ * 
+ * Security Notes:
+ * - Never commit ENCRYPTION_KEY to version control
+ * - Use secrets manager (AWS Secrets Manager, HashiCorp Vault) in production
+ * - Rotate encryption key periodically
+ * - Enable Supabase RLS for social_accounts table (backend uses service role)
+ */
+
+import crypto from 'crypto';
+import { supabase } from '../db/supabaseClient';
+
+const ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 12; // GCM requires 12 bytes IV (not 16)
+const TAG_LENGTH = 16; // GCM tag is always 16 bytes
+const KEY_LENGTH = 32; // AES-256 requires 32 bytes key
+
+/**
+ * Get encryption key from environment
+ * Converts hex string or base64 to Buffer
+ */
+function getEncryptionKey(): Buffer {
+  const keyEnv = process.env.ENCRYPTION_KEY;
+  if (!keyEnv) {
+    throw new Error('ENCRYPTION_KEY environment variable is required');
+  }
+
+  // Try to parse as hex first, then base64
+  let keyBuffer: Buffer;
+  if (keyEnv.length === 64 && /^[0-9a-fA-F]+$/.test(keyEnv)) {
+    // Hex string (64 chars = 32 bytes)
+    keyBuffer = Buffer.from(keyEnv, 'hex');
+  } else {
+    // Base64
+    keyBuffer = Buffer.from(keyEnv, 'base64');
+  }
+
+  if (keyBuffer.length !== KEY_LENGTH) {
+    throw new Error(`ENCRYPTION_KEY must be ${KEY_LENGTH} bytes (got ${keyBuffer.length})`);
+  }
+
+  return keyBuffer;
+}
+
+/**
+ * Encrypt a string value
+ */
+function encrypt(text: string): string {
+  const key = getEncryptionKey();
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+
+  const tag = cipher.getAuthTag();
+
+  // Combine iv + tag + encrypted data
+  return iv.toString('hex') + ':' + tag.toString('hex') + ':' + encrypted;
+}
+
+/**
+ * Decrypt an encrypted string
+ */
+function decrypt(encryptedData: string): string {
+  const key = getEncryptionKey();
+  const parts = encryptedData.split(':');
+  
+  if (parts.length !== 3) {
+    throw new Error('Invalid encrypted data format');
+  }
+
+  const iv = Buffer.from(parts[0], 'hex');
+  const tag = Buffer.from(parts[1], 'hex');
+  const encrypted = parts[2];
+
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAuthTag(tag);
+
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+
+  return decrypted;
+}
+
+export interface TokenObject {
+  access_token: string;
+  refresh_token?: string;
+  expires_at?: string; // ISO timestamp
+  token_type?: string;
+  scope?: string;
+}
+
+/**
+ * Get encrypted token for a social account
+ * 
+ * @param socialAccountId - UUID of social_account record
+ * @returns Decrypted token object or null if not found
+ */
+export async function getToken(socialAccountId: string): Promise<TokenObject | null> {
+  const { data, error } = await supabase
+    .from('social_accounts')
+    .select('access_token, refresh_token, token_expires_at')
+    .eq('id', socialAccountId)
+    .single();
+
+  if (error || !data) {
+    console.error(`Failed to get token for account ${socialAccountId}:`, error?.message);
+    return null;
+  }
+
+  if (!data.access_token) {
+    return null;
+  }
+
+  try {
+    // Decrypt access token
+    const accessToken = decrypt(data.access_token);
+    
+    // Decrypt refresh token if exists
+    let refreshToken: string | undefined;
+    if (data.refresh_token) {
+      refreshToken = decrypt(data.refresh_token);
+    }
+
+    return {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_at: data.token_expires_at || undefined,
+      token_type: 'Bearer',
+    };
+  } catch (error: any) {
+    console.error(`Failed to decrypt token for account ${socialAccountId}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Store encrypted token for a social account
+ * 
+ * @param socialAccountId - UUID of social_account record
+ * @param token - Token object to encrypt and store
+ */
+export async function setToken(socialAccountId: string, token: TokenObject): Promise<void> {
+  // Encrypt tokens
+  const encryptedAccessToken = encrypt(token.access_token);
+  const encryptedRefreshToken = token.refresh_token ? encrypt(token.refresh_token) : null;
+
+  // Update social_accounts table
+  const updateData: any = {
+    access_token: encryptedAccessToken,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (encryptedRefreshToken) {
+    updateData.refresh_token = encryptedRefreshToken;
+  }
+
+  if (token.expires_at) {
+    updateData.token_expires_at = token.expires_at;
+  }
+
+  const { error } = await supabase
+    .from('social_accounts')
+    .update(updateData)
+    .eq('id', socialAccountId);
+
+  if (error) {
+    throw new Error(`Failed to store token: ${error.message}`);
+  }
+
+  console.log(`✅ Token stored for account ${socialAccountId}`);
+}
+
+/**
+ * Check if token is expired or expiring soon
+ */
+export function isTokenExpiringSoon(token: TokenObject, bufferMinutes: number = 5): boolean {
+  if (!token.expires_at) {
+    return false; // No expiration info, assume valid
+  }
+
+  const expiresAt = new Date(token.expires_at);
+  const now = new Date();
+  const bufferMs = bufferMinutes * 60 * 1000;
+
+  return expiresAt.getTime() - now.getTime() < bufferMs;
+}
+

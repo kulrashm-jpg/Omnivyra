@@ -1,0 +1,516 @@
+{
+  "tickets": [
+    {
+      "title": "Implement Queue Worker for Scheduled Posts",
+      "description": "Create Bull/BullMQ worker to process scheduled posts from database queue. This is a critical blocker preventing actual post publishing.",
+      "acceptance_criteria": [
+        "BullMQ worker connects to Redis and processes queue_jobs table",
+        "Worker picks up posts due for publishing based on scheduled_for timestamp",
+        "Failed jobs retry up to 3 times with exponential backoff (1min, 5min, 15min)",
+        "Job status updates reflected in scheduled_posts.status field",
+        "Queue job logs recorded in queue_job_logs table for debugging"
+      ],
+      "files_to_modify": [
+        "lib/services/queue.ts (create new)",
+        "lib/services/scheduling.ts (lines 137-402, integrate queue)",
+        "pages/api/scheduler/schedule.ts (persist to database instead of console.log)",
+        "package.json (add bullmq dependency)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "High",
+      "priority": "P0",
+      "estimated_effort": "L",
+      "missing_info": [
+        "Redis connection string/credentials",
+        "BullMQ worker deployment strategy (separate process or API route)"
+      ]
+    },
+    {
+      "title": "Production OAuth & Posting Integration for All Platforms",
+      "description": "Replace mocked posting with real API integrations for LinkedIn, Twitter, Instagram, Facebook, and YouTube. Handle OAuth flows, token refresh, and actual posting.",
+      "acceptance_criteria": [
+        "Real OAuth flow completes successfully for all 5 platforms",
+        "Access tokens stored securely in social_accounts table (encrypted)",
+        "Actual posts published to platforms via their APIs (not mocked)",
+        "Refresh tokens automatically renewed before expiration",
+        "API errors handled gracefully with user-friendly messages"
+      ],
+      "files_to_modify": [
+        "lib/services/posting.ts (lines 333-448, implement real API calls)",
+        "lib/social-auth.ts (lines 22-117, complete OAuth flows)",
+        "pages/api/auth/linkedin/callback.ts",
+        "pages/api/auth/twitter/callback.ts",
+        "pages/api/auth/instagram/callback.ts",
+        "pages/api/auth/facebook/callback.ts",
+        "pages/api/auth/youtube/callback.ts",
+        "pages/api/social/post.ts (lines 95-167, implement real posting)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "High",
+      "priority": "P0",
+      "estimated_effort": "L",
+      "missing_info": [
+        "Platform developer app credentials (LinkedIn, Twitter, Instagram, Facebook, YouTube)",
+        "OAuth app redirect URLs for each platform",
+        "Platform API documentation access",
+        "Test accounts for each platform"
+      ]
+    },
+    {
+      "title": "Cron Job for Processing Scheduled Posts",
+      "description": "Create background cron job that checks scheduled_posts table every minute and triggers publishing workflow for due posts.",
+      "acceptance_criteria": [
+        "Cron job runs every 60 seconds checking for posts where scheduled_for <= NOW()",
+        "Due posts are added to queue_jobs table with status 'pending'",
+        "Cron job handles errors gracefully without crashing",
+        "Job processing time logged for monitoring",
+        "No duplicate jobs created for same post"
+      ],
+      "files_to_modify": [
+        "lib/services/scheduler-cron.ts (create new)",
+        "pages/api/cron/process-scheduled-posts.ts (create new)",
+        "lib/services/scheduling.ts (integrate cron trigger)",
+        "package.json (add node-cron dependency)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Medium",
+      "priority": "P0",
+      "estimated_effort": "M",
+      "missing_info": [
+        "Cron job deployment method (Vercel Cron, separate worker, or API route with external trigger)"
+      ]
+    },
+    {
+      "title": "Encrypt OAuth Tokens at Rest",
+      "description": "Implement encryption for social account access tokens stored in database to prevent unauthorized access if database is compromised.",
+      "acceptance_criteria": [
+        "Access tokens encrypted before storing in social_accounts.access_token column",
+        "Refresh tokens encrypted before storing in social_accounts.refresh_token column",
+        "Tokens decrypted automatically when retrieved for API calls",
+        "Encryption key stored securely (environment variable or secret manager)",
+        "Migration script encrypts existing tokens"
+      ],
+      "files_to_modify": [
+        "lib/services/token-encryption.ts (create new)",
+        "lib/social-auth.ts (lines 66-90, add encrypt/decrypt wrapper)",
+        "pages/api/auth/*/callback.ts (encrypt tokens on save)",
+        "lib/services/posting.ts (decrypt tokens before use)",
+        "database/migrations/encrypt-tokens.sql (create migration)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Medium",
+      "priority": "P0",
+      "estimated_effort": "M",
+      "missing_info": [
+        "Encryption library preference (crypto-js, node-forge, or Supabase Vault)",
+        "Key rotation strategy"
+      ]
+    },
+    {
+      "title": "Media Upload API and UI",
+      "description": "Create file upload endpoint and drag-and-drop UI for media assets. Store files in Supabase Storage with metadata in media_files table.",
+      "acceptance_criteria": [
+        "POST /api/media/upload endpoint accepts multipart/form-data",
+        "Files validated for type, size, and security (max 100MB, allowed formats: jpg, png, mp4, mov, pdf)",
+        "Upload progress tracked and displayed in UI",
+        "Files stored in Supabase Storage with public URLs",
+        "Media metadata (dimensions, duration, size) extracted and saved to media_files table",
+        "Drag-and-drop upload UI component in ContentCreationPanel or new AssetLibrary component"
+      ],
+      "files_to_modify": [
+        "pages/api/media/upload.ts (create new)",
+        "components/AssetUploader.tsx (create new)",
+        "components/ContentCreationPanel.tsx (integrate upload)",
+        "db-utils/additional-social-media-tables.sql (ensure media_files table exists)"
+      ],
+      "assignee_role": "frontend",
+      "complexity": "Medium",
+      "priority": "P1",
+      "estimated_effort": "M",
+      "missing_info": [
+        "Supabase Storage bucket configuration",
+        "File size limits per file type",
+        "Virus scanning service integration (if required)"
+      ]
+    },
+    {
+      "title": "Comprehensive Pre-launch Readiness Checklist",
+      "description": "Create UI and API for pre-launch validation checklist. Check social accounts connected, content created, schedules validated, and media uploaded.",
+      "acceptance_criteria": [
+        "GET /api/campaigns/[id]/readiness returns checklist status with percentage",
+        "Checklist validates: social accounts connected, weekly plans created, daily plans created, media uploaded, posts scheduled",
+        "UI displays checklist in campaign-details page with visual indicators (✅/⚠️/❌)",
+        "Blocking items highlighted in red, non-blocking in yellow",
+        "Progress percentage calculated and displayed (e.g., 80% ready)",
+        "Launch button disabled until all blocking items complete"
+      ],
+      "files_to_modify": [
+        "pages/api/campaigns/[campaignId]/readiness.ts (create new)",
+        "pages/campaign-details/[id].tsx (lines 263-286, add checklist component)",
+        "components/ReadinessChecklist.tsx (create new)",
+        "lib/services/readiness-validator.ts (create new)"
+      ],
+      "assignee_role": "frontend",
+      "complexity": "Medium",
+      "priority": "P1",
+      "estimated_effort": "M",
+      "missing_info": []
+    },
+    {
+      "title": "Refresh Token Management for Social Platforms",
+      "description": "Implement automatic refresh token renewal for social media platforms before access tokens expire. Handle 401 errors by refreshing and retrying.",
+      "acceptance_criteria": [
+        "Token expiration checked before each API call",
+        "Refresh tokens automatically exchanged for new access tokens when <24 hours until expiration",
+        "401 errors trigger automatic token refresh and request retry",
+        "Failed refresh attempts logged and user notified",
+        "Token refresh status tracked in social_accounts.token_expires_at field"
+      ],
+      "files_to_modify": [
+        "lib/services/token-refresh.ts (create new)",
+        "lib/services/posting.ts (lines 333-448, add refresh check)",
+        "lib/social-auth.ts (add refreshTokenExchange function)",
+        "pages/api/auth/*/callback.ts (store refresh tokens)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Medium",
+      "priority": "P1",
+      "estimated_effort": "M",
+      "missing_info": [
+        "Platform-specific refresh token expiration policies",
+        "Refresh token storage requirements per platform"
+      ]
+    },
+    {
+      "title": "Rate Limit Tracking and Queue Management",
+      "description": "Track API rate limits per platform and queue requests when limits are reached. Automatically retry queued requests when limits reset.",
+      "acceptance_criteria": [
+        "Rate limit tracking per platform in api_rate_limits table (from step14-integration-webhooks.sql)",
+        "Requests counted and compared against platform limits (Twitter: 300/15min, Instagram: 200/hour, etc.)",
+        "Requests queued when rate limit reached with estimated retry time",
+        "Queued requests automatically processed when rate limit window resets",
+        "Rate limit status displayed in UI for each connected account"
+      ],
+      "files_to_modify": [
+        "lib/services/rate-limiter.ts (create new)",
+        "lib/services/posting.ts (check rate limits before posting)",
+        "pages/api/social/post.ts (integrate rate limit check)",
+        "database/step14-integration-webhooks.sql (ensure api_rate_limits table exists)",
+        "components/AccountStatusIndicator.tsx (create new)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Medium",
+      "priority": "P1",
+      "estimated_effort": "M",
+      "missing_info": [
+        "Exact rate limits for each platform API endpoint",
+        "Rate limit reset window policies per platform"
+      ]
+    },
+    {
+      "title": "Retry Logic with Exponential Backoff",
+      "description": "Implement retry mechanism for failed post publishing with exponential backoff delays. Notify users on final failure after max retries.",
+      "acceptance_criteria": [
+        "Failed posts automatically retry with delays: 1 minute, 5 minutes, 15 minutes",
+        "Retry count tracked in scheduled_posts.retry_count field",
+        "Max retries set to 3 in scheduled_posts.max_retries",
+        "Final failure sends notification to user via notifications table",
+        "Error messages stored in scheduled_posts.error_message for debugging"
+      ],
+      "files_to_modify": [
+        "lib/services/scheduling.ts (lines 137-402, add retry logic)",
+        "lib/services/queue.ts (implement retry with backoff)",
+        "pages/api/scheduler/schedule.ts (update error handling)",
+        "pages/api/notifications/create.ts (create notification on failure)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Medium",
+      "priority": "P1",
+      "estimated_effort": "M",
+      "missing_info": []
+    },
+    {
+      "title": "Asset Library Browse and Search Interface",
+      "description": "Create UI component for browsing, searching, and filtering media assets. Allow users to preview and reuse assets across campaigns.",
+      "acceptance_criteria": [
+        "GET /api/media/list endpoint returns paginated media files with filters",
+        "UI displays grid view of media thumbnails with metadata",
+        "Search by filename, tags, or AI-generated description",
+        "Filter by media type (image, video, audio), platform compatibility, or date",
+        "Click to preview full-size media before selecting",
+        "Drag-and-drop or click to attach media to scheduled posts"
+      ],
+      "files_to_modify": [
+        "pages/api/media/list.ts (create new)",
+        "components/AssetLibrary.tsx (create new)",
+        "components/MediaPreview.tsx (create new)",
+        "components/PlatformContentForm.tsx (integrate asset selection)"
+      ],
+      "assignee_role": "frontend",
+      "complexity": "Medium",
+      "priority": "P1",
+      "estimated_effort": "M",
+      "missing_info": []
+    },
+    {
+      "title": "Dependency Checking for Campaign Readiness",
+      "description": "Validate dependencies before allowing actions: media uploaded before scheduling, accounts connected before posting, content created before scheduling.",
+      "acceptance_criteria": [
+        "Validation prevents scheduling post if required media files not uploaded",
+        "Validation prevents posting if social account not connected for target platform",
+        "Validation prevents scheduling if daily/weekly content plans not created",
+        "Clear error messages explain which dependencies are missing",
+        "Dependency status shown in readiness checklist"
+      ],
+      "files_to_modify": [
+        "lib/services/readiness-validator.ts (add dependency checks)",
+        "pages/api/campaigns/[campaignId]/readiness.ts (include dependency status)",
+        "pages/api/scheduler/schedule.ts (validate dependencies before scheduling)",
+        "components/ReadinessChecklist.tsx (display dependency errors)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Low",
+      "priority": "P1",
+      "estimated_effort": "S",
+      "missing_info": []
+    },
+    {
+      "title": "Timezone-aware Scheduling",
+      "description": "Ensure all dates and times respect user timezone. Display times in user's local timezone and schedule posts in platform timezones.",
+      "acceptance_criteria": [
+        "User timezone stored in users table or session",
+        "All date/time displays converted to user's local timezone",
+        "Scheduled posts stored in UTC but displayed in user timezone",
+        "Platform-specific timezone handling for optimal posting times",
+        "Timezone selector in user settings or campaign creation form"
+      ],
+      "files_to_modify": [
+        "pages/campaign-planning.tsx (lines 44-68, add timezone handling)",
+        "pages/api/campaigns/create-12week-plan.ts (store timezone)",
+        "components/TimeZoneSelector.tsx (create new)",
+        "lib/utils/timezone.ts (create utility functions)",
+        "package.json (add date-fns-tz or moment-timezone dependency)"
+      ],
+      "assignee_role": "frontend",
+      "complexity": "Low",
+      "priority": "P1",
+      "estimated_effort": "S",
+      "missing_info": []
+    },
+    {
+      "title": "Priority-based Job Scheduling",
+      "description": "Implement priority field in scheduled_posts to prioritize high-priority posts (paid campaigns) over regular posts while respecting rate limits.",
+      "acceptance_criteria": [
+        "priority field added to scheduled_posts table (INTEGER, default 0)",
+        "High-priority posts (priority > 0) processed before regular posts",
+        "Priority scheduling respects platform rate limits",
+        "Priority can be set in campaign settings or per-post",
+        "Queue worker processes jobs sorted by priority then scheduled_for timestamp"
+      ],
+      "files_to_modify": [
+        "database/migrations/add-priority-to-scheduled-posts.sql (create migration)",
+        "lib/services/queue.ts (implement priority sorting)",
+        "pages/api/scheduler/schedule.ts (accept priority parameter)",
+        "components/PostSchedulingForm.tsx (add priority selector)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Medium",
+      "priority": "P2",
+      "estimated_effort": "S",
+      "missing_info": []
+    },
+    {
+      "title": "Real-time AI Model Integration for Campaign Generation",
+      "description": "Replace template-based generation in generate-comprehensive-plan.ts with live API calls to GPT-4 or Claude. Maintain conversation context.",
+      "acceptance_criteria": [
+        "generate-comprehensive-plan.ts calls OpenAI/Anthropic API instead of using templates",
+        "Conversation history stored in ai_threads table for context",
+        "AI responses include structured JSON for themes, focus areas, and channels",
+        "Error handling with fallback to templates if API fails",
+        "Response time < 10 seconds for 12-week plan generation"
+      ],
+      "files_to_modify": [
+        "pages/api/ai/generate-comprehensive-plan.ts (lines 41-109, replace template logic)",
+        "pages/api/ai/claude-chat.ts (integrate for plan generation)",
+        "components/ComprehensivePlanEditor.tsx (handle async generation)",
+        "pages/api/ai/gpt-chat.ts (add as fallback option)"
+      ],
+      "assignee_role": "ML",
+      "complexity": "Medium",
+      "priority": "P2",
+      "estimated_effort": "M",
+      "missing_info": [
+        "OpenAI API key confirmation",
+        "Anthropic API key confirmation",
+        "Preferred model (GPT-4 vs Claude 3.5)"
+      ]
+    },
+    {
+      "title": "Platform-specific Error Recovery and Messages",
+      "description": "Handle platform-specific API errors gracefully with actionable error messages. Categorize errors (media too large, policy violations, account restrictions).",
+      "acceptance_criteria": [
+        "Error categorization system for common platform errors",
+        "User-friendly error messages (e.g., 'Image exceeds LinkedIn size limit. Resize to 1200x627px or smaller')",
+        "Automatic recovery suggestions (e.g., 'Try reducing image size' or 'Check account permissions')",
+        "Error codes stored in scheduled_posts.error_code for analytics",
+        "Error recovery actions suggested in UI (retry, edit content, contact support)"
+      ],
+      "files_to_modify": [
+        "lib/services/error-handler.ts (create new)",
+        "lib/services/posting.ts (lines 333-448, add error categorization)",
+        "components/ErrorRecoveryDialog.tsx (create new)",
+        "pages/api/social/post.ts (return structured errors)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "High",
+      "priority": "P2",
+      "estimated_effort": "M",
+      "missing_info": [
+        "Complete list of platform-specific error codes and meanings",
+        "Platform API error documentation"
+      ]
+    },
+    {
+      "title": "Automatic Date Adjustment on Campaign Changes",
+      "description": "When campaign start date changes, automatically recalculate all weekly and daily plan dates. Update all related records in database.",
+      "acceptance_criteria": [
+        "PUT /api/campaigns/[id] endpoint detects start_date changes",
+        "Weekly content refinements dates recalculated when campaign start date changes",
+        "Daily content plans dates updated accordingly",
+        "Scheduled posts with old dates show warning in UI",
+        "User confirmation dialog before bulk date updates"
+      ],
+      "files_to_modify": [
+        "pages/api/campaigns/[campaignId].ts (add date change detection)",
+        "pages/api/campaigns/update-dates.ts (create new for bulk update)",
+        "lib/services/timeline-adjuster.ts (create new)",
+        "components/DateChangeWarning.tsx (create new)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Low",
+      "priority": "P2",
+      "estimated_effort": "S",
+      "missing_info": []
+    },
+    {
+      "title": "Activity Feed and Audit Log",
+      "description": "Track all user actions (campaign created, content edited, post scheduled) in chronological feed. Filter by user, action type, or date range.",
+      "acceptance_criteria": [
+        "Activity events logged to database table (audit_logs or activity_feed)",
+        "Events include: user_id, action_type, entity_type, entity_id, timestamp, metadata",
+        "GET /api/activity/feed endpoint returns paginated activities",
+        "UI displays activity feed in campaign-details or dashboard page",
+        "Filter by user, action type, date range, or campaign",
+        "Activity feed updates in real-time (polling or SSE)"
+      ],
+      "files_to_modify": [
+        "database/migrations/create-activity-feed-table.sql (create migration)",
+        "pages/api/activity/feed.ts (create new)",
+        "lib/services/activity-logger.ts (create new)",
+        "components/ActivityFeed.tsx (create new)",
+        "pages/campaign-details/[id].tsx (integrate activity feed)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Medium",
+      "priority": "P2",
+      "estimated_effort": "M",
+      "missing_info": []
+    },
+    {
+      "title": "Team Assignment Workflow",
+      "description": "Allow assigning specific weeks or tasks to team members. Notify assignees and track completion status.",
+      "acceptance_criteria": [
+        "Assign week to team member via UI (dropdown or drag-drop)",
+        "Assignment stored in weekly_content_refinements.assigned_to_user_id",
+        "Assignee notified via notifications table when assigned",
+        "Completion status tracked (not_started, in_progress, completed)",
+        "Assignment visible in campaign details and weekly planning interface"
+      ],
+      "files_to_modify": [
+        "pages/api/campaigns/assign-week.ts (create new)",
+        "pages/team-management.tsx (lines 21-439, add assignment UI)",
+        "components/WeekAssignmentDropdown.tsx (create new)",
+        "components/WeeklyRefinementInterface.tsx (display assignee)",
+        "database/migrations/add-assignment-to-weekly-refinements.sql (create migration)"
+      ],
+      "assignee_role": "frontend",
+      "complexity": "Medium",
+      "priority": "P2",
+      "estimated_effort": "M",
+      "missing_info": [
+        "Team member backend API endpoints (if not existing)"
+      ]
+    },
+    {
+      "title": "Risk Assessment Scoring for Campaign Readiness",
+      "description": "Calculate risk score based on incomplete readiness items. Suggest mitigation strategies for high-risk campaigns.",
+      "acceptance_criteria": [
+        "Risk score calculated: 0-100 (0 = no risk, 100 = critical issues)",
+        "Score factors: missing accounts (high), missing content (medium), missing media (low), date conflicts (high)",
+        "Risk level displayed: Low (0-30), Medium (31-70), High (71-100)",
+        "Mitigation suggestions shown for each risk factor",
+        "Risk score updated in real-time as checklist items complete"
+      ],
+      "files_to_modify": [
+        "lib/services/risk-assessor.ts (create new)",
+        "pages/api/campaigns/[campaignId]/readiness.ts (include risk score)",
+        "components/ReadinessChecklist.tsx (display risk score and suggestions)",
+        "components/RiskMitigationSuggestions.tsx (create new)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Medium",
+      "priority": "P2",
+      "estimated_effort": "S",
+      "missing_info": []
+    },
+    {
+      "title": "Conflict Detection for Overlapping Campaigns",
+      "description": "Warn users when campaigns overlap dates. Suggest optimal dates to avoid conflicts and resource constraints.",
+      "acceptance_criteria": [
+        "GET /api/campaigns/conflicts?campaignId=X detects overlapping campaigns",
+        "Overlap defined as: start_date < other.end_date AND end_date > other.start_date",
+        "Conflict warnings displayed in campaign creation/edit form",
+        "Suggested dates shown (next available date range)",
+        "User can proceed with conflict or adjust dates"
+      ],
+      "files_to_modify": [
+        "pages/api/campaigns/conflicts.ts (create new)",
+        "pages/campaign-planning.tsx (add conflict detection on date change)",
+        "components/CampaignConflictWarning.tsx (create new)",
+        "lib/services/conflict-detector.ts (create new)"
+      ],
+      "assignee_role": "backend",
+      "complexity": "Medium",
+      "priority": "P2",
+      "estimated_effort": "S",
+      "missing_info": []
+    },
+    {
+      "title": "Database Schema Consolidation",
+      "description": "Resolve inconsistencies between multiple schema files. Consolidate to single source of truth and create migration plan.",
+      "acceptance_criteria": [
+        "Audit all schema files (complete-setup.sql, comprehensive-scheduling-schema.sql, etc.)",
+        "Identify conflicts and duplicate table definitions",
+        "Create consolidated schema file as single source of truth",
+        "Migration script converts existing database to consolidated schema",
+        "All tests pass with new schema structure"
+      ],
+      "files_to_modify": [
+        "database/schema-audit.md (create audit document)",
+        "database/consolidated-schema.sql (create new consolidated schema)",
+        "database/migrations/consolidate-schema.sql (create migration)",
+        "db-utils/db-inspector.js (verify schema consistency)"
+      ],
+      "assignee_role": "infra",
+      "complexity": "High",
+      "priority": "P2",
+      "estimated_effort": "L",
+      "missing_info": [
+        "Current production database state",
+        "Migration rollback strategy"
+      ]
+    }
+  ]
+}
+
+

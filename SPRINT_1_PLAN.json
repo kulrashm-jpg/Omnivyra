@@ -1,0 +1,374 @@
+{
+  "sprint_name": "Sprint 1 - MVP Core Delivery",
+  "duration_days": 14,
+  "start_date": "2025-10-31",
+  "end_date": "2025-11-13",
+  "tickets": [
+    {
+      "id": "TCK-004",
+      "title": "Encrypt OAuth Tokens at Rest",
+      "priority": "P0",
+      "complexity": "Medium",
+      "estimated_effort": "M",
+      "estimated_duration_days": 4,
+      "depends_on": [],
+      "blocks": ["TCK-002", "TCK-007"],
+      "assignee_role": "backend",
+      "files_to_modify": [
+        "lib/services/token-encryption.ts (create new)",
+        "lib/social-auth.ts (lines 66-90, add encrypt/decrypt wrapper)",
+        "pages/api/auth/*/callback.ts (encrypt tokens on save)",
+        "lib/services/posting.ts (decrypt tokens before use)",
+        "database/migrations/encrypt-tokens.sql (create migration)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 1,
+      "start_day": 1,
+      "end_day": 4
+    },
+    {
+      "id": "TCK-001",
+      "title": "Implement Queue Worker for Scheduled Posts",
+      "priority": "P0",
+      "complexity": "High",
+      "estimated_effort": "L",
+      "estimated_duration_days": 9,
+      "depends_on": [],
+      "blocks": ["TCK-003", "TCK-010", "TCK-008"],
+      "assignee_role": "backend",
+      "files_to_modify": [
+        "lib/services/queue.ts (create new)",
+        "lib/services/scheduling.ts (lines 137-402, integrate queue)",
+        "pages/api/scheduler/schedule.ts (persist to database instead of console.log)",
+        "package.json (add bullmq dependency)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 2,
+      "start_day": 1,
+      "end_day": 9
+    },
+    {
+      "id": "TCK-002",
+      "title": "Production OAuth & Posting Integration for All Platforms",
+      "priority": "P0",
+      "complexity": "High",
+      "estimated_effort": "L",
+      "estimated_duration_days": 9,
+      "depends_on": ["TCK-004"],
+      "blocks": ["TCK-007", "TCK-008"],
+      "assignee_role": "backend",
+      "files_to_modify": [
+        "lib/services/posting.ts (lines 333-448, implement real API calls)",
+        "lib/social-auth.ts (lines 22-117, complete OAuth flows)",
+        "pages/api/auth/linkedin/callback.ts",
+        "pages/api/auth/twitter/callback.ts",
+        "pages/api/auth/instagram/callback.ts",
+        "pages/api/auth/facebook/callback.ts",
+        "pages/api/auth/youtube/callback.ts",
+        "pages/api/social/post.ts (lines 95-167, implement real posting)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 3,
+      "start_day": 5,
+      "end_day": 13
+    },
+    {
+      "id": "TCK-005",
+      "title": "Media Upload API and UI",
+      "priority": "P1",
+      "complexity": "Medium",
+      "estimated_effort": "M",
+      "estimated_duration_days": 4,
+      "depends_on": [],
+      "blocks": ["TCK-013", "TCK-016"],
+      "assignee_role": "frontend",
+      "files_to_modify": [
+        "pages/api/media/upload.ts (create new)",
+        "components/AssetUploader.tsx (create new)",
+        "components/ContentCreationPanel.tsx (integrate upload)",
+        "db-utils/additional-social-media-tables.sql (ensure media_files table exists)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 4,
+      "start_day": 1,
+      "end_day": 4
+    },
+    {
+      "id": "TCK-003",
+      "title": "Cron Job for Processing Scheduled Posts",
+      "priority": "P0",
+      "complexity": "Medium",
+      "estimated_effort": "M",
+      "estimated_duration_days": 5,
+      "depends_on": ["TCK-001"],
+      "blocks": [],
+      "assignee_role": "backend",
+      "files_to_modify": [
+        "lib/services/scheduler-cron.ts (create new)",
+        "pages/api/cron/process-scheduled-posts.ts (create new)",
+        "lib/services/scheduling.ts (integrate cron trigger)",
+        "package.json (add node-cron dependency)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 5,
+      "start_day": 10,
+      "end_day": 14
+    },
+    {
+      "id": "TCK-010",
+      "title": "Retry Logic with Exponential Backoff",
+      "priority": "P1",
+      "complexity": "Medium",
+      "estimated_effort": "M",
+      "estimated_duration_days": 5,
+      "depends_on": ["TCK-001"],
+      "blocks": [],
+      "assignee_role": "backend",
+      "files_to_modify": [
+        "lib/services/scheduling.ts (lines 137-402, add retry logic)",
+        "lib/services/queue.ts (implement retry with backoff)",
+        "pages/api/scheduler/schedule.ts (update error handling)",
+        "pages/api/notifications/create.ts (create notification on failure)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 7,
+      "start_day": 10,
+      "end_day": 14
+    },
+    {
+      "id": "TCK-008",
+      "title": "Rate Limit Tracking and Queue Management",
+      "priority": "P1",
+      "complexity": "Medium",
+      "estimated_effort": "M",
+      "estimated_duration_days": 5,
+      "depends_on": ["TCK-002", "TCK-001"],
+      "blocks": [],
+      "assignee_role": "backend",
+      "files_to_modify": [
+        "lib/services/rate-limiter.ts (create new)",
+        "lib/services/posting.ts (check rate limits before posting)",
+        "pages/api/social/post.ts (integrate rate limit check)",
+        "database/step14-integration-webhooks.sql (ensure api_rate_limits table exists)",
+        "components/AccountStatusIndicator.tsx (create new)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 8,
+      "start_day": 14,
+      "end_day": 18,
+      "overflow_to_next_sprint": true
+    },
+    {
+      "id": "TCK-007",
+      "title": "Refresh Token Management for Social Platforms",
+      "priority": "P1",
+      "complexity": "Medium",
+      "estimated_effort": "M",
+      "estimated_duration_days": 5,
+      "depends_on": ["TCK-002", "TCK-004"],
+      "blocks": [],
+      "assignee_role": "backend",
+      "files_to_modify": [
+        "lib/services/token-refresh.ts (create new)",
+        "lib/services/posting.ts (lines 333-448, add refresh check)",
+        "lib/social-auth.ts (add refreshTokenExchange function)",
+        "pages/api/auth/*/callback.ts (store refresh tokens)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 9,
+      "start_day": 14,
+      "end_day": 18,
+      "overflow_to_next_sprint": true
+    }
+  ],
+  "support_tickets": [
+    {
+      "id": "TCK-025",
+      "title": "QA & Monitoring Setup",
+      "priority": "P1",
+      "complexity": "Low",
+      "estimated_effort": "S",
+      "estimated_duration_days": 2,
+      "depends_on": ["TCK-001", "TCK-004", "TCK-005"],
+      "blocks": [],
+      "assignee_role": "QA",
+      "files_to_modify": [
+        "tests/integration/queue-media-oauth.test.ts (create new)",
+        "lib/monitoring/alert-config.ts (create new)",
+        "lib/monitoring/log-aggregator.ts (create new)",
+        "pages/api/monitoring/health.ts (create new)",
+        "docker-compose.monitoring.yml (create new)",
+        ".github/workflows/integration-tests.yml (update)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 10,
+      "start_day": 12,
+      "end_day": 13,
+      "description": "Setup QA pipelines and monitoring to catch integration issues early"
+    },
+    {
+      "id": "TCK-026",
+      "title": "MVP Demo & Setup Documentation",
+      "priority": "P1",
+      "complexity": "Low",
+      "estimated_effort": "S",
+      "estimated_duration_days": 2,
+      "depends_on": ["TCK-001", "TCK-004", "TCK-005", "TCK-003"],
+      "blocks": [],
+      "assignee_role": "frontend",
+      "files_to_modify": [
+        "scripts/seed-demo-campaign.sh (create new)",
+        "scripts/seed-demo-campaign.js (create new)",
+        "docs/SPRINT_1_DEMO.md (create new)",
+        "docs/SPRINT_1_SETUP.md (create new)",
+        "README.md (update with sprint outcomes)",
+        "docs/demo-video-script.md (create new)"
+      ],
+      "definition_of_done": [
+        "Code is implemented and committed to branch specified in ticket (or main/dev if not specified)",
+        "Unit tests added and passing locally",
+        "Integration tests or smoke test added (if applicable)",
+        "PR created with description, linked to this ticket",
+        "Peer review completed and approvals recorded",
+        "Deployed to staging environment and QA verified",
+        "Documentation and runbook updated if behavior or infra changed",
+        "Production monitoring/alerts configured (if applicable)"
+      ],
+      "execution_order": 11,
+      "start_day": 13,
+      "end_day": 14,
+      "description": "Create demo materials and documentation for Sprint 1 outcomes"
+    }
+  ],
+  "milestones": [
+    {
+      "name": "Queue Worker Live",
+      "depends_on": ["TCK-001"],
+      "target_day": 9,
+      "description": "Queue worker processing scheduled posts successfully"
+    },
+    {
+      "name": "OAuth Posting Functional",
+      "depends_on": ["TCK-002"],
+      "target_day": 13,
+      "description": "Real OAuth integration and posting working for all platforms"
+    },
+    {
+      "name": "Cron Scheduling Ready",
+      "depends_on": ["TCK-003"],
+      "target_day": 14,
+      "description": "Automated cron job processing scheduled posts"
+    },
+    {
+      "name": "End-to-End Dry Run",
+      "depends_on": ["TCK-001", "TCK-002", "TCK-003", "TCK-005"],
+      "target_day": 14,
+      "description": "Complete workflow tested: schedule -> queue -> publish -> platform (with media upload)"
+    },
+    {
+      "name": "Media Upload Ready",
+      "depends_on": ["TCK-005"],
+      "target_day": 4,
+      "description": "Users can upload images/videos for content posts"
+    }
+  ],
+  "critical_path": [
+    "TCK-004 (Days 1-4) -> TCK-002 (Days 5-13) -> TCK-008 (Day 14+)",
+    "TCK-001 (Days 1-9) -> TCK-003 (Days 10-14)",
+    "TCK-001 (Days 1-9) -> TCK-010 (Days 10-14)",
+    "TCK-005 (Days 1-4) - Parallel frontend work, enables media publishing"
+  ],
+  "parallel_execution_groups": [
+    {
+      "group": 1,
+      "tickets": ["TCK-001", "TCK-004", "TCK-005"],
+      "description": "Foundation tasks that can run in parallel (backend + frontend)"
+    },
+    {
+      "group": 2,
+      "tickets": ["TCK-003", "TCK-010"],
+      "description": "Both depend on TCK-001 and can run in parallel"
+    }
+  ]
+}
