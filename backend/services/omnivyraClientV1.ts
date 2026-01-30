@@ -1,6 +1,15 @@
+import { validateOmniVyraEnvelope } from './omnivyraContractService';
+import {
+  getHealthReport,
+  recordFailure,
+  recordSuccess,
+  setLastMeta,
+} from './omnivyraHealthService';
+
 type OmniVyraError = {
   message: string;
   status?: number;
+  error_type?: string;
 };
 
 export type OmniVyraEnvelope<T> = {
@@ -23,6 +32,12 @@ export type OmniVyraResponse<T> = {
   partial?: boolean;
   raw?: any;
   error?: OmniVyraError;
+  _omnivyra_meta?: {
+    latency_ms: number;
+    contract_valid: boolean;
+    error_type?: string;
+    endpoint: string;
+  };
 };
 
 export type TrendSignalInput = {
@@ -190,9 +205,22 @@ const requestOmniVyra = async <T>(
 ): Promise<OmniVyraResponse<T>> => {
   const baseUrl = getBaseUrl();
   if (!baseUrl) {
+    recordFailure(path, 'unknown', 'Missing OMNIVYRA_BASE_URL');
+    setLastMeta({
+      endpoint: path,
+      latency_ms: 0,
+      contract_valid: false,
+      error_type: 'omnivyra_unavailable',
+    });
     return {
       status: 'error',
-      error: { message: 'Missing OMNIVYRA_BASE_URL' },
+      error: { message: 'Missing OMNIVYRA_BASE_URL', error_type: 'omnivyra_unavailable' },
+      _omnivyra_meta: {
+        latency_ms: 0,
+        contract_valid: false,
+        error_type: 'omnivyra_unavailable',
+        endpoint: path,
+      },
     };
   }
 
@@ -204,12 +232,14 @@ const requestOmniVyra = async <T>(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      const startedAt = Date.now();
       const response = await fetch(`${baseUrl}${API_PREFIX}${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload ?? {}),
         signal: controller.signal,
       });
+      const latencyMs = Date.now() - startedAt;
       const rawText = await response.text();
       let rawJson: any = null;
       if (rawText) {
@@ -224,16 +254,41 @@ const requestOmniVyra = async <T>(
         lastError = {
           message: rawJson?.error || response.statusText || 'OmniVyra error',
           status: response.status,
+          error_type: 'http_error',
         };
+        recordFailure(path, 'http_error', lastError.message);
+        setLastMeta({
+          endpoint: path,
+          latency_ms: latencyMs,
+          contract_valid: false,
+          error_type: 'http_error',
+        });
         continue;
       }
 
+      const contract = validateOmniVyraEnvelope(rawJson);
       const envelope = normalizeEnvelope<T>(rawJson);
-      if (!envelope) {
+      if (!contract.valid || !envelope) {
+        const errorType = contract.errors.some((error) => error.includes('contract_version'))
+          ? 'version_mismatch'
+          : 'schema_invalid';
+        recordFailure(path, errorType, contract.errors.join('; '));
+        setLastMeta({
+          endpoint: path,
+          latency_ms: latencyMs,
+          contract_valid: false,
+          error_type: errorType,
+        });
         return {
           status: 'error',
-          error: { message: 'Invalid OmniVyra response envelope' },
+          error: { message: 'Invalid OmniVyra response envelope', error_type: errorType },
           raw: rawJson,
+          _omnivyra_meta: {
+            latency_ms: latencyMs,
+            contract_valid: false,
+            error_type: errorType,
+            endpoint: path,
+          },
         };
       }
 
@@ -247,6 +302,13 @@ const requestOmniVyra = async <T>(
         contract_version: envelope.contract_version,
       });
 
+      recordSuccess(path, latencyMs);
+      setLastMeta({
+        endpoint: path,
+        latency_ms: latencyMs,
+        contract_valid: true,
+        contract_version: envelope.contract_version,
+      });
       return {
         status: 'ok',
         data: envelope.data,
@@ -257,11 +319,24 @@ const requestOmniVyra = async <T>(
         contract_version: envelope.contract_version,
         partial,
         raw: rawJson,
+        _omnivyra_meta: {
+          latency_ms: latencyMs,
+          contract_valid: true,
+          endpoint: path,
+        },
       };
     } catch (error: any) {
       lastError = {
         message: error?.name === 'AbortError' ? 'OmniVyra request timed out' : error?.message,
+        error_type: error?.name === 'AbortError' ? 'timeout' : 'unknown',
       };
+      recordFailure(path, (lastError.error_type || 'unknown') as any, lastError.message);
+      setLastMeta({
+        endpoint: path,
+        latency_ms: timeoutMs,
+        contract_valid: false,
+        error_type: lastError.error_type,
+      });
     } finally {
       clearTimeout(timeoutId);
     }
@@ -274,6 +349,12 @@ const requestOmniVyra = async <T>(
   return {
     status: 'error',
     error: lastError || { message: 'OmniVyra request failed' },
+    _omnivyra_meta: {
+      latency_ms: timeoutMs,
+      contract_valid: false,
+      error_type: lastError?.error_type ?? 'unknown',
+      endpoint: path,
+    },
   };
 };
 
@@ -281,6 +362,8 @@ export const isOmniVyraEnabled = (): boolean => {
   const flag = process.env.USE_OMNIVYRA;
   return flag === 'true' || flag === '1' || flag === 'yes';
 };
+
+export const getOmniVyraHealthReport = () => getHealthReport(isOmniVyraEnabled());
 
 export const getTrendRelevance = (input: {
   signals: TrendSignalInput[];

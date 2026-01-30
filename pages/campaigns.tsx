@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Edit, Trash2 } from 'lucide-react';
+import { useCompanyContext } from '../components/CompanyContext';
 
 interface Campaign {
   id: string;
@@ -20,17 +21,20 @@ interface Campaign {
 }
 
 export default function CampaignsList() {
+  const { selectedCompanyId } = useCompanyContext();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    if (!selectedCompanyId) return;
     fetchCampaigns();
-  }, []);
+  }, [selectedCompanyId]);
 
    const fetchCampaigns = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/campaigns/list');
+      if (!selectedCompanyId) return;
+      const response = await fetch(`/api/campaigns?companyId=${encodeURIComponent(selectedCompanyId)}`);
       if (response.ok) {
         const data = await response.json();
         setCampaigns(data.campaigns || []);

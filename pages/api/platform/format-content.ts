@@ -4,6 +4,7 @@ import { generatePromotionMetadata } from '../../../backend/services/promotionMe
 import { formatPlatformContent } from '../../../backend/services/platformContentFormatter';
 import { validatePlatformCompliance } from '../../../backend/services/platformComplianceService';
 import { getOmniVyraAdvisory } from '../../../backend/services/omnivyraAdapterService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -13,6 +14,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { companyId, contentAssetId, platform, contentType, omnivyraRecommendation } = req.body || {};
+    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!access) return;
     if (!companyId || !contentAssetId || !platform || !contentType) {
       return res.status(400).json({ error: 'companyId, contentAssetId, platform, contentType are required' });
     }

@@ -7,6 +7,7 @@ import { validateCampaignHealth } from '../../../backend/services/campaignHealth
 import { getLatestCampaignVersion, saveCampaignHealthReport } from '../../../backend/db/campaignVersionStore';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { getLatestLearningInsights, getLatestAnalyticsReport } from '../../../backend/db/performanceStore';
+import { sendLearningSnapshot } from '../../../backend/services/omnivyraFeedbackService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -77,6 +78,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       confidence: healthReport.confidence,
       issues: healthReport.issues,
       scores: healthReport.scores,
+    });
+
+    await sendLearningSnapshot({
+      companyId: campaign.company_id,
+      campaignId,
+      trends_used: trendSignals.map((signal) => ({
+        topic: signal.topic,
+        source: signal.source,
+        signal_confidence: signal.signal_confidence,
+      })),
+      trends_ignored: [],
+      signal_confidence_summary: undefined,
+      novelty_score: undefined,
+      confidence_score: healthReport.confidence,
+      placeholders: [],
+      explanation: reason ? `Optimization reason: ${reason}` : 'Weekly optimization run',
+      external_api_health_snapshot: [],
+      performance_metrics: analyticsReport?.report_json ?? null,
+      optimization_reason: reason,
+      drift_flags: {
+        status: healthReport.status,
+        issues: healthReport.issues,
+      },
+      timestamp: new Date().toISOString(),
     });
 
     return res.status(200).json({

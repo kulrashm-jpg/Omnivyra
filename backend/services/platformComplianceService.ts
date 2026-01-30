@@ -1,5 +1,6 @@
 import { saveComplianceReport } from '../db/platformPromotionStore';
 import { checkPlatformCompliance, isOmniVyraEnabled } from './omnivyraClientV1';
+import { setLastFallbackReason } from './omnivyraHealthService';
 
 export async function validatePlatformCompliance(input: {
   contentAssetId: string;
@@ -9,6 +10,7 @@ export async function validatePlatformCompliance(input: {
   rule: any;
   promotionMetadata: any;
 }): Promise<any> {
+  let fallbackReason: string | null = null;
   if (isOmniVyraEnabled()) {
     const response = await checkPlatformCompliance({
       contentAssetId: input.contentAssetId,
@@ -46,9 +48,15 @@ export async function validatePlatformCompliance(input: {
           contract_version: response.contract_version,
           partial: response.partial,
         },
+        fallback_reason: null,
       };
     }
+    fallbackReason = (response._omnivyra_meta?.error_type || 'omnivyra_unavailable') as string;
+    setLastFallbackReason(fallbackReason);
     console.warn('OMNIVYRA_FALLBACK_COMPLIANCE', { reason: response.error?.message });
+  } else {
+    fallbackReason = 'omnivyra_disabled';
+    setLastFallbackReason(fallbackReason);
   }
 
   const violations: string[] = [];
@@ -78,5 +86,5 @@ export async function validatePlatformCompliance(input: {
   });
 
   console.log('COMPLIANCE REPORT', { assetId: input.contentAssetId, platform: input.platform, status });
-  return report;
+  return { ...report, fallback_reason: fallbackReason };
 }

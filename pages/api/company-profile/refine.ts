@@ -4,6 +4,7 @@ import {
   refineProfileWithAIWithDetails,
   saveProfile,
 } from '../../../backend/services/companyProfileService';
+import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -14,21 +15,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined) ||
     (req.body?.company_id as string | undefined);
-  console.log('Resolved company_id:', companyId);
+  const user = await resolveUserContext(req);
+  const resolvedCompanyId = companyId || user.defaultCompanyId;
+  console.log('Resolved company_id:', resolvedCompanyId);
+  const access = await enforceCompanyAccess({ req, res, companyId: resolvedCompanyId });
+  if (!access) return;
 
   try {
     let profile: any = null;
-    if (!companyId) {
-      const created = await saveProfile({ ...(req.body?.profile || req.body || {}) });
-      companyId = created.company_id;
-      profile = created;
-    } else {
-      profile = await getProfile(companyId, { autoRefine: false });
-    }
+    const effectiveCompanyId = resolvedCompanyId;
+    profile = await getProfile(effectiveCompanyId, { autoRefine: false });
     if (!profile) {
       const seedProfile = await saveProfile({
         ...(req.body?.profile || req.body || {}),
-        company_id: companyId,
+        company_id: effectiveCompanyId,
         source: 'user',
       });
       profile = seedProfile;

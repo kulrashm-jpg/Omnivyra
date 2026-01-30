@@ -1,26 +1,38 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import {
-  getLatestProfile,
   getProfile,
   saveProfile,
 } from '../../../backend/services/companyProfileService';
+import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined);
+  const mode = (req.query.mode as string | undefined) || (req.body?.mode as string | undefined);
+  const user = await resolveUserContext();
 
   if (req.method === 'GET') {
     try {
-      console.log('Resolved company_id:', companyId);
-      if (!companyId) {
-        const latest = await getLatestProfile();
-        if (latest) {
-          return res.status(200).json({ profile: latest });
-        }
-        const created = await saveProfile({});
-        return res.status(200).json({ profile: created });
+      if (mode === 'list') {
+        const profiles = await Promise.all(
+          user.companyIds.map(async (id) => {
+            const profile = await getProfile(id, { autoRefine: false });
+            return profile || { company_id: id, name: id };
+          })
+        );
+        return res.status(200).json({
+          user,
+          companies: profiles.map((profile) => ({
+            company_id: profile.company_id,
+            name: profile.name || profile.company_id,
+          })),
+        });
       }
+
+      console.log('Resolved company_id:', companyId);
+      const access = await enforceCompanyAccess({ req, res, companyId });
+      if (!access) return;
 
       const profile = await getProfile(companyId, { autoRefine: false });
       if (!profile) {
@@ -38,8 +50,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       let resolvedCompanyId = companyId;
       if (!resolvedCompanyId) {
-        const created = await saveProfile({ ...req.body });
-        return res.status(200).json({ profile: created });
+        const access = await enforceCompanyAccess({ req, res, companyId: resolvedCompanyId });
+        if (!access) return;
+      } else {
+        const access = await enforceCompanyAccess({ req, res, companyId: resolvedCompanyId });
+        if (!access) return;
       }
       const payload = {
         ...req.body,

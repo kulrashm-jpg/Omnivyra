@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -7,6 +8,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    const companyId =
+      (req.query.companyId as string | undefined) ||
+      (req.query.company_id as string | undefined);
+    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!access) return;
     // Get all campaigns with simplified fields
     const { data: campaigns, error } = await supabase
       .from('campaigns')
@@ -23,6 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         updated_at,
         weekly_themes
       `)
+      .eq('company_id', companyId)
       .order('created_at', { ascending: false });
 
     if (error) {

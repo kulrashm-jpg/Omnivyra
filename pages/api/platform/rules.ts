@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ensureFallbackPlatformRules, getRulesForPlatform } from '../../../backend/services/platformRulesService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -8,7 +9,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { platform, contentType } = req.body || {};
+    const { companyId, platform, contentType } = req.body || {};
+    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!access) return;
     if (!platform || !contentType) {
       return res.status(400).json({ error: 'platform and contentType are required' });
     }

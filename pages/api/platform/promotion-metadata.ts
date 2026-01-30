@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { generatePromotionMetadata } from '../../../backend/services/promotionMetadataService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -9,6 +10,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { companyId, contentAssetId, platform, content } = req.body || {};
+    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!access) return;
     if (!companyId || !contentAssetId || !platform || !content) {
       return res.status(400).json({ error: 'companyId, contentAssetId, platform, content are required' });
     }

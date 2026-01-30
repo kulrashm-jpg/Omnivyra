@@ -14,6 +14,7 @@ import { buildSchedulerPayload } from '../../../backend/services/schedulerPayloa
 import { validateCampaignHealth } from '../../../backend/services/campaignHealthService';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { getComplianceReport, getPlatformVariant, getPromotionMetadata } from '../../../backend/db/platformPromotionStore';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -23,8 +24,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { companyId, campaignId, weekNumber } = req.body || {};
-    if (!companyId || !weekNumber) {
-      return res.status(400).json({ error: 'companyId and weekNumber are required' });
+    const access = await enforceCompanyAccess({
+      req,
+      res,
+      companyId,
+      campaignId,
+      requireCampaignId: true,
+    });
+    if (!access) return;
+    if (!weekNumber) {
+      return res.status(400).json({ error: 'weekNumber is required' });
     }
 
     const profile = await getProfile(companyId, { autoRefine: false });

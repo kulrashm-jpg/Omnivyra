@@ -1,11 +1,12 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { validatePlatformConfig } from '../../../backend/services/externalApiService';
+import { resolveUserContext } from '../../../backend/services/userContextService';
 
 const ensureSuperAdmin = async (req: NextApiRequest, res: NextApiResponse): Promise<boolean> => {
-  const userId = 'current-user-id';
+  const user = await resolveUserContext(req);
   const { data: isSuperAdmin, error } = await supabase.rpc('is_super_admin', {
-    check_user_id: userId,
+    check_user_id: user.userId,
   });
   if (error || !isSuperAdmin) {
     res.status(403).json({
@@ -50,8 +51,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       purpose,
       category,
       is_active,
+      method,
       auth_type,
       api_key_name,
+      api_key_env_name,
+      headers,
+      query_params,
+      is_preset,
+      retry_count,
+      timeout_ms,
+      rate_limit_per_min,
       platform_type,
       supported_content_types,
       promotion_modes,
@@ -60,20 +69,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       requires_admin,
     } = req.body || {};
 
+    let existingRecord: any = null;
     let resolvedPlatformType = platform_type;
-    if (!resolvedPlatformType) {
+    if (!resolvedPlatformType || !auth_type || !api_key_name || !api_key_env_name || !method) {
       const { data: existing } = await supabase
         .from('external_api_sources')
         .select('*')
         .eq('id', id)
         .single();
-      resolvedPlatformType = existing?.platform_type || 'social';
+      existingRecord = existing;
+      resolvedPlatformType = resolvedPlatformType ?? existing?.platform_type ?? 'social';
     }
 
     const validation = validatePlatformConfig({
       name,
       base_url,
       platform_type: resolvedPlatformType,
+      method,
+      headers,
+      query_params,
       supported_content_types,
       promotion_modes,
       required_metadata,
@@ -83,23 +97,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: validation.message || 'Invalid platform config' });
     }
 
-    let resolvedAuthType = auth_type;
-    let resolvedApiKeyName = api_key_name;
-    if (!resolvedAuthType || !resolvedApiKeyName) {
-      const { data: existing } = await supabase
-        .from('external_api_sources')
-        .select('*')
-        .eq('id', id)
-        .single();
-      resolvedAuthType = resolvedAuthType ?? existing?.auth_type ?? 'none';
-      resolvedApiKeyName = resolvedApiKeyName ?? existing?.api_key_name ?? null;
-    }
+    const resolvedAuthType = auth_type ?? existingRecord?.auth_type ?? 'none';
+    const resolvedApiKeyName = api_key_name ?? existingRecord?.api_key_name ?? null;
+    const resolvedApiKeyEnv = api_key_env_name ?? existingRecord?.api_key_env_name ?? null;
+    const resolvedMethod = method ?? existingRecord?.method ?? 'GET';
+    const resolvedHeaders = headers ?? existingRecord?.headers ?? {};
+    const resolvedQueryParams = query_params ?? existingRecord?.query_params ?? {};
+    const resolvedIsPreset = is_preset ?? existingRecord?.is_preset ?? false;
+    const resolvedRetryCount = retry_count ?? existingRecord?.retry_count ?? 2;
+    const resolvedTimeoutMs = timeout_ms ?? existingRecord?.timeout_ms ?? 8000;
+    const resolvedRateLimit = rate_limit_per_min ?? existingRecord?.rate_limit_per_min ?? 60;
 
-    if (resolvedAuthType !== 'none') {
-      if (!resolvedApiKeyName || !process.env[resolvedApiKeyName]) {
-        return res.status(400).json({ error: 'API key not found in environment variables' });
-      }
-    }
+    const resolvedKeyEnv = resolvedApiKeyEnv || resolvedApiKeyName || null;
 
     const { data, error } = await supabase
       .from('external_api_sources')
@@ -109,8 +118,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         purpose,
         category,
         is_active,
+        method: resolvedMethod,
         auth_type: resolvedAuthType,
         api_key_name: resolvedApiKeyName,
+        api_key_env_name: resolvedKeyEnv,
+        headers: resolvedHeaders,
+        query_params: resolvedQueryParams,
+        is_preset: resolvedIsPreset,
+        retry_count: resolvedRetryCount,
+        timeout_ms: resolvedTimeoutMs,
+        rate_limit_per_min: resolvedRateLimit,
         platform_type: resolvedPlatformType || 'social',
         supported_content_types: supported_content_types || [],
         promotion_modes: promotion_modes || [],

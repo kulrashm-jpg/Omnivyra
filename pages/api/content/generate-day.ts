@@ -5,6 +5,7 @@ import { getLatestPlatformExecutionPlan } from '../../../backend/db/platformExec
 import { generateContentForDay } from '../../../backend/services/contentGenerationService';
 import { getCampaignMemory } from '../../../backend/services/campaignMemoryService';
 import { createContentAsset } from '../../../backend/services/contentAssetService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -14,6 +15,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { companyId, campaignId, weekNumber, day } = req.body || {};
+    const access = await enforceCompanyAccess({
+      req,
+      res,
+      companyId,
+      campaignId,
+      requireCampaignId: true,
+    });
+    if (!access) return;
     if (!companyId || !campaignId || !weekNumber || !day) {
       return res.status(400).json({ error: 'companyId, campaignId, weekNumber, day are required' });
     }

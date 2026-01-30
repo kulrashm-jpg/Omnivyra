@@ -2,6 +2,7 @@ import { savePromotionMetadata } from '../db/platformPromotionStore';
 import { getCampaignMemory } from './campaignMemoryService';
 import { detectContentOverlap } from './contentOverlapService';
 import { getPromotionMetadata, isOmniVyraEnabled } from './omnivyraClientV1';
+import { setLastFallbackReason } from './omnivyraHealthService';
 
 const toKeywords = (text: string): string[] =>
   text
@@ -30,6 +31,7 @@ export async function generatePromotionMetadata(input: {
   platform: string;
   content: { headline?: string; caption?: string; hook?: string; callToAction?: string };
 }): Promise<any> {
+  let fallbackReason: string | null = null;
   if (isOmniVyraEnabled()) {
     const response = await getPromotionMetadata({
       companyId: input.companyId,
@@ -68,9 +70,15 @@ export async function generatePromotionMetadata(input: {
           contract_version: response.contract_version,
           partial: response.partial,
         },
+        fallback_reason: null,
       };
     }
+    fallbackReason = (response._omnivyra_meta?.error_type || 'omnivyra_unavailable') as string;
+    setLastFallbackReason(fallbackReason);
     console.warn('OMNIVYRA_FALLBACK_PROMOTION', { reason: response.error?.message });
+  } else {
+    fallbackReason = 'omnivyra_disabled';
+    setLastFallbackReason(fallbackReason);
   }
 
   const baseText = [input.content.headline, input.content.caption, input.content.hook]
@@ -110,5 +118,5 @@ export async function generatePromotionMetadata(input: {
 
   await savePromotionMetadata(metadata);
   console.log('PROMOTION METADATA GENERATED', { assetId: input.contentAssetId, platform: input.platform });
-  return metadata;
+  return { ...metadata, fallback_reason: fallbackReason };
 }

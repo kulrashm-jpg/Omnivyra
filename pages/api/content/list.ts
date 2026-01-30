@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -8,7 +9,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { campaignId, weekNumber } = req.query;
+    const { companyId, campaignId, weekNumber } = req.query;
+    const access = await enforceCompanyAccess({
+      req,
+      res,
+      companyId: typeof companyId === 'string' ? companyId : undefined,
+      campaignId: typeof campaignId === 'string' ? campaignId : undefined,
+      requireCampaignId: true,
+    });
+    if (!access) return;
     if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'campaignId is required' });
     }

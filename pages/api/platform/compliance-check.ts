@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getPlatformVariant, getPromotionMetadata, getPlatformRule } from '../../../backend/db/platformPromotionStore';
 import { validatePlatformCompliance } from '../../../backend/services/platformComplianceService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -9,7 +10,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { contentAssetId, platform, contentType } = req.body || {};
+    const { companyId, contentAssetId, platform, contentType } = req.body || {};
+    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!access) return;
     if (!contentAssetId || !platform || !contentType) {
       return res.status(400).json({ error: 'contentAssetId, platform, contentType are required' });
     }

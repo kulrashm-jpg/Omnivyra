@@ -2,6 +2,7 @@ import { getLatestCampaignVersion, getTrendSnapshots } from '../db/campaignVersi
 import { listAssetsWithLatestContent } from '../db/contentAssetStore';
 import { getLatestAnalyticsReport, getLatestLearningInsights } from '../db/performanceStore';
 import { saveCampaignMemorySnapshot } from '../db/campaignMemoryStore';
+import { detectContentOverlap } from './contentOverlapService';
 
 export async function getCampaignMemory(input: {
   companyId: string;
@@ -59,4 +60,33 @@ export async function getCampaignMemory(input: {
     pastPlatforms,
     pastContentSummaries,
   };
+}
+
+export async function validateUniqueness(input: {
+  companyId: string;
+  campaignId?: string;
+  proposedPlan: {
+    themes?: string[];
+    topics?: string[];
+    hooks?: string[];
+    messages?: string[];
+  };
+}): Promise<{
+  overlapDetected: boolean;
+  overlappingItems: string[];
+  similarityScore: number;
+  recommendation: string;
+}> {
+  const memory = await getCampaignMemory({ companyId: input.companyId, campaignId: input.campaignId });
+  const proposedContent = [
+    ...(input.proposedPlan.themes || []),
+    ...(input.proposedPlan.topics || []),
+    ...(input.proposedPlan.hooks || []),
+    ...(input.proposedPlan.messages || []),
+  ].filter(Boolean);
+  return detectContentOverlap({
+    companyId: input.companyId,
+    newProposedContent: proposedContent,
+    campaignMemory: memory,
+  });
 }

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import CampaignAIChat from '../components/CampaignAIChat';
+import { useCompanyContext } from '../components/CompanyContext';
 
 interface CampaignData {
   id: string;
@@ -27,6 +28,7 @@ interface CampaignData {
 
 export default function CreateCampaign() {
   const router = useRouter();
+  const { selectedCompanyId } = useCompanyContext();
   const [isLoading, setIsLoading] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [aiGeneratedContent, setAiGeneratedContent] = useState<any>(null);
@@ -157,6 +159,10 @@ export default function CreateCampaign() {
   };
 
   const createNewCampaign = async () => {
+    if (!selectedCompanyId) {
+      alert('Select a company first.');
+      return;
+    }
     if (!campaignData.name || campaignData.name.trim() === '') {
       alert('Please enter a campaign name first');
       return;
@@ -175,6 +181,7 @@ export default function CreateCampaign() {
         name: campaignData.name.trim(), // Ensure name is not empty
         status: 'planning',
         current_stage: 'planning',
+        companyId: selectedCompanyId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
@@ -220,6 +227,10 @@ export default function CreateCampaign() {
   };
 
   const generate12WeekPlan = async () => {
+    if (!selectedCompanyId) {
+      alert('Select a company first.');
+      return;
+    }
     if (!campaignData.name || campaignData.name.trim() === '') {
       alert('Please enter a campaign name first');
       return;
@@ -243,6 +254,7 @@ export default function CreateCampaign() {
         name: campaignData.name.trim(), // Ensure name is not empty
         status: 'planning',
         current_stage: 'planning',
+        companyId: selectedCompanyId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
@@ -536,6 +548,7 @@ export default function CreateCampaign() {
           onMinimize={() => setIsChatOpen(false)}
           context="campaign-creation"
           campaignId={null}
+          companyId={selectedCompanyId}
           campaignData={campaignData}
           onProgramGenerated={handleAIProgramGenerated}
         />

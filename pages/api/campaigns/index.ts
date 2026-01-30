@@ -1,6 +1,7 @@
 // Handle GET requests to /api/campaigns
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 // Use service role key for server-side operations (bypasses RLS)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -26,6 +27,12 @@ if (supabaseUrl && supabaseKey) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const companyId =
+    (req.query.companyId as string | undefined) ||
+    (req.body?.companyId as string | undefined);
+  const access = await enforceCompanyAccess({ req, res, companyId });
+  if (!access) return;
+
   if (req.method === 'POST') {
     // Handle campaign creation
     try {
@@ -50,7 +57,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...campaignDataWithoutCamelCase,
         user_id: '550e8400-e29b-41d4-a716-446655440000', // Default user ID for development
         start_date: startDate, // Map camelCase to snake_case
-        end_date: endDate // Map camelCase to snake_case
+        end_date: endDate, // Map camelCase to snake_case
+        company_id: companyId,
       };
 
       console.log('Processed campaign data for database:', campaignDataWithUser);
@@ -77,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
-      console.log('Campaign created successfully:', campaign.id);
+      console.log('CAMPAIGN_CREATED', { companyId, campaignId: campaign.id });
       return res.status(201).json({ 
         success: true,
         campaign,
@@ -114,6 +122,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from('campaigns')
         .select('*')
         .eq('id', campaignId)
+        .eq('company_id', companyId)
         .single();
 
       if (error) {
@@ -148,6 +157,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       
       // Get campaign goals
+      const { data: campaign, error: campaignError } = await supabase
+        .from('campaigns')
+        .select('id, company_id')
+        .eq('id', campaignId)
+        .eq('company_id', companyId)
+        .single();
+      if (campaignError || !campaign) {
+        return res.status(403).json({ error: 'Access denied to company' });
+      }
+
       const { data: goals, error } = await supabase
         .from('campaign_goals')
         .select('*')
@@ -172,12 +191,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
-      // GetAll campaigns for user
+      // GetAll campaigns for company
       let campaigns, error;
       try {
         const result = await supabase
           .from('campaigns')
           .select('*')
+          .eq('company_id', companyId)
           .order('created_at', { ascending: false });
         campaigns = result.data;
         error = result.error;

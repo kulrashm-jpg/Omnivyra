@@ -1,6 +1,7 @@
 import { getPlatformRule, listPlatformRules, upsertPlatformRule } from '../db/platformPromotionStore';
 import { OmniVyraAdvisory } from './omnivyraAdapterService';
 import { getPlatformRules, isOmniVyraEnabled } from './omnivyraClientV1';
+import { setLastFallbackReason } from './omnivyraHealthService';
 
 const fallbackRules: Array<any> = [
   {
@@ -105,6 +106,7 @@ export async function getRulesForPlatform(input: {
   const normalizedPlatform = input.platform.toLowerCase();
   const normalizedType = input.contentType.toLowerCase();
 
+  let fallbackReason: string | null = null;
   if (isOmniVyraEnabled()) {
     const response = await getPlatformRules({
       platform: normalizedPlatform,
@@ -132,11 +134,17 @@ export async function getRulesForPlatform(input: {
             contract_version: response.contract_version,
             partial: response.partial,
           },
+          fallback_reason: null,
         };
       }
     } else {
+      fallbackReason = (response._omnivyra_meta?.error_type || 'omnivyra_unavailable') as string;
+      setLastFallbackReason(fallbackReason);
       console.warn('OMNIVYRA_FALLBACK_PLATFORM_RULES', { reason: response.error?.message });
     }
+  } else {
+    fallbackReason = 'omnivyra_disabled';
+    setLastFallbackReason(fallbackReason);
   }
 
   let rule = await getPlatformRule(normalizedPlatform, normalizedType);
@@ -170,5 +178,8 @@ export async function getRulesForPlatform(input: {
     };
   }
 
-  return rule;
+  return {
+    ...rule,
+    fallback_reason: fallbackReason,
+  };
 }

@@ -27,6 +27,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import ComprehensivePlanEditor from '../../components/ComprehensivePlanEditor';
+import { useCompanyContext } from '../../components/CompanyContext';
 
 interface Campaign {
   id: string;
@@ -132,6 +133,7 @@ interface PerformanceSummary {
 export default function CampaignDetails() {
   const router = useRouter();
   const { id } = router.query;
+  const { selectedCompanyId } = useCompanyContext();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [weeklyPlans, setWeeklyPlans] = useState<WeeklyPlan[]>([]);
   const [dailyPlans, setDailyPlans] = useState<DailyPlan[]>([]);
@@ -151,10 +153,10 @@ export default function CampaignDetails() {
   const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
-    if (id) {
+    if (id && selectedCompanyId) {
       loadCampaignDetails(id as string);
     }
-  }, [id]);
+  }, [id, selectedCompanyId]);
 
   useEffect(() => {
     const recId =
@@ -189,27 +191,44 @@ export default function CampaignDetails() {
     setIsLoading(true);
     try {
       // Load campaign data
-      const campaignResponse = await fetch(`/api/campaigns?type=campaign&campaignId=${campaignId}`);
+      if (!selectedCompanyId) {
+        throw new Error('Select a company first');
+      }
+      const campaignResponse = await fetch(
+        `/api/campaigns?type=campaign&campaignId=${campaignId}&companyId=${encodeURIComponent(
+          selectedCompanyId
+        )}`
+      );
       if (campaignResponse.ok) {
         const campaignData = await campaignResponse.json();
         setCampaign(campaignData.campaign);
       }
 
       // Load weekly plans
-      const weeklyResponse = await fetch(`/api/campaigns/get-weekly-plans?campaignId=${campaignId}`);
+      const weeklyResponse = await fetch(
+        `/api/campaigns/get-weekly-plans?campaignId=${campaignId}&companyId=${encodeURIComponent(
+          selectedCompanyId
+        )}`
+      );
       if (weeklyResponse.ok) {
         const weeklyData = await weeklyResponse.json();
         setWeeklyPlans(weeklyData);
       }
 
       // Load daily plans
-      const dailyResponse = await fetch(`/api/campaigns/daily-plans?campaignId=${campaignId}`);
+      const dailyResponse = await fetch(
+        `/api/campaigns/daily-plans?campaignId=${campaignId}&companyId=${encodeURIComponent(
+          selectedCompanyId
+        )}`
+      );
       if (dailyResponse.ok) {
         const dailyData = await dailyResponse.json();
         setDailyPlans(dailyData);
       }
 
-      const readinessResponse = await fetch(`/api/campaigns/${campaignId}/readiness`);
+      const readinessResponse = await fetch(
+        `/api/campaigns/${campaignId}/readiness?companyId=${encodeURIComponent(selectedCompanyId)}`
+      );
       if (readinessResponse.ok) {
         const readinessData = await readinessResponse.json();
         setReadiness(readinessData);
@@ -217,6 +236,8 @@ export default function CampaignDetails() {
 
       const gateResponse = await fetch(`/api/campaigns/${campaignId}/virality/gate`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: selectedCompanyId, campaignId }),
       });
       if (gateResponse.ok) {
         const gateData = await gateResponse.json();
@@ -225,13 +246,17 @@ export default function CampaignDetails() {
 
       const diagnosticsResponse = await fetch(`/api/campaigns/${campaignId}/virality/assess`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: selectedCompanyId, campaignId }),
       });
       if (diagnosticsResponse.ok) {
         const diagnosticsData = await diagnosticsResponse.json();
         setViralityDiagnostics(diagnosticsData);
       }
 
-      const performanceResponse = await fetch(`/api/performance/campaign/${campaignId}`);
+      const performanceResponse = await fetch(
+        `/api/performance/campaign/${campaignId}?companyId=${encodeURIComponent(selectedCompanyId)}`
+      );
       if (performanceResponse.ok) {
         const performanceData = await performanceResponse.json();
         setPerformanceSummary(performanceData);
@@ -262,6 +287,7 @@ export default function CampaignDetails() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          companyId: selectedCompanyId,
           campaignId: id,
           week: weekNumber,
           theme: `Week ${weekNumber} Theme`,

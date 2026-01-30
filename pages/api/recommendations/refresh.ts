@@ -3,6 +3,7 @@ import {
   runCompanyProfileTriggeredRefresh,
   runWeeklyRecommendationRefresh,
 } from '../../../backend/services/recommendationScheduler';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -10,6 +11,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { mode, companyId } = req.body || {};
+  const access = await enforceCompanyAccess({ req, res, companyId });
+  if (!access) return;
 
   try {
     if (mode === 'weekly') {

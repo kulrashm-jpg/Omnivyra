@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { regenerateContentAsset } from '../../../backend/services/contentAssetService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -8,7 +9,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { assetId, instruction } = req.body || {};
+    const { companyId, assetId, instruction } = req.body || {};
+    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!access) return;
     if (!assetId || !instruction) {
       return res.status(400).json({ error: 'assetId and instruction are required' });
     }

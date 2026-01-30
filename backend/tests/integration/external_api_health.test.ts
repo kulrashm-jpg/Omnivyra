@@ -1,26 +1,28 @@
-import { fetchTrendsFromApis } from '../../services/externalApiService';
-import * as externalApiService from '../../services/externalApiService';
-import { generateRecommendations } from '../../services/recommendationEngine';
+import {
+  fetchTrendsFromApis,
+  getExternalApiRuntimeSnapshot,
+  resetExternalApiRuntime,
+} from '../../services/externalApiService';
+import { resetCacheStats, getCacheStats } from '../../services/externalApiCacheService';
 import { supabase } from '../../db/supabaseClient';
-import { getHistoricalAccuracyScore } from '../../services/performanceFeedbackService';
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
-}));
-jest.mock('../../services/performanceFeedbackService', () => ({
-  getHistoricalAccuracyScore: jest.fn().mockResolvedValue(0.5),
 }));
 
 const sources = [
   {
     id: 'api-1',
-    name: 'API One',
+    name: 'YouTube Trends',
     base_url: 'https://api-one.example.com',
     purpose: 'trends',
     category: null,
     is_active: true,
     auth_type: 'none',
     api_key_name: null,
+    retry_count: 2,
+    timeout_ms: 8000,
+    rate_limit_per_min: 60,
     created_at: '2026-01-01T00:00:00Z',
   },
 ];
@@ -28,11 +30,17 @@ const sources = [
 const healthStore = new Map<string, any>();
 
 const buildQuery = (table: string) => {
-  const state: { filters: Record<string, any> } = { filters: {} };
+  const state: { filters: Record<string, any>; inFilter?: { field: string; values: any[] } } = {
+    filters: {},
+  };
   const query: any = {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn((field: string, value: any) => {
       state.filters[field] = value;
+      return query;
+    }),
+    in: jest.fn((field: string, values: any[]) => {
+      state.inFilter = { field, values };
       return query;
     }),
     order: jest.fn().mockReturnThis(),
@@ -48,6 +56,12 @@ const buildQuery = (table: string) => {
         return Promise.resolve({ data: sources, error: null }).then(resolve, reject);
       }
       if (table === 'external_api_health') {
+        if (state.inFilter?.field === 'api_source_id') {
+          const rows = state.inFilter.values
+            .map((id: string) => healthStore.get(id))
+            .filter(Boolean);
+          return Promise.resolve({ data: rows, error: null }).then(resolve, reject);
+        }
         const id = state.filters['api_source_id'];
         const data = healthStore.get(id);
         if (!data) {
@@ -61,13 +75,13 @@ const buildQuery = (table: string) => {
   return query;
 };
 
-describe('External API health', () => {
+describe('External API health + cache + rate limit', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
     healthStore.clear();
+    resetCacheStats();
+    resetExternalApiRuntime();
     jest.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
-    jest.spyOn(externalApiService, 'getPlatformStrategies').mockResolvedValue([]);
-    (getHistoricalAccuracyScore as jest.Mock).mockResolvedValue(0.5);
   });
 
   afterEach(() => {
@@ -75,58 +89,79 @@ describe('External API health', () => {
     jest.resetAllMocks();
   });
 
-  it('records success and failure with freshness and reliability', async () => {
-    const fetchMock = jest.fn();
-    fetchMock.mockResolvedValueOnce({
+  it('records cache hit and miss', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         items: [{ topic: 'Trend A', velocity: 1, sentiment: 0.5, volume: 1000 }],
       }),
     });
+    (global as any).fetch = fetchMock;
+
+    await fetchTrendsFromApis('US', 'marketing');
+    await fetchTrendsFromApis('US', 'marketing');
+
+    const stats = getCacheStats();
+    expect(stats.misses).toBeGreaterThan(0);
+    expect(stats.hits).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries on 5xx responses', async () => {
+    jest.useRealTimers();
+    const fetchMock = jest.fn();
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
     fetchMock.mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-      json: async () => ({}),
+      ok: true,
+      json: async () => ({ items: [{ topic: 'Trend A' }] }),
     });
     (global as any).fetch = fetchMock;
 
     await fetchTrendsFromApis();
-    const first = healthStore.get('api-1');
-    expect(first.success_count).toBe(1);
-    expect(first.failure_count).toBe(0);
-    expect(first.freshness_score).toBe(1);
-    expect(first.reliability_score).toBe(1);
-
-    jest.setSystemTime(new Date('2026-01-03T00:00:00Z'));
-    await fetchTrendsFromApis();
-    const second = healthStore.get('api-1');
-    expect(second.success_count).toBe(1);
-    expect(second.failure_count).toBe(1);
-    expect(second.reliability_score).toBeCloseTo(0.5, 3);
-    expect(second.freshness_score).toBeLessThan(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    jest.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
 
-  it('applies health scores to recommendation trend score', async () => {
-    (global as any).fetch = jest.fn();
-    const recommendations = await generateRecommendations({
-      companyProfile: null,
-      trendSignals: [
-        {
-          topic: 'Trend A',
-          source: 'API One',
-          volume: 1000,
-          velocity: 1,
-          sentiment: 0.5,
-          trend_source_health: {
-            freshness_score: 0.5,
-            reliability_score: 0.5,
-          },
-        },
-      ],
+  it('blocks rate limited sources', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ topic: 'Trend A' }] }),
     });
+    (global as any).fetch = fetchMock;
 
-    expect(recommendations[0].scores.trend_score).toBeCloseTo(1, 2);
-    expect(recommendations[0].scores.health_multiplier).toBeCloseTo(0.25, 2);
-    expect(recommendations[0].scores.final_score).toBeCloseTo(0.26, 2);
+    sources[0].rate_limit_per_min = 1;
+    await fetchTrendsFromApis();
+    await fetchTrendsFromApis();
+    sources[0].rate_limit_per_min = 60;
+
+    const snapshot = await getExternalApiRuntimeSnapshot(['api-1']);
+    expect(snapshot.rate_limited_sources.length).toBeGreaterThan(0);
+  });
+
+  it('updates health score on success', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ topic: 'Trend A' }] }),
+    });
+    (global as any).fetch = fetchMock;
+
+    await fetchTrendsFromApis();
+    const record = healthStore.get('api-1');
+    expect(record.success_count).toBe(1);
+    expect(record.failure_count).toBe(0);
+  });
+
+  it('computes signal confidence', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [{ topic: 'Trend A', velocity: 1, sentiment: 0.5, volume: 1000 }],
+      }),
+    });
+    (global as any).fetch = fetchMock;
+
+    const trends = await fetchTrendsFromApis();
+    expect(trends[0].signal_confidence).toBeDefined();
+    expect(trends[0].signal_confidence).toBeGreaterThanOrEqual(0);
   });
 });

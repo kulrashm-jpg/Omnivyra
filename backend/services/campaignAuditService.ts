@@ -9,6 +9,10 @@ import { getLatestPlatformExecutionPlan } from '../db/platformExecutionStore';
 import { listAssetsWithLatestContent } from '../db/contentAssetStore';
 import { getLatestAnalyticsReport, getLatestLearningInsights } from '../db/performanceStore';
 import { getCampaignMemory } from './campaignMemoryService';
+import { getEnabledApis, getExternalApiRuntimeSnapshot } from './externalApiService';
+import { getOmniVyraHealthReport } from './omnivyraClientV1';
+import { getLastFallbackReason, getLastMeta } from './omnivyraHealthService';
+import { getLearningStatus } from './omnivyraFeedbackService';
 import { detectContentOverlap } from './contentOverlapService';
 import { getLatestForecast, getLatestRoi, getLatestBusinessReport } from '../db/forecastStore';
 import { getComplianceReport, getPlatformVariant, getPromotionMetadata } from '../db/platformPromotionStore';
@@ -237,6 +241,24 @@ export async function generateCampaignAuditReport(
     placeholders: placeholders.length,
     lowConfidenceWeeks: lowConfidenceWeeks.length,
   });
+  const confidence_label =
+    confidence_score >= 75 ? 'High' : confidence_score >= 40 ? 'Medium' : 'Low';
+  const novelty_flag = overlap.similarityScore > 0.6;
+  const omnivyra_explanation_used = Boolean(omnivyraSnapshot?.explanation);
+  const ui_explainability_snapshot = {
+    explanation: omnivyraSnapshot?.explanation ?? null,
+    confidence: omnivyraSnapshot?.confidence ?? null,
+    placeholders: omnivyraSnapshot?.placeholders ?? [],
+    trends_used: usedTrends.slice(0, 10),
+    trends_ignored: ignoredTrends.slice(0, 10),
+  };
+  const enabledApis = await getEnabledApis();
+  const externalApiSnapshot = await getExternalApiRuntimeSnapshot(
+    enabledApis.map((api) => api.id)
+  );
+  const learningStatus = getLearningStatus(campaignId ?? null);
+  const omnivyraHealth = getOmniVyraHealthReport();
+  const omnivyraMeta = getLastMeta();
   const status = computeStatus({
     missingFields: gate.missing_fields,
     placeholders: placeholders.length,
@@ -312,6 +334,26 @@ export async function generateCampaignAuditReport(
     confidence_score,
     status,
     health_report: healthReport,
+    recommendation_snapshot: campaignSnapshot?.recommendation_snapshot ?? null,
+    omnivyra_snapshot: omnivyraSnapshot,
+    trend_sources: usedTrends.map((trend) => trend.platform || trend.topic),
+    novelty_score: overlap.similarityScore,
+    confidence: confidence_score,
+    confidence_label,
+    novelty_flag,
+    omnivyra_explanation_used,
+    ui_explainability_snapshot,
+    external_api_health_snapshot: externalApiSnapshot.health_snapshot,
+    cache_hits: externalApiSnapshot.cache_stats,
+    rate_limited_sources: externalApiSnapshot.rate_limited_sources,
+    signal_confidence_summary: externalApiSnapshot.signal_confidence_summary,
+    omnivyra_learning_sent: learningStatus?.status === 'sent',
+    omnivyra_learning_payload_preview: learningStatus?.payload_preview ?? null,
+    omnivyra_health_snapshot: omnivyraHealth,
+    omnivyra_contract_valid: omnivyraMeta?.contract_valid ?? null,
+    omnivyra_fallback_reason: getLastFallbackReason(),
+    omnivyra_latency_ms: omnivyraMeta?.latency_ms ?? null,
+    omnivyra_endpoint_used: omnivyraMeta?.endpoint ?? null,
     platform_execution_plan: platformExecution?.plan_json ?? null,
     content_assets: {
       total: contentAssets.length,
@@ -330,7 +372,6 @@ export async function generateCampaignAuditReport(
     forecast_snapshot: forecast?.forecast_json ?? null,
     roi_snapshot: roi?.roi_json ?? null,
     business_report: businessReport?.report_json ?? null,
-    omnivyra_snapshot: omnivyraSnapshot,
     audit_sources: {
       trend_snapshots: trendSnapshots,
       week_versions: weekVersions,

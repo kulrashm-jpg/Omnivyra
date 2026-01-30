@@ -4,6 +4,7 @@ import { detectTrendDrift } from '../../../backend/services/trendDriftService';
 import { fetchTrendsFromApis } from '../../../backend/services/externalApiService';
 import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
 import { getLatestAnalyticsReport } from '../../../backend/db/performanceStore';
+import { sendLearningSnapshot } from '../../../backend/services/omnivyraFeedbackService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -41,6 +42,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     console.log('DRIFT DETECTED', drift);
+    await sendLearningSnapshot({
+      companyId,
+      trends_used: newTrends.map((topic) => ({ topic })),
+      trends_ignored: [],
+      signal_confidence_summary: undefined,
+      novelty_score: undefined,
+      confidence_score: undefined,
+      placeholders: [],
+      explanation: 'Trend drift check executed',
+      external_api_health_snapshot: [],
+      performance_metrics: analyticsReport?.report_json ?? null,
+      drift_flags: drift,
+      timestamp: new Date().toISOString(),
+    });
     return res.status(200).json(drift);
   } catch (error: any) {
     return res.status(500).json({ error: error?.message || 'Failed to detect trend drift' });

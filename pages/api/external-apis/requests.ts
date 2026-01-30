@@ -1,0 +1,115 @@
+import { NextApiRequest, NextApiResponse } from 'next';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { validatePlatformConfig } from '../../../backend/services/externalApiService';
+import { resolveUserContext } from '../../../backend/services/userContextService';
+
+const authTypeRequiresKey = (authType?: string | null) =>
+  ['api_key', 'bearer', 'query', 'header'].includes(String(authType || 'none'));
+
+const getSuperAdminStatus = async (userId: string): Promise<boolean> => {
+  const { data, error } = await supabase.rpc('is_super_admin', { check_user_id: userId });
+  if (error) {
+    console.warn('Failed to check super admin status', { error: error.message });
+    return false;
+  }
+  return !!data;
+};
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const user = await resolveUserContext(req);
+
+  if (req.method === 'GET') {
+    const isAdmin = await getSuperAdminStatus(user.userId);
+    const query = supabase
+      .from('external_api_source_requests')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    const { data, error } = isAdmin
+      ? await query
+      : await query.eq('created_by_user_id', user.userId);
+
+    if (error) {
+      return res.status(500).json({ error: 'Failed to load API requests' });
+    }
+    return res.status(200).json({ requests: data || [] });
+  }
+
+  if (req.method === 'POST') {
+    const {
+      name,
+      base_url,
+      purpose,
+      category,
+      is_active,
+      method,
+      auth_type,
+      api_key_env_name,
+      headers,
+      query_params,
+      platform_type,
+      supported_content_types,
+      promotion_modes,
+      required_metadata,
+      posting_constraints,
+      requires_admin,
+    } = req.body || {};
+
+    const resolvedPlatformType = platform_type || 'social';
+    const validation = validatePlatformConfig({
+      name,
+      base_url,
+      platform_type: resolvedPlatformType,
+      method,
+      headers,
+      query_params,
+      supported_content_types,
+      promotion_modes,
+      required_metadata,
+      posting_constraints,
+    });
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.message || 'Invalid platform config' });
+    }
+
+    const resolvedApiKeyEnv = api_key_env_name ? String(api_key_env_name).trim() : null;
+    if (authTypeRequiresKey(auth_type) && !resolvedApiKeyEnv) {
+      return res.status(400).json({ error: 'API key env var name is required' });
+    }
+
+    const { data, error } = await supabase
+      .from('external_api_source_requests')
+      .insert({
+        name,
+        base_url,
+        purpose: purpose || 'trends',
+        category: category || null,
+        is_active: is_active ?? true,
+        method: method || 'GET',
+        auth_type: auth_type || 'none',
+        api_key_env_name: resolvedApiKeyEnv,
+        headers: headers || {},
+        query_params: query_params || {},
+        is_preset: false,
+        platform_type: resolvedPlatformType,
+        supported_content_types: supported_content_types || [],
+        promotion_modes: promotion_modes || [],
+        required_metadata: required_metadata || {},
+        posting_constraints: posting_constraints || {},
+        requires_admin: requires_admin ?? true,
+        status: 'pending',
+        created_by_user_id: user.userId,
+        created_at: new Date().toISOString(),
+      })
+      .select('*')
+      .single();
+
+    if (error) {
+      return res.status(500).json({ error: 'Failed to submit API request' });
+    }
+
+    return res.status(201).json({ request: data });
+  }
+
+  return res.status(405).json({ error: 'Method not allowed' });
+}

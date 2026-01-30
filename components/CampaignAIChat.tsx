@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { 
   Send, 
   Mic, 
@@ -55,6 +55,7 @@ interface AIChatProps {
   onClose: () => void;
   onMinimize: () => void;
   context?: string;
+  companyId?: string;
   campaignId?: string;
   campaignData?: any;
   onProgramGenerated?: (program: any) => void;
@@ -125,7 +126,7 @@ type AiHistoryEntry = {
   created_at: string;
 };
 
-export default function AIChat({ isOpen, onClose, onMinimize, context = "general", campaignId, campaignData, onProgramGenerated }: AIChatProps) {
+export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, onProgramGenerated }: AIChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isRecording, setIsRecording] = useState(false);
@@ -185,6 +186,23 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [isPlatformIntelLoading, setIsPlatformIntelLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const resolvedCompanyId = useMemo(() => {
+    if (companyId) return companyId;
+    if (typeof window === 'undefined') return '';
+    return (
+      window.localStorage.getItem('selected_company_id') ||
+      window.localStorage.getItem('company_id') ||
+      ''
+    );
+  }, [companyId]);
+
+  const ensureCompanyId = (): boolean => {
+    if (!resolvedCompanyId) {
+      setUiErrorMessage('Please select or create a campaign first.');
+      return false;
+    }
+    return true;
+  };
 
   // Debug: Log props when component mounts or props change
   useEffect(() => {
@@ -1055,11 +1073,12 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const loadAuditReport = async (id: string) => {
     try {
       setIsAuditLoading(true);
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/campaigns/audit-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId: id,
         }),
       });
@@ -1079,11 +1098,12 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const loadHealthReport = async (id: string) => {
     try {
       setIsHealthLoading(true);
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/campaigns/health-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId: id,
         }),
       });
@@ -1132,11 +1152,12 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const loadExecutionPlan = async (id: string, force = false) => {
     try {
       setIsExecutionLoading(true);
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/campaigns/platform-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId: id,
           weekNumber: executionWeekNumber,
           force,
@@ -1161,11 +1182,12 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const handleApproveScheduling = async () => {
     if (!campaignId) return;
     try {
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/campaigns/scheduler-payload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId,
           weekNumber: executionWeekNumber,
         }),
@@ -1187,8 +1209,9 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const loadContentAssets = async (id: string) => {
     try {
       setIsContentLoading(true);
+      if (!ensureCompanyId()) return;
       const response = await fetch(
-        `/api/content/list?campaignId=${id}&weekNumber=${contentWeekNumber}`
+        `/api/content/list?companyId=${encodeURIComponent(resolvedCompanyId)}&campaignId=${id}&weekNumber=${contentWeekNumber}`
       );
       if (!response.ok) {
         throw new Error('Failed to load content assets');
@@ -1199,7 +1222,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId: id,
           weekNumber: contentWeekNumber,
         }),
@@ -1222,11 +1245,12 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const handleGenerateContent = async (day: string) => {
     if (!campaignId) return;
     try {
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/content/generate-day', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId,
           weekNumber: contentWeekNumber,
           day,
@@ -1248,10 +1272,11 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
       return;
     }
     try {
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/content/regenerate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assetId, instruction: regenerateInstruction }),
+        body: JSON.stringify({ companyId: resolvedCompanyId, assetId, instruction: regenerateInstruction }),
       });
       if (!response.ok) {
         throw new Error('Failed to regenerate content');
@@ -1265,10 +1290,11 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
 
   const handleApproveContent = async (assetId: string) => {
     try {
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/content/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assetId }),
+        body: JSON.stringify({ companyId: resolvedCompanyId, assetId }),
       });
       if (!response.ok) {
         throw new Error('Failed to approve content');
@@ -1282,10 +1308,11 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
 
   const handleRejectContent = async (assetId: string) => {
     try {
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/content/reject', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assetId, reason: 'Needs revisions' }),
+        body: JSON.stringify({ companyId: resolvedCompanyId, assetId, reason: 'Needs revisions' }),
       });
       if (!response.ok) {
         throw new Error('Failed to reject content');
@@ -1300,11 +1327,12 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const loadPerformanceInsights = async (id: string) => {
     try {
       setIsPerformanceLoading(true);
+      if (!ensureCompanyId()) return;
       const analyticsResponse = await fetch('/api/analytics/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId: id,
           timeframe: 'latest',
         }),
@@ -1319,7 +1347,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId: id,
         }),
       });
@@ -1365,11 +1393,12 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
 
   const loadCampaignMemory = async (id: string) => {
     try {
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/campaigns/memory', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId: id,
         }),
       });
@@ -1382,7 +1411,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           campaignId: id,
           proposedPlan: {
             themes: data.pastThemes,
@@ -1408,10 +1437,11 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const loadBusinessReports = async (id: string) => {
     try {
       setIsBusinessLoading(true);
+      if (!ensureCompanyId()) return;
       const forecastResponse = await fetch('/api/campaigns/forecast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: campaignData?.company_id, campaignId: id }),
+        body: JSON.stringify({ companyId: resolvedCompanyId, campaignId: id }),
       });
       if (forecastResponse.ok) {
         setForecastReport(await forecastResponse.json());
@@ -1427,7 +1457,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
       const businessResponse = await fetch('/api/campaigns/business-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: campaignData?.company_id, campaignId: id }),
+        body: JSON.stringify({ companyId: resolvedCompanyId, campaignId: id }),
       });
       if (businessResponse.ok) {
         setBusinessReport(await businessResponse.json());
@@ -1449,11 +1479,12 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
     }
     try {
       setIsPlatformIntelLoading(true);
+      if (!ensureCompanyId()) return;
       const response = await fetch('/api/platform/format-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: campaignData?.company_id,
+          companyId: resolvedCompanyId,
           contentAssetId: platformIntelAssetId,
           platform: platformIntelPlatform,
           contentType: platformIntelContentType,

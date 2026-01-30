@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
+import { useCompanyContext } from '../components/CompanyContext';
 
 type CompanyProfile = {
   company_id?: string;
@@ -122,6 +123,15 @@ const buildSocialProfilesFromScalars = (
 
 export default function CompanyProfilePage() {
   const router = useRouter();
+  const {
+    user,
+    companies,
+    selectedCompanyId,
+    selectedCompanyName,
+    setSelectedCompanyId,
+    isLoading: isCompanyLoading,
+  } = useCompanyContext();
+  const isAdmin = useMemo(() => user?.role === 'admin', [user]);
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
   const [draftProfile, setDraftProfile] = useState<CompanyProfile>(emptyProfile);
   const [companyId, setCompanyId] = useState('');
@@ -142,26 +152,28 @@ export default function CompanyProfilePage() {
     const queryCompanyId =
       typeof router.query.companyId === 'string' ? router.query.companyId : '';
     if (queryCompanyId) {
+      setSelectedCompanyId(queryCompanyId);
       setCompanyId(queryCompanyId);
       setDraftProfile((prev) => ({ ...prev, company_id: queryCompanyId }));
-      localStorage.setItem('company_id', queryCompanyId);
-    } else {
-      const stored = localStorage.getItem('company_id') || '';
-      if (stored) {
-        setCompanyId(stored);
-        setDraftProfile((prev) => ({ ...prev, company_id: stored }));
-      }
     }
   }, [router.isReady, router.query.companyId]);
+
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    setCompanyId(selectedCompanyId);
+    setDraftProfile((prev) => ({ ...prev, company_id: selectedCompanyId }));
+  }, [selectedCompanyId]);
 
   useEffect(() => {
     const loadProfile = async () => {
       try {
         setIsLoading(true);
+        if (!companyId) {
+          setErrorMessage('Select a company to continue.');
+          return;
+        }
         const response = await fetch(
-          companyId
-            ? `/api/company-profile?companyId=${encodeURIComponent(companyId)}`
-            : '/api/company-profile'
+          `/api/company-profile?companyId=${encodeURIComponent(companyId)}`
         );
         if (response.status === 404) {
           setProfile(null);
@@ -198,6 +210,7 @@ export default function CompanyProfilePage() {
   useEffect(() => {
     const loadRefinements = async () => {
       try {
+        if (!companyId) return;
         const response = await fetch(
           companyId
             ? `/api/company-profile/refinements?companyId=${encodeURIComponent(companyId)}`
@@ -298,6 +311,10 @@ export default function CompanyProfilePage() {
       setIsSaving(true);
       setErrorMessage(null);
       setSuccessMessage(null);
+      if (!companyId) {
+        setErrorMessage('Select a company to continue.');
+        return;
+      }
       const payload = {
         ...activeProfile,
         companyId: companyId || activeProfile.company_id,
@@ -326,7 +343,7 @@ export default function CompanyProfilePage() {
       setDraftProfile(data.profile || activeProfile);
       if (data.profile?.company_id) {
         setCompanyId(data.profile.company_id);
-        localStorage.setItem('company_id', data.profile.company_id);
+        setSelectedCompanyId(data.profile.company_id);
         console.log('Profile loaded:', data.profile.company_id);
       }
       setNotFound(false);
@@ -344,6 +361,10 @@ export default function CompanyProfilePage() {
       setIsRefining(true);
       setErrorMessage(null);
       setSuccessMessage(null);
+      if (!companyId) {
+        setErrorMessage('Select a company to continue.');
+        return;
+      }
       const payload = {
         ...activeProfile,
         companyId: companyId || activeProfile.company_id,
@@ -372,7 +393,7 @@ export default function CompanyProfilePage() {
       setDraftProfile(data.profile || activeProfile);
       if (data.profile?.company_id) {
         setCompanyId(data.profile.company_id);
-        localStorage.setItem('company_id', data.profile.company_id);
+        setSelectedCompanyId(data.profile.company_id);
         console.log('Profile loaded:', data.profile.company_id);
       }
       setNotFound(false);
@@ -493,16 +514,28 @@ export default function CompanyProfilePage() {
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="text-sm font-medium text-gray-700">Company ID</label>
-                <input
+                <label className="text-sm font-medium text-gray-700">Company</label>
+                <select
                   value={companyId}
                   onChange={(e) => {
                     const nextId = e.target.value;
+                    setSelectedCompanyId(nextId);
                     setCompanyId(nextId);
                     updateActiveProfile({ ...activeProfile, company_id: nextId });
                   }}
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
+                  disabled={!isAdmin || isCompanyLoading}
+                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
+                >
+                  <option value="">Select company</option>
+                  {companies.map((company) => (
+                    <option key={company.company_id} value={company.company_id}>
+                      {company.name}
+                    </option>
+                  ))}
+                </select>
+                {!isAdmin && selectedCompanyName && (
+                  <div className="text-xs text-gray-500 mt-1">Company locked for your role.</div>
+                )}
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">Company Name</label>
