@@ -1,9 +1,10 @@
 import { getProfile } from './companyProfileService';
 import {
-  fetchTrendsFromApis,
+  fetchExternalApis,
   getEnabledApis,
   getExternalApiRuntimeSnapshot,
   getPlatformStrategies,
+  recordSignalConfidenceSummary,
   TrendSignal,
 } from './externalApiService';
 import { sendLearningSnapshot } from './omnivyraFeedbackService';
@@ -19,12 +20,13 @@ import { getLastFallbackReason, getLastMeta, setLastFallbackReason } from './omn
 import { generateCampaignStrategy } from './campaignRecommendationService';
 import {
   mergeTrendsAcrossSources,
-  normalizeTrendSignals,
   removeDuplicates,
   scoreByFrequency,
   tagByPlatform,
   TrendSignalNormalized,
 } from './trendProcessingService';
+import { normalizeTrends } from './trendNormalizationService';
+import { supabase } from '../db/supabaseClient';
 
 export type RecommendationEngineInput = {
   companyId: string;
@@ -32,6 +34,27 @@ export type RecommendationEngineInput = {
   objective?: string;
   durationWeeks?: number;
   userId?: string | null;
+  simulate?: boolean;
+};
+
+export type PersonaSummary = {
+  personas: string[];
+  tone?: string | null;
+  platform_preferences: string[];
+};
+
+export type ScenarioOutcomes = {
+  best_case: number;
+  worst_case: number;
+  likely_case: number;
+};
+
+export type ScoringAdjustments = {
+  base_confidence: number;
+  adjusted_confidence: number;
+  persona_fit: number;
+  budget_fit: number;
+  competitor_gap: number;
 };
 
 export type RecommendationEngineResult = {
@@ -42,6 +65,9 @@ export type RecommendationEngineResult = {
   confidence_score: number;
   explanation: string;
   sources: string[];
+  persona_summary?: PersonaSummary;
+  scenario_outcomes?: ScenarioOutcomes;
+  scoring_adjustments?: ScoringAdjustments;
   signal_quality?: {
     external_api_health_snapshot: any;
     cache_hits: any;
@@ -105,6 +131,134 @@ const pickProfileCategory = (profile: any): string | undefined => {
   return undefined;
 };
 
+const normalizeList = (value?: string | null): string[] =>
+  String(value || '')
+    .split(/[,;/|]+/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+const normalizePlatformName = (value: string): string => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'twitter' || normalized === 'x') return 'x';
+  return normalized;
+};
+
+const extractPersonaSummary = (profile: any): PersonaSummary => {
+  const personas = Array.isArray(profile?.target_audience_list)
+    ? profile.target_audience_list.map((item: string) => String(item).trim()).filter(Boolean)
+    : normalizeList(profile?.target_audience);
+  const tone = Array.isArray(profile?.brand_voice_list) && profile.brand_voice_list.length > 0
+    ? profile.brand_voice_list[0]
+    : profile?.brand_voice ?? null;
+  const platform_preferences = Array.isArray(profile?.social_profiles)
+    ? profile.social_profiles
+        .map((entry: any) => normalizePlatformName(String(entry?.platform || '')))
+        .filter(Boolean)
+    : [];
+  return {
+    personas: Array.from(new Set(personas)),
+    tone,
+    platform_preferences: Array.from(new Set(platform_preferences)),
+  };
+};
+
+const computePersonaFit = (trends: TrendSignalNormalized[], summary: PersonaSummary): number => {
+  if (!summary.personas.length || trends.length === 0) return 1;
+  const personaTerms = summary.personas.map((persona) => persona.toLowerCase());
+  const matches = trends.filter((trend) =>
+    personaTerms.some((term) => trend.topic.toLowerCase().includes(term))
+  ).length;
+  const ratio = matches / Math.max(1, trends.length);
+  return Number((1 + Math.min(0.08, ratio * 0.08)).toFixed(3));
+};
+
+const pickBudgetValue = (profile: any): number | null => {
+  const candidates = [
+    profile?.budget,
+    profile?.marketing_budget,
+    profile?.monthly_budget,
+    profile?.annual_budget,
+    profile?.campaign_budget,
+  ];
+  const found = candidates.find((value) => typeof value === 'number' && Number.isFinite(value));
+  return typeof found === 'number' ? found : null;
+};
+
+const computeBudgetFit = (profile: any): number => {
+  const budget = pickBudgetValue(profile);
+  if (budget === null) return 1;
+  if (budget <= 0) return 0.95;
+  return 1.02;
+};
+
+const computeCompetitorGap = (trends: TrendSignalNormalized[], profile: any): number => {
+  const competitors = Array.isArray(profile?.competitors_list)
+    ? profile.competitors_list.map((item: string) => String(item).trim()).filter(Boolean)
+    : normalizeList(profile?.competitors);
+  if (competitors.length === 0 || trends.length === 0) return 1;
+  const competitorTerms = competitors.map((entry) => entry.toLowerCase());
+  const overlap = trends.filter((trend) =>
+    competitorTerms.some((term) => trend.topic.toLowerCase().includes(term))
+  ).length;
+  const overlapRatio = overlap / Math.max(1, trends.length);
+  return overlapRatio > 0 ? 0.98 : 1.02;
+};
+
+const buildScoringAdjustments = (
+  baseConfidence: number,
+  trends: TrendSignalNormalized[],
+  profile: any,
+  summary: PersonaSummary
+): ScoringAdjustments => {
+  const personaFit = computePersonaFit(trends, summary);
+  const budgetFit = computeBudgetFit(profile);
+  const competitorGap = computeCompetitorGap(trends, profile);
+  const adjusted = Math.round(
+    Math.max(0, Math.min(100, baseConfidence * personaFit * budgetFit * competitorGap))
+  );
+  return {
+    base_confidence: baseConfidence,
+    adjusted_confidence: adjusted,
+    persona_fit: personaFit,
+    budget_fit: budgetFit,
+    competitor_gap: competitorGap,
+  };
+};
+
+const applyPersonaPlatformBias = (
+  trends: TrendSignalNormalized[],
+  summary: PersonaSummary
+): TrendSignalNormalized[] => {
+  if (!summary.platform_preferences.length || trends.length === 0) return trends;
+  const preferenceSet = new Set(summary.platform_preferences.map((value) => value.toLowerCase()));
+  const scored = trends.map((trend, index) => {
+    const platformTag = String(trend.platform_tag || '').toLowerCase();
+    const source = String(trend.source || '').toLowerCase();
+    const preferenceMatch =
+      (platformTag && preferenceSet.has(platformTag)) ||
+      preferenceSet.has(source);
+    const confidence = typeof trend.signal_confidence === 'number' ? trend.signal_confidence : 0.6;
+    return {
+      trend,
+      index,
+      score: confidence + (preferenceMatch ? 0.15 : 0),
+    };
+  });
+  return scored
+    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.index - b.index))
+    .map((entry) => entry.trend);
+};
+
+const computeScenarioOutcomes = (confidence: number, trendCount: number): ScenarioOutcomes => {
+  const boost = Math.min(15, 5 + trendCount * 2);
+  const decline = Math.max(8, Math.round(boost * 0.7));
+  return {
+    likely_case: confidence,
+    best_case: Math.min(100, confidence + boost),
+    worst_case: Math.max(0, confidence - decline),
+  };
+};
+
 const computeConfidence = (
   trendsUsed: TrendSignalNormalized[],
   omniConfidence?: number
@@ -149,15 +303,33 @@ const toProposalPlan = (weeklyPlan: any[], dailyPlan: any[]) => ({
   messages: weeklyPlan.flatMap((week: any) => week.new_content_needed || []).filter(Boolean),
 });
 
+const ensureCampaignCompanyLink = async (companyId: string, campaignId: string) => {
+  const { data, error } = await supabase
+    .from('campaign_versions')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('campaign_id', campaignId);
+  if (error) {
+    throw new Error(`Failed to verify campaign link: ${error.message}`);
+  }
+  if (!data || data.length === 0) {
+    const linkError: any = new Error('CAMPAIGN_NOT_IN_COMPANY');
+    linkError.code = 'CAMPAIGN_NOT_IN_COMPANY';
+    throw linkError;
+  }
+};
+
 export const generateRecommendations = async (
   input: RecommendationEngineInput
 ): Promise<RecommendationEngineResult> => {
+  await ensureCampaignCompanyLink(input.companyId, input.campaignId);
   const profile = await getProfile(input.companyId, { autoRefine: true });
   await getCampaignMemory({ companyId: input.companyId, campaignId: input.campaignId });
+  const personaSummary = extractPersonaSummary(profile);
 
   const durationWeeks = input.durationWeeks ?? DEFAULT_DURATION_WEEKS;
   const objective = input.objective ?? 'awareness';
-  const platformStrategies = (await getPlatformStrategies()) || [];
+  const platformStrategies = (await getPlatformStrategies(input.companyId)) || [];
   const platformRules = platformStrategies.reduce<Record<string, { content_types: string[] }>>(
     (acc, strategy) => {
       const key = (strategy.platform_type || strategy.name || '').toLowerCase();
@@ -171,46 +343,82 @@ export const generateRecommendations = async (
   );
 
   let rawSignals: TrendSignal[] = [];
+  let missingEnvPlaceholders: string[] = [];
   try {
-    rawSignals = await fetchTrendsFromApis(pickProfileGeo(profile), pickProfileCategory(profile), {
+    const externalSummary = await fetchExternalApis(input.companyId, pickProfileGeo(profile), pickProfileCategory(profile), {
       recordHealth: true,
       minReliability: 0.3,
       userId: input.userId ?? null,
     });
+    const normalizedTrends = normalizeTrends(
+      externalSummary.results.map((result) => ({
+        source: result.source,
+        payload: result.payload,
+        health: result.health ?? null,
+        geo: pickProfileGeo(profile),
+        category: pickProfileCategory(profile),
+      }))
+    );
+    missingEnvPlaceholders = externalSummary.missing_env_placeholders;
+    if (missingEnvPlaceholders.length > 0) {
+      console.warn('EXTERNAL_API_MISSING_ENV_PLACEHOLDERS', { placeholders: missingEnvPlaceholders });
+    }
+    console.log('EXTERNAL_API_NORMALIZED_TRENDS', { count: normalizedTrends.length });
+    if (typeof recordSignalConfidenceSummary === 'function') {
+      recordSignalConfidenceSummary(normalizedTrends.map((trend) => trend.confidence));
+    }
+    rawSignals = normalizedTrends.map((trend) => ({
+      topic: trend.title,
+      source: trend.source,
+      geo: trend.geo,
+      volume: trend.volume,
+      sentiment: undefined,
+      velocity: undefined,
+      signal_confidence: trend.confidence,
+      trend_source_health: undefined,
+    }));
   } catch (error) {
     console.warn('EXTERNAL_API_FETCH_FAILED');
   }
 
-  const normalized = normalizeTrendSignals(rawSignals);
-  const deduped = removeDuplicates(normalized);
+  const deduped = removeDuplicates(rawSignals);
   const merged = mergeTrendsAcrossSources(deduped);
   const tagged = tagByPlatform(merged);
 
   if (tagged.length === 0) {
+    console.warn('EXTERNAL_API_NO_SIGNALS');
     const fallbackPlan = await generateCampaignStrategy({
       companyId: input.companyId,
       objective,
       durationWeeks,
     });
-    const enabledApis = await getEnabledApis();
+    const enabledApis = await getEnabledApis(input.companyId);
     const signalQuality = await getExternalApiRuntimeSnapshot(enabledApis.map((api) => api.id));
     const healthReport = getOmniVyraHealthReport();
     const lastMeta = getLastMeta();
     if (!isOmniVyraEnabled()) {
       setLastFallbackReason('omnivyra_disabled');
     }
+    const baseConfidence = computeConfidence([], undefined);
+    const scoringAdjustments = buildScoringAdjustments(baseConfidence, [], profile, personaSummary);
+    const scenarioOutcomes = input.simulate
+      ? computeScenarioOutcomes(scoringAdjustments.adjusted_confidence, 0)
+      : undefined;
     const result = {
       trends_used: [],
       trends_ignored: [],
       weekly_plan: fallbackPlan.weekly_plan ?? [],
       daily_plan: fallbackPlan.daily_plan ?? [],
-      confidence_score: computeConfidence([]),
+      confidence_score: scoringAdjustments.adjusted_confidence,
       explanation: buildExplanation({
         trendsUsed: [],
         sources: [],
         fallbackReason: 'No external signals found. Generated a fallback plan.',
       }),
       sources: [],
+      persona_summary: personaSummary,
+      scoring_adjustments: scoringAdjustments,
+      scenario_outcomes: scenarioOutcomes,
       signal_quality: {
         external_api_health_snapshot: signalQuality.health_snapshot,
         cache_hits: signalQuality.cache_stats,
@@ -218,7 +426,7 @@ export const generateRecommendations = async (
         signal_confidence_summary: signalQuality.signal_confidence_summary,
       },
       omnivyra_metadata: {
-        placeholders: ['no_external_signals'],
+        placeholders: ['no_external_signals', ...missingEnvPlaceholders],
       },
       omnivyra_status: {
         status: healthReport.status,
@@ -345,8 +553,16 @@ export const generateRecommendations = async (
     dailyPlan = retryPlan.daily_plan ?? dailyPlan;
   }
 
-  const confidence = computeConfidence(trendsUsed, omnivyraMeta?.confidence);
-  const enabledApis = await getEnabledApis();
+  trendsUsed = applyPersonaPlatformBias(trendsUsed, personaSummary);
+  const baseConfidence = computeConfidence(trendsUsed, omnivyraMeta?.confidence);
+  const scoringAdjustments = buildScoringAdjustments(
+    baseConfidence,
+    trendsUsed,
+    profile,
+    personaSummary
+  );
+  const confidence = scoringAdjustments.adjusted_confidence;
+  const enabledApis = await getEnabledApis(input.companyId);
   const signalQuality = await getExternalApiRuntimeSnapshot(enabledApis.map((api) => api.id));
   const allUnhealthy =
     signalQuality.health_snapshot.length > 0 &&
@@ -362,14 +578,27 @@ export const generateRecommendations = async (
     if (!isOmniVyraEnabled()) {
       setLastFallbackReason('omnivyra_disabled');
     }
+    const fallbackBaseConfidence = computeConfidence([], undefined);
+    const fallbackAdjustments = buildScoringAdjustments(
+      fallbackBaseConfidence,
+      [],
+      profile,
+      personaSummary
+    );
+    const scenarioOutcomes = input.simulate
+      ? computeScenarioOutcomes(fallbackAdjustments.adjusted_confidence, 0)
+      : undefined;
     const result = {
       trends_used: [],
       trends_ignored: [],
       weekly_plan: fallbackPlan.weekly_plan ?? [],
       daily_plan: fallbackPlan.daily_plan ?? [],
-      confidence_score: 25,
+      confidence_score: fallbackAdjustments.adjusted_confidence,
       explanation: 'External trend sources unavailable.',
       sources: [],
+      persona_summary: personaSummary,
+      scoring_adjustments: fallbackAdjustments,
+      scenario_outcomes: scenarioOutcomes,
       signal_quality: {
         external_api_health_snapshot: signalQuality.health_snapshot,
         cache_hits: signalQuality.cache_stats,
@@ -414,6 +643,9 @@ export const generateRecommendations = async (
 
   const healthReport = getOmniVyraHealthReport();
   const lastMeta = getLastMeta();
+  const scenarioOutcomes = input.simulate
+    ? computeScenarioOutcomes(confidence, trendsUsed.length)
+    : undefined;
   const result = {
     trends_used: trendsUsed,
     trends_ignored: trendsIgnored,
@@ -426,6 +658,9 @@ export const generateRecommendations = async (
       omnivyraExplanation: omnivyraMeta?.explanation,
     }),
     sources,
+    persona_summary: personaSummary,
+    scoring_adjustments: scoringAdjustments,
+    scenario_outcomes: scenarioOutcomes,
     signal_quality: {
       external_api_health_snapshot: signalQuality.health_snapshot,
       cache_hits: signalQuality.cache_stats,

@@ -53,7 +53,11 @@ export async function runWeeklyRecommendationRefresh(): Promise<void> {
   for (const companyId of companyIds) {
     try {
       const profile = await getProfile(companyId, { autoRefine: false });
-      const trends = await fetchTrendsFromApis();
+      const geoHint = profile?.geography_list?.[0] ?? profile?.geography ?? undefined;
+      const categoryHint = profile?.industry_list?.[0] ?? profile?.category ?? undefined;
+      const trends = await fetchTrendsFromApis(companyId, geoHint, categoryHint, {
+        recordHealth: false,
+      });
       const recommendations = await generateRecommendations({
         companyProfile: profile,
         trendSignals: trends,
@@ -73,7 +77,11 @@ export async function runCompanyProfileTriggeredRefresh(companyId: string): Prom
   if (!companyId) return;
   try {
     const profile = await getProfile(companyId, { autoRefine: false });
-    const trends = await fetchTrendsFromApis();
+    const geoHint = profile?.geography_list?.[0] ?? profile?.geography ?? undefined;
+    const categoryHint = profile?.industry_list?.[0] ?? profile?.category ?? undefined;
+    const trends = await fetchTrendsFromApis(companyId, geoHint, categoryHint, {
+      recordHealth: false,
+    });
     const recommendations = await generateRecommendations({
       companyProfile: profile,
       trendSignals: trends,

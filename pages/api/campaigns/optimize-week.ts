@@ -8,55 +8,85 @@ import { getLatestCampaignVersion, saveCampaignHealthReport } from '../../../bac
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { getLatestLearningInsights, getLatestAnalyticsReport } from '../../../backend/db/performanceStore';
 import { sendLearningSnapshot } from '../../../backend/services/omnivyraFeedbackService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { Role } from '../../../backend/services/rbacService';
+import { withRBAC } from '../../../backend/middleware/withRBAC';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { campaignId, weekNumber, reason } = req.body || {};
-    if (!campaignId || !weekNumber) {
-      return res.status(400).json({ error: 'campaignId and weekNumber are required' });
+    const { campaignId, weekNumber, reason, companyId } = req.body || {};
+    if (!campaignId || !weekNumber || !companyId) {
+      return res.status(400).json({ error: 'campaignId, weekNumber, and companyId are required' });
     }
 
-    const { data: campaign } = await supabase
-      .from('campaigns')
-      .select('id, company_id, objective')
-      .eq('id', campaignId)
-      .single();
+    const access = await enforceCompanyAccess({
+      req,
+      res,
+      companyId,
+      campaignId,
+      requireCampaignId: true,
+    });
+    if (!access) return;
 
-    if (!campaign?.company_id) {
-      return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
+    const { data: ownershipRows, error: ownershipError } = await supabase
+      .from('campaign_versions')
+      .select('campaign_id')
+      .eq('company_id', companyId)
+      .eq('campaign_id', campaignId);
+
+    if (ownershipError) {
+      return res.status(500).json({ error: 'Failed to verify campaign ownership' });
     }
 
-    const profile = await getProfile(campaign.company_id, { autoRefine: false });
+    if (!ownershipRows || ownershipRows.length === 0) {
+      return res.status(403).json({
+        error: 'CAMPAIGN_NOT_IN_COMPANY',
+        code: 'CAMPAIGN_NOT_IN_COMPANY',
+      });
+    }
+
+    const profile = await getProfile(companyId, { autoRefine: false });
     if (!profile) {
       return res.status(404).json({ status: 'blocked', reason: 'company profile not found' });
     }
 
     const geoHint = profile.geography_list?.[0] ?? profile.geography ?? undefined;
-    const trendSignals = await fetchTrendsFromApis(geoHint, undefined, { recordHealth: false });
+    const trendSignals = await fetchTrendsFromApis(companyId, geoHint, undefined, {
+      recordHealth: false,
+      userId: access.userId,
+    });
     const trendData = trendSignals.map((signal) => ({
       topic: signal.topic,
       platform: signal.source,
       geography: signal.geo,
     }));
 
-    const learningInsights = await getLatestLearningInsights(campaign.company_id, campaignId);
-    const analyticsReport = await getLatestAnalyticsReport(campaign.company_id, campaignId);
+    const learningInsights = await getLatestLearningInsights(companyId, campaignId);
+    const analyticsReport = await getLatestAnalyticsReport(companyId, campaignId);
+    const latestVersion = await getLatestCampaignVersion(companyId, campaignId);
+    if (!latestVersion?.campaign_snapshot) {
+      return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
+    }
+    const campaignObjective =
+      latestVersion.campaign_snapshot?.campaign?.objective ??
+      latestVersion.campaign_snapshot?.objective ??
+      'engagement';
     const optimization = await optimizeCampaignWeek({
-      companyId: campaign.company_id,
+      companyId,
       campaignId,
       weekNumber: Number(weekNumber),
       reason,
-      campaignObjective: campaign.objective ?? 'engagement',
+      campaignObjective,
       trendData,
       analyticsInsights: learningInsights?.insights_json ?? null,
     });
 
-    const updatedVersion = await getLatestCampaignVersion(campaign.company_id, campaignId);
+    const updatedVersion = await getLatestCampaignVersion(companyId, campaignId);
     const weeklyPlans = updatedVersion?.campaign_snapshot?.weekly_plan ?? [];
     const dailyPlans = updatedVersion?.campaign_snapshot?.daily_plan ?? [];
     const contentAssets = await listAssetsWithLatestContent({ campaignId });
@@ -72,7 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     await saveCampaignHealthReport({
-      companyId: campaign.company_id,
+      companyId,
       campaignId,
       status: healthReport.status,
       confidence: healthReport.confidence,
@@ -81,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     await sendLearningSnapshot({
-      companyId: campaign.company_id,
+      companyId,
       campaignId,
       trends_used: trendSignals.map((signal) => ({
         topic: signal.topic,
@@ -114,3 +144,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: error?.message || 'Failed to optimize week' });
   }
 }
+
+export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.CONTENT_PLANNER]);

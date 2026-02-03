@@ -1,8 +1,48 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
-import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { resolveUserContext } from '../../../backend/services/userContextService';
+import {
+  ALL_ROLES,
+  getUserCompanyRole,
+  getUserRole,
+  hasPermission,
+  isSuperAdmin,
+  Role,
+} from '../../../backend/services/rbacService';
+import { withRBAC } from '../../../backend/middleware/withRBAC';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+const requireCompanyRole = async (
+  req: NextApiRequest,
+  res: NextApiResponse,
+  companyId?: string,
+  allowedRoles: Role[] = []
+) => {
+  if (!companyId) {
+    res.status(400).json({ error: 'companyId required' });
+    return null;
+  }
+  const user = await resolveUserContext(req);
+  const superAdmin = await isSuperAdmin(user.userId);
+  if (superAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
+    return { userId: user.userId, role: Role.SUPER_ADMIN };
+  }
+  const { role, error } = await getUserRole(user.userId, companyId);
+  if (error === 'COMPANY_ACCESS_DENIED') {
+    res.status(403).json({ error: 'COMPANY_ACCESS_DENIED' });
+    return null;
+  }
+  if (error || !role) {
+    res.status(403).json({ error: 'NOT_ALLOWED' });
+    return null;
+  }
+  if (!allowedRoles.includes(role)) {
+    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    return null;
+  }
+  return { userId: user.userId, role };
+};
+
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -11,9 +51,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const companyId =
       (req.query.companyId as string | undefined) ||
       (req.query.company_id as string | undefined);
-    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId required' });
+    }
+    const { role } = await getUserCompanyRole(req, companyId);
+    if (!hasPermission(role, 'view')) {
+      return res.status(403).json({ error: 'NOT_ALLOWED' });
+    }
+
+    const access = await requireCompanyRole(req, res, companyId, [
+      Role.SUPER_ADMIN,
+      Role.ADMIN,
+      Role.CONTENT_MANAGER,
+      Role.CONTENT_PLANNER,
+      Role.CONTENT_CREATOR,
+      Role.CONTENT_ENGAGER,
+      Role.VIEWER,
+    ]);
     if (!access) return;
     // Get all campaigns with simplified fields
+    const { data: mappingRows, error: mappingError } = await supabase
+      .from('campaign_versions')
+      .select('campaign_id')
+      .eq('company_id', companyId);
+
+    if (mappingError) {
+      console.error('Error fetching campaign mappings:', mappingError);
+      return res.status(500).json({ error: 'Failed to fetch campaign mappings', details: mappingError });
+    }
+
+    const campaignIds = Array.from(
+      new Set((mappingRows || []).map((row) => row.campaign_id).filter(Boolean))
+    );
+
+    if (campaignIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        campaigns: [],
+        total: 0,
+      });
+    }
+
     const { data: campaigns, error } = await supabase
       .from('campaigns')
       .select(`
@@ -29,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         updated_at,
         weekly_themes
       `)
-      .eq('company_id', companyId)
+      .in('id', campaignIds)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -60,3 +138,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default withRBAC(handler, ALL_ROLES);

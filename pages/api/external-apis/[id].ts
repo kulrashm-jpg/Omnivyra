@@ -2,26 +2,17 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { validatePlatformConfig } from '../../../backend/services/externalApiService';
 import { resolveUserContext } from '../../../backend/services/userContextService';
+import { Role } from '../../../backend/services/rbacService';
+import { withRBAC } from '../../../backend/middleware/withRBAC';
 
-const ensureSuperAdmin = async (req: NextApiRequest, res: NextApiResponse): Promise<boolean> => {
-  const user = await resolveUserContext(req);
-  const { data: isSuperAdmin, error } = await supabase.rpc('is_super_admin', {
-    check_user_id: user.userId,
-  });
-  if (error || !isSuperAdmin) {
-    res.status(403).json({
-      error: 'Access denied. Only super admins can manage external APIs.',
-      code: 'INSUFFICIENT_PRIVILEGES',
-    });
-    return false;
-  }
-  return true;
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'API ID is required' });
+  }
+  const { defaultCompanyId: companyId } = await resolveUserContext(req);
+  if (!companyId) {
+    return res.status(400).json({ error: 'companyId required' });
   }
 
   if (req.method === 'GET') {
@@ -29,6 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .from('external_api_sources')
       .select('*')
       .eq('id', id)
+      .eq('company_id', companyId)
       .single();
     if (error) {
       return res.status(500).json({ error: 'Failed to load external API' });
@@ -42,9 +34,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PUT') {
-    const isAdmin = await ensureSuperAdmin(req, res);
-    if (!isAdmin) return;
-
     const {
       name,
       base_url,
@@ -76,6 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from('external_api_sources')
         .select('*')
         .eq('id', id)
+        .eq('company_id', companyId)
         .single();
       existingRecord = existing;
       resolvedPlatformType = resolvedPlatformType ?? existing?.platform_type ?? 'social';
@@ -136,6 +126,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         requires_admin: requires_admin ?? true,
       })
       .eq('id', id)
+      .eq('company_id', companyId)
       .select('*')
       .single();
 
@@ -146,10 +137,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'DELETE') {
-    const isAdmin = await ensureSuperAdmin(req, res);
-    if (!isAdmin) return;
-
-    const { error } = await supabase.from('external_api_sources').delete().eq('id', id);
+    const { error } = await supabase
+      .from('external_api_sources')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', companyId);
     if (error) {
       return res.status(500).json({ error: 'Failed to delete external API' });
     }
@@ -158,3 +150,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default withRBAC(handler, [Role.SUPER_ADMIN]);

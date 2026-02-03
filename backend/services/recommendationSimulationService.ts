@@ -11,7 +11,9 @@ export const simulateRecommendations = async (input: {
   const { companyId, campaignId, draftPolicyWeights } = input;
 
   const profile = await getProfile(companyId, { autoRefine: false });
-  const trendSignals = await fetchTrendsFromApis();
+  const geoHint = profile?.geography_list?.[0] ?? profile?.geography ?? undefined;
+  const categoryHint = profile?.industry_list?.[0] ?? profile?.category ?? undefined;
+  const trendSignals = await fetchTrendsFromApis(companyId, geoHint, categoryHint, { recordHealth: false });
   const activePolicy = await getActivePolicy();
 
   const baseline = await generateRecommendations(

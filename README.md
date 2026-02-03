@@ -20,6 +20,9 @@
 - lib/ - Platform configurations
 - utils/ - Utilities and helpers
 
+## ⏱️ Community-AI Scheduler
+See `docs/community-ai-scheduler.md` for how to run the scheduler manually or via cron/Task Scheduler.
+
 ## 🚀 Getting Started
 `ash
 npm install

@@ -564,17 +564,27 @@ const MAX_CRAWL_PAGES = 12;
 const MAX_SOCIAL_LINKS = 8;
 
 const normalizeUrl = (value: string): string | null => {
-  try {
-    const parsed = new URL(value);
-    const normalized = parsed.toString()
-      .split('#')[0]
-      .replace(/\?.*$/, '')
-      .replace(/\/$/, '')
-      .toLowerCase();
-    return normalized;
-  } catch {
-    return null;
+  if (!value) return null;
+  const tryParse = (input: string): string | null => {
+    try {
+      const parsed = new URL(input);
+      return parsed.toString()
+        .split('#')[0]
+        .replace(/\?.*$/, '')
+        .replace(/\/$/, '')
+        .toLowerCase();
+    } catch {
+      return null;
+    }
+  };
+  const direct = tryParse(value);
+  if (direct) return direct;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return tryParse(`https://${trimmed}`);
   }
+  return null;
 };
 
 const normalizeSocialUrl = (value: string): string | null => {
@@ -585,6 +595,79 @@ const normalizeSocialUrl = (value: string): string | null => {
     return withoutWww.replace('https://twitter.com', 'https://x.com');
   }
   return withoutWww;
+};
+
+const getBrandTokensFromUrl = (baseUrl: string): string[] => {
+  try {
+    const host = new URL(baseUrl).hostname.replace(/^www\./i, '').toLowerCase();
+    const root = host.split('.').slice(0, -1).join('.');
+    const rawTokens = root.split(/[.\-]/g);
+    const stop = new Set(['inc', 'llc', 'company', 'co', 'corp', 'ltd', 'group', 'the']);
+    return rawTokens
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3 && !stop.has(token));
+  } catch {
+    return [];
+  }
+};
+
+const isGenericSocialUrl = (url: string): boolean => {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname.toLowerCase();
+    if (path === '/' || path === '') return true;
+    if (host.includes('facebook.com') && (path.startsWith('/share') || path.startsWith('/sharer'))) return true;
+    if (host.includes('youtube.com') && (path.startsWith('/watch') || path.startsWith('/results') || path.startsWith('/feed'))) {
+      return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+};
+
+const isLikelyCompanySocialLink = (platform: string, url: string): boolean => {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname.toLowerCase();
+    if (platform === 'facebook') {
+      if (path.startsWith('/profile.php')) return false;
+      if (path.startsWith('/pages/')) return true;
+      const segments = path.split('/').filter(Boolean);
+      return segments.length === 1;
+    }
+    if (platform === 'youtube') {
+      if (path.startsWith('/watch') || path.startsWith('/results') || path.startsWith('/feed')) return false;
+      return (
+        path.startsWith('/channel/') ||
+        path.startsWith('/user/') ||
+        path.startsWith('/c/') ||
+        path.startsWith('/@')
+      );
+    }
+    if (platform === 'instagram') {
+      const segments = path.split('/').filter(Boolean);
+      return segments.length >= 1 && !segments[0].startsWith('p');
+    }
+    if (platform === 'linkedin') {
+      return path.startsWith('/company/');
+    }
+    if (platform === 'x') {
+      const segments = path.split('/').filter(Boolean);
+      return segments.length === 1 && segments[0] !== 'home';
+    }
+    if (platform === 'tiktok') {
+      return path.startsWith('/@');
+    }
+    if (platform === 'reddit') {
+      return path.startsWith('/r/');
+    }
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const isSameDomain = (baseUrl: string, targetUrl: string): boolean => {
@@ -657,13 +740,21 @@ const extractSocialLinks = (urls: string[]): Record<string, string[]> => {
     const normalized = normalizeSocialUrl(url);
     if (!normalized) return;
     const lower = normalized.toLowerCase();
-    if (lower.includes('linkedin.com')) buckets.linkedin.push(url);
-    else if (lower.includes('facebook.com')) buckets.facebook.push(url);
-    else if (lower.includes('instagram.com')) buckets.instagram.push(url);
-    else if (lower.includes('x.com') || lower.includes('twitter.com')) buckets.x.push(url);
-    else if (lower.includes('youtube.com') || lower.includes('youtu.be')) buckets.youtube.push(url);
-    else if (lower.includes('tiktok.com')) buckets.tiktok.push(url);
-    else if (lower.includes('reddit.com')) buckets.reddit.push(url);
+    if (lower.includes('linkedin.com') && isLikelyCompanySocialLink('linkedin', normalized)) {
+      buckets.linkedin.push(url);
+    } else if (lower.includes('facebook.com') && isLikelyCompanySocialLink('facebook', normalized)) {
+      buckets.facebook.push(url);
+    } else if (lower.includes('instagram.com') && isLikelyCompanySocialLink('instagram', normalized)) {
+      buckets.instagram.push(url);
+    } else if ((lower.includes('x.com') || lower.includes('twitter.com')) && isLikelyCompanySocialLink('x', normalized)) {
+      buckets.x.push(url);
+    } else if ((lower.includes('youtube.com') || lower.includes('youtu.be')) && isLikelyCompanySocialLink('youtube', normalized)) {
+      buckets.youtube.push(url);
+    } else if (lower.includes('tiktok.com') && isLikelyCompanySocialLink('tiktok', normalized)) {
+      buckets.tiktok.push(url);
+    } else if (lower.includes('reddit.com') && isLikelyCompanySocialLink('reddit', normalized)) {
+      buckets.reddit.push(url);
+    }
   });
   return buckets;
 };
@@ -672,32 +763,59 @@ const extractSocialLinksFromHtml = (
   html: string,
   baseUrl: string
 ): Record<string, string[]> => {
-  const buckets: Record<string, string[]> = {
-    linkedin: [],
-    facebook: [],
-    instagram: [],
-    x: [],
-    youtube: [],
-    tiktok: [],
-    reddit: [],
+  const buckets: Record<string, Map<string, number>> = {
+    linkedin: new Map(),
+    facebook: new Map(),
+    instagram: new Map(),
+    x: new Map(),
+    youtube: new Map(),
+    tiktok: new Map(),
+    reddit: new Map(),
   };
   const anchorRegex = /<a\s+[^>]*?>[\s\S]*?<\/a>/gi;
   const hrefRegex = /href=["']([^"']+)["']/i;
   const dataHrefRegex = /data-href=["']([^"']+)["']/i;
   const ariaRegex = /aria-label=["']([^"']+)["']/i;
   const titleRegex = /title=["']([^"']+)["']/i;
+  const brandTokens = getBrandTokensFromUrl(baseUrl);
 
-  const addCandidate = (candidate: string) => {
+  const scoreCandidate = (candidate: string, labelText: string) => {
+    const lowerUrl = candidate.toLowerCase();
+    const lowerLabel = labelText.toLowerCase();
+    let score = 0;
+    brandTokens.forEach((token) => {
+      if (lowerUrl.includes(token)) score += 3;
+      if (lowerLabel.includes(token)) score += 2;
+    });
+    if (lowerLabel.includes('official')) score += 1;
+    return score;
+  };
+
+  const addCandidate = (candidate: string, labelText: string) => {
     const normalized = normalizeSocialUrl(candidate);
     if (!normalized) return;
+    if (isPlaceholderUrl(normalized) || isGenericSocialUrl(normalized)) return;
     const lower = normalized.toLowerCase();
-    if (lower.includes('linkedin.com')) buckets.linkedin.push(normalized);
-    else if (lower.includes('facebook.com')) buckets.facebook.push(normalized);
-    else if (lower.includes('instagram.com')) buckets.instagram.push(normalized);
-    else if (lower.includes('x.com') || lower.includes('twitter.com')) buckets.x.push(normalized);
-    else if (lower.includes('youtube.com') || lower.includes('youtu.be')) buckets.youtube.push(normalized);
-    else if (lower.includes('tiktok.com')) buckets.tiktok.push(normalized);
-    else if (lower.includes('reddit.com')) buckets.reddit.push(normalized);
+    const score = scoreCandidate(normalized, labelText);
+    const addTo = (bucket: Map<string, number>) => {
+      const existing = bucket.get(normalized) || 0;
+      bucket.set(normalized, Math.max(existing, score));
+    };
+    if (lower.includes('linkedin.com') && isLikelyCompanySocialLink('linkedin', normalized)) {
+      addTo(buckets.linkedin);
+    } else if (lower.includes('facebook.com') && isLikelyCompanySocialLink('facebook', normalized)) {
+      addTo(buckets.facebook);
+    } else if (lower.includes('instagram.com') && isLikelyCompanySocialLink('instagram', normalized)) {
+      addTo(buckets.instagram);
+    } else if ((lower.includes('x.com') || lower.includes('twitter.com')) && isLikelyCompanySocialLink('x', normalized)) {
+      addTo(buckets.x);
+    } else if ((lower.includes('youtube.com') || lower.includes('youtu.be')) && isLikelyCompanySocialLink('youtube', normalized)) {
+      addTo(buckets.youtube);
+    } else if (lower.includes('tiktok.com') && isLikelyCompanySocialLink('tiktok', normalized)) {
+      addTo(buckets.tiktok);
+    } else if (lower.includes('reddit.com') && isLikelyCompanySocialLink('reddit', normalized)) {
+      addTo(buckets.reddit);
+    }
   };
 
   const anchors = html.match(anchorRegex) || [];
@@ -713,25 +831,29 @@ const extractSocialLinksFromHtml = (
       if (!value) return;
       try {
         const resolved = new URL(value, baseUrl).toString();
-        addCandidate(resolved);
+        addCandidate(resolved, labelText);
       } catch {
         return;
       }
     });
-
-    if (labelText) {
-      const lower = labelText.toLowerCase();
-      if (lower.includes('linkedin')) addCandidate('https://linkedin.com');
-      if (lower.includes('facebook')) addCandidate('https://facebook.com');
-      if (lower.includes('instagram')) addCandidate('https://instagram.com');
-      if (lower.includes('twitter') || lower.includes('x ')) addCandidate('https://x.com');
-      if (lower.includes('youtube')) addCandidate('https://youtube.com');
-      if (lower.includes('tiktok')) addCandidate('https://tiktok.com');
-      if (lower.includes('reddit')) addCandidate('https://reddit.com');
-    }
   });
 
-  return buckets;
+  const finalizeBucket = (bucket: Map<string, number>) => {
+    const entries = Array.from(bucket.entries()).sort((a, b) => b[1] - a[1]);
+    const hasScored = entries.some(([, score]) => score > 0);
+    const filtered = hasScored ? entries.filter(([, score]) => score > 0) : entries;
+    return filtered.map(([url]) => url);
+  };
+
+  return {
+    linkedin: finalizeBucket(buckets.linkedin),
+    facebook: finalizeBucket(buckets.facebook),
+    instagram: finalizeBucket(buckets.instagram),
+    x: finalizeBucket(buckets.x),
+    youtube: finalizeBucket(buckets.youtube),
+    tiktok: finalizeBucket(buckets.tiktok),
+    reddit: finalizeBucket(buckets.reddit),
+  };
 };
 
 const extractEvidenceFromHtml = (html: string): ExtractedEvidence => {
@@ -978,6 +1100,10 @@ const buildExtractionPrompt = (
     '- website_url\n' +
     '- social_profiles (object with linkedin, facebook, instagram, x, youtube, tiktok, reddit, blog)\n\n' +
     'Important:\n' +
+    '- category_list should reflect what the company does (product/service categories), not just industry.\n' +
+    '- Prefer 3-7 concise categories when evidence supports it.\n' +
+    '- Use website headings, product/service sections, and positioning statements to infer categories.\n' +
+    '- Avoid overly generic categories like "technology" unless explicitly stated.\n' +
     '- industry_list, category_list, geography_list, competitors_list, content_themes_list must be arrays.\n' +
     '- Do not return empty arrays if evidence exists.\n' +
     '- If multiple industries or geographies apply, include all.\n\n' +
@@ -1159,6 +1285,8 @@ const buildSocialProfileList = (
       if (isPlaceholderUrl(url)) return;
       const normalized = normalizeSocialUrl(url);
       if (!normalized || shouldSkipUrl(normalized)) return;
+      if (isGenericSocialUrl(normalized)) return;
+      if (platform !== 'blog' && !isLikelyCompanySocialLink(platform, normalized)) return;
       result.push({
         platform,
         url: normalized,
@@ -1191,25 +1319,36 @@ const buildSocialProfileList = (
 };
 const mergeDiscoveredSocialProfiles = (
   profile: CompanyProfile,
-  discovered: Record<string, string[]>
+  discovered: Record<string, string[]> | undefined | null
 ): CompanyProfile => {
   const updated = { ...profile };
-  if (!updated.linkedin_url && discovered.linkedin?.[0]) updated.linkedin_url = discovered.linkedin[0];
-  if (!updated.facebook_url && discovered.facebook?.[0]) updated.facebook_url = discovered.facebook[0];
-  if (!updated.instagram_url && discovered.instagram?.[0]) updated.instagram_url = discovered.instagram[0];
-  if (!updated.x_url && discovered.x?.[0]) updated.x_url = discovered.x[0];
-  if (!updated.youtube_url && discovered.youtube?.[0]) updated.youtube_url = discovered.youtube[0];
-  if (!updated.tiktok_url && discovered.tiktok?.[0]) updated.tiktok_url = discovered.tiktok[0];
-  if (!updated.reddit_url && discovered.reddit?.[0]) updated.reddit_url = discovered.reddit[0];
+  const safeDiscovered: Record<string, string[]> = discovered || {};
+  const getList = (key: string) =>
+    Array.isArray(safeDiscovered[key]) ? safeDiscovered[key] : [];
+  const linkedin = getList('linkedin');
+  const facebook = getList('facebook');
+  const instagram = getList('instagram');
+  const x = getList('x');
+  const youtube = getList('youtube');
+  const tiktok = getList('tiktok');
+  const reddit = getList('reddit');
+
+  if (!updated.linkedin_url && linkedin[0]) updated.linkedin_url = linkedin[0];
+  if (!updated.facebook_url && facebook[0]) updated.facebook_url = facebook[0];
+  if (!updated.instagram_url && instagram[0]) updated.instagram_url = instagram[0];
+  if (!updated.x_url && x[0]) updated.x_url = x[0];
+  if (!updated.youtube_url && youtube[0]) updated.youtube_url = youtube[0];
+  if (!updated.tiktok_url && tiktok[0]) updated.tiktok_url = tiktok[0];
+  if (!updated.reddit_url && reddit[0]) updated.reddit_url = reddit[0];
 
   const primarySocials: Array<{ platform: string; url: string }> = [
-    { platform: 'linkedin', url: discovered.linkedin?.[0] || '' },
-    { platform: 'facebook', url: discovered.facebook?.[0] || '' },
-    { platform: 'instagram', url: discovered.instagram?.[0] || '' },
-    { platform: 'x', url: discovered.x?.[0] || '' },
-    { platform: 'youtube', url: discovered.youtube?.[0] || '' },
-    { platform: 'tiktok', url: discovered.tiktok?.[0] || '' },
-    { platform: 'reddit', url: discovered.reddit?.[0] || '' },
+    { platform: 'linkedin', url: linkedin[0] || '' },
+    { platform: 'facebook', url: facebook[0] || '' },
+    { platform: 'instagram', url: instagram[0] || '' },
+    { platform: 'x', url: x[0] || '' },
+    { platform: 'youtube', url: youtube[0] || '' },
+    { platform: 'tiktok', url: tiktok[0] || '' },
+    { platform: 'reddit', url: reddit[0] || '' },
   ].filter((entry) => entry.url);
 
   const existingProfiles = Array.isArray(updated.social_profiles)
@@ -1228,13 +1367,13 @@ const mergeDiscoveredSocialProfiles = (
   updated.social_profiles = existingProfiles;
 
   const extraSocial = [
-    ...discovered.linkedin.slice(1),
-    ...discovered.facebook.slice(1),
-    ...discovered.instagram.slice(1),
-    ...discovered.x.slice(1),
-    ...discovered.youtube.slice(1),
-    ...discovered.tiktok.slice(1),
-    ...discovered.reddit.slice(1),
+    ...linkedin.slice(1),
+    ...facebook.slice(1),
+    ...instagram.slice(1),
+    ...x.slice(1),
+    ...youtube.slice(1),
+    ...tiktok.slice(1),
+    ...reddit.slice(1),
   ];
 
   if (extraSocial.length > 0) {
@@ -1271,11 +1410,14 @@ const buildChangedFields = (
     'confidence_score',
   ];
 
+  const normalizeValue = (value: any) =>
+    value === '' || value === undefined ? null : value;
+
   return trackedFields
     .map((field) => ({
       field,
-      before: beforeProfile[field] ?? null,
-      after: afterProfile[field] ?? null,
+      before: normalizeValue(beforeProfile[field]),
+      after: normalizeValue(afterProfile[field]),
     }))
     .filter((entry) => entry.before !== entry.after);
 };

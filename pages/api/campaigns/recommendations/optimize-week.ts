@@ -36,7 +36,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const geoHint = profile.geography_list?.[0] ?? profile.geography ?? undefined;
-    const trendSignals = await fetchTrendsFromApis(geoHint, undefined, { recordHealth: false });
+    const trendSignals = await fetchTrendsFromApis(companyId, geoHint, undefined, {
+      recordHealth: false,
+    });
     const trendData = trendSignals.map((signal) => ({
       topic: signal.topic,
       platform: signal.source,

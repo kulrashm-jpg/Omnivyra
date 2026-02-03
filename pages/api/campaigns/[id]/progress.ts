@@ -5,13 +5,16 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { ALL_ROLES } from '../../../../backend/services/rbacService';
+import { withRBAC } from '../../../../backend/middleware/withRBAC';
 
 const supabase = createClient(
   process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -22,16 +25,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!id || typeof id !== 'string') {
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
+    const companyId = req.query.companyId as string | undefined;
+    const access = await enforceCompanyAccess({
+      req,
+      res,
+      companyId,
+      campaignId: id,
+      requireCampaignId: true,
+    });
+    if (!access) return;
 
-    // Get campaign progress data
-    const { data: campaign, error } = await supabase
-      .from('campaigns')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const { data: ownershipRows, error: ownershipError } = await supabase
+      .from('campaign_versions')
+      .select('campaign_id')
+      .eq('company_id', companyId)
+      .eq('campaign_id', id);
 
-    if (error || !campaign) {
-      return res.status(404).json({ error: 'Campaign not found' });
+    if (ownershipError) {
+      return res.status(500).json({ error: 'Failed to verify campaign ownership' });
+    }
+
+    if (!ownershipRows || ownershipRows.length === 0) {
+      return res.status(403).json({
+        error: 'CAMPAIGN_NOT_IN_COMPANY',
+        code: 'CAMPAIGN_NOT_IN_COMPANY',
+      });
     }
 
     // Get scheduled posts count
@@ -71,3 +89,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 }
 
+export default withRBAC(handler, ALL_ROLES);

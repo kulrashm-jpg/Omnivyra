@@ -30,7 +30,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .filter(Boolean);
 
     const geoHint = profile.geography_list?.[0] ?? profile.geography ?? undefined;
-    const trendSignals = await fetchTrendsFromApis(geoHint, undefined, { recordHealth: false });
+    const trendSignals = await fetchTrendsFromApis(companyId, geoHint, undefined, {
+      recordHealth: false,
+    });
     const newTrends = trendSignals.map((signal) => signal.topic).filter(Boolean);
 
     const analyticsReport = await getLatestAnalyticsReport(companyId);

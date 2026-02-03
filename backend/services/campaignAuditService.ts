@@ -85,16 +85,32 @@ export async function generateCampaignAuditReport(
   campaignId?: string
 ): Promise<any> {
   let resolvedCompanyId = companyId;
-  if (!resolvedCompanyId && campaignId) {
-    const { data } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', campaignId)
-      .single();
-    resolvedCompanyId = data?.company_id;
+  let campaignCompanyLinkVerified = false;
+  if (campaignId) {
+    if (resolvedCompanyId) {
+      const { data, error } = await supabase
+        .from('campaign_versions')
+        .select('id')
+        .eq('company_id', resolvedCompanyId)
+        .eq('campaign_id', campaignId);
+      if (!error && (data || []).length > 0) {
+        campaignCompanyLinkVerified = true;
+      }
+    } else {
+      const { data, error } = await supabase
+        .from('campaign_versions')
+        .select('company_id')
+        .eq('campaign_id', campaignId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (!error && data && data.length > 0) {
+        resolvedCompanyId = data[0].company_id;
+        campaignCompanyLinkVerified = true;
+      }
+    }
   }
 
-  if (!resolvedCompanyId) {
+  if (!resolvedCompanyId || (campaignId && !campaignCompanyLinkVerified)) {
     return { status: 'blocked', reason: 'campaign not found' };
   }
 
@@ -252,10 +268,12 @@ export async function generateCampaignAuditReport(
     trends_used: usedTrends.slice(0, 10),
     trends_ignored: ignoredTrends.slice(0, 10),
   };
-  const enabledApis = await getEnabledApis();
+  const enabledApis = await getEnabledApis(resolvedCompanyId);
   const externalApiSnapshot = await getExternalApiRuntimeSnapshot(
     enabledApis.map((api) => api.id)
   );
+  console.log('EXTERNAL_API_COMPANY_SCOPE', resolvedCompanyId);
+  console.log('EXTERNAL_API_SOURCES_USED', enabledApis.map((api) => api.id));
   const learningStatus = getLearningStatus(campaignId ?? null);
   const omnivyraHealth = getOmniVyraHealthReport();
   const omnivyraMeta = getLastMeta();
@@ -343,10 +361,18 @@ export async function generateCampaignAuditReport(
     novelty_flag,
     omnivyra_explanation_used,
     ui_explainability_snapshot,
+    external_api_company_scope: resolvedCompanyId,
+    external_api_sources_used: enabledApis.map((api) => api.id),
     external_api_health_snapshot: externalApiSnapshot.health_snapshot,
     cache_hits: externalApiSnapshot.cache_stats,
+    cache_stats: externalApiSnapshot.cache_stats,
     rate_limited_sources: externalApiSnapshot.rate_limited_sources,
     signal_confidence_summary: externalApiSnapshot.signal_confidence_summary,
+    user_role: null,
+    permission_checked: 'CAMPAIGN_AUDIT',
+    access_granted: campaignCompanyLinkVerified,
+    campaign_company_link_verified: campaignCompanyLinkVerified,
+    campaign_company_source: 'campaign_versions',
     omnivyra_learning_sent: learningStatus?.status === 'sent',
     omnivyra_learning_payload_preview: learningStatus?.payload_preview ?? null,
     omnivyra_health_snapshot: omnivyraHealth,
@@ -381,3 +407,15 @@ export async function generateCampaignAuditReport(
     },
   };
 }
+
+export const logUserManagementAudit = (
+  event: 'USER_INVITED' | 'USER_ROLE_UPDATED' | 'USER_REMOVED',
+  payload: {
+    actor_user_id: string;
+    target_user_id: string;
+    company_id: string;
+    role: string | null;
+  }
+) => {
+  console.log(event, payload);
+};

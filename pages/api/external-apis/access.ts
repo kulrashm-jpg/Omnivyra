@@ -1,23 +1,36 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getEnabledApis, getUserApiAccess } from '../../../backend/services/externalApiService';
-import { resolveUserContext } from '../../../backend/services/userContextService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { getUserRole, Role } from '../../../backend/services/rbacService';
 
 const normalizeRecord = (value: any): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return value;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const user = await resolveUserContext(req);
-  if (!user?.userId) {
-    return res.status(400).json({ error: 'User context unavailable' });
+const buildUsageUserId = (userId: string, companyId: string) => `${userId}:${companyId}`;
+
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const companyId =
+    (req.query.companyId as string | undefined) ||
+    (req.body?.companyId as string | undefined);
+  if (!companyId) {
+    return res.status(400).json({ error: 'companyId required' });
+  }
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (error || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+  const { role, error: roleError } = await getUserRole(user.id, companyId);
+  if (roleError || role !== Role.COMPANY_ADMIN) {
+    return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
 
   if (req.method === 'GET') {
     try {
-      const sources = await getEnabledApis();
-      const accessRows = await getUserApiAccess(user.userId);
+      const sources = await getEnabledApis(companyId);
+      const accessRows = await getUserApiAccess(user.id);
       const accessMap = accessRows.reduce<Record<string, any>>((acc, row) => {
         acc[row.api_source_id] = row;
         return acc;
@@ -26,10 +39,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const since = new Date();
       since.setDate(since.getDate() - 13);
       const sinceDate = since.toISOString().slice(0, 10);
+      const usageUserId = buildUsageUserId(user.id, companyId);
       const { data: usageRows } = await supabase
         .from('external_api_usage')
         .select('*')
-        .eq('user_id', user.userId)
+        .eq('user_id', usageUserId)
         .gte('usage_date', sinceDate);
 
       const usageByApi = (usageRows || []).reduce<Record<string, any[]>>((acc, row) => {
@@ -109,15 +123,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headers_override,
       query_params_override,
       rate_limit_per_min,
+      scope,
     } = req.body || {};
 
     if (!api_source_id) {
       return res.status(400).json({ error: 'api_source_id is required' });
     }
 
+    const scopedUserId = scope === 'company' ? `company:${companyId}` : user.id;
     const payload = {
       api_source_id,
-      user_id: user.userId,
+      user_id: scopedUserId,
       is_enabled: typeof is_enabled === 'boolean' ? is_enabled : false,
       api_key_env_name: api_key_env_name ? String(api_key_env_name).trim() : null,
       headers_override: normalizeRecord(headers_override),
@@ -141,3 +157,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default handler;

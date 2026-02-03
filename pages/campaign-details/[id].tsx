@@ -133,7 +133,7 @@ interface PerformanceSummary {
 export default function CampaignDetails() {
   const router = useRouter();
   const { id } = router.query;
-  const { selectedCompanyId } = useCompanyContext();
+  const { selectedCompanyId, isLoading: isCompanyLoading } = useCompanyContext();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [weeklyPlans, setWeeklyPlans] = useState<WeeklyPlan[]>([]);
   const [dailyPlans, setDailyPlans] = useState<DailyPlan[]>([]);
@@ -176,7 +176,10 @@ export default function CampaignDetails() {
   useEffect(() => {
     const loadAdminStatus = async () => {
       try {
-        const response = await fetch('/api/admin/check-super-admin');
+        if (!selectedCompanyId) return;
+        const response = await fetch(
+          `/api/admin/check-super-admin?companyId=${encodeURIComponent(selectedCompanyId)}`
+        );
         if (!response.ok) return;
         const data = await response.json();
         setIsAdmin(!!data?.isSuperAdmin);
@@ -185,14 +188,15 @@ export default function CampaignDetails() {
       }
     };
     loadAdminStatus();
-  }, []);
+  }, [selectedCompanyId]);
 
   const loadCampaignDetails = async (campaignId: string) => {
     setIsLoading(true);
     try {
       // Load campaign data
       if (!selectedCompanyId) {
-        throw new Error('Select a company first');
+        setIsLoading(false);
+        return;
       }
       const campaignResponse = await fetch(
         `/api/campaigns?type=campaign&campaignId=${campaignId}&companyId=${encodeURIComponent(
@@ -354,6 +358,34 @@ export default function CampaignDetails() {
     }
     setExpandedDiagnostics(next);
   };
+
+  if (isCompanyLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-purple-600 mx-auto mb-4" />
+          <p className="text-gray-600">Loading company context...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!selectedCompanyId) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center">
+        <div className="text-center">
+          <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-4" />
+          <p className="text-gray-600">Select a company to view campaign details.</p>
+          <button
+            onClick={() => router.push('/campaigns')}
+            className="mt-4 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
+          >
+            Back to Campaigns
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (

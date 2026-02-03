@@ -12,52 +12,54 @@ import {
   Target,
   RefreshCw
 } from 'lucide-react';
+import { useCompanyContext } from '../components/CompanyContext';
+import Header from '../components/Header';
 
 export default function Analytics() {
+  const { selectedCompanyId } = useCompanyContext();
   const [campaignId, setCampaignId] = useState<string | null>(null);
   const [analyticsData, setAnalyticsData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const id = urlParams.get('campaignId');
     setCampaignId(id);
     
-    if (id) {
-      fetchAnalyticsData(id);
+    if (id && selectedCompanyId) {
+      fetchAnalyticsData(id, selectedCompanyId);
+    } else if (selectedCompanyId) {
+      fetchAnalyticsData(null, selectedCompanyId);
+    } else {
+      setIsLoading(false);
     }
-  }, []);
+  }, [selectedCompanyId]);
 
-  const fetchAnalyticsData = async (id: string) => {
+  const fetchAnalyticsData = async (id: string | null, companyId: string) => {
     setIsLoading(true);
     try {
-      // Simulate analytics data - in real implementation, this would fetch from API
-      const mockData = {
-        totalReach: 125000,
-        totalEngagement: 8500,
-        totalConversions: 450,
-        weeklyBreakdown: [
-          { week: 1, reach: 8500, engagement: 650, conversions: 35 },
-          { week: 2, reach: 12000, engagement: 780, conversions: 42 },
-          { week: 3, reach: 15000, engagement: 920, conversions: 48 },
-          { week: 4, reach: 18000, engagement: 1100, conversions: 55 },
-          { week: 5, reach: 22000, engagement: 1350, conversions: 68 },
-          { week: 6, reach: 25000, engagement: 1500, conversions: 75 },
-          { week: 7, reach: 28000, engagement: 1650, conversions: 82 },
-          { week: 8, reach: 30000, engagement: 1800, conversions: 90 }
-        ],
-        platformBreakdown: {
-          linkedin: { reach: 45000, engagement: 3200, conversions: 180 },
-          facebook: { reach: 35000, engagement: 2800, conversions: 150 },
-          instagram: { reach: 25000, engagement: 1500, conversions: 80 },
-          twitter: { reach: 15000, engagement: 800, conversions: 30 },
-          youtube: { reach: 5000, engagement: 200, conversions: 10 }
-        }
-      };
-      
-      setAnalyticsData(mockData);
+      setError(null);
+      const response = await fetch('/api/analytics/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId,
+          campaignId: id || undefined,
+          timeframe: 'quarter',
+        }),
+      });
+      if (!response.ok) {
+        setAnalyticsData(null);
+        setError('Failed to load analytics');
+        return;
+      }
+      const data = await response.json();
+      setAnalyticsData(data);
     } catch (error) {
       console.error('Error fetching analytics:', error);
+      setAnalyticsData(null);
+      setError('Failed to load analytics');
     } finally {
       setIsLoading(false);
     }
@@ -76,6 +78,7 @@ export default function Analytics() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
+      <Header />
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
@@ -104,7 +107,7 @@ export default function Analytics() {
               </div>
               <div>
                 <div className="text-2xl font-bold text-gray-900">
-                  {analyticsData?.totalReach?.toLocaleString() || '0'}
+                  {analyticsData?.totalReach?.toLocaleString?.() || '0'}
                 </div>
                 <div className="text-sm text-gray-600">Total Reach</div>
               </div>
@@ -118,7 +121,7 @@ export default function Analytics() {
               </div>
               <div>
                 <div className="text-2xl font-bold text-gray-900">
-                  {analyticsData?.totalEngagement?.toLocaleString() || '0'}
+                  {analyticsData?.totalEngagement?.toLocaleString?.() || '0'}
                 </div>
                 <div className="text-sm text-gray-600">Total Engagement</div>
               </div>
@@ -132,7 +135,7 @@ export default function Analytics() {
               </div>
               <div>
                 <div className="text-2xl font-bold text-gray-900">
-                  {analyticsData?.totalConversions?.toLocaleString() || '0'}
+                  {analyticsData?.totalConversions?.toLocaleString?.() || '0'}
                 </div>
                 <div className="text-sm text-gray-600">Total Conversions</div>
               </div>
@@ -144,7 +147,7 @@ export default function Analytics() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-8">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Weekly Performance</h2>
           <div className="space-y-3">
-            {analyticsData?.weeklyBreakdown?.map((week: any, index: number) => (
+            {(analyticsData?.weeklyBreakdown || []).map((week: any, index: number) => (
               <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center text-purple-600 font-semibold">
@@ -168,6 +171,9 @@ export default function Analytics() {
                 </div>
               </div>
             ))}
+            {(!analyticsData?.weeklyBreakdown || analyticsData.weeklyBreakdown.length === 0) && (
+              <div className="text-sm text-gray-600">No analytics data yet.</div>
+            )}
           </div>
         </div>
 
@@ -201,6 +207,9 @@ export default function Analytics() {
                 </div>
               </div>
             ))}
+            {Object.keys(analyticsData?.platformBreakdown || {}).length === 0 && (
+              <div className="text-sm text-gray-600">No platform analytics yet.</div>
+            )}
           </div>
         </div>
       </div>

@@ -1,172 +1,254 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  ArrowLeft, 
-  Users, 
-  Plus, 
-  Edit3, 
-  Trash2,
-  Mail,
-  Phone,
-  Calendar,
-  Shield,
-  UserPlus,
-  Settings,
-  Eye,
-  EyeOff,
-  CheckCircle,
-  Clock,
-  AlertCircle
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/router';
+import { ArrowLeft, Shield, UserPlus, Users, RefreshCw } from 'lucide-react';
+import { supabase } from '../utils/supabaseClient';
+import { useCompanyContext } from '../components/CompanyContext';
+import Header from '../components/Header';
+
+type TeamMember = {
+  user_id?: string;
+  id?: string;
+  name?: string;
+  email: string;
+  role: string;
+  status?: string;
+  created_at: string;
+};
+
+const roleOptions = [
+  { id: 'COMPANY_ADMIN', name: 'Company Admin', description: 'Manage users and permissions' },
+  { id: 'CONTENT_CREATOR', name: 'Content Creator', description: 'Create content' },
+  { id: 'CONTENT_REVIEWER', name: 'Content Reviewer', description: 'Approve content' },
+  { id: 'CONTENT_PUBLISHER', name: 'Content Publisher', description: 'Publish content' },
+  { id: 'VIEW_ONLY', name: 'View Only', description: 'View content' },
+];
 
 export default function TeamManagement() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState('members');
   const [isLoading, setIsLoading] = useState(false);
-  const [teamMembers, setTeamMembers] = useState<any[]>([]);
-  const [invitations, setInvitations] = useState<any[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteForm, setInviteForm] = useState({
+    name: '',
     email: '',
-    role: 'campaign_manager',
-    permissions: []
+    role: 'CONTENT_CREATOR',
   });
+  const [roleNotice, setRoleNotice] = useState('');
+  const [toastMessage, setToastMessage] = useState('');
 
-  // Sample team members data
+  const { selectedCompanyId, selectedCompanyName, userRole, isAuthenticated } = useCompanyContext();
+  const canManage =
+    userRole === 'COMPANY_ADMIN' ||
+    userRole === 'SUPER_ADMIN' ||
+    userRole === 'ADMIN';
+
+  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      throw new Error('Not authenticated');
+    }
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  };
+
+  const loadUsers = async () => {
+    if (!selectedCompanyId) return;
+    setIsLoading(true);
+    try {
+      const response = await fetchWithAuth(
+        `/api/company/users?companyId=${selectedCompanyId}&ts=${Date.now()}`,
+        { cache: 'no-store' }
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        console.error(data.error || 'FAILED_TO_LIST_USERS');
+        setToastMessage(data.error || 'Failed to load users');
+        setTeamMembers([]);
+        return;
+      }
+      const users = (data.users || []).map((row: any) => ({
+        user_id: row.user_id,
+        name: row.name || '',
+        email: row.email || '',
+        role: row.role,
+        status: row.status || 'active',
+        created_at: row.created_at,
+      }));
+      setTeamMembers(users);
+    } catch (error: any) {
+      console.error('Error loading users:', error);
+      setToastMessage(error?.message || 'Failed to load users');
+      setTeamMembers([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    setTeamMembers([
-      {
-        id: '1',
-        name: 'Sarah Johnson',
-        email: 'sarah@drishiq.com',
-        role: 'Campaign Manager',
-        status: 'active',
-        joinDate: '2024-01-15',
-        permissions: ['create_campaigns', 'edit_content', 'schedule_posts'],
-        avatar: '👩‍💼',
-        lastActive: '2 hours ago'
-      },
-      {
-        id: '2',
-        name: 'Mike Chen',
-        email: 'mike@drishiq.com',
-        role: 'Content Creator',
-        status: 'active',
-        joinDate: '2024-02-01',
-        permissions: ['edit_content', 'create_content'],
-        avatar: '👨‍🎨',
-        lastActive: '1 day ago'
-      },
-      {
-        id: '3',
-        name: 'Emily Rodriguez',
-        email: 'emily@drishiq.com',
-        role: 'Social Media Specialist',
-        status: 'pending',
-        joinDate: '2024-03-10',
-        permissions: ['schedule_posts', 'view_analytics'],
-        avatar: '👩‍💻',
-        lastActive: 'Never'
-      }
-    ]);
+    if (!toastMessage) return;
+    const timer = window.setTimeout(() => {
+      setToastMessage('');
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [toastMessage]);
 
-    setInvitations([
-      {
-        id: 'inv1',
-        email: 'alex@drishiq.com',
-        role: 'Content Creator',
-        status: 'pending',
-        sentDate: '2024-03-15',
-        expiresAt: '2024-03-22'
-      }
-    ]);
-  }, []);
-
-  const roles = [
-    { id: 'campaign_manager', name: 'Campaign Manager', description: 'Full access to campaigns and team management' },
-    { id: 'content_creator', name: 'Content Creator', description: 'Create and edit content, manage content calendar' },
-    { id: 'social_specialist', name: 'Social Media Specialist', description: 'Schedule posts and manage social media' },
-    { id: 'analyst', name: 'Analyst', description: 'View analytics and generate reports' },
-    { id: 'viewer', name: 'Viewer', description: 'Read-only access to campaigns and content' }
-  ];
-
-  const permissions = [
-    { id: 'create_campaigns', name: 'Create Campaigns', description: 'Create new marketing campaigns' },
-    { id: 'edit_campaigns', name: 'Edit Campaigns', description: 'Modify existing campaigns' },
-    { id: 'create_content', name: 'Create Content', description: 'Create new content pieces' },
-    { id: 'edit_content', name: 'Edit Content', description: 'Modify existing content' },
-    { id: 'schedule_posts', name: 'Schedule Posts', description: 'Schedule content for publishing' },
-    { id: 'view_analytics', name: 'View Analytics', description: 'Access performance analytics' },
-    { id: 'manage_team', name: 'Manage Team', description: 'Invite and manage team members' },
-    { id: 'manage_settings', name: 'Manage Settings', description: 'Configure system settings' }
-  ];
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setTeamMembers([]);
+      setRoleNotice('');
+      return;
+    }
+    if (!selectedCompanyId) {
+      setRoleNotice('Select a company first');
+      return;
+    }
+    setRoleNotice('');
+    loadUsers();
+  }, [isAuthenticated, selectedCompanyId]);
 
   const sendInvitation = async () => {
-    if (!inviteForm.email || !inviteForm.role) return;
-
+    if (!inviteForm.email || !inviteForm.role || !selectedCompanyId) return;
     setIsLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      const newInvitation = {
-        id: `inv${Date.now()}`,
-        email: inviteForm.email,
-        role: inviteForm.role,
-        status: 'pending',
-        sentDate: new Date().toISOString().split('T')[0],
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      };
-
-      setInvitations(prev => [...prev, newInvitation]);
-      setInviteForm({ email: '', role: 'campaign_manager', permissions: [] });
+      const response = await fetchWithAuth('/api/company/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: inviteForm.name,
+          email: inviteForm.email,
+          role: inviteForm.role,
+          companyId: selectedCompanyId,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setToastMessage(result.error || 'Failed to invite user');
+        return;
+      }
+      setInviteForm({ name: '', email: '', role: 'CONTENT_CREATOR' });
       setShowInviteModal(false);
-    } catch (error) {
+      setToastMessage(result.message || 'Invitation sent');
+      loadUsers();
+    } catch (error: any) {
       console.error('Error sending invitation:', error);
+      setToastMessage(error?.message || 'Failed to invite user');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const removeTeamMember = async (memberId: string) => {
-    if (confirm('Are you sure you want to remove this team member?')) {
-      setTeamMembers(prev => prev.filter(member => member.id !== memberId));
-    }
-  };
-
-  const resendInvitation = async (invitationId: string) => {
+  const updateUserRole = async (userId: string, role: string) => {
+    if (!selectedCompanyId) return;
     setIsLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      setInvitations(prev => 
-        prev.map(inv => 
-          inv.id === invitationId 
-            ? { ...inv, sentDate: new Date().toISOString().split('T')[0] }
-            : inv
-        )
-      );
-    } catch (error) {
-      console.error('Error resending invitation:', error);
+      const response = await fetchWithAuth('/api/company/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: selectedCompanyId, role, userId }),
+      });
+      if (!response.ok) {
+        const result = await response.json();
+        setToastMessage(result.error || 'Failed to update role');
+        return;
+      }
+      loadUsers();
+    } catch (error: any) {
+      console.error('Error updating role:', error);
+      setToastMessage(error?.message || 'Failed to update role');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const cancelInvitation = async (invitationId: string) => {
-    if (confirm('Are you sure you want to cancel this invitation?')) {
-      setInvitations(prev => prev.filter(inv => inv.id !== invitationId));
+  const reinviteUser = async (email: string, role: string, name?: string) => {
+    if (!selectedCompanyId) return;
+    setIsLoading(true);
+    try {
+      const response = await fetchWithAuth('/api/company/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, role, name, companyId: selectedCompanyId }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setToastMessage(result.error || 'Failed to reinvite user');
+        return;
+      }
+      setToastMessage(result.message || 'Reinvite sent');
+      loadUsers();
+    } catch (error: any) {
+      console.error('Error reinviting user:', error);
+      setToastMessage(error?.message || 'Failed to reinvite user');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const deactivateUser = async (userId: string, role: string) => {
+    if (!selectedCompanyId) return;
+    setIsLoading(true);
+    try {
+      const response = await fetchWithAuth('/api/company/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: selectedCompanyId, role, userId, status: 'inactive' }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setToastMessage(result.error || 'Failed to deactivate user');
+        return;
+      }
+      setToastMessage('User deactivated');
+      loadUsers();
+    } catch (error: any) {
+      console.error('Error deactivating user:', error);
+      setToastMessage(error?.message || 'Failed to deactivate user');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const removeUser = async (userId: string) => {
+    if (!selectedCompanyId) return;
+    if (!window.confirm('Remove this user from the company?')) return;
+    setIsLoading(true);
+    try {
+      const response = await fetchWithAuth('/api/company/users', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: selectedCompanyId, userId }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setToastMessage(result.error || 'Failed to remove user');
+        return;
+      }
+      setToastMessage('User removed');
+      loadUsers();
+    } catch (error: any) {
+      console.error('Error removing user:', error);
+      setToastMessage(error?.message || 'Failed to remove user');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-purple-100 to-pink-100">
-      {/* Header */}
+      <Header />
       <div className="bg-gradient-to-r from-indigo-200/90 via-purple-200/90 to-pink-200/90 backdrop-blur-sm border-b border-purple-300/50 shadow-lg">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <button 
-                onClick={() => window.location.href = '/'}
+              <button
+                onClick={() => router.push('/team-management')}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 <ArrowLeft className="h-5 w-5 text-gray-600" />
@@ -175,23 +257,29 @@ export default function TeamManagement() {
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
                   Team Management
                 </h1>
-                <p className="text-gray-600 mt-1">Manage your team members and permissions</p>
+                <p className="text-gray-600 mt-1">
+                  {selectedCompanyName ? `Company: ${selectedCompanyName}` : 'Manage your team members'}
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-3">
               <button
-                onClick={() => window.location.href = '/super-admin'}
-                className="bg-gradient-to-r from-red-500 to-orange-600 hover:from-red-600 hover:to-orange-700 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg"
-              >
-                <Shield className="h-4 w-4" />
-                Super Admin
-              </button>
-              <button
-                onClick={() => setShowInviteModal(true)}
-                className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 flex items-center gap-2"
+                onClick={() => {
+                  if (canManage) setShowInviteModal(true);
+                }}
+                disabled={!canManage}
+                className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 flex items-center gap-2 disabled:opacity-50"
               >
                 <UserPlus className="h-5 w-5" />
                 Invite Member
+              </button>
+              <button
+                onClick={loadUsers}
+                disabled={isLoading}
+                className="px-4 py-2 text-gray-600 hover:text-gray-900 font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+                Refresh Users
               </button>
             </div>
           </div>
@@ -199,14 +287,12 @@ export default function TeamManagement() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
-        {/* Tabs */}
         <div className="mb-8">
           <div className="flex space-x-1 bg-white/70 backdrop-blur-sm rounded-xl p-1 border border-gray-200/50">
             {[
               { id: 'members', label: 'Team Members', icon: Users },
-              { id: 'invitations', label: 'Invitations', icon: Mail },
-              { id: 'roles', label: 'Roles & Permissions', icon: Shield }
-            ].map(tab => {
+              { id: 'roles', label: 'Roles', icon: Shield },
+            ].map((tab) => {
               const IconComponent = tab.icon;
               return (
                 <button
@@ -226,196 +312,209 @@ export default function TeamManagement() {
           </div>
         </div>
 
-        {/* Team Members Tab */}
-        {activeTab === 'members' && (
+        {!isAuthenticated && (
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6">
+            <p className="text-gray-700">Please log in to manage your team.</p>
+          </div>
+        )}
+
+        {isAuthenticated && !userRole && (
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6">
+            <p className="text-gray-700">No company role assigned yet.</p>
+          </div>
+        )}
+
+        {roleNotice && (
+          <div className="text-yellow-600 text-sm mb-2">
+            {roleNotice}
+          </div>
+        )}
+
+        {toastMessage && (
+          <div className="bg-orange-100 text-orange-700 rounded-lg p-4 mb-6">
+            {toastMessage}
+          </div>
+        )}
+
+        {activeTab === 'members' && isAuthenticated && (
           <div className="space-y-6">
             <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6">
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Team Members ({teamMembers.length})</h2>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {teamMembers.map(member => (
-                  <div key={member.id} className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-gray-200/50 hover:shadow-lg transition-all duration-200">
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <div className="text-2xl">{member.avatar}</div>
-                        <div>
-                          <h3 className="font-semibold text-gray-900">{member.name}</h3>
-                          <p className="text-sm text-gray-600">{member.role}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <div className={`w-2 h-2 rounded-full ${
-                          member.status === 'active' ? 'bg-green-500' : 'bg-yellow-500'
-                        }`}></div>
-                        <span className="text-xs text-gray-500">{member.status}</span>
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-2 mb-4">
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <Mail className="h-4 w-4" />
-                        {member.email}
-                      </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <Calendar className="h-4 w-4" />
-                        Joined {new Date(member.joinDate).toLocaleDateString()}
-                      </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <Clock className="h-4 w-4" />
-                        Last active {member.lastActive}
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1">
-                        {member.permissions.slice(0, 2).map(permission => (
-                          <span key={permission} className="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded">
-                            {permission.replace('_', ' ')}
-                          </span>
-                        ))}
-                        {member.permissions.length > 2 && (
-                          <span className="text-xs text-gray-500">+{member.permissions.length - 2} more</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button className="p-1 hover:bg-gray-100 rounded text-gray-500">
-                          <Edit3 className="h-4 w-4" />
-                        </button>
-                        <button 
-                          onClick={() => removeTeamMember(member.id)}
-                          className="p-1 hover:bg-red-100 rounded text-red-500"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-xl font-bold text-gray-900">
+                  Team Members ({teamMembers.length})
+                </h2>
+                <span className="text-xs text-gray-500">
+                  Use the Role dropdown to assign roles
+                </span>
               </div>
+              {teamMembers.length === 0 ? (
+                <p className="text-gray-600">No users yet. Invite your first team member.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {teamMembers.map((member) => (
+                        <tr key={member.user_id || member.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {member.name || '—'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {member.email}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                            {member.role}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            <span
+                              className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                member.status === 'invited'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : member.status === 'expired'
+                                  ? 'bg-orange-100 text-orange-700'
+                                  : member.status === 'inactive' || member.status === 'deactivated'
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-green-100 text-green-700'
+                              }`}
+                            >
+                              {member.status || 'active'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {new Date(member.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                            <div className="flex items-center gap-3">
+                              <select
+                                value={member.role}
+                                onChange={(e) => updateUserRole(String(member.user_id || member.id), e.target.value)}
+                                className="border border-gray-300 rounded-lg px-3 py-1"
+                                disabled={isLoading || !canManage}
+                              >
+                                {roleOptions.map((role) => (
+                                  <option key={role.id} value={role.id}>
+                                    {role.name}
+                                  </option>
+                                ))}
+                              </select>
+                              {member.status === 'invited' && (
+                                <button
+                                  onClick={() => reinviteUser(member.email, member.role, member.name)}
+                                  disabled={isLoading || !canManage}
+                                  className="text-indigo-600 hover:text-indigo-800 text-sm font-medium disabled:opacity-50"
+                                >
+                                  Reinvite
+                                </button>
+                              )}
+                              {member.status === 'invited' && canManage && (
+                                <button
+                                  onClick={() => removeUser(String(member.user_id || member.id))}
+                                  disabled={isLoading}
+                                  className="text-red-600 hover:text-red-800 text-sm font-medium disabled:opacity-50"
+                                >
+                                  Cancel Invite
+                                </button>
+                              )}
+                              {member.status === 'active' && canManage && (
+                                <button
+                                  onClick={() => deactivateUser(String(member.user_id || member.id), member.role)}
+                                  disabled={isLoading}
+                                  className="text-red-600 hover:text-red-800 text-sm font-medium disabled:opacity-50"
+                                >
+                                  Deactivate
+                                </button>
+                              )}
+                              {member.status === 'active' && canManage && (
+                                <button
+                                  onClick={() => removeUser(String(member.user_id || member.id))}
+                                  disabled={isLoading}
+                                  className="text-red-600 hover:text-red-800 text-sm font-medium disabled:opacity-50"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* Invitations Tab */}
-        {activeTab === 'invitations' && (
-          <div className="space-y-6">
-            <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6">
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Pending Invitations ({invitations.length})</h2>
-              
-              <div className="space-y-4">
-                {invitations.map(invitation => (
-                  <div key={invitation.id} className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-gray-200/50">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="text-2xl">📧</div>
-                        <div>
-                          <h3 className="font-semibold text-gray-900">{invitation.email}</h3>
-                          <p className="text-sm text-gray-600">{invitation.role.replace('_', ' ')}</p>
-                          <p className="text-xs text-gray-500">
-                            Sent {new Date(invitation.sentDate).toLocaleDateString()} • 
-                            Expires {new Date(invitation.expiresAt).toLocaleDateString()}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1">
-                          <Clock className="h-4 w-4 text-yellow-500" />
-                          <span className="text-sm text-yellow-600 font-medium">Pending</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => resendInvitation(invitation.id)}
-                            disabled={isLoading}
-                            className="px-3 py-1 text-sm bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 transition-colors"
-                          >
-                            Resend
-                          </button>
-                          <button
-                            onClick={() => cancelInvitation(invitation.id)}
-                            className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Roles & Permissions Tab */}
         {activeTab === 'roles' && (
           <div className="space-y-6">
             <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6">
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Roles & Permissions</h2>
-              
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Roles */}
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Roles</h3>
-                  <div className="space-y-3">
-                    {roles.map(role => (
-                      <div key={role.id} className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-gray-200/50">
-                        <h4 className="font-semibold text-gray-900">{role.name}</h4>
-                        <p className="text-sm text-gray-600 mt-1">{role.description}</p>
-                      </div>
-                    ))}
+              <h2 className="text-xl font-bold text-gray-900 mb-6">Roles</h2>
+              <div className="space-y-3">
+                {roleOptions.map((role) => (
+                  <div key={role.id} className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-gray-200/50">
+                    <h4 className="font-semibold text-gray-900">{role.name}</h4>
+                    <p className="text-sm text-gray-600 mt-1">{role.description}</p>
                   </div>
-                </div>
-
-                {/* Permissions */}
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Permissions</h3>
-                  <div className="space-y-3">
-                    {permissions.map(permission => (
-                      <div key={permission.id} className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-gray-200/50">
-                        <h4 className="font-semibold text-gray-900">{permission.name}</h4>
-                        <p className="text-sm text-gray-600 mt-1">{permission.description}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Invite Modal */}
       {showInviteModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4">
             <h3 className="text-xl font-bold text-gray-900 mb-4">Invite Team Member</h3>
-            
+
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Full Name</label>
+                <input
+                  type="text"
+                  value={inviteForm.name}
+                  onChange={(e) => setInviteForm((prev) => ({ ...prev, name: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  placeholder="Alex Johnson"
+                />
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
                 <input
                   type="email"
                   value={inviteForm.email}
-                  onChange={(e) => setInviteForm(prev => ({ ...prev, email: e.target.value }))}
+                  onChange={(e) => setInviteForm((prev) => ({ ...prev, email: e.target.value }))}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                   placeholder="colleague@drishiq.com"
                 />
               </div>
-              
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Role</label>
                 <select
                   value={inviteForm.role}
-                  onChange={(e) => setInviteForm(prev => ({ ...prev, role: e.target.value }))}
+                  onChange={(e) => setInviteForm((prev) => ({ ...prev, role: e.target.value }))}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                 >
-                  {roles.map(role => (
-                    <option key={role.id} value={role.id}>{role.name}</option>
+                  {roleOptions.map((role) => (
+                    <option key={role.id} value={role.id}>
+                      {role.name}
+                    </option>
                   ))}
                 </select>
               </div>
             </div>
-            
+
             <div className="flex items-center gap-3 mt-6">
               <button
                 onClick={() => setShowInviteModal(false)}

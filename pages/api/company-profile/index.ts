@@ -3,35 +3,77 @@ import {
   getProfile,
   saveProfile,
 } from '../../../backend/services/companyProfileService';
-import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { getUserRole, isSuperAdmin } from '../../../backend/services/rbacService';
+
+const resolveCompanyAccess = async (
+  req: NextApiRequest,
+  res: NextApiResponse,
+  companyId?: string | null
+) => {
+  if (!companyId) {
+    res.status(400).json({ error: 'companyId required' });
+    return null;
+  }
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (error || !user) {
+    res.status(401).json({ error: 'UNAUTHORIZED' });
+    return null;
+  }
+  if (await isSuperAdmin(user.id)) {
+    return { userId: user.id, role: 'SUPER_ADMIN' };
+  }
+  const { role, error: roleError } = await getUserRole(user.id, companyId);
+  if (roleError || !role) {
+    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    return null;
+  }
+  return { userId: user.id, role };
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined);
   const mode = (req.query.mode as string | undefined) || (req.body?.mode as string | undefined);
-  const user = await resolveUserContext();
 
   if (req.method === 'GET') {
     try {
       if (mode === 'list') {
+        const { user, error } = await getSupabaseUserFromRequest(req);
+        if (error || !user) {
+          return res.status(401).json({ error: 'UNAUTHORIZED' });
+        }
+        const { data: roleRows, error: roleError } = await supabase
+          .from('user_company_roles')
+          .select('company_id, role, status')
+          .eq('user_id', user.id)
+          .eq('status', 'active');
+        if (roleError) {
+          return res.status(500).json({ error: 'FAILED_TO_LOAD_COMPANIES' });
+        }
+        const companyIds = (roleRows || []).map((row: any) => row.company_id).filter(Boolean);
+        const rolesByCompany = (roleRows || []).map((row: any) => ({
+          company_id: row.company_id,
+          role: row.role,
+        }));
         const profiles = await Promise.all(
-          user.companyIds.map(async (id) => {
+          companyIds.map(async (id) => {
             const profile = await getProfile(id, { autoRefine: false });
             return profile || { company_id: id, name: id };
           })
         );
         return res.status(200).json({
-          user,
           companies: profiles.map((profile) => ({
             company_id: profile.company_id,
             name: profile.name || profile.company_id,
           })),
+          rolesByCompany,
         });
       }
 
-      console.log('Resolved company_id:', companyId);
-      const access = await enforceCompanyAccess({ req, res, companyId });
+      const access = await resolveCompanyAccess(req, res, companyId);
       if (!access) return;
 
       const profile = await getProfile(companyId, { autoRefine: false });
@@ -48,14 +90,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'POST') {
     try {
-      let resolvedCompanyId = companyId;
-      if (!resolvedCompanyId) {
-        const access = await enforceCompanyAccess({ req, res, companyId: resolvedCompanyId });
-        if (!access) return;
-      } else {
-        const access = await enforceCompanyAccess({ req, res, companyId: resolvedCompanyId });
-        if (!access) return;
-      }
+      const resolvedCompanyId = companyId;
+      const access = await resolveCompanyAccess(req, res, resolvedCompanyId);
+      if (!access) return;
       const payload = {
         ...req.body,
         company_id: resolvedCompanyId,

@@ -9,8 +9,10 @@ import {
 import { supabase } from '../../../backend/db/supabaseClient';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { getLatestAnalyticsReport, getLatestLearningInsights } from '../../../backend/db/performanceStore';
+import { ALL_ROLES } from '../../../backend/services/rbacService';
+import { withRBAC } from '../../../backend/middleware/withRBAC';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -19,16 +21,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     let { companyId, campaignId } = req.body || {};
     if (!companyId && campaignId) {
-      const { data } = await supabase
-        .from('campaigns')
+      const { data, error } = await supabase
+        .from('campaign_versions')
         .select('company_id')
-        .eq('id', campaignId)
-        .single();
-      companyId = data?.company_id;
+        .eq('campaign_id', campaignId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (error) {
+        return res.status(500).json({ error: 'Failed to resolve company for campaign' });
+      }
+      companyId = data?.[0]?.company_id;
     }
 
-    if (!companyId) {
+    if (!companyId || !campaignId) {
       return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
+    }
+
+    const { data: ownershipRows, error: ownershipError } = await supabase
+      .from('campaign_versions')
+      .select('campaign_id')
+      .eq('company_id', companyId)
+      .eq('campaign_id', campaignId);
+
+    if (ownershipError) {
+      return res.status(500).json({ error: 'Failed to verify campaign ownership' });
+    }
+
+    if (!ownershipRows || ownershipRows.length === 0) {
+      return res.status(403).json({
+        error: 'CAMPAIGN_NOT_IN_COMPANY',
+        code: 'CAMPAIGN_NOT_IN_COMPANY',
+      });
     }
 
     const profile = await getProfile(companyId, { autoRefine: false });
@@ -73,3 +96,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: error?.message || 'Failed to generate health report' });
   }
 }
+
+export default withRBAC(handler, ALL_ROLES);

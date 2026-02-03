@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -7,26 +8,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Get current user ID (you'll need to implement proper auth)
-    const userId = 'current-user-id'; // Replace with actual user ID from auth
+    const { user, error: authError } = await getSupabaseUserFromRequest(req);
+    if (authError || !user) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
+    const userId = user.id;
+    const companyId =
+      (req.query.companyId as string | undefined) ||
+      (req.query.company_id as string | undefined);
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId required' });
+    }
 
-    // Check if user is super admin
-    const { data, error } = await supabase.rpc('is_super_admin', {
-      check_user_id: userId
-    });
+    const { data, error } = await supabase
+      .from('user_company_roles')
+      .select('role')
+      .eq('user_id', userId)
+      .eq('company_id', companyId)
+      .eq('role', 'SUPER_ADMIN')
+      .maybeSingle();
 
     if (error) {
       console.error('Error checking super admin status:', error);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: 'Failed to check super admin status',
-        details: error.message 
+        details: error.message,
       });
     }
 
     return res.status(200).json({
       success: true,
-      isSuperAdmin: data || false,
-      userId: userId
+      isSuperAdmin: !!data,
+      userId: userId,
     });
 
   } catch (error) {

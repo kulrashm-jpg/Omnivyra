@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useCompanyContext } from '../components/CompanyContext';
 
 type ApiSource = {
   id: string;
@@ -116,6 +117,7 @@ const HealthBadgeLegend = () => (
 );
 
 export default function ExternalApiAccessPage() {
+  const { selectedCompanyId, isLoading: isCompanyLoading } = useCompanyContext();
   const [apis, setApis] = useState<ApiSource[]>([]);
   const [drafts, setDrafts] = useState<Record<string, AccessDraft>>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -147,7 +149,14 @@ export default function ExternalApiAccessPage() {
   const loadApis = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/external-apis/access');
+      if (!selectedCompanyId) {
+        setApis([]);
+        setDrafts({});
+        return;
+      }
+      const response = await fetch(
+        `/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`
+      );
       if (!response.ok) throw new Error('Failed to load APIs');
       const data = await response.json();
       setApis(data.apis || []);
@@ -161,7 +170,13 @@ export default function ExternalApiAccessPage() {
 
   const loadRequests = async () => {
     try {
-      const response = await fetch('/api/external-apis/requests');
+      if (!selectedCompanyId) {
+        setRequests([]);
+        return;
+      }
+      const response = await fetch(
+        `/api/external-apis/requests?companyId=${encodeURIComponent(selectedCompanyId)}`
+      );
       if (!response.ok) return;
       const data = await response.json();
       setRequests(data.requests || []);
@@ -173,7 +188,7 @@ export default function ExternalApiAccessPage() {
   useEffect(() => {
     loadApis();
     loadRequests();
-  }, []);
+  }, [selectedCompanyId]);
 
   const updateDraft = (id: string, updates: Partial<AccessDraft>) => {
     setDrafts((prev) => ({
@@ -203,7 +218,13 @@ export default function ExternalApiAccessPage() {
     setSaveMessage(null);
     updateDraft(source.id, { saving: true });
     try {
-      const response = await fetch('/api/external-apis/access', {
+      if (!selectedCompanyId) {
+        updateDraft(source.id, { error: 'Select a company to manage access.' });
+        return;
+      }
+      const response = await fetch(
+        `/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`,
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -215,6 +236,7 @@ export default function ExternalApiAccessPage() {
           rate_limit_per_min: draft.rate_limit_per_min
             ? Number(draft.rate_limit_per_min)
             : null,
+          companyId: selectedCompanyId,
         }),
       });
       if (!response.ok) {
@@ -240,7 +262,13 @@ export default function ExternalApiAccessPage() {
 
     setIsSubmittingRequest(true);
     try {
-      const response = await fetch('/api/external-apis/requests', {
+      if (!selectedCompanyId) {
+        setRequestMessage('Select a company to submit a request.');
+        return;
+      }
+      const response = await fetch(
+        `/api/external-apis/requests?companyId=${encodeURIComponent(selectedCompanyId)}`,
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -253,6 +281,7 @@ export default function ExternalApiAccessPage() {
           api_key_env_name: requestForm.api_key_env_name || null,
           headers: headersResult.value,
           query_params: queryResult.value,
+          companyId: selectedCompanyId,
         }),
       });
       if (!response.ok) {
@@ -298,6 +327,24 @@ export default function ExternalApiAccessPage() {
 
   const selectedApi = apis.find((api) => api.id === selectedApiId) || null;
   const selectedDraft = selectedApi ? drafts[selectedApi.id] : null;
+
+  if (isCompanyLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <div className="max-w-6xl mx-auto text-sm text-gray-500">Loading company context...</div>
+      </div>
+    );
+  }
+
+  if (!selectedCompanyId) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <div className="max-w-6xl mx-auto text-sm text-gray-500">
+          Select a company to manage external API access.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">

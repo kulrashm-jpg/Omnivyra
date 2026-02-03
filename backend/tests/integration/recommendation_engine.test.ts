@@ -2,16 +2,34 @@ import handler from '../../../pages/api/recommendations/generate';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendations } from '../../services/recommendationEngineService';
 import { getProfile } from '../../services/companyProfileService';
-import { fetchTrendsFromApis } from '../../services/externalApiService';
+import { fetchExternalApis } from '../../services/externalApiService';
 import { validateUniqueness } from '../../services/campaignMemoryService';
 import { generateCampaignStrategy } from '../../services/campaignRecommendationService';
-import { getTrendRanking, getTrendRelevance, isOmniVyraEnabled } from '../../services/omnivyraClientV1';
+import {
+  getTrendRanking,
+  getTrendRelevance,
+  getOmniVyraHealthReport,
+  isOmniVyraEnabled,
+} from '../../services/omnivyraClientV1';
+
+jest.mock('../../db/supabaseClient', () => ({
+  supabase: { from: jest.fn() },
+}));
+jest.mock('../../services/userContextService', () => ({
+  resolveUserContext: jest.fn().mockResolvedValue({
+    userId: 'user-1',
+    role: 'admin',
+    companyIds: ['c-1'],
+    defaultCompanyId: 'c-1',
+  }),
+}));
 
 jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn(),
 }));
 jest.mock('../../services/externalApiService', () => ({
-  fetchTrendsFromApis: jest.fn(),
+  fetchExternalApis: jest.fn(),
+  recordSignalConfidenceSummary: jest.fn(),
   getPlatformStrategies: jest.fn().mockResolvedValue([]),
   getEnabledApis: jest.fn().mockResolvedValue([]),
   getExternalApiRuntimeSnapshot: jest.fn().mockResolvedValue({
@@ -40,6 +58,12 @@ jest.mock('../../services/omnivyraClientV1', () => ({
     last_error: null,
   }),
 }));
+jest.mock('../../services/trendNormalizationService', () => ({
+  normalizeTrends: jest.fn().mockReturnValue([
+    { title: 'AI marketing', source: 'YouTube Trends', confidence: 0.7 },
+    { title: 'AI marketing', source: 'NewsAPI', confidence: 0.6 },
+  ]),
+}));
 
 const createMockRes = () => {
   const res: Partial<NextApiResponse> & { json: jest.Mock } = {
@@ -60,10 +84,37 @@ describe('Recommendation engine API', () => {
 
 describe('Recommendation engine service', () => {
   beforeEach(() => {
+    const { supabase } = jest.requireMock('../../db/supabaseClient');
+    (supabase.from as jest.Mock).mockImplementation(() => ({
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      then: (resolve: any) => resolve({ data: [{ id: 'link' }], error: null }),
+    }));
     (getProfile as jest.Mock).mockResolvedValue({ company_id: 'c-1', category: 'marketing' });
-    (fetchTrendsFromApis as jest.Mock).mockResolvedValue([
-      { topic: 'AI marketing', source: 'YouTube Trends', volume: 1200 },
-      { topic: 'AI marketing', source: 'NewsAPI', volume: 900 },
+    const externalApiService = jest.requireMock('../../services/externalApiService');
+    externalApiService.getEnabledApis.mockResolvedValue([]);
+    externalApiService.getPlatformStrategies.mockResolvedValue([]);
+    externalApiService.getExternalApiRuntimeSnapshot.mockResolvedValue({
+      health_snapshot: [],
+      cache_stats: { hits: 0, misses: 0 },
+      rate_limited_sources: [],
+      signal_confidence_summary: null,
+    });
+    externalApiService.recordSignalConfidenceSummary.mockImplementation(() => {});
+    (fetchExternalApis as jest.Mock).mockResolvedValue({
+      results: [
+        { source: { name: 'YouTube Trends', id: 'yt' }, payload: {} },
+        { source: { name: 'NewsAPI', id: 'news' }, payload: {} },
+      ],
+      missing_env_placeholders: [],
+      cache_stats: { hits: 0, misses: 0, per_api_hits: {}, per_api_misses: {} },
+      rate_limited_sources: [],
+      signal_confidence_summary: null,
+    });
+    const trendNormalization = jest.requireMock('../../services/trendNormalizationService');
+    trendNormalization.normalizeTrends.mockReturnValue([
+      { title: 'AI marketing', source: 'YouTube Trends', confidence: 0.7 },
+      { title: 'AI marketing', source: 'NewsAPI', confidence: 0.6 },
     ]);
     (validateUniqueness as jest.Mock).mockResolvedValue({
       overlapDetected: false,
@@ -74,6 +125,13 @@ describe('Recommendation engine service', () => {
     (generateCampaignStrategy as jest.Mock).mockResolvedValue({
       weekly_plan: [{ week_number: 1, theme: 'AI Marketing', trend_influence: [] }],
       daily_plan: [{ date: 'Week 1 Day 1', platform: 'linkedin', content_type: 'text', topic: 'AI' }],
+    });
+    (getOmniVyraHealthReport as jest.Mock).mockReturnValue({
+      status: 'healthy',
+      endpoints: {},
+      avg_latency_ms: 0,
+      success_rate: 1,
+      last_error: null,
     });
   });
 

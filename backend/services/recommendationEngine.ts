@@ -257,7 +257,7 @@ export async function generateRecommendations(
   const { companyProfile, trendSignals } = input;
   if (!trendSignals || trendSignals.length === 0) return [];
 
-  const platformConfigs = await getPlatformStrategies();
+  const platformConfigs = await getPlatformStrategies(companyProfile?.company_id ?? null);
   const fallbackPolicy: RecommendationPolicy = {
     id: 'default',
     name: 'Default Policy',

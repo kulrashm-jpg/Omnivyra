@@ -105,7 +105,12 @@ export const buildTrendAssessments = async (input: {
   let trendSignals: TrendSignal[] = [];
   try {
     const geoHint = input.profile.geography_list?.[0] ?? input.profile.geography ?? undefined;
-    trendSignals = await fetchTrendsFromApis(geoHint, undefined, { recordHealth: false });
+    trendSignals = await fetchTrendsFromApis(
+      input.profile.company_id,
+      geoHint,
+      undefined,
+      { recordHealth: false }
+    );
   } catch {
     trendSignals = [];
   }

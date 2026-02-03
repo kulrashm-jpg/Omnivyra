@@ -7,56 +7,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Get audit logs with user information
-    const { data: auditLogs, error } = await supabase
-      .from('deletion_audit_log')
-      .select(`
-        id,
-        user_id,
-        user_role,
-        action,
-        table_name,
-        record_id,
-        reason,
-        ip_address,
-        user_agent,
-        created_at,
-        users!inner(
-          name,
-          email
-        )
-      `)
+    const { data, error } = await supabase
+      .from('super_admin_audit_logs')
+      .select('id, username, action, ip_address, user_agent, created_at')
       .order('created_at', { ascending: false })
       .limit(100);
 
     if (error) {
       console.error('Error fetching audit logs:', error);
-      return res.status(500).json({ 
-        error: 'Failed to fetch audit logs',
-        details: error.message 
-      });
+      return res.status(500).json({ error: error.message });
     }
-
-    // Format the response
-    const formattedLogs = auditLogs.map(log => ({
-      id: log.id,
-      user_id: log.user_id,
-      user_name: log.users.name,
-      user_role: log.user_role,
-      action: log.action,
-      table_name: log.table_name,
-      record_id: log.record_id,
-      reason: log.reason,
-      ip_address: log.ip_address,
-      user_agent: log.user_agent,
-      created_at: log.created_at
-    }));
 
     return res.status(200).json({
       success: true,
-      logs: formattedLogs
+      logs: data || [],
     });
-
   } catch (error) {
     console.error('Error in audit-logs API:', error);
     return res.status(500).json({ 

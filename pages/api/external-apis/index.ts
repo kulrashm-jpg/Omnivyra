@@ -2,42 +2,75 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import {
   getPlatformConfigs,
+  getExternalApiRuntimeSnapshot,
   validatePlatformConfig,
 } from '../../../backend/services/externalApiService';
-import { resolveUserContext } from '../../../backend/services/userContextService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { getUserRole, hasPermission, isSuperAdmin } from '../../../backend/services/rbacService';
 
-const ensureSuperAdmin = async (req: NextApiRequest, res: NextApiResponse): Promise<boolean> => {
-  const user = await resolveUserContext(req);
-  const { data: isSuperAdmin, error } = await supabase.rpc('is_super_admin', {
-    check_user_id: user.userId,
-  });
-  if (error || !isSuperAdmin) {
-    res.status(403).json({
-      error: 'Access denied. Only super admins can manage external APIs.',
-      code: 'INSUFFICIENT_PRIVILEGES',
-    });
-    return false;
+const requireExternalApiAccess = async (
+  req: NextApiRequest,
+  res: NextApiResponse,
+  companyId?: string,
+  requireManage = false
+) => {
+  if (!companyId) {
+    res.status(400).json({ error: 'companyId required' });
+    return null;
   }
-  return true;
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (error || !user) {
+    res.status(401).json({ error: 'UNAUTHORIZED' });
+    return null;
+  }
+  if (await isSuperAdmin(user.id)) {
+    return { userId: user.id, role: 'SUPER_ADMIN' };
+  }
+  const { role, error: roleError } = await getUserRole(user.id, companyId);
+  if (roleError || !role) {
+    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    return null;
+  }
+  if (requireManage && !hasPermission(role, 'MANAGE_EXTERNAL_APIS')) {
+    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    return null;
+  }
+  return { userId: user.id, role };
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const companyId =
+    (req.query.companyId as string | undefined) ||
+    (req.body?.companyId as string | undefined);
+  if (!companyId) {
+    return res.status(400).json({ error: 'companyId required' });
+  }
+
   if (req.method === 'GET') {
+    const access = await requireExternalApiAccess(req, res, companyId, false);
+    if (!access) return;
     try {
-      const apis = await getPlatformConfigs();
+      const apis = await getPlatformConfigs(companyId);
       const since = new Date();
       since.setDate(since.getDate() - 13);
       const sinceDate = since.toISOString().slice(0, 10);
+      const apiIds = apis.map((api) => api.id);
 
-      const { data: accessRows } = await supabase
-        .from('external_api_user_access')
-        .select('*')
-        .eq('is_enabled', true);
+      const { data: accessRows } = apiIds.length
+        ? await supabase
+            .from('external_api_user_access')
+            .select('*')
+            .eq('is_enabled', true)
+            .in('api_source_id', apiIds)
+        : { data: [] };
 
-      const { data: usageRows } = await supabase
-        .from('external_api_usage')
-        .select('*')
-        .gte('usage_date', sinceDate);
+      const { data: usageRows } = apiIds.length
+        ? await supabase
+            .from('external_api_usage')
+            .select('*')
+            .gte('usage_date', sinceDate)
+            .in('api_source_id', apiIds)
+        : { data: [] };
 
       const enabledCountMap = (accessRows || []).reduce<Record<string, number>>((acc, row) => {
         acc[row.api_source_id] = (acc[row.api_source_id] || 0) + 1;
@@ -107,16 +140,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         };
       });
 
-      return res.status(200).json({ apis: enriched });
+      const runtime = await getExternalApiRuntimeSnapshot(apiIds);
+      return res.status(200).json({ apis: enriched, runtime });
     } catch (error) {
       return res.status(500).json({ error: 'Failed to load external APIs' });
     }
   }
 
   if (req.method === 'POST') {
-    const isAdmin = await ensureSuperAdmin(req, res);
-    if (!isAdmin) return;
-
+    const access = await requireExternalApiAccess(req, res, companyId, true);
+    if (!access) return;
     const {
       name,
       base_url,
@@ -183,6 +216,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         required_metadata: required_metadata || {},
         posting_constraints: posting_constraints || {},
         requires_admin: requires_admin ?? true,
+        company_id: companyId,
         created_at: new Date().toISOString(),
       })
       .select('*')
@@ -196,3 +230,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default handler;

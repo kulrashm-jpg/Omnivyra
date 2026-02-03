@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
+import Header from '../components/Header';
+import { supabase } from '../utils/supabaseClient';
 
 type CompanyProfile = {
   company_id?: string;
@@ -141,6 +143,8 @@ export default function CompanyProfilePage() {
   const [isRefining, setIsRefining] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [lastFetchStatus, setLastFetchStatus] = useState<number | null>(null);
+  const [lastFetchError, setLastFetchError] = useState<string | null>(null);
   const [latestRefinement, setLatestRefinement] = useState<CompanyProfileRefinement | null>(null);
   const [refinementHistory, setRefinementHistory] = useState<CompanyProfileRefinement[]>([]);
   const [missingFieldAnswers, setMissingFieldAnswers] = useState<Record<string, string[]>>({});
@@ -165,6 +169,15 @@ export default function CompanyProfilePage() {
   }, [selectedCompanyId]);
 
   useEffect(() => {
+    if (selectedCompanyId || companies.length !== 1) return;
+    const fallbackCompany = companies[0]?.company_id;
+    if (!fallbackCompany) return;
+    setSelectedCompanyId(fallbackCompany);
+    setCompanyId(fallbackCompany);
+    setDraftProfile((prev) => ({ ...prev, company_id: fallbackCompany }));
+  }, [companies, selectedCompanyId, setSelectedCompanyId]);
+
+  useEffect(() => {
     const loadProfile = async () => {
       try {
         setIsLoading(true);
@@ -172,16 +185,24 @@ export default function CompanyProfilePage() {
           setErrorMessage('Select a company to continue.');
           return;
         }
-        const response = await fetch(
+        const response = await fetchWithAuth(
           `/api/company-profile?companyId=${encodeURIComponent(companyId)}`
         );
+        setLastFetchStatus(response.status);
         if (response.status === 404) {
           setProfile(null);
           setNotFound(true);
           return;
         }
         if (!response.ok) {
-          throw new Error('Failed to load company profile');
+          let details = '';
+          try {
+            const errorBody = await response.json();
+            details = errorBody?.error || errorBody?.details || '';
+          } catch {
+            details = '';
+          }
+          throw new Error(details || 'Failed to load company profile');
         }
         const data = await response.json();
         setProfile(data.profile || null);
@@ -192,12 +213,10 @@ export default function CompanyProfilePage() {
         if (data.profile?.company_id) {
           setCompanyId(data.profile.company_id);
           localStorage.setItem('company_id', data.profile.company_id);
-          console.log('Profile loaded:', data.profile.company_id);
         }
-        console.log('PROFILE FROM API:', data.profile);
-        console.log('SOCIAL PROFILES FROM API:', data.profile?.social_profiles);
       } catch (error) {
         console.error('Error loading company profile:', error);
+        setLastFetchError((error as Error)?.message || 'Failed to load company profile');
         setErrorMessage('Failed to load company profile.');
       } finally {
         setIsLoading(false);
@@ -211,12 +230,16 @@ export default function CompanyProfilePage() {
     const loadRefinements = async () => {
       try {
         if (!companyId) return;
-        const response = await fetch(
+        const response = await fetchWithAuth(
           companyId
             ? `/api/company-profile/refinements?companyId=${encodeURIComponent(companyId)}`
             : '/api/company-profile/refinements'
         );
-        if (!response.ok) return;
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => null);
+          console.warn('Failed to load profile refinements', errorBody?.error || response.status);
+          return;
+        }
         const data = await response.json();
         const refinements = data?.refinements || [];
         setRefinementHistory(refinements);
@@ -236,6 +259,21 @@ export default function CompanyProfilePage() {
     } else {
       setDraftProfile(next);
     }
+  };
+
+  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      throw new Error('Not authenticated');
+    }
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
   };
 
   const handleChange = (field: keyof CompanyProfile, value: string) => {
@@ -330,13 +368,14 @@ export default function CompanyProfilePage() {
         brand_voice_list: activeProfile.brand_voice_list ?? splitToList(activeProfile.brand_voice),
         social_profiles: buildSocialProfilesFromScalars(activeProfile),
       };
-      const response = await fetch('/api/company-profile', {
+      const response = await fetchWithAuth('/api/company-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       if (!response.ok) {
-        throw new Error('Failed to save profile');
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.error || errorBody?.details || 'Failed to save profile');
       }
       const data = await response.json();
       setProfile(data.profile || activeProfile);
@@ -380,13 +419,14 @@ export default function CompanyProfilePage() {
         brand_voice_list: activeProfile.brand_voice_list ?? splitToList(activeProfile.brand_voice),
         social_profiles: buildSocialProfilesFromScalars(activeProfile),
       };
-      const response = await fetch('/api/company-profile/refine', {
+      const response = await fetchWithAuth('/api/company-profile/refine', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       if (!response.ok) {
-        throw new Error('Failed to refine profile');
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.error || errorBody?.details || 'Failed to refine profile');
       }
       const data = await response.json();
       setProfile(data.profile || activeProfile);
@@ -415,8 +455,9 @@ export default function CompanyProfilePage() {
     : 'Never';
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-4xl mx-auto bg-white shadow rounded-lg p-6">
+    <div className="min-h-screen bg-gray-50">
+      <Header />
+      <div className="max-w-4xl mx-auto bg-white shadow rounded-lg p-6 mt-6">
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Company Profile</h1>

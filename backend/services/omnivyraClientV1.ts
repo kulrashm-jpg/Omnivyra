@@ -408,3 +408,22 @@ export const checkPlatformCompliance = (input: {
 
 export const getExplainability = (input: { recommendation?: string | null; context?: any }) =>
   requestOmniVyra<ExplainabilityResult>('/explain', input);
+
+export type CommunityAiEvaluationResult = {
+  analysis?: string;
+  suggested_actions?: any[];
+  content_improvement?: any;
+  safety_classification?: any;
+  execution_links?: any;
+};
+
+export const evaluateCommunityAiEngagement = (input: {
+  tenant_id: string;
+  organization_id: string;
+  platform?: string | null;
+  post_data?: any;
+  engagement_metrics?: any;
+  goals?: any;
+  brand_voice: string;
+  context?: any;
+}) => requestOmniVyra<CommunityAiEvaluationResult>('/community/engagement/evaluate', input);

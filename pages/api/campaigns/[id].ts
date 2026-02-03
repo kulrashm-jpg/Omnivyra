@@ -1,8 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient.js';
 import { evaluateCampaignReadiness } from '../../../backend/services/campaignReadinessService';
+import { ALL_ROLES } from '../../../backend/services/rbacService';
+import { withRBAC } from '../../../backend/middleware/withRBAC';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
 
   if (!id || typeof id !== 'string') {
@@ -85,3 +87,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 }
 
+export default withRBAC(handler, ALL_ROLES);

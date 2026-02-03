@@ -54,15 +54,48 @@ interface CampaignData {
   user_name: string;
 }
 
+interface CompanyData {
+  id: string;
+  name: string;
+  website: string;
+  industry?: string | null;
+  status: string;
+  created_at: string;
+}
+
+interface AppUserData {
+  user_id: string;
+  email: string;
+  company_id: string;
+  company_name: string;
+  role: string;
+  created_at: string;
+}
+
 export default function SuperAdminPanel() {
   const [activeTab, setActiveTab] = useState('overview');
   const [isLoading, setIsLoading] = useState(false);
   const [superAdmins, setSuperAdmins] = useState<SuperAdminUser[]>([]);
   const [auditLogs, setAuditLogs] = useState<DeletionAudit[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignData[]>([]);
+  const [companies, setCompanies] = useState<CompanyData[]>([]);
+  const [appUsers, setAppUsers] = useState<AppUserData[]>([]);
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [showCreateCompanyModal, setShowCreateCompanyModal] = useState(false);
+  const [showCreateCompanyAdminModal, setShowCreateCompanyAdminModal] = useState(false);
+  const [companyForm, setCompanyForm] = useState({
+    name: '',
+    website: '',
+    industry: '',
+  });
+  const [companyAdminForm, setCompanyAdminForm] = useState({
+    email: '',
+    companyId: '',
+    role: 'COMPANY_ADMIN',
+  });
 
   useEffect(() => {
     loadSuperAdminData();
@@ -85,14 +118,88 @@ export default function SuperAdminPanel() {
         setAuditLogs(auditData.logs || []);
       }
 
-      // Load campaigns
-      const campaignsResponse = await fetch('/api/campaigns/list');
-      if (campaignsResponse.ok) {
-        const campaignsData = await campaignsResponse.json();
-        setCampaigns(campaignsData.campaigns || []);
+      // Super Admin dashboard does not request campaigns without companyId
+      setCampaigns([]);
+
+      // Load companies
+      const companiesResponse = await fetch('/api/super-admin/companies');
+      if (companiesResponse.ok) {
+        const companiesData = await companiesResponse.json();
+        setCompanies(companiesData.companies || []);
+      }
+
+      // Load users
+      const usersResponse = await fetch('/api/super-admin/users');
+      if (usersResponse.ok) {
+        const usersData = await usersResponse.json();
+        setAppUsers(usersData.users || []);
       }
     } catch (error) {
       console.error('Error loading super admin data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCreateCompany = async () => {
+    if (!companyForm.name.trim() || !companyForm.website.trim()) {
+      alert('Company name and website are required');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/super-admin/companies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: companyForm.name,
+          website: companyForm.website,
+          industry: companyForm.industry,
+        }),
+      });
+      if (response.ok) {
+        setCompanyForm({ name: '', website: '', industry: '' });
+        setShowCreateCompanyModal(false);
+        loadSuperAdminData();
+      } else {
+        const result = await response.json();
+        alert(result.error || 'Failed to create company');
+      }
+    } catch (error) {
+      console.error('Error creating company:', error);
+      alert('Failed to create company');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCreateCompanyAdmin = async () => {
+    if (!companyAdminForm.email.trim() || !companyAdminForm.companyId) {
+      alert('Email and company are required');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/super-admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: companyAdminForm.email,
+          companyId: companyAdminForm.companyId,
+          role: companyAdminForm.role,
+        }),
+      });
+      if (response.ok) {
+        setCompanyAdminForm({ email: '', companyId: '', role: 'COMPANY_ADMIN' });
+        setShowCreateCompanyAdminModal(false);
+        loadSuperAdminData();
+      } else {
+        const result = await response.json();
+        alert(result.error || 'Failed to create company admin');
+      }
+    } catch (error) {
+      console.error('Error creating company admin:', error);
+      alert('Failed to create company admin');
     } finally {
       setIsLoading(false);
     }
@@ -248,6 +355,17 @@ export default function SuperAdminPanel() {
                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
                 Refresh
               </button>
+              <button
+                onClick={async () => {
+                  setIsLoggingOut(true);
+                  await fetch('/api/super-admin/logout', { method: 'POST' });
+                  window.location.href = '/super-admin/login';
+                }}
+                disabled={isLoggingOut}
+                className="px-4 py-2 bg-gray-900 text-white rounded-lg font-medium disabled:opacity-50"
+              >
+                {isLoggingOut ? 'Signing out...' : 'Logout'}
+              </button>
             </div>
           </div>
         </div>
@@ -260,6 +378,7 @@ export default function SuperAdminPanel() {
             { id: 'overview', label: 'Overview', icon: Activity },
             { id: 'campaigns', label: 'Campaign Management', icon: Database },
             { id: 'admins', label: 'Super Admins', icon: Shield },
+            { id: 'company-users', label: 'Companies & Users', icon: Users },
             { id: 'audit', label: 'Audit Logs', icon: Eye }
           ].map((tab) => {
             const Icon = tab.icon;
@@ -486,6 +605,100 @@ export default function SuperAdminPanel() {
           </div>
         )}
 
+        {activeTab === 'company-users' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-gray-900">Companies</h3>
+                <button
+                  onClick={() => setShowCreateCompanyModal(true)}
+                  className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium"
+                >
+                  Create Company
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Website</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Industry</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {companies.map((company) => (
+                      <tr key={company.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {company.name}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          {company.website}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          {company.industry || '—'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(company.status)}`}>
+                            {company.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {new Date(company.created_at).toLocaleDateString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-gray-900">Company Admins</h3>
+                <button
+                  onClick={() => setShowCreateCompanyAdminModal(true)}
+                  className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium"
+                >
+                  Create Company Admin
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {appUsers.map((user) => (
+                      <tr key={user.user_id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {user.email}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          {user.company_name || user.company_id}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          {user.role}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {new Date(user.created_at).toLocaleDateString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'audit' && (
           <div className="bg-white rounded-lg shadow-sm border border-gray-200">
             <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
@@ -589,6 +802,125 @@ export default function SuperAdminPanel() {
                     <Trash2 className="h-4 w-4" />
                   )}
                   Delete Campaign
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCreateCompanyModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Create Company</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Company Name</label>
+                  <input
+                    type="text"
+                    value={companyForm.name}
+                    onChange={(e) => setCompanyForm((prev) => ({ ...prev, name: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                    placeholder="Acme Inc."
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Website</label>
+                  <input
+                    type="text"
+                    value={companyForm.website}
+                    onChange={(e) => setCompanyForm((prev) => ({ ...prev, website: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                    placeholder="acme.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Industry</label>
+                  <input
+                    type="text"
+                    value={companyForm.industry}
+                    onChange={(e) => setCompanyForm((prev) => ({ ...prev, industry: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                    placeholder="SaaS"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={() => setShowCreateCompanyModal(false)}
+                  className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateCompany}
+                  disabled={isLoading}
+                  className="px-4 py-2 bg-gray-900 text-white rounded-lg disabled:opacity-50"
+                >
+                  {isLoading ? 'Creating...' : 'Create Company'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCreateCompanyAdminModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Create Company Admin</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                  <input
+                    type="email"
+                    value={companyAdminForm.email}
+                    onChange={(e) => setCompanyAdminForm((prev) => ({ ...prev, email: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                    placeholder="admin@acme.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Company</label>
+                  <select
+                    value={companyAdminForm.companyId}
+                    onChange={(e) => setCompanyAdminForm((prev) => ({ ...prev, companyId: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                  >
+                    <option value="">Select company</option>
+                    {companies.map((company) => (
+                      <option key={company.id} value={company.id}>
+                        {company.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Role</label>
+                  <select
+                    value={companyAdminForm.role}
+                    onChange={(e) => setCompanyAdminForm((prev) => ({ ...prev, role: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                  >
+                    <option value="COMPANY_ADMIN">Company Admin</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={() => setShowCreateCompanyAdminModal(false)}
+                  className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateCompanyAdmin}
+                  disabled={isLoading}
+                  className="px-4 py-2 bg-gray-900 text-white rounded-lg disabled:opacity-50"
+                >
+                  {isLoading ? 'Creating...' : 'Create Admin'}
                 </button>
               </div>
             </div>

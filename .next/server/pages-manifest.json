@@ -3,5 +3,6 @@
   "/_error": "pages/_error.js",
   "/_document": "pages/_document.js",
   "/": "pages/index.js",
-  "/external-apis": "pages/external-apis.js"
+  "/dashboard": "pages/dashboard.js",
+  "/community-ai": "pages/community-ai.js"
 }

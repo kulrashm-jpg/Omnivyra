@@ -4,7 +4,8 @@ import {
   refineProfileWithAIWithDetails,
   saveProfile,
 } from '../../../backend/services/companyProfileService';
-import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { getUserRole, isSuperAdmin } from '../../../backend/services/rbacService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -15,11 +16,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined) ||
     (req.body?.company_id as string | undefined);
-  const user = await resolveUserContext(req);
-  const resolvedCompanyId = companyId || user.defaultCompanyId;
-  console.log('Resolved company_id:', resolvedCompanyId);
-  const access = await enforceCompanyAccess({ req, res, companyId: resolvedCompanyId });
-  if (!access) return;
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (error || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+  const resolvedCompanyId = companyId;
+  if (!resolvedCompanyId) {
+    return res.status(400).json({ error: 'companyId required' });
+  }
+  const isAdmin = await isSuperAdmin(user.id);
+  if (!isAdmin) {
+    const { role, error: roleError } = await getUserRole(user.id, resolvedCompanyId);
+    if (roleError || !role) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    }
+  }
 
   try {
     let profile: any = null;
@@ -49,6 +60,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ profile: refined.profile, refinement: refined.details });
   } catch (error: any) {
     console.error('Error refining company profile:', error);
-    return res.status(500).json({ error: 'Failed to refine company profile' });
+    return res.status(500).json({
+      error: 'Failed to refine company profile',
+      details: error?.message || null,
+    });
   }
 }

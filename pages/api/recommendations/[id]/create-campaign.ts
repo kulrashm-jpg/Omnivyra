@@ -1,6 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { runCampaignAiPlan } from '../../../../backend/services/campaignAiOrchestrator';
+import { Role } from '../../../../backend/services/rbacService';
+import { withRBAC } from '../../../../backend/middleware/withRBAC';
 
 type RecommendationSnapshot = {
   id: string;
@@ -28,7 +30,7 @@ const buildRecommendationContext = (snapshot: RecommendationSnapshot) => {
   );
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -98,3 +100,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Failed to create campaign from recommendation' });
   }
 }
+
+export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN]);

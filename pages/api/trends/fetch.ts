@@ -11,7 +11,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const geo = typeof req.query.geo === 'string' ? req.query.geo : undefined;
     const category = typeof req.query.category === 'string' ? req.query.category : undefined;
     const user = await resolveUserContext(req);
-    const trends = await fetchTrendsFromApis(geo, category, {
+    const companyId = user?.defaultCompanyId;
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId required' });
+    }
+    const trends = await fetchTrendsFromApis(companyId, geo, category, {
       recordHealth: true,
       minReliability: 0.3,
       userId: user?.userId,

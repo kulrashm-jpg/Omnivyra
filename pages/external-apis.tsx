@@ -1,4 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useCompanyContext } from '../components/CompanyContext';
+import Header from '../components/Header';
+import { supabase } from '../utils/supabaseClient';
 
 type KeyValuePair = { key: string; value: string };
 
@@ -125,6 +128,7 @@ const emptyForm: Partial<ApiSource> = {
 };
 
 export default function ExternalApisPage() {
+  const { selectedCompanyId, isLoading: isCompanyLoading } = useCompanyContext();
   const [apis, setApis] = useState<ApiSource[]>([]);
   const [form, setForm] = useState<Partial<ApiSource>>(emptyForm);
   const [isLoading, setIsLoading] = useState(false);
@@ -136,6 +140,7 @@ export default function ExternalApisPage() {
   const [isLoadingRequests, setIsLoadingRequests] = useState(false);
   const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
   const [presets, setPresets] = useState<ExternalApiPreset[]>([]);
+  const [isLoadingPresets, setIsLoadingPresets] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<ExternalApiPreset | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
@@ -148,14 +153,45 @@ export default function ExternalApisPage() {
   const [testResult, setTestResult] = useState<any>(null);
   const [isSavingPreset, setIsSavingPreset] = useState(false);
   const [activeTab, setActiveTab] = useState<'global' | 'queue' | 'usage'>('global');
+  const [runtime, setRuntime] = useState<any>(null);
+  const [apiTestResults, setApiTestResults] = useState<Record<string, any>>({});
+  const [hiddenPresetIds, setHiddenPresetIds] = useState<Set<string>>(new Set());
+  const [showPresetModal, setShowPresetModal] = useState(false);
+  const [presetSelection, setPresetSelection] = useState<Set<string>>(new Set());
+  const [isSavingPresetSelection, setIsSavingPresetSelection] = useState(false);
+
+  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      throw new Error('Not authenticated');
+    }
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  };
 
   const loadApis = async () => {
     try {
+      if (!selectedCompanyId) {
+        console.warn('No company selected yet, skipping external API load');
+        return;
+      }
       setIsLoading(true);
-      const response = await fetch('/api/external-apis');
-      if (!response.ok) throw new Error('Failed to load APIs');
+      const url = `/api/external-apis?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetchWithAuth(url);
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.error || 'Failed to load APIs');
+      }
       const data = await response.json();
       setApis(data.apis || []);
+      setRuntime(data.runtime || null);
     } catch (error) {
       console.error('Error loading APIs:', error);
       setErrorMessage('Failed to load API sources.');
@@ -166,20 +202,103 @@ export default function ExternalApisPage() {
 
   const loadPresets = async () => {
     try {
-      const response = await fetch('/api/external-apis/presets');
-      if (!response.ok) throw new Error('Failed to load presets');
+      if (!selectedCompanyId) return;
+      setIsLoadingPresets(true);
+      const url = `/api/external-apis/presets?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetchWithAuth(url);
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.error || 'Failed to load presets');
+      }
       const data = await response.json();
       setPresets(data.presets || []);
+      setHiddenPresetIds(new Set(data.hidden_ids || []));
+      return {
+        presets: data.presets || [],
+        hidden_ids: data.hidden_ids || [],
+      };
     } catch (error) {
       console.error('Error loading presets:', error);
+      setErrorMessage('Failed to load presets.');
+      return null;
+    } finally {
+      setIsLoadingPresets(false);
+    }
+  };
+  const openPresetModal = async () => {
+    const fresh = presets.length === 0 ? await loadPresets() : null;
+    const presetList = fresh?.presets ?? presets;
+    const hiddenSet = new Set<string>(fresh?.hidden_ids ?? Array.from(hiddenPresetIds));
+    const selected = new Set<string>();
+    presetList.forEach((preset) => {
+      if (!preset.id) return;
+      if (!hiddenSet.has(preset.id)) {
+        selected.add(preset.id);
+      }
+    });
+    setPresetSelection(selected);
+    setShowPresetModal(true);
+  };
+
+  const togglePresetSelection = (presetId: string, checked: boolean) => {
+    setPresetSelection((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(presetId);
+      } else {
+        next.delete(presetId);
+      }
+      return next;
+    });
+  };
+
+  const savePresetSelection = async () => {
+    if (!selectedCompanyId) return;
+    const selectable = presets.filter((preset) => preset.id);
+    setIsSavingPresetSelection(true);
+    try {
+      await Promise.all(
+        selectable.map((preset) =>
+          fetchWithAuth('/api/external-apis/access', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              companyId: selectedCompanyId,
+              api_source_id: preset.id,
+              is_enabled: presetSelection.has(preset.id),
+              scope: 'company',
+            }),
+          })
+        )
+      );
+      setSuccessMessage('Preset selection saved.');
+      setShowPresetModal(false);
+      await loadPresets();
+      await loadApis();
+    } catch (error) {
+      console.error('Error updating preset selection:', error);
+      setErrorMessage('Failed to update preset selection.');
+    } finally {
+      setIsSavingPresetSelection(false);
     }
   };
 
   const loadRequests = async () => {
     try {
       setIsLoadingRequests(true);
-      const response = await fetch('/api/external-apis/requests');
-      if (!response.ok) throw new Error('Failed to load requests');
+      if (!selectedCompanyId) return;
+      const url = `/api/external-apis/requests?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetchWithAuth(url);
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        if (errorBody?.error === 'FORBIDDEN_ROLE') {
+          setRequests([]);
+          return;
+        }
+        throw new Error(errorBody?.error || 'Failed to load requests');
+      }
       const data = await response.json();
       setRequests(data.requests || []);
     } catch (error) {
@@ -195,7 +314,10 @@ export default function ExternalApisPage() {
     loadRequests();
     const loadAdminStatus = async () => {
       try {
-        const response = await fetch('/api/admin/check-super-admin');
+        if (!selectedCompanyId) return;
+        const url = `/api/admin/check-super-admin?companyId=${selectedCompanyId}`;
+        console.log('DASHBOARD_API_CALL', url);
+        const response = await fetchWithAuth(url);
         if (!response.ok) return;
         const data = await response.json();
         setIsAdmin(!!data?.isSuperAdmin);
@@ -204,7 +326,7 @@ export default function ExternalApisPage() {
       }
     };
     loadAdminStatus();
-  }, []);
+  }, [selectedCompanyId]);
 
   useEffect(() => {
     setQueryPairs(toPairs(form.query_params || {}));
@@ -315,14 +437,15 @@ export default function ExternalApisPage() {
         query_params: resolved.queryParams,
         is_preset: form.is_preset ?? false,
       };
-      const response = await fetch(
-        editingId ? `/api/external-apis/${editingId}` : '/api/external-apis',
-        {
-          method: editingId ? 'PUT' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }
-      );
+      const url = editingId
+        ? `/api/external-apis/${editingId}?companyId=${selectedCompanyId}`
+        : `/api/external-apis?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetch(url, {
+        method: editingId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
       if (!response.ok) throw new Error('Failed to save API');
       setForm(emptyForm);
       setSelectedPreset(null);
@@ -352,14 +475,15 @@ export default function ExternalApisPage() {
         query_params: resolved.queryParams,
         is_preset: true,
       };
-      const response = await fetch(
-        editingPresetId ? `/api/external-apis/${editingPresetId}` : '/api/external-apis',
-        {
-          method: editingPresetId ? 'PUT' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }
-      );
+      const url = editingPresetId
+        ? `/api/external-apis/${editingPresetId}?companyId=${selectedCompanyId}`
+        : `/api/external-apis?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetch(url, {
+        method: editingPresetId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
       if (!response.ok) throw new Error('Failed to save preset');
       setSuccessMessage(editingPresetId ? 'Preset updated.' : 'Preset saved.');
       await loadPresets();
@@ -374,7 +498,9 @@ export default function ExternalApisPage() {
   const updateApi = async (api: ApiSource) => {
     try {
       resetMessages();
-      const response = await fetch(`/api/external-apis/${api.id}`, {
+      const url = `/api/external-apis/${api.id}?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(api),
@@ -391,7 +517,9 @@ export default function ExternalApisPage() {
   const deleteApi = async (id: string) => {
     try {
       resetMessages();
-      const response = await fetch(`/api/external-apis/${id}`, { method: 'DELETE' });
+      const url = `/api/external-apis/${id}?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetch(url, { method: 'DELETE' });
       if (!response.ok) throw new Error('Failed to delete API');
       setSuccessMessage('API source deleted.');
       await loadApis();
@@ -405,7 +533,9 @@ export default function ExternalApisPage() {
     try {
       resetMessages();
       const rejection_reason = status === 'rejected' ? rejectionReasons[id] : undefined;
-      const response = await fetch(`/api/external-apis/requests/${id}`, {
+      const url = `/api/external-apis/requests/${id}?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, rejection_reason }),
@@ -435,7 +565,9 @@ export default function ExternalApisPage() {
         headers: resolved.headers,
         query_params: resolved.queryParams,
       };
-      const response = await fetch('/api/external-apis/test', {
+      const url = `/api/external-apis/test?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -455,7 +587,9 @@ export default function ExternalApisPage() {
   const validateApi = async (id: string) => {
     try {
       resetMessages();
-      const response = await fetch(`/api/external-apis/${id}/validate`);
+      const url = `/api/external-apis/${id}/validate?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetch(url);
       if (!response.ok) throw new Error('Failed to validate API');
       setSuccessMessage('API validation completed.');
       await loadApis();
@@ -468,12 +602,15 @@ export default function ExternalApisPage() {
   const testExistingApi = async (id: string) => {
     try {
       resetMessages();
-      const response = await fetch(`/api/external-apis/${id}/test`);
+      const url = `/api/external-apis/${id}/test?companyId=${selectedCompanyId}`;
+      console.log('DASHBOARD_API_CALL', url);
+      const response = await fetch(url);
       const data = await response.json();
+      setTestResult(data);
+      setApiTestResults((prev) => ({ ...prev, [id]: data }));
       if (!response.ok) {
         throw new Error(data?.error || 'Failed to test API');
       }
-      setTestResult(data);
       setSuccessMessage('Test fetch completed.');
     } catch (error) {
       console.error('Error testing API:', error);
@@ -488,6 +625,9 @@ export default function ExternalApisPage() {
     if (combined >= 0.4) return { label: 'Health: Fair', className: 'bg-yellow-100 text-yellow-700' };
     return { label: 'Health: Poor', className: 'bg-red-100 text-red-700' };
   };
+
+  const authRequiresKey = (authType?: string | null) =>
+    ['api_key', 'bearer', 'query', 'header'].includes(String(authType || 'none'));
 
   const formatPercent = (value?: number | null) => {
     if (typeof value !== 'number') return '—';
@@ -547,8 +687,31 @@ export default function ExternalApisPage() {
   );
   const previewUrl = buildPreviewUrl(form.base_url || '', previewQueryParams);
 
+  if (isCompanyLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header />
+        <div className="p-6 text-gray-500">
+          Loading company context...
+        </div>
+      </div>
+    );
+  }
+
+  if (!selectedCompanyId) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header />
+        <div className="p-6 text-gray-500">
+          Select a company to manage external APIs.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
+      <Header />
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="bg-white rounded-lg shadow p-6">
           <h1 className="text-2xl font-bold text-gray-900 mb-2">External API Sources</h1>
@@ -611,6 +774,9 @@ export default function ExternalApisPage() {
               <p className="text-xs text-gray-500">
                 Start with a blank configuration or load a preset and customize it.
               </p>
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 inline-block mt-2">
+                Global API presets are available on a paid plan.
+              </p>
             </div>
             <div className="flex flex-wrap gap-3 items-center">
               <button
@@ -619,25 +785,33 @@ export default function ExternalApisPage() {
               >
                 Add Blank API
               </button>
-              <select
-                className="border rounded-lg px-3 py-2 text-sm"
-                value=""
-                onChange={(e) => {
-                  const preset = presets.find((item) => item.name === e.target.value);
-                  if (preset) {
-                    applyPreset(preset);
-                  }
-                }}
+              <button
+                onClick={openPresetModal}
+                className="px-3 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm border border-indigo-100"
               >
-                <option value="" disabled>
-                  Add from Preset
-                </option>
-                {presets.map((preset) => (
-                  <option key={preset.name} value={preset.name}>
-                    {preset.name}
+                Select Global Presets
+              </button>
+              {isAdmin && (
+                <select
+                  className="border rounded-lg px-3 py-2 text-sm"
+                  value=""
+                  onChange={(e) => {
+                    const preset = presets.find((item) => item.name === e.target.value);
+                    if (preset) {
+                      applyPreset(preset);
+                    }
+                  }}
+                >
+                  <option value="" disabled>
+                    Add from Preset
                   </option>
-                ))}
-              </select>
+                  {presets.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               {selectedPreset && (
                 <span className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-1">
                   Preset loaded
@@ -949,7 +1123,13 @@ export default function ExternalApisPage() {
             <div className="text-sm text-gray-500">Loading...</div>
           ) : (
             <div className="space-y-4">
-              {apis.map((api) => (
+              {apis.map((api) => {
+                const testData = apiTestResults[api.id];
+                const isRateLimited =
+                  runtime?.rate_limited_sources?.includes(api.name) ?? false;
+                const missingEnv = authRequiresKey(api.auth_type) &&
+                  !(api.api_key_env_name || api.api_key_name);
+                return (
                 <div key={api.id} className="border rounded-lg p-4">
                   <div className="flex items-center justify-between">
                     <div>
@@ -986,14 +1166,34 @@ export default function ExternalApisPage() {
                               Degraded
                             </span>
                           )}
+                        {isRateLimited && (
+                          <span
+                            className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700"
+                            title="Rate limited recently"
+                          >
+                            Rate limited
+                          </span>
+                        )}
+                        {missingEnv && (
+                          <span
+                            className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-red-100 text-red-700"
+                            title="Missing required env var name"
+                          >
+                            Missing env
+                          </span>
+                        )}
                         {api.is_preset && (
                           <span className="text-[10px] uppercase tracking-wide bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
                             Preset
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-gray-500">{api.base_url}</div>
-                      {(api.api_key_env_name || api.api_key_name) && api.auth_type !== 'none' && (
+                      <div className="text-xs text-gray-500">
+                        {api.is_preset && !isAdmin ? 'Global preset details hidden' : api.base_url}
+                      </div>
+                      {(api.api_key_env_name || api.api_key_name) &&
+                        api.auth_type !== 'none' &&
+                        !(api.is_preset && !isAdmin) && (
                         <div
                           className="text-xs text-gray-400"
                           title={`Uses env var: ${api.api_key_env_name || api.api_key_name}`}
@@ -1054,34 +1254,93 @@ export default function ExternalApisPage() {
                     >
                       {getHealthBadge(api.health).label}
                     </span>
-                    <button
-                      onClick={() => startEdit(api)}
-                      className="text-xs text-gray-700"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => validateApi(api.id)}
-                      className="text-xs text-indigo-600"
-                    >
-                      Validate API
-                    </button>
-                    <button
-                      onClick={() => testExistingApi(api.id)}
-                      className="text-xs text-gray-700"
-                    >
-                      Test API
-                    </button>
-                    <button
-                      onClick={() => deleteApi(api.id)}
-                      disabled={!isAdmin}
-                      className="text-xs text-red-600 disabled:opacity-50"
-                    >
-                      Delete
-                    </button>
+                    {!(api.is_preset && !isAdmin) && (
+                      <button
+                        onClick={() => startEdit(api)}
+                        className="text-xs text-gray-700"
+                      >
+                        Edit
+                      </button>
+                    )}
+                    {!(api.is_preset && !isAdmin) && (
+                      <button
+                        onClick={() => validateApi(api.id)}
+                        className="text-xs text-indigo-600"
+                      >
+                        Validate API
+                      </button>
+                    )}
+                    {!(api.is_preset && !isAdmin) && (
+                      <button
+                        onClick={() => testExistingApi(api.id)}
+                        className="text-xs text-gray-700"
+                      >
+                        Test API
+                      </button>
+                    )}
+                    {!(api.is_preset && !isAdmin) && (
+                      <button
+                        onClick={() => deleteApi(api.id)}
+                        disabled={!isAdmin}
+                        className="text-xs text-red-600 disabled:opacity-50"
+                      >
+                        Delete
+                      </button>
+                    )}
                   </div>
+
+                  {missingEnv && (
+                    <div className="text-xs text-red-600 mt-2">
+                      Missing required env var name for this API.
+                    </div>
+                  )}
+
+                  {testData && (
+                    <div className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-700">
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold text-gray-800">Latest Test</div>
+                        <div className="text-[10px] text-gray-500">
+                          Cache: {testData.cache?.hit ? 'Hit' : 'Miss'}
+                        </div>
+                      </div>
+                      {testData.health && (
+                        <div className="text-[10px] text-gray-500 mt-1">
+                          Health: freshness {testData.health.freshness_score ?? '—'} • reliability{' '}
+                          {testData.health.reliability_score ?? '—'}
+                        </div>
+                      )}
+                      {testData.normalized_trends && testData.normalized_trends.length > 0 ? (
+                        <div className="mt-2 space-y-2">
+                          {testData.normalized_trends.slice(0, 3).map((trend: any, index: number) => (
+                            <div key={`${api.id}-trend-${index}`} className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold text-gray-900">{trend.title}</div>
+                                <div className="text-xs text-gray-500">{trend.description || 'No description'}</div>
+                              </div>
+                              <div className="flex flex-col items-end gap-1">
+                                <span className="text-[10px] uppercase bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
+                                  {trend.source}
+                                </span>
+                                <span className="text-[10px] text-gray-500">
+                                  Conf {Math.round((trend.confidence || 0) * 100)}%
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-500 mt-2">No normalized trends returned.</div>
+                      )}
+                      {testData.missing && (
+                        <div className="text-xs text-red-600 mt-2">
+                          Missing env vars: {Array.isArray(testData.missing) ? testData.missing.join(', ') : String(testData.missing)}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              ))}
+              );
+            })}
               {apis.length === 0 && (
                 <div className="text-sm text-gray-500">No API sources configured.</div>
               )}
@@ -1327,6 +1586,83 @@ export default function ExternalApisPage() {
           </div>
         )}
       </div>
+
+      {showPresetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-3xl rounded-lg bg-white p-6 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Select Global Presets</h3>
+                <p className="text-xs text-gray-500">
+                  Choose which global APIs this company can use. You can select none.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPresetModal(false)}
+                className="text-sm text-gray-600"
+              >
+                Close
+              </button>
+            </div>
+              <div className="max-h-[60vh] overflow-auto space-y-2">
+                {isLoadingPresets && (
+                  <div className="text-sm text-gray-500">Loading presets...</div>
+                )}
+                {!isLoadingPresets && presets.length === 0 && (
+                  <div className="text-sm text-gray-500">No presets available.</div>
+                )}
+                {!isLoadingPresets && presets.map((preset) => {
+                const disabled = !preset.id;
+                const checked = preset.id ? presetSelection.has(preset.id) : false;
+                return (
+                  <label
+                    key={`${preset.name}-${preset.id || 'inline'}`}
+                    className={`flex items-start gap-3 rounded-lg border p-3 text-sm ${
+                      disabled ? 'bg-gray-50 text-gray-400' : 'bg-white text-gray-800'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      disabled={disabled}
+                      checked={checked}
+                      onChange={(e) => {
+                        if (preset.id) {
+                          togglePresetSelection(preset.id, e.target.checked);
+                        }
+                      }}
+                      className="mt-1"
+                    />
+                    <div>
+                      <div className="font-semibold">{preset.name}</div>
+                      <div className="text-xs text-gray-500">{preset.description}</div>
+                      {!preset.id && (
+                        <div className="text-xs text-gray-400 mt-1">
+                          Ask a super admin to add this preset to the global catalog.
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                );
+                })}
+            </div>
+            <div className="flex items-center justify-end gap-3 mt-4">
+              <button
+                onClick={() => setShowPresetModal(false)}
+                className="px-4 py-2 text-sm text-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={savePresetSelection}
+                disabled={isSavingPresetSelection}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
+              >
+                {isSavingPresetSelection ? 'Saving...' : 'Save Selection'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

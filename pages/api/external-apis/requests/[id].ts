@@ -2,20 +2,10 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { savePlatformConfig } from '../../../../backend/services/externalApiService';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
+import { Role } from '../../../../backend/services/rbacService';
+import { withRBAC } from '../../../../backend/middleware/withRBAC';
 
-const ensureSuperAdmin = async (req: NextApiRequest, res: NextApiResponse) => {
-  const user = await resolveUserContext(req);
-  const { data, error } = await supabase.rpc('is_super_admin', {
-    check_user_id: user.userId,
-  });
-  if (error || !data) {
-    res.status(403).json({ error: 'Access denied. Only super admins can manage requests.' });
-    return { isAdmin: false, user };
-  }
-  return { isAdmin: true, user };
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Request ID is required' });
@@ -25,8 +15,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const adminCheck = await ensureSuperAdmin(req, res);
-  if (res.writableEnded) return;
+  const adminUser = await resolveUserContext(req);
 
   const { status, rejection_reason } = req.body || {};
   if (!['approved', 'rejected', 'pending'].includes(String(status || ''))) {
@@ -70,7 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .from('external_api_source_requests')
       .update({
         status: 'approved',
-        approved_by_user_id: adminCheck.user.userId,
+        approved_by_user_id: adminUser.userId,
         approved_at: new Date().toISOString(),
       })
       .eq('id', id);
@@ -85,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .from('external_api_source_requests')
     .update({
       status,
-      approved_by_user_id: adminCheck.user.userId,
+      approved_by_user_id: adminUser.userId,
       approved_at: new Date().toISOString(),
       rejection_reason: status === 'rejected' ? rejection_reason || null : null,
       rejected_at: status === 'rejected' ? new Date().toISOString() : null,
@@ -98,3 +87,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ status });
 }
+
+export default withRBAC(handler, [Role.SUPER_ADMIN]);

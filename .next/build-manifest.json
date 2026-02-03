@@ -28,10 +28,10 @@
       "static/chunks/main.js",
       "static/chunks/pages/_error.js"
     ],
-    "/external-apis": [
+    "/community-ai": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",
-      "static/chunks/pages/external-apis.js"
+      "static/chunks/pages/community-ai.js"
     ]
   },
   "ampFirstPages": []
