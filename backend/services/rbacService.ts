@@ -67,7 +67,7 @@ export const PERMISSIONS: Record<string, string[]> = {
   VIEW_CONTENT: ['*'],
 };
 
-const normalizePermissionRole = (role: string) => {
+export const normalizePermissionRole = (role: string) => {
   if (role === Role.ADMIN) return Role.COMPANY_ADMIN;
   if (role === Role.CONTENT_MANAGER) return Role.CONTENT_CREATOR;
   if (role === Role.CONTENT_PLANNER) return Role.CONTENT_CREATOR;
@@ -168,12 +168,27 @@ export const isSuperAdmin = async (userId: string): Promise<boolean> => {
   return !!data && data.length > 0;
 };
 
+export const isPlatformSuperAdmin = async (userId: string): Promise<boolean> => {
+  const { data, error } = await supabase
+    .from('user_company_roles')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('role', Role.SUPER_ADMIN)
+    .limit(1);
+  if (error) return false;
+  return !!data && data.length > 0;
+};
+
 export const enforceRole = async (input: {
   req: NextApiRequest;
   res: NextApiResponse;
   companyId?: string | null;
   allowedRoles: Role[];
 }): Promise<{ userId: string; role: Role } | null> => {
+  const hasLegacySuperAdmin = input.req.cookies?.super_admin_session === '1';
+  if (hasLegacySuperAdmin && input.allowedRoles.includes(Role.SUPER_ADMIN)) {
+    return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
+  }
   const user = await resolveUserContext(input.req);
   const companyId = input.companyId;
   if (!companyId) {

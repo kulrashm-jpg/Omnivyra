@@ -2,7 +2,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { validatePlatformConfig } from '../../../backend/services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isSuperAdmin } from '../../../backend/services/rbacService';
+import { getUserRole, isPlatformSuperAdmin, isSuperAdmin } from '../../../backend/services/rbacService';
+import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 
 const authTypeRequiresKey = (authType?: string | null) =>
   ['api_key', 'bearer', 'query', 'header'].includes(String(authType || 'none'));
@@ -11,39 +12,102 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined);
-  if (!companyId) {
+  const platformScopeRequested = req.query?.scope === 'platform';
+  if (!companyId && !platformScopeRequested) {
     return res.status(400).json({ error: 'companyId required' });
   }
-  const { user, error } = await getSupabaseUserFromRequest(req);
+  const legacySession = getLegacySuperAdminSession(req);
+  const { user, error } = legacySession ? { user: { id: legacySession.userId }, error: null } : await getSupabaseUserFromRequest(req);
   if (error || !user) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
-  if (!(await isSuperAdmin(user.id))) {
-    return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-  }
-
   if (req.method === 'GET') {
-    const createQuery = () =>
-      supabase
+    if (platformScopeRequested && !companyId) {
+      const platformAdmin = legacySession ? true : await isPlatformSuperAdmin(user.id);
+      if (platformAdmin || (await isSuperAdmin(user.id))) {
+        const { data, error: listError } = await supabase
+          .from('external_api_source_requests')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (listError) {
+          return res.status(500).json({ error: 'Failed to load API requests' });
+        }
+        return res.status(200).json({ requests: data || [] });
+      }
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    }
+    const platformAdmin = legacySession ? true : await isPlatformSuperAdmin(user.id);
+    if (platformAdmin) {
+      const createQuery = () =>
+        supabase
+          .from('external_api_source_requests')
+          .select('*')
+          .order('created_at', { ascending: false });
+      const scopedResult = await createQuery().eq('company_id', companyId);
+      if (!scopedResult.error) {
+        return res.status(200).json({ requests: scopedResult.data || [] });
+      }
+      const message = scopedResult.error.message || '';
+      if (!message.toLowerCase().includes('company_id')) {
+        return res.status(500).json({ error: 'Failed to load API requests' });
+      }
+      const fallbackResult = await createQuery();
+      if (fallbackResult.error) {
+        return res.status(500).json({ error: 'Failed to load API requests' });
+      }
+      return res.status(200).json({ requests: fallbackResult.data || [] });
+    }
+    const legacyAdmin = legacySession ? true : await isSuperAdmin(user.id);
+    if (legacyAdmin) {
+      console.debug('SUPER_ADMIN_FALLBACK', {
+        path: req.url,
+        userId: user.id,
+        source: 'rbacService.isSuperAdmin',
+      });
+      const { data, error: legacyError } = await supabase
         .from('external_api_source_requests')
         .select('*')
         .order('created_at', { ascending: false });
-    const scopedResult = await createQuery().eq('company_id', companyId);
-    if (!scopedResult.error) {
-      return res.status(200).json({ requests: scopedResult.data || [] });
+      if (legacyError) {
+        return res.status(500).json({ error: 'Failed to load API requests' });
+      }
+      return res.status(200).json({ requests: data || [] });
     }
-    const message = scopedResult.error.message || '';
-    if (!message.toLowerCase().includes('company_id')) {
+    const { role, error: roleError } = await getUserRole(user.id, companyId);
+    if (roleError || !role) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    }
+    const { data, error: requestError } = await supabase
+      .from('external_api_source_requests')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('created_by_user_id', user.id)
+      .order('created_at', { ascending: false });
+    if (!requestError) {
+      return res.status(200).json({ requests: data || [] });
+    }
+    const requestMessage = requestError.message || '';
+    if (!requestMessage.toLowerCase().includes('company_id')) {
       return res.status(500).json({ error: 'Failed to load API requests' });
     }
-    const fallbackResult = await createQuery();
-    if (fallbackResult.error) {
+    const { data: fallbackData, error: fallbackError } = await supabase
+      .from('external_api_source_requests')
+      .select('*')
+      .eq('created_by_user_id', user.id)
+      .order('created_at', { ascending: false });
+    if (fallbackError) {
       return res.status(500).json({ error: 'Failed to load API requests' });
     }
-    return res.status(200).json({ requests: fallbackResult.data || [] });
+    return res.status(200).json({ requests: fallbackData || [] });
   }
 
   if (req.method === 'POST') {
+    if (!legacySession) {
+      const { role, error: roleError } = await getUserRole(user.id, companyId);
+      if (roleError || !role) {
+        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      }
+    }
     const {
       name,
       base_url,

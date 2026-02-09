@@ -2,7 +2,15 @@
   "/_app": "pages/_app.js",
   "/_error": "pages/_error.js",
   "/_document": "pages/_document.js",
-  "/": "pages/index.js",
+  "/external-apis": "pages/external-apis.js",
   "/dashboard": "pages/dashboard.js",
-  "/community-ai": "pages/community-ai.js"
+  "/super-admin/dashboard": "pages/super-admin/dashboard.js",
+  "/api/admin/audit-logs": "pages/api/admin/audit-logs.js",
+  "/api/super-admin/analytics-summary": "pages/api/super-admin/analytics-summary.js",
+  "/api/super-admin/campaign-health": "pages/api/super-admin/campaign-health.js",
+  "/api/super-admin/companies": "pages/api/super-admin/companies.js",
+  "/api/super-admin/users": "pages/api/super-admin/users.js",
+  "/api/super-admin/community-ai-metrics": "pages/api/super-admin/community-ai-metrics.js",
+  "/api/super-admin/community-ai-policy": "pages/api/super-admin/community-ai-policy.js",
+  "/api/super-admin/rbac": "pages/api/super-admin/rbac.js"
 }

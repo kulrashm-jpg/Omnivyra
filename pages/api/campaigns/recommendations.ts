@@ -43,9 +43,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           schedule_hints: result.schedule_hints,
           omnivyra: result.omnivyra,
         },
-        status: result.campaign.status,
+        status: 'proposed',
         version: 1,
       });
+      console.debug('Campaign strategy version created with status=proposed');
 
       if (result.weekly_plan) {
         await saveWeekVersions({ companyId, campaignId, weeks: result.weekly_plan });

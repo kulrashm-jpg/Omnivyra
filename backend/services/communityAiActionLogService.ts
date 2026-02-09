@@ -1,6 +1,12 @@
 import { supabase } from '../db/supabaseClient';
 
-type ActionEventType = 'approved' | 'executed' | 'failed' | 'skipped' | 'scheduled';
+type ActionEventType =
+  | 'approved'
+  | 'executed'
+  | 'failed'
+  | 'skipped'
+  | 'scheduled'
+  | 'auto_executed';
 
 export const logCommunityAiActionEvent = async (input: {
   action_id: string;

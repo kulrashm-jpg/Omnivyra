@@ -20,11 +20,12 @@ DROP TABLE IF EXISTS campaign_goals CASCADE;
 DROP TABLE IF EXISTS campaigns CASCADE;
 
 -- Create Campaign Management Tables
-CREATE TABLE campaigns (
+CREATE TABLE IF NOT EXISTS campaigns (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     description TEXT,
+    virality_playbook_id UUID REFERENCES virality_playbooks(id) ON DELETE SET NULL,
     status VARCHAR(50) DEFAULT 'planning' CHECK (status IN ('planning', 'market-analysis', 'content-creation', 'schedule-review', 'active', 'completed', 'paused', 'cancelled')),
     current_stage VARCHAR(50) DEFAULT 'planning',
     timeframe VARCHAR(50) DEFAULT 'quarter' CHECK (timeframe IN ('week', 'month', 'quarter', 'year')),
@@ -194,16 +195,16 @@ CREATE TABLE webhook_logs (
 );
 
 -- Create Indexes for Performance
-CREATE INDEX idx_campaigns_user_id ON campaigns(user_id);
-CREATE INDEX idx_campaigns_status ON campaigns(status);
-CREATE INDEX idx_campaigns_created_at ON campaigns(created_at);
-CREATE INDEX idx_campaign_goals_campaign_id ON campaign_goals(campaign_id);
-CREATE INDEX idx_market_analyses_campaign_id ON market_analyses(campaign_id);
-CREATE INDEX idx_content_plans_campaign_id ON content_plans(campaign_id);
-CREATE INDEX idx_content_plans_status ON content_plans(status);
-CREATE INDEX idx_ai_threads_campaign_id ON ai_threads(campaign_id);
-CREATE INDEX idx_ai_feedback_campaign_id ON ai_feedback(campaign_id);
-CREATE INDEX idx_campaign_analytics_campaign_id ON campaign_analytics(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_campaigns_user_id ON campaigns(user_id);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+CREATE INDEX IF NOT EXISTS idx_campaigns_created_at ON campaigns(created_at);
+CREATE INDEX IF NOT EXISTS idx_campaign_goals_campaign_id ON campaign_goals(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_market_analyses_campaign_id ON market_analyses(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_content_plans_campaign_id ON content_plans(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_content_plans_status ON content_plans(status);
+CREATE INDEX IF NOT EXISTS idx_ai_threads_campaign_id ON ai_threads(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_ai_feedback_campaign_id ON ai_feedback(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_analytics_campaign_id ON campaign_analytics(campaign_id);
 
 -- Create Views
 CREATE VIEW campaign_summary AS
@@ -227,9 +228,14 @@ LEFT JOIN content_plans cp ON c.id = cp.campaign_id
 GROUP BY c.id, c.name, c.status, c.current_stage, c.timeframe, c.start_date, c.end_date, c.created_at, c.launched_at;
 
 -- Insert Sample Data
+INSERT INTO users (id, email, name)
+VALUES ('550e8400-e29b-41d4-a716-446655440000', 'demo@example.com', 'Demo User')
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO campaigns (id, user_id, name, description, status, current_stage, timeframe) VALUES 
 ('550e8400-e29b-41d4-a716-446655440010', '550e8400-e29b-41d4-a716-446655440000', 'Q1 2024 Brand Awareness', 'Brand awareness campaign for Q1 2024', 'planning', 'planning', 'quarter'),
-('550e8400-e29b-41d4-a716-446655440011', '550e8400-e29b-41d4-a716-446655440000', 'Product Launch Campaign', 'Product launch campaign for new features', 'planning', 'planning', 'month');
+('550e8400-e29b-41d4-a716-446655440011', '550e8400-e29b-41d4-a716-446655440000', 'Product Launch Campaign', 'Product launch campaign for new features', 'planning', 'planning', 'month')
+ON CONFLICT (id) DO NOTHING;
 
 -- Test the setup
 SELECT 'Database setup completed successfully!' as status;

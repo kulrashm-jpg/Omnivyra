@@ -427,3 +427,63 @@ export const evaluateCommunityAiEngagement = (input: {
   brand_voice: string;
   context?: any;
 }) => requestOmniVyra<CommunityAiEvaluationResult>('/community/engagement/evaluate', input);
+
+export type CommunityAiInsightsResult = {
+  summary_insight?: string;
+  key_findings?: any[];
+  recommended_actions?: any[];
+  risks?: any;
+  confidence_level?: number;
+};
+
+export const evaluateCommunityAiInsights = (input: {
+  tenant_id: string;
+  organization_id: string;
+  platform?: string | null;
+  content_type?: string | null;
+  kpis: any;
+  trends: any;
+  anomalies: any;
+  brand_voice: string;
+  recent_content_summary?: any;
+}) => requestOmniVyra<CommunityAiInsightsResult>('/community/insights/evaluate', input);
+
+export type CommunityAiForecastInsightsResult = {
+  explanation_summary?: string;
+  key_drivers?: any[];
+  risks?: any[];
+  recommended_actions?: any[];
+  confidence_level?: number;
+};
+
+export const evaluateCommunityAiForecastInsights = (input: {
+  tenant_id: string;
+  organization_id: string;
+  platform?: string | null;
+  content_type?: string | null;
+  forecast: any;
+  trends: any;
+  anomalies: any;
+  kpis: any;
+  brand_voice: string;
+  recent_content_summary?: any;
+}) => requestOmniVyra<CommunityAiForecastInsightsResult>('/community/forecast/insights', input);
+
+export type CommunityAiExecutiveNarrativeResult = {
+  overview?: string;
+  key_shifts?: any[];
+  risks_to_watch?: any[];
+  recommendations_to_review?: any[];
+  explicitly_not_recommended?: any[];
+  confidence_level?: number;
+};
+
+export const evaluateCommunityAiExecutiveNarrative = (input: {
+  tenant_id: string;
+  organization_id: string;
+  executive_summary: any;
+  playbook_effectiveness: any;
+  network_intelligence_snapshot: any;
+  automation_levels: any;
+  date_range?: { start_date: string | null; end_date: string | null };
+}) => requestOmniVyra<CommunityAiExecutiveNarrativeResult>('/community/executive/narrative', input);

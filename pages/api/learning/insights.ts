@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { computeAnalytics } from '../../../backend/services/analyticsService';
 import { generateLearningInsights } from '../../../backend/services/learningEngineService';
-import { getLatestCampaignVersion } from '../../../backend/db/campaignVersionStore';
+import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -22,8 +22,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const analytics = await computeAnalytics({ companyId, campaignId, timeframe: 'latest' });
-    const campaignVersion = await getLatestCampaignVersion(companyId, campaignId);
+    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
     const campaign = campaignVersion?.campaign_snapshot?.campaign ?? {};
+    console.debug('Approved strategy used for analytics', {
+      campaignId,
+      companyId,
+      versionId: campaignVersion?.id,
+      status: campaignVersion?.status,
+    });
 
     const insights = await generateLearningInsights({
       analytics,

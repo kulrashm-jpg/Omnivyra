@@ -3,11 +3,11 @@ import { z } from 'zod';
 import { CompanyProfile, getProfile } from './companyProfileService';
 import { WeeklyPlan } from './campaignRecommendationService';
 import {
-  getLatestCampaignVersion,
   saveCampaignVersion,
   saveOptimizationHistory,
   saveWeekVersions,
 } from '../db/campaignVersionStore';
+import { getLatestApprovedCampaignVersion } from '../db/campaignApprovedVersionStore';
 
 type WeekPlanItem = WeeklyPlan[number];
 
@@ -145,7 +145,7 @@ export async function optimizeCampaignWeek(input: {
     throw new Error('Company profile not found');
   }
 
-  const campaignVersion = await getLatestCampaignVersion(input.companyId, input.campaignId);
+  const campaignVersion = await getLatestApprovedCampaignVersion(input.companyId, input.campaignId);
   if (!campaignVersion?.campaign_snapshot?.weekly_plan) {
     throw new Error('Weekly plan not found');
   }
@@ -203,9 +203,10 @@ export async function optimizeCampaignWeek(input: {
       ...campaignVersion.campaign_snapshot,
       weekly_plan: updatedWeeklyPlan,
     },
-    status: campaignVersion.status ?? 'optimized',
+    status: 'proposed',
     version: (campaignVersion.version ?? 1) + 1,
   });
+  console.debug('Campaign strategy version created with status=proposed');
 
   return {
     updated_week: updatedWeek,

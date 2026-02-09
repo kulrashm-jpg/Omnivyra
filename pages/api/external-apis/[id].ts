@@ -1,27 +1,76 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { validatePlatformConfig } from '../../../backend/services/externalApiService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveUserContext } from '../../../backend/services/userContextService';
-import { Role } from '../../../backend/services/rbacService';
-import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
+import {
+  getUserRole,
+  hasPermission,
+  isPlatformSuperAdmin,
+  isSuperAdmin,
+} from '../../../backend/services/rbacService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'API ID is required' });
   }
-  const { defaultCompanyId: companyId } = await resolveUserContext(req);
-  if (!companyId) {
+  const { defaultCompanyId } = await resolveUserContext(req);
+  const platformScopeRequested = req.query?.scope === 'platform';
+  const companyId =
+    (req.query.companyId as string | undefined) ||
+    (req.body?.companyId as string | undefined) ||
+    (platformScopeRequested ? undefined : defaultCompanyId);
+  if (!companyId && !platformScopeRequested) {
     return res.status(400).json({ error: 'companyId required' });
+  }
+  const legacySession = getLegacySuperAdminSession(req);
+  const { user, error: userError } = legacySession
+    ? { user: { id: legacySession.userId }, error: null }
+    : await getSupabaseUserFromRequest(req);
+  if (userError || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+  let canManageExternalApis = false;
+  let hasPlatformScope = false;
+  if (legacySession) {
+    canManageExternalApis = true;
+    hasPlatformScope = true;
+  } else {
+    const platformAdmin = await isPlatformSuperAdmin(user.id);
+    if (platformAdmin) {
+      canManageExternalApis = true;
+      hasPlatformScope = true;
+    } else if (await isSuperAdmin(user.id)) {
+      console.debug('SUPER_ADMIN_FALLBACK', {
+        path: req.url,
+        userId: user.id,
+        source: 'rbacService.isSuperAdmin',
+      });
+      canManageExternalApis = true;
+      hasPlatformScope = true;
+    } else {
+      if (!companyId) {
+        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      }
+      const { role, error: roleError } = await getUserRole(user.id, companyId);
+      if (roleError || !role) {
+        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      }
+      canManageExternalApis = hasPermission(role, 'MANAGE_EXTERNAL_APIS');
+    }
   }
 
   if (req.method === 'GET') {
-    const { data, error } = await supabase
+    let query = supabase
       .from('external_api_sources')
       .select('*')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single();
+      .eq('id', id);
+    if (!platformScopeRequested) {
+      query = query.eq('company_id', companyId);
+    }
+    const { data, error } = await query.single();
     if (error) {
       return res.status(500).json({ error: 'Failed to load external API' });
     }
@@ -34,6 +83,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   if (req.method === 'PUT') {
+    if (!canManageExternalApis) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    }
     const {
       name,
       base_url,
@@ -100,7 +152,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const resolvedKeyEnv = resolvedApiKeyEnv || resolvedApiKeyName || null;
 
-    const { data, error } = await supabase
+    let updateQuery = supabase
       .from('external_api_sources')
       .update({
         name,
@@ -125,10 +177,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         posting_constraints: posting_constraints || {},
         requires_admin: requires_admin ?? true,
       })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .select('*')
-      .single();
+      .eq('id', id);
+    if (!platformScopeRequested) {
+      updateQuery = updateQuery.eq('company_id', companyId);
+    }
+    const { data, error } = await updateQuery.select('*').single();
 
     if (error) {
       return res.status(500).json({ error: 'Failed to update external API' });
@@ -137,11 +190,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   if (req.method === 'DELETE') {
-    const { error } = await supabase
-      .from('external_api_sources')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', companyId);
+    if (!canManageExternalApis) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    }
+    const deleteQuery = supabase.from('external_api_sources').delete().eq('id', id);
+    if (!hasPlatformScope) {
+      deleteQuery.eq('company_id', companyId);
+    }
+    const { error } = await deleteQuery;
     if (error) {
       return res.status(500).json({ error: 'Failed to delete external API' });
     }
@@ -151,4 +207,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default handler;

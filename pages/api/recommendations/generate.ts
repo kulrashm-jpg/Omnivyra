@@ -1,9 +1,12 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendations } from '../../../backend/services/recommendationEngineService';
+import { getCompanyDefaultApiIds } from '../../../backend/services/externalApiService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { getProfile } from '../../../backend/services/companyProfileService';
+import OpenAI from 'openai';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -11,7 +14,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { companyId, campaignId, objective, durationWeeks, simulate } = req.body || {};
+    const {
+      companyId,
+      campaignId,
+      objective,
+      durationWeeks,
+      simulate,
+      chat,
+      selected_api_ids,
+      manual_context,
+    } = req.body || {};
     if (!companyId || !campaignId) {
       return res.status(400).json({ error: 'companyId and campaignId are required' });
     }
@@ -37,15 +49,92 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(403).json({ error: 'CAMPAIGN_NOT_IN_COMPANY' });
     }
 
-    const result = await generateRecommendations({
-      companyId,
-      campaignId,
-      objective,
-      durationWeeks,
-      simulate: Boolean(simulate),
-      userId: access.userId,
-    });
+    const chatMode = Boolean(chat);
+    let recommendationContext: Record<string, any> | null = null;
+    const defaultApiIds = await getCompanyDefaultApiIds(companyId);
+    const resolvedSelection = Array.isArray(selected_api_ids) ? selected_api_ids : defaultApiIds;
+    const manualContext =
+      manual_context && typeof manual_context === 'object' ? manual_context : null;
+    const result = await generateRecommendations(
+      {
+        companyId,
+        campaignId,
+        objective,
+        durationWeeks,
+        simulate: Boolean(simulate),
+        userId: access.userId,
+        selectedApiIds: resolvedSelection,
+      },
+      {
+        onContext: chatMode
+          ? (context) => {
+              recommendationContext = context;
+            }
+          : undefined,
+      }
+    );
 
+    let opportunityAnalysis: any | null = null;
+    if (manualContext?.type === 'opportunity') {
+      try {
+        if (!process.env.OPENAI_API_KEY) {
+          console.warn('OPENAI_API_KEY_MISSING_FOR_OPPORTUNITY_ANALYSIS');
+        } else {
+          const profile = await getProfile(companyId, { autoRefine: false });
+          const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+          const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+          const message =
+            'Evaluate this opportunity against the company profile.\n' +
+            'Return JSON only with fields:\n' +
+            '- relevance_score (0 to 1)\n' +
+            '- narrative_angle (string)\n' +
+            '- content_mix (array of content types)\n' +
+            '- risk_level (Low | Medium | High)\n' +
+            '- confidence (0 to 1)\n' +
+            `Company Profile:\n${JSON.stringify(profile || {}, null, 2)}\n` +
+            `Opportunity:\n${JSON.stringify(manualContext || {}, null, 2)}`;
+          const completion = await openai.chat.completions.create({
+            model,
+            temperature: 0.3,
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: 'You are a campaign strategist.' },
+              { role: 'user', content: message },
+            ],
+          });
+          const raw = completion.choices?.[0]?.message?.content || '{}';
+          opportunityAnalysis = JSON.parse(raw);
+        }
+      } catch (error) {
+        console.warn('OPPORTUNITY_ANALYSIS_FAILED', error);
+        opportunityAnalysis = null;
+      }
+    }
+
+    if (manualContext?.type === 'opportunity' && manualContext?.topic) {
+      const manualTopic = String(manualContext.topic).trim();
+      if (manualTopic) {
+        const exists = (result.trends_used || []).some(
+          (trend: any) => String(trend.topic || '').toLowerCase() === manualTopic.toLowerCase()
+        );
+        if (!exists) {
+          result.trends_used = [
+            {
+              topic: manualTopic,
+              source: 'opportunity',
+              sources: ['manual'],
+              platform_tag: Array.isArray(manualContext.platform_preferences)
+                ? manualContext.platform_preferences[0]
+                : undefined,
+            },
+            ...(result.trends_used || []),
+          ];
+        }
+      }
+    }
+
+    let snapshotHashByTopic: Record<string, string> = {};
+    let snapshotRowsByTopic: Record<string, { id: string; snapshot_hash?: string | null }> = {};
     if (!simulate) {
       const createdAt = new Date().toISOString();
       const fallbackTopic =
@@ -73,9 +162,105 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (snapshotError) {
         return res.status(500).json({ error: 'Failed to persist recommendation snapshot' });
       }
+      try {
+        const windowStart = new Date(new Date(createdAt).getTime() - 2 * 60 * 1000).toISOString();
+        const windowEnd = new Date(new Date(createdAt).getTime() + 2 * 60 * 1000).toISOString();
+        const { data: snapshotRows, error: snapshotLookupError } = await supabase
+          .from('recommendation_snapshots')
+          .select('id,trend_topic,snapshot_hash')
+          .eq('company_id', companyId)
+          .gte('refreshed_at', windowStart)
+          .lte('refreshed_at', windowEnd)
+          .in('trend_topic', topics);
+        if (!snapshotLookupError && snapshotRows) {
+          snapshotHashByTopic = snapshotRows.reduce<Record<string, string>>((acc, row: any) => {
+            if (row?.trend_topic && row?.snapshot_hash) {
+              acc[String(row.trend_topic)] = String(row.snapshot_hash);
+            }
+            return acc;
+          }, {});
+          snapshotRowsByTopic = snapshotRows.reduce<Record<string, { id: string; snapshot_hash?: string | null }>>(
+            (acc, row: any) => {
+              if (row?.trend_topic && row?.id) {
+                acc[String(row.trend_topic)] = {
+                  id: String(row.id),
+                  snapshot_hash: row.snapshot_hash ?? null,
+                };
+              }
+              return acc;
+            },
+            {}
+          );
+        }
+      } catch {
+        snapshotHashByTopic = {};
+        snapshotRowsByTopic = {};
+      }
     }
 
-    return res.status(200).json(result);
+    const resultWithSnapshots = snapshotHashByTopic && Object.keys(snapshotHashByTopic).length > 0
+      ? {
+          ...result,
+          trends_used: result.trends_used.map((trend: any) => ({
+            ...trend,
+            snapshot_hash: snapshotHashByTopic[trend.topic] || undefined,
+          })),
+        }
+      : result;
+
+    if (!simulate && opportunityAnalysis && manualContext?.type === 'opportunity') {
+      try {
+        const topicKey = manualContext?.topic ? String(manualContext.topic) : null;
+        const targetRow = topicKey ? snapshotRowsByTopic[topicKey] : null;
+        if (targetRow?.id) {
+          await supabase.from('audit_logs').insert({
+            action: 'RECOMMENDATION_OPPORTUNITY_ANALYSIS',
+            actor_user_id: access.userId ?? null,
+            company_id: companyId,
+            metadata: {
+              recommendation_id: targetRow.id,
+              snapshot_hash: targetRow.snapshot_hash ?? null,
+              opportunity_analysis: opportunityAnalysis,
+            },
+            created_at: new Date().toISOString(),
+          });
+        }
+      } catch (error) {
+        console.warn('OPPORTUNITY_ANALYSIS_AUDIT_FAILED', error);
+      }
+    }
+
+    if (chatMode && recommendationContext?.trend_reasoning) {
+      const reasoning = recommendationContext.trend_reasoning as Array<{
+        topic: string;
+        signals: string[];
+      }>;
+      const signalCopy: Record<string, string> = {
+        topic_overlap_detected: 'This overlaps with topics used in a recent campaign.',
+        related_to_recent_campaign: 'This is related to a recent campaign you ran.',
+        possible_campaign_continuation:
+          'This could work as a continuation of a previous campaign.',
+        novel_theme: 'This appears to be a new theme for your brand.',
+      };
+
+      const explanations = reasoning.map((item) => ({
+        topic: item.topic,
+        explanations: item.signals.map((signal) => signalCopy[signal]).filter(Boolean),
+      }));
+
+      return res.status(200).json({
+        ...resultWithSnapshots,
+        opportunity_analysis: opportunityAnalysis ?? undefined,
+        chat_meta: {
+          trend_explanations: explanations,
+        },
+      });
+    }
+
+    return res.status(200).json({
+      ...resultWithSnapshots,
+      opportunity_analysis: opportunityAnalysis ?? undefined,
+    });
   } catch (error: any) {
     if (error?.code === 'CAMPAIGN_NOT_IN_COMPANY') {
       return res.status(403).json({ error: 'CAMPAIGN_NOT_IN_COMPANY' });

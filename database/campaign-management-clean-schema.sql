@@ -29,7 +29,7 @@ DROP TABLE IF EXISTS users CASCADE;
 
 -- STEP 2: CREATE CORE USER MANAGEMENT
 -- =====================================================
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
@@ -42,11 +42,12 @@ CREATE TABLE users (
 
 -- STEP 3: CREATE CAMPAIGN MANAGEMENT TABLES
 -- =====================================================
-CREATE TABLE campaigns (
+CREATE TABLE IF NOT EXISTS campaigns (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     description TEXT,
+    virality_playbook_id UUID REFERENCES virality_playbooks(id) ON DELETE SET NULL,
     status VARCHAR(50) DEFAULT 'planning' CHECK (status IN ('planning', 'market-analysis', 'content-creation', 'schedule-review', 'active', 'completed', 'paused', 'cancelled')),
     current_stage VARCHAR(50) DEFAULT 'planning',
     timeframe VARCHAR(50) DEFAULT 'quarter' CHECK (timeframe IN ('week', 'month', 'quarter', 'year')),

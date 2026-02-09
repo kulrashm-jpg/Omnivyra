@@ -6,10 +6,28 @@ import {
   getUserCompanyRole,
   getUserRole,
   hasPermission,
+  isPlatformSuperAdmin,
   isSuperAdmin,
   Role,
 } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+
+const mapCampaignPlaybook = (campaign: any) => ({
+  ...campaign,
+  // Playbooks are informational only:
+  // - Do NOT drive scheduling
+  // - Do NOT alter publishing logic
+  // - Do NOT affect approvals
+  playbook: campaign.virality_playbooks
+    ? {
+        id: campaign.virality_playbooks.id,
+        name: campaign.virality_playbooks.name,
+        objective: campaign.virality_playbooks.objective,
+        platforms: campaign.virality_playbooks.platforms,
+        content_types: campaign.virality_playbooks.content_types,
+      }
+    : null,
+});
 
 const requireCompanyRole = async (
   req: NextApiRequest,
@@ -22,8 +40,17 @@ const requireCompanyRole = async (
     return null;
   }
   const user = await resolveUserContext(req);
-  const superAdmin = await isSuperAdmin(user.userId);
-  if (superAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
+  const platformAdmin = await isPlatformSuperAdmin(user.userId);
+  if (platformAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
+    return { userId: user.userId, role: Role.SUPER_ADMIN };
+  }
+  const legacyAdmin = await isSuperAdmin(user.userId);
+  if (legacyAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
+    console.debug('SUPER_ADMIN_FALLBACK', {
+      path: req.url,
+      userId: user.userId,
+      source: 'rbacService.isSuperAdmin',
+    });
     return { userId: user.userId, role: Role.SUPER_ADMIN };
   }
   const { role, error } = await getUserRole(user.userId, companyId);
@@ -105,9 +132,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         end_date,
         created_at,
         updated_at,
-        weekly_themes
+        weekly_themes,
+        virality_playbook_id,
+        virality_playbooks(id, name, objective, platforms, content_types, company_id)
       `)
       .in('id', campaignIds)
+      .or(`virality_playbook_id.is.null,virality_playbooks.company_id.eq.${companyId}`)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -116,7 +146,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Add simple stats for each campaign
-    const campaignsWithCounts = campaigns.map((campaign) => ({
+    const campaignsWithCounts = (campaigns || []).map(mapCampaignPlaybook).map((campaign) => ({
       ...campaign,
       name: campaign.name || `Campaign ${campaign.id.substring(0, 8)}`, // Fallback for missing names
       stats: {

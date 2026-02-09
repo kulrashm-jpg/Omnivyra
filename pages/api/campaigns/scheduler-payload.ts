@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import { getLatestCampaignVersion } from '../../../backend/db/campaignVersionStore';
+import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
 import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
 import {
   buildPlatformExecutionPlan,
@@ -50,7 +50,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
     if (!plan?.plan_json) {
-      const campaignVersion = await getLatestCampaignVersion(companyId, campaignId);
+      const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
       if (!campaignVersion?.campaign_snapshot?.weekly_plan) {
         return res.status(404).json({ error: 'Campaign plan not found' });
       }
@@ -126,7 +126,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     console.log('AUTOMATION PAYLOAD READY', { jobs: payload.jobs.length });
 
-    const campaignVersion = await getLatestCampaignVersion(companyId, campaignId);
+    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
     const contentAssets = await listAssetsWithLatestContent({ campaignId });
     const healthReport = validateCampaignHealth({
       companyProfile: profile,

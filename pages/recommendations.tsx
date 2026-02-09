@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
+import { supabase } from '../utils/supabaseClient';
+import VoiceNotesComponent from '../components/VoiceNotesComponent';
 import {
   buildTrendSourceCounts,
   getConfidenceLabel,
@@ -87,6 +89,19 @@ type RecommendationEngineResult = {
     last_error?: string | null;
     endpoint?: string | null;
   };
+  chat_meta?: {
+    trend_explanations?: Array<{
+      topic: string;
+      explanations: string[];
+    }>;
+  };
+  opportunity_analysis?: {
+    relevance_score?: number;
+    narrative_angle?: string;
+    content_mix?: string[];
+    risk_level?: string;
+    confidence?: number;
+  };
 };
 
 type TrendSourceLegendItem = {
@@ -94,6 +109,13 @@ type TrendSourceLegendItem = {
   label: string;
   description: string;
   badgeClass: string;
+};
+
+type ExternalApiOption = {
+  id: string;
+  name: string;
+  is_global_preset?: boolean | null;
+  company_id?: string | null;
 };
 
 export default function RecommendationsPage() {
@@ -120,7 +142,72 @@ export default function RecommendationsPage() {
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [lastRefreshSource, setLastRefreshSource] = useState<string | null>(null);
   const [simulateScenarios, setSimulateScenarios] = useState(false);
+  const [expandedTrendKey, setExpandedTrendKey] = useState<string | null>(null);
+  const [availableApis, setAvailableApis] = useState<ExternalApiOption[]>([]);
+  const [selectedApiIds, setSelectedApiIds] = useState<string[]>([]);
+  const [isApiLoading, setIsApiLoading] = useState(false);
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<'all' | 'shortlisted' | 'discarded'>(
+    'all'
+  );
+  const [recommendationStates, setRecommendationStates] = useState<Record<string, string>>({});
+  const [recommendationDetails, setRecommendationDetails] = useState<
+    Record<
+      string,
+      { state: string; actor_user_id: string | null; created_at: string | null; snapshot_hash?: string | null }
+    >
+  >({});
+  const [recommendationSummaries, setRecommendationSummaries] = useState<
+    Record<
+      string,
+      {
+        shortlisted_count: number;
+        discarded_count: number;
+        active_count: number;
+        priority_score?: number;
+        priority_bucket?: 'High' | 'Medium' | 'Low';
+        last_admin_decision?: { state: string; actor_user_id: string | null; created_at: string | null };
+        last_discarded?: { actor_user_id: string | null; created_at: string | null };
+      }
+    >
+  >({});
+  const [recommendationBySnapshot, setRecommendationBySnapshot] = useState<Record<string, string>>(
+    {}
+  );
+  const [manualTopic, setManualTopic] = useState('');
+  const [manualNarrative, setManualNarrative] = useState('');
+  const [manualObjective, setManualObjective] = useState('');
+  const [manualPlatformPreference, setManualPlatformPreference] = useState('');
+  const [isSubmittingManual, setIsSubmittingManual] = useState(false);
+  const [stateError, setStateError] = useState<string | null>(null);
+  const [sortByPriority, setSortByPriority] = useState(true);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<any | null>(null);
+  const [previewRecommendationId, setPreviewRecommendationId] = useState<string | null>(null);
+  const [previewSnapshotHash, setPreviewSnapshotHash] = useState<string | null>(null);
+  const [previewPriorityBucket, setPreviewPriorityBucket] = useState<string | null>(null);
+  const [previewCurrentState, setPreviewCurrentState] = useState<string | null>(null);
+  const [previewOpinionNote, setPreviewOpinionNote] = useState('');
+  const [previewConfidenceRating, setPreviewConfidenceRating] = useState<number | ''>('');
+  const [previewConfidence, setPreviewConfidence] = useState<number | null>(null);
+  const [previewContentFrequency, setPreviewContentFrequency] = useState<any | null>(null);
   const isAdmin = useMemo(() => user?.role === 'admin', [user]);
+  const canManageRecommendationState = useMemo(() => {
+    const role = (userRole || '').toUpperCase();
+    return ['COMPANY_ADMIN', 'CONTENT_CREATOR', 'SUPER_ADMIN'].includes(role);
+  }, [userRole]);
+  const trendExplanationMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const explanations = engineResult?.chat_meta?.trend_explanations || [];
+    explanations.forEach((entry) => {
+      const key = entry.topic?.trim().toLowerCase();
+      if (!key || map.has(key)) return;
+      map.set(key, entry.explanations || []);
+    });
+    return map;
+  }, [engineResult?.chat_meta?.trend_explanations]);
 
   useEffect(() => {
     const queryCampaignId =
@@ -145,6 +232,12 @@ export default function RecommendationsPage() {
       setSelectedCampaignId(stored);
     }
   }, [selectedCompanyId]);
+
+  const toggleApiSelection = (apiId: string) => {
+    setSelectedApiIds((prev) =>
+      prev.includes(apiId) ? prev.filter((id) => id !== apiId) : [...prev, apiId]
+    );
+  };
 
   useEffect(() => {
     if (!selectedCompanyId) return;
@@ -179,6 +272,51 @@ export default function RecommendationsPage() {
     loadCampaigns();
   }, [selectedCompanyId, campaignIdLocked]);
 
+  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      throw new Error('Not authenticated');
+    }
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  };
+
+  useEffect(() => {
+    const loadApiDefaults = async () => {
+      if (!selectedCompanyId) {
+        setAvailableApis([]);
+        setSelectedApiIds([]);
+        return;
+      }
+      try {
+        setIsApiLoading(true);
+        const response = await fetchWithAuth(
+          `/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`
+        );
+        if (!response.ok) {
+          setAvailableApis([]);
+          setSelectedApiIds([]);
+          return;
+        }
+        const data = await response.json();
+        setAvailableApis(data.availableApis || []);
+        setSelectedApiIds(Array.isArray(data.companyDefaultApis) ? data.companyDefaultApis : []);
+      } catch {
+        setAvailableApis([]);
+        setSelectedApiIds([]);
+      } finally {
+        setIsApiLoading(false);
+      }
+    };
+    loadApiDefaults();
+  }, [selectedCompanyId]);
+
   useEffect(() => {
     if (!selectedCampaignId || !campaignIdLocked || autoGenerated || isLoading) return;
     setAutoGenerated(true);
@@ -201,7 +339,13 @@ export default function RecommendationsPage() {
     }
   }, [selectedCampaignId, campaigns, selectedCompanyId]);
 
-  const generateRecommendations = async () => {
+  const generateRecommendations = async (manualContext?: {
+    type?: string;
+    topic?: string;
+    narrative?: string;
+    objective?: string;
+    platform_preferences?: string[];
+  }) => {
     if (!selectedCompanyId || !selectedCampaignId) {
       setErrorMessage('Please select or create a campaign first.');
       return;
@@ -209,6 +353,7 @@ export default function RecommendationsPage() {
     try {
       setIsLoading(true);
       setErrorMessage(null);
+      setExpandedTrendKey(null);
       const response = await fetch('/api/recommendations/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -216,13 +361,16 @@ export default function RecommendationsPage() {
           companyId: selectedCompanyId,
           campaignId: selectedCampaignId,
           simulate: simulateScenarios,
+          chat: true,
+          selected_api_ids: selectedApiIds,
+          ...(manualContext ? { manual_context: manualContext } : {}),
         }),
       });
       if (!response.ok) throw new Error('Failed to generate recommendations');
       const data = await response.json();
       setEngineResult(data);
       setLastRefresh(new Date().toLocaleString());
-      setLastRefreshSource('manual');
+      setLastRefreshSource(manualContext?.type === 'opportunity' ? 'opportunity' : 'manual');
     } catch (error) {
       console.error('Error generating recommendations:', error);
       setErrorMessage('Failed to generate recommendations.');
@@ -255,6 +403,290 @@ export default function RecommendationsPage() {
       console.error('Error refreshing recommendations:', error);
       setErrorMessage('Failed to refresh recommendations.');
       setIsLoading(false);
+    }
+  };
+
+  const fetchStateMap = async () => {
+    if (!selectedCompanyId) return;
+    try {
+      const snapshotHashes =
+        engineResult?.trends_used?.map((trend) => trend.snapshot_hash).filter(Boolean) || [];
+      const params = new URLSearchParams({ companyId: selectedCompanyId });
+      if (snapshotHashes.length > 0) {
+        params.set('snapshot_hashes', snapshotHashes.join(','));
+      }
+      const response = await fetch(`/api/recommendations/state-map?${params.toString()}`);
+      if (!response.ok) {
+        setRecommendationStates({});
+        setRecommendationDetails({});
+        setRecommendationBySnapshot({});
+        return;
+      }
+      const data = await response.json();
+      setRecommendationStates(data?.states || {});
+      setRecommendationDetails(data?.details || {});
+      setRecommendationSummaries(data?.summaries || {});
+      setRecommendationBySnapshot(data?.recommendations || {});
+    } catch (error) {
+      console.error('Error loading recommendation states:', error);
+      setRecommendationStates({});
+      setRecommendationDetails({});
+      setRecommendationSummaries({});
+      setRecommendationBySnapshot({});
+    }
+  };
+
+  const updateRecommendationState = async (recommendationId: string, state: string) => {
+    if (!recommendationId) return;
+    try {
+      setStateError(null);
+      const response = await fetch(`/api/recommendations/${recommendationId}/state`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state }),
+      });
+      if (!response.ok) {
+        setStateError('Failed to update recommendation state.');
+        return;
+      }
+      await fetchStateMap();
+    } catch (error) {
+      console.error('Error updating recommendation state:', error);
+      setStateError('Failed to update recommendation state.');
+    }
+  };
+
+  const handleCreateCampaignFromRecommendation = async (recommendationId?: string) => {
+    if (!recommendationId) {
+      setErrorMessage('Recommendation ID not available.');
+      return;
+    }
+    try {
+      setIsLoading(true);
+      const response = await fetch(`/api/recommendations/${recommendationId}/create-campaign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ durationWeeks: 12 }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to create campaign');
+      }
+      const data = await response.json();
+      if (data?.campaign_id) {
+        window.location.href = `/campaign-planning?mode=edit&campaignId=${data.campaign_id}`;
+      }
+    } catch (error) {
+      console.error('Error creating campaign:', error);
+      setErrorMessage('Failed to create campaign.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePreparePlanFromRecommendation = async (
+    recommendationId?: string,
+    snapshotHash?: string | null,
+    options?: { draft?: boolean; priorityBucket?: string }
+  ) => {
+    if (!recommendationId || !snapshotHash) {
+      setErrorMessage('Recommendation context not available.');
+      return;
+    }
+    try {
+      setDraftError(null);
+      setIsLoading(true);
+      const response = await fetch(`/api/recommendations/${recommendationId}/prepare-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          draft: Boolean(options?.draft),
+          priority_bucket: options?.priorityBucket ?? null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to prepare planning context');
+      }
+      const data = await response.json();
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(
+          `recommendation_plan_context_${snapshotHash}`,
+          JSON.stringify(data)
+        );
+      }
+      window.location.href = `/campaign-planning?context=recommendation&hash=${encodeURIComponent(
+        snapshotHash
+      )}${options?.draft ? '&mode=draft' : ''}`;
+    } catch (error) {
+      console.error('Error preparing planning context:', error);
+      setDraftError('Failed to prepare planning context.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const openPreviewForRecommendation = async (
+    recommendationId?: string,
+    snapshotHash?: string | null,
+    currentState?: string | null,
+    priorityBucket?: string | null
+  ) => {
+    if (!recommendationId || !snapshotHash) {
+      setDraftError('Preview unavailable for this recommendation.');
+      return;
+    }
+    try {
+      setPreviewError(null);
+      setPreviewLoading(true);
+      setPreviewModalOpen(true);
+      setPreviewRecommendationId(recommendationId);
+      setPreviewSnapshotHash(snapshotHash);
+      setPreviewPriorityBucket(priorityBucket || null);
+      setPreviewCurrentState(currentState || null);
+      setPreviewOpinionNote('');
+      setPreviewConfidenceRating('');
+      setPreviewConfidence(null);
+      setPreviewContentFrequency(null);
+      const response = await fetch(`/api/recommendations/${recommendationId}/preview-strategy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error('Failed to generate preview');
+      }
+      const data = await response.json();
+      setPreviewData(data?.preview || null);
+      setPreviewConfidence(typeof data?.confidence === 'number' ? data.confidence : null);
+      setPreviewContentFrequency(data?.content_frequency ?? null);
+      if (data?.snapshot_hash) {
+        setPreviewSnapshotHash(String(data.snapshot_hash));
+      }
+      setPreviewRecommendationId(String(data?.recommendation_id || recommendationId));
+    } catch (error) {
+      console.error('Error generating preview:', error);
+      setPreviewError('Failed to generate preview.');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const regeneratePreview = async () => {
+    if (!previewRecommendationId) return;
+    try {
+      setPreviewError(null);
+      setPreviewLoading(true);
+      const response = await fetch(
+        `/api/recommendations/${previewRecommendationId}/preview-strategy`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preview_overrides: previewData || null }),
+        }
+      );
+      if (!response.ok) {
+        throw new Error('Failed to regenerate preview');
+      }
+      const data = await response.json();
+      setPreviewData(data?.preview || null);
+      setPreviewConfidence(typeof data?.confidence === 'number' ? data.confidence : null);
+      setPreviewContentFrequency(data?.content_frequency ?? null);
+    } catch (error) {
+      console.error('Error regenerating preview:', error);
+      setPreviewError('Failed to regenerate preview.');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const savePreviewOpinion = async () => {
+    if (!previewRecommendationId || !previewCurrentState) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/recommendations/${previewRecommendationId}/state`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: previewCurrentState,
+          opinion_note: previewOpinionNote || null,
+          confidence_rating:
+            typeof previewConfidenceRating === 'number' ? previewConfidenceRating : null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to save opinion');
+      }
+      await fetchStateMap();
+    } catch (error) {
+      console.error('Error saving opinion:', error);
+    }
+  };
+
+  const acceptPreviewAndDraftPlan = async () => {
+    if (!previewRecommendationId || !previewSnapshotHash) {
+      setPreviewError('Preview context missing.');
+      return;
+    }
+    try {
+      setPreviewError(null);
+      setPreviewLoading(true);
+      const response = await fetch(`/api/recommendations/${previewRecommendationId}/state`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: 'shortlisted',
+          opinion_note: previewOpinionNote || null,
+          confidence_rating:
+            typeof previewConfidenceRating === 'number' ? previewConfidenceRating : null,
+          accept_preview: true,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to accept preview');
+      }
+      if (typeof window !== 'undefined' && previewData) {
+        window.sessionStorage.setItem(
+          `recommendation_preview_${previewSnapshotHash}`,
+          JSON.stringify({
+            ...previewData,
+            recommendation_id: previewRecommendationId,
+            snapshot_hash: previewSnapshotHash,
+            confidence: previewConfidence,
+            content_frequency: previewContentFrequency,
+          })
+        );
+      }
+      setPreviewModalOpen(false);
+      await handlePreparePlanFromRecommendation(previewRecommendationId, previewSnapshotHash, {
+        draft: true,
+        priorityBucket: previewPriorityBucket || undefined,
+      });
+    } catch (error) {
+      console.error('Error accepting preview:', error);
+      setPreviewError('Failed to accept preview.');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleManualSubmit = async () => {
+    if (!manualTopic.trim() && !manualNarrative.trim() && !manualObjective.trim()) {
+      setErrorMessage('Enter a topic, narrative, or objective to continue.');
+      return;
+    }
+    try {
+      setIsSubmittingManual(true);
+      await generateRecommendations({
+        type: 'opportunity',
+        topic: manualTopic.trim() || undefined,
+        narrative: manualNarrative.trim() || undefined,
+        objective: manualObjective.trim() || undefined,
+        platform_preferences: manualPlatformPreference
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      });
+    } finally {
+      setIsSubmittingManual(false);
     }
   };
   const confidencePercent = engineResult?.confidence_score ?? 0;
@@ -296,6 +728,16 @@ export default function RecommendationsPage() {
     },
   ];
   const omnivyraStatus = engineResult?.omnivyra_status;
+  useEffect(() => {
+    if (!selectedCompanyId || !engineResult?.trends_used?.length) {
+      setRecommendationStates({});
+      setRecommendationDetails({});
+      setRecommendationSummaries({});
+      setRecommendationBySnapshot({});
+      return;
+    }
+    fetchStateMap();
+  }, [selectedCompanyId, engineResult?.trends_used]);
   const omnivyraStatusColor =
     omnivyraStatus?.status === 'healthy'
       ? 'bg-green-100 text-green-700'
@@ -508,6 +950,502 @@ export default function RecommendationsPage() {
               )}
             </div>
           </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-lg font-semibold text-gray-900">Opportunity / Market Event</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Enter an event or opportunity and let AI evaluate it against your company profile.
+          </p>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-gray-500">Topic / Event Name</label>
+              <input
+                type="text"
+                value={manualTopic}
+                onChange={(event) => setManualTopic(event.target.value)}
+                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                placeholder="Product launch, industry event, trend..."
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500">Business Objective</label>
+              <input
+                type="text"
+                value={manualObjective}
+                onChange={(event) => setManualObjective(event.target.value)}
+                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                placeholder="Awareness, leads, conversions..."
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-xs text-gray-500">Narrative / Description</label>
+              <textarea
+                value={manualNarrative}
+                onChange={(event) => setManualNarrative(event.target.value)}
+                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                rows={3}
+                placeholder="What story should we tell?"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-xs text-gray-500">Platform Preference (optional)</label>
+              <input
+                type="text"
+                value={manualPlatformPreference}
+                onChange={(event) => setManualPlatformPreference(event.target.value)}
+                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                placeholder="LinkedIn, YouTube, TikTok..."
+              />
+            </div>
+          </div>
+          <div className="mt-4">
+            <VoiceNotesComponent
+              context="campaign"
+              campaignId={selectedCampaignId}
+              onTranscriptionComplete={(transcription) => {
+                const text =
+                  transcription?.text ||
+                  transcription?.transcription ||
+                  transcription?.content ||
+                  '';
+                if (text) {
+                  setManualNarrative((prev) => (prev ? `${prev}\n${text}` : text));
+                }
+              }}
+            />
+          </div>
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              onClick={handleManualSubmit}
+              disabled={isSubmittingManual || isLoading}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
+            >
+              {isSubmittingManual ? 'Submitting...' : 'Evaluate Opportunity'}
+            </button>
+          </div>
+          {engineResult?.opportunity_analysis && (
+            <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
+              <div className="font-semibold">Opportunity Analysis</div>
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <div className="text-indigo-700">Relevance Score</div>
+                  <div className="font-medium">
+                    {engineResult.opportunity_analysis.relevance_score ?? '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-indigo-700">Risk Level</div>
+                  <div className="font-medium">
+                    {engineResult.opportunity_analysis.risk_level ?? '—'}
+                  </div>
+                </div>
+                <div className="md:col-span-2">
+                  <div className="text-indigo-700">Suggested Narrative Angle</div>
+                  <div className="font-medium">
+                    {engineResult.opportunity_analysis.narrative_angle ?? '—'}
+                  </div>
+                </div>
+                <div className="md:col-span-2">
+                  <div className="text-indigo-700">Suggested Content Mix</div>
+                  <div className="font-medium">
+                    {Array.isArray(engineResult.opportunity_analysis.content_mix)
+                      ? engineResult.opportunity_analysis.content_mix.join(', ')
+                      : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {canManageRecommendationState && (
+          <div className="bg-white rounded-lg shadow p-6">
+            <h2 className="text-lg font-semibold text-gray-900">Content Manager Workspace</h2>
+            <div className="mt-4 flex flex-wrap gap-2 text-sm">
+              {['all', 'shortlisted', 'discarded'].map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveWorkspaceTab(tab as 'all' | 'shortlisted' | 'discarded')}
+                  className={`px-3 py-1 rounded-full border ${
+                    activeWorkspaceTab === tab
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-white text-gray-700 border-gray-300'
+                  }`}
+                >
+                  {tab === 'all'
+                    ? 'All'
+                    : tab === 'shortlisted'
+                    ? 'Shortlisted'
+                    : 'Discarded'}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center gap-2 text-xs text-gray-600">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={sortByPriority}
+                  onChange={(event) => setSortByPriority(event.target.checked)}
+                />
+                Sort by Priority
+              </label>
+            </div>
+            {stateError && (
+              <div className="mt-3 text-xs text-red-600">{stateError}</div>
+            )}
+            {draftError && (
+              <div className="mt-2 text-xs text-red-600">{draftError}</div>
+            )}
+            <div className="mt-4 space-y-3">
+              {(engineResult?.trends_used || [])
+                .filter((trend) => {
+                  const snapshotHash = trend.snapshot_hash;
+                  const recommendationId = snapshotHash
+                    ? recommendationBySnapshot[snapshotHash]
+                    : undefined;
+                  const state = recommendationId ? recommendationStates[recommendationId] : 'active';
+                  if (activeWorkspaceTab === 'shortlisted') return state === 'shortlisted';
+                  if (activeWorkspaceTab === 'discarded') return state === 'discarded';
+                  return true;
+                })
+                .sort((a, b) => {
+                  if (!sortByPriority) return 0;
+                  const aHash = a.snapshot_hash;
+                  const bHash = b.snapshot_hash;
+                  const aId = aHash ? recommendationBySnapshot[aHash] : undefined;
+                  const bId = bHash ? recommendationBySnapshot[bHash] : undefined;
+                  const aScore = aId ? recommendationSummaries[aId]?.priority_score ?? 0 : 0;
+                  const bScore = bId ? recommendationSummaries[bId]?.priority_score ?? 0 : 0;
+                  return bScore - aScore;
+                })
+                .map((trend, index) => {
+                  const snapshotHash = trend.snapshot_hash;
+                  const recommendationId = snapshotHash
+                    ? recommendationBySnapshot[snapshotHash]
+                    : undefined;
+                  const state = recommendationId ? recommendationStates[recommendationId] : 'active';
+                  const details = recommendationId ? recommendationDetails[recommendationId] : undefined;
+                  const summary = recommendationId ? recommendationSummaries[recommendationId] : undefined;
+                  const lastAdminDecision = summary?.last_admin_decision;
+                  const finalDecision = lastAdminDecision ? lastAdminDecision.state : null;
+                  const priorityBucket = summary?.priority_bucket ?? null;
+                  const isOpportunity =
+                    trend.source === 'opportunity' ||
+                    (Array.isArray(trend.sources) && trend.sources.includes('manual'));
+                  const canDraft =
+                    priorityBucket === 'High' && state !== 'discarded' && !!snapshotHash;
+                  return (
+                    <div key={`${trend.topic}-${index}`} className="border rounded-lg p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="font-semibold text-gray-900">{trend.topic}</div>
+                          <div className="text-xs text-gray-500">
+                            Source: {trend.source || '—'} • State: {state || 'active'}
+                          </div>
+                          {summary && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              Shortlisted by {summary.shortlisted_count} users • Discarded by{' '}
+                              {summary.discarded_count} users
+                            </div>
+                          )}
+                          {summary?.priority_bucket && (
+                            <div className="mt-2 text-[10px] inline-flex rounded-full px-2 py-0.5 bg-slate-100 text-slate-700">
+                              Priority: {summary.priority_bucket}
+                            </div>
+                          )}
+                          {lastAdminDecision && (
+                            <div className="text-xs text-gray-600 mt-1">
+                              Last decision by Company Admin: {lastAdminDecision.state}
+                            </div>
+                          )}
+                          {finalDecision && (
+                            <div className="inline-flex mt-2 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                              Final Decision: Company Admin
+                            </div>
+                          )}
+                          {state === 'discarded' && details?.created_at && (
+                            <div className="text-xs text-amber-700 mt-1">
+                              Discarded by {details.actor_user_id || 'unknown'} at{' '}
+                              {new Date(details.created_at).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => updateRecommendationState(recommendationId || '', 'shortlisted')}
+                            disabled={!recommendationId}
+                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                          >
+                            Keep
+                          </button>
+                          <button
+                            onClick={() => updateRecommendationState(recommendationId || '', 'discarded')}
+                            disabled={!recommendationId}
+                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                          >
+                            Discard
+                          </button>
+                          {activeWorkspaceTab === 'discarded' && (
+                            <button
+                              onClick={() => updateRecommendationState(recommendationId || '', 'active')}
+                              disabled={!recommendationId}
+                              className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                            >
+                              Restore
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleCreateCampaignFromRecommendation(recommendationId)}
+                            disabled={!recommendationId}
+                            className="px-3 py-1 text-xs rounded-full bg-indigo-600 text-white"
+                          >
+                            Create Campaign
+                          </button>
+                          <button
+                            onClick={() =>
+                              openPreviewForRecommendation(
+                                recommendationId,
+                                snapshotHash,
+                                state,
+                                priorityBucket
+                              )
+                            }
+                            disabled={!canDraft}
+                            title={
+                              snapshotHash ? undefined : 'Draft unavailable for this recommendation.'
+                            }
+                            className="px-3 py-1 text-xs rounded-full bg-emerald-600 text-white disabled:opacity-50"
+                          >
+                            Draft 12-Week Plan
+                          </button>
+                          {isOpportunity && (
+                            <button
+                              onClick={() =>
+                                openPreviewForRecommendation(
+                                  recommendationId,
+                                  snapshotHash,
+                                  state,
+                                  priorityBucket
+                                )
+                              }
+                              disabled={!snapshotHash || !recommendationId}
+                              className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                            >
+                              Preview Strategy
+                            </button>
+                          )}
+                          {state === 'shortlisted' && (
+                            <button
+                              onClick={() =>
+                                handlePreparePlanFromRecommendation(recommendationId, snapshotHash)
+                              }
+                              disabled={!recommendationId || !snapshotHash}
+                              className="px-3 py-1 text-xs rounded-full bg-emerald-600 text-white"
+                            >
+                              Generate 12-Week Plan
+                            </button>
+                          )}
+                          <button
+                            onClick={() => console.log('Schedule stub', trend.topic)}
+                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                          >
+                            Schedule
+                          </button>
+                          <button
+                            onClick={() => console.log('Share stub', trend.topic)}
+                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                          >
+                            Share
+                          </button>
+                          <button
+                            onClick={() => console.log('Dismiss stub', trend.topic)}
+                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              {(engineResult?.trends_used || []).length === 0 && (
+                <div className="text-xs text-gray-500">No recommendations available.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {previewModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="max-w-2xl w-full rounded-xl bg-white shadow-xl border border-gray-200 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Strategy Preview</h3>
+                <button
+                  onClick={() => {
+                    setPreviewModalOpen(false);
+                    setPreviewData(null);
+                    setPreviewError(null);
+                  }}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {previewLoading && (
+                <div className="text-sm text-gray-500">Generating preview...</div>
+              )}
+              {previewError && (
+                <div className="text-sm text-red-600 mb-3">{previewError}</div>
+              )}
+
+              {previewData && (
+                <div className="space-y-3 text-sm text-gray-700">
+                  <div>
+                    <div className="text-xs text-gray-500">Confidence</div>
+                    <div className="font-medium text-gray-900">
+                      {typeof previewConfidence === 'number' ? previewConfidence : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Platform Mix</div>
+                    <div className="font-medium text-gray-900">
+                      {Array.isArray(previewData.platform_mix)
+                        ? previewData.platform_mix.join(', ')
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Content Mix</div>
+                    <div className="font-medium text-gray-900">
+                      {Array.isArray(previewData.content_mix)
+                        ? previewData.content_mix.join(', ')
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Weekly Frequency</div>
+                    <div className="font-medium text-gray-900 whitespace-pre-wrap">
+                      {previewData.frequency_plan
+                        ? JSON.stringify(previewData.frequency_plan, null, 2)
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Content Frequency</div>
+                    <div className="font-medium text-gray-900 whitespace-pre-wrap">
+                      {previewContentFrequency
+                        ? JSON.stringify(previewContentFrequency, null, 2)
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Reuse Strategy</div>
+                    <div className="font-medium text-gray-900">
+                      {Array.isArray(previewData.reuse_plan)
+                        ? previewData.reuse_plan.join(', ')
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Narrative Direction</div>
+                    <div className="font-medium text-gray-900 whitespace-pre-wrap">
+                      {previewData.narrative_direction || '—'}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-4 space-y-3">
+                <div>
+                  <label className="block text-xs text-gray-500">Opinion note</label>
+                  <textarea
+                    value={previewOpinionNote}
+                    onChange={(event) => setPreviewOpinionNote(event.target.value)}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    rows={3}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500">Confidence rating (1-5)</label>
+                  <select
+                    value={previewConfidenceRating}
+                    onChange={(event) =>
+                      setPreviewConfidenceRating(
+                        event.target.value ? Number(event.target.value) : ''
+                      )
+                    }
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  >
+                    <option value="">Select</option>
+                    {[1, 2, 3, 4, 5].map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  onClick={regeneratePreview}
+                  disabled={previewLoading}
+                  className="px-3 py-2 text-xs rounded-lg border border-gray-300"
+                >
+                  Regenerate Preview
+                </button>
+                <button
+                  onClick={savePreviewOpinion}
+                  disabled={previewLoading}
+                  className="px-3 py-2 text-xs rounded-lg border border-gray-300"
+                >
+                  Add Opinion
+                </button>
+                <button
+                  onClick={acceptPreviewAndDraftPlan}
+                  disabled={previewLoading}
+                  className="px-3 py-2 text-xs rounded-lg bg-emerald-600 text-white"
+                >
+                  Accept Preview
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-lg font-semibold text-gray-900">External API Selection</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Defaults come from company settings. You can override per request.
+          </p>
+          {isApiLoading ? (
+            <div className="text-xs text-gray-500 mt-3">Loading API defaults...</div>
+          ) : (
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-700">
+              {availableApis.length === 0 && (
+                <div className="text-xs text-gray-500">No external APIs configured.</div>
+              )}
+              {availableApis.map((api) => (
+                <label
+                  key={api.id}
+                  className="flex items-center gap-2 border rounded-lg px-3 py-2"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedApiIds.includes(api.id)}
+                    onChange={() => toggleApiSelection(api.id)}
+                    disabled={!selectedCompanyId}
+                  />
+                  <span className="font-semibold">{api.name}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                    {api.is_global_preset ? 'Global (Virality)' : 'Tenant-Provided'}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
 
         {errorMessage && (
@@ -766,12 +1704,34 @@ export default function RecommendationsPage() {
                 <h3 className="text-sm font-semibold text-gray-900 mb-3">Trend Recommendations</h3>
                 <div className="flex flex-wrap gap-2">
                   {engineResult.trends_used.map((trend, index) => (
-                    <span
-                      key={`${trend.topic}-${index}`}
-                      className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full"
-                    >
-                      {trend.topic}
-                    </span>
+                    <div key={`${trend.topic}-${index}`} className="flex flex-col">
+                      <div className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full flex items-center gap-2">
+                        <span>{trend.topic}</span>
+                        {trendExplanationMap.has(trend.topic.trim().toLowerCase()) ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const key = `${trend.topic}-${index}`;
+                              setExpandedTrendKey((prev) => (prev === key ? null : key));
+                            }}
+                            className="text-[10px] text-indigo-500 hover:text-indigo-700"
+                            aria-expanded={expandedTrendKey === `${trend.topic}-${index}`}
+                            aria-label="Toggle explanation"
+                          >
+                            Context
+                          </button>
+                        ) : null}
+                      </div>
+                      {expandedTrendKey === `${trend.topic}-${index}` ? (
+                        <ul className="mt-1 text-[11px] text-gray-500 list-disc pl-4 space-y-1">
+                          {(trendExplanationMap.get(trend.topic.trim().toLowerCase()) || []).map(
+                            (explanation, idx) => (
+                              <li key={`${trend.topic}-${index}-exp-${idx}`}>{explanation}</li>
+                            )
+                          )}
+                        </ul>
+                      ) : null}
+                    </div>
                   ))}
                   {engineResult.trends_used.length === 0 && (
                     <span className="text-xs text-gray-500">No external trends used.</span>

@@ -13,6 +13,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
+    // Planning-only: return strategy metadata without execution/automation details.
+    // Community-AI playbooks execute separately and are not surfaced here.
     // Get campaign strategy
     const { data: strategy, error: strategyError } = await supabase
       .from('campaign_strategies')

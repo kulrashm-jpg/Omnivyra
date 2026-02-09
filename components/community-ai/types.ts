@@ -69,16 +69,40 @@ export type PendingAction = TenantScoped & {
   target_url?: string;
   target_id?: string;
   suggested_text?: string | null;
+  final_text?: string | null;
   risk_level: string;
   requires_approval?: boolean;
   requires_human_approval?: boolean;
   status: string;
   execution_result?: any;
   scheduled_at?: string | null;
+  execution_mode?: string | null;
+  execution_modes_config?: {
+    api_allowed: boolean;
+    rpa_allowed: boolean;
+    manual_only: boolean;
+  } | null;
+  playbook_id?: string | null;
+  playbook_name?: string | null;
+  tone?: string | null;
+  tone_used?: string | null;
+  tone_limits?: {
+    max_length?: number | null;
+    emoji_allowed?: boolean | null;
+    style?: string | null;
+  } | null;
+  safety_rules?: {
+    block_urls?: boolean | null;
+    prohibited_words?: string[] | null;
+  } | null;
   last_event?: {
     event_type: string;
     created_at: string;
+    rule_name?: string | null;
   } | null;
+  last_event_type?: string | null;
+  rule_name?: string | null;
+  rule_match?: boolean;
 };
 
 export type ChatMessage = {

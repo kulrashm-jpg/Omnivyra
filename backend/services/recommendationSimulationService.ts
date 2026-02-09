@@ -1,5 +1,5 @@
 import { getProfile } from './companyProfileService';
-import { fetchTrendsFromApis } from './externalApiService';
+import { fetchTrendsFromApis, getCompanyDefaultApiIds } from './externalApiService';
 import { getActivePolicy, RecommendationPolicyWeights } from './recommendationPolicyService';
 import { generateRecommendations } from './recommendationEngine';
 
@@ -13,7 +13,12 @@ export const simulateRecommendations = async (input: {
   const profile = await getProfile(companyId, { autoRefine: false });
   const geoHint = profile?.geography_list?.[0] ?? profile?.geography ?? undefined;
   const categoryHint = profile?.industry_list?.[0] ?? profile?.category ?? undefined;
-  const trendSignals = await fetchTrendsFromApis(companyId, geoHint, categoryHint, { recordHealth: false });
+  const defaultApiIds = companyId ? await getCompanyDefaultApiIds(companyId) : [];
+  const trendSignals = await fetchTrendsFromApis(companyId, geoHint, categoryHint, {
+    recordHealth: false,
+    selectedApiIds: defaultApiIds,
+    feature: 'recommendations',
+  });
   const activePolicy = await getActivePolicy();
 
   const baseline = await generateRecommendations(

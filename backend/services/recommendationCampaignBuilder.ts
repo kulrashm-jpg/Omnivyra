@@ -15,28 +15,35 @@ type RecommendationSnapshot = {
 };
 
 const stringifyContext = (snapshot: RecommendationSnapshot, profile: any) => {
-  return JSON.stringify(
-    {
-      trend_topic: snapshot.trend_topic,
-      category: snapshot.category,
-      audience: snapshot.audience,
-      geo: snapshot.geo,
-      platforms: snapshot.platforms,
-      promotion_mode: snapshot.promotion_mode,
-      company_profile: {
-        name: profile?.name,
-        industry: profile?.industry,
-        category: profile?.category,
-        target_audience: profile?.target_audience,
-        geography: profile?.geography,
-        brand_voice: profile?.brand_voice,
-        goals: profile?.goals,
-        content_themes: profile?.content_themes,
-      },
+  const context = {
+    trend_topic: snapshot.trend_topic,
+    category: snapshot.category ?? null,
+    audience: snapshot.audience ?? null,
+    geo: snapshot.geo ?? null,
+    platforms: snapshot.platforms ?? null,
+    promotion_mode: snapshot.promotion_mode ?? null,
+    confidence: (snapshot as any)?.confidence ?? null,
+    success_projection: (snapshot as any)?.success_projection ?? null,
+    final_score: (snapshot as any)?.final_score ?? null,
+    scores: (snapshot as any)?.scores ?? null,
+    explanation: (snapshot as any)?.explanation ?? null,
+    effort_score: (snapshot as any)?.effort_score ?? null,
+    snapshot_hash: (snapshot as any)?.snapshot_hash ?? null,
+    refresh_source: (snapshot as any)?.refresh_source ?? null,
+    refreshed_at: (snapshot as any)?.refreshed_at ?? null,
+    company_profile: {
+      name: profile?.name ?? null,
+      industry: profile?.industry ?? null,
+      category: profile?.category ?? null,
+      target_audience: profile?.target_audience ?? null,
+      geography: profile?.geography ?? null,
+      brand_voice: profile?.brand_voice ?? null,
+      goals: profile?.goals ?? null,
+      content_themes: profile?.content_themes ?? null,
     },
-    null,
-    2
-  );
+  };
+  console.debug('Recommendation enrichment context attached');
+  return JSON.stringify(context, null, 2);
 };
 
 export async function buildCampaignFromRecommendation(input: {
@@ -75,7 +82,10 @@ export async function buildCampaignFromRecommendation(input: {
   }
 
   const message =
-    'Create a campaign based on this recommendation.\n' +
+    'Generate a 12-week content mix proposal based on this recommendation.\n' +
+    'Use the provided context to propose: platforms, content types (video/blog/post/etc.), weekly frequency, and reuse opportunities across platforms.\n' +
+    'Base the proposal on: confidence, final_score, company_profile, and platforms.\n' +
+    'After proposing, ask for confirmation one field at a time. For each field, provide two suggested options and accept user-provided alternatives.\n' +
     stringifyContext(recommendation as RecommendationSnapshot, profile);
 
   const planResult = await runCampaignAiPlan({

@@ -28,18 +28,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'API ID is required' });
   }
-  const { defaultCompanyId: companyId } = await resolveUserContext(req);
-  if (!companyId) {
+  const platformScopeRequested = req.query?.scope === 'platform';
+  const { defaultCompanyId } = await resolveUserContext(req);
+  const companyId =
+    (req.query.companyId as string | undefined) ||
+    (req.body?.companyId as string | undefined) ||
+    (platformScopeRequested ? undefined : defaultCompanyId);
+  if (!companyId && !platformScopeRequested) {
     return res.status(400).json({ error: 'companyId required' });
   }
 
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('external_api_sources')
       .select('*')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single();
+      .eq('id', id);
+    if (!platformScopeRequested) {
+      query = query.eq('company_id', companyId);
+    }
+    const { data, error } = await query.single();
     if (error || !data) {
       return res.status(404).json({ error: 'API source not found' });
     }
@@ -83,7 +90,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const truncated = truncate(rawText);
       if (contentType.includes('application/json')) {
         try {
-          parsed = JSON.parse(truncated);
+          parsed = JSON.parse(rawText);
         } catch (error) {
           parsed = truncated;
         }

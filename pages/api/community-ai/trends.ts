@@ -1,6 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { ACTION_VIEW_ROLES, enforceActionRole, requireTenantScope } from './utils';
+import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/communityAiCapabilities';
+import { enforceActionRole, requireTenantScope } from './utils';
+import { sendCommunityAiWebhooks } from '../../../backend/services/communityAiWebhookService';
 
 type MetricKey = 'likes' | 'comments' | 'shares' | 'views' | 'engagement_rate';
 
@@ -30,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     req,
     res,
     companyId: scope.organizationId,
-    allowedRoles: ACTION_VIEW_ROLES,
+    allowedRoles: [...COMMUNITY_AI_CAPABILITIES.VIEW_ACTIONS],
   });
   if (!roleGate) return;
 
@@ -203,7 +205,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? 'high'
           : 'medium';
 
-      anomalies.push({
+      const anomaly = {
         post_id: postId,
         platform: postEntry.platform,
         content_type: postEntry.content_type,
@@ -217,7 +219,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         reason: exceeds
           ? 'Metric exceeds 2x platform/content average'
           : 'Metric below 50% of expected goal',
-      });
+      };
+      anomalies.push(anomaly);
+
+      if (severity === 'high') {
+        void sendCommunityAiWebhooks({
+          tenant_id: scope.tenantId,
+          organization_id: scope.organizationId,
+          event_type: 'anomaly',
+          action_id: null,
+          message: 'High severity anomaly detected',
+          metadata: {
+            post_id: postId,
+            platform: postEntry.platform,
+            content_type: postEntry.content_type,
+            metric,
+            value: round(value),
+            expected_range: {
+              min: round(avg * 0.5),
+              max: round(avg * 2),
+            },
+            reason: anomaly.reason,
+          },
+        });
+      }
     });
   });
 

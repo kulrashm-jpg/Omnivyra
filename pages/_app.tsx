@@ -10,7 +10,12 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const publicRoutes = ['/login', '/signup', '/super-admin/login', '/'];
   const isSuperAdminRoute = router.pathname.startsWith('/super-admin');
-  const isPublic = publicRoutes.includes(router.pathname) || isSuperAdminRoute;
+  const isPlatformExternalApis =
+    router.pathname === '/external-apis' && router.asPath.includes('mode=platform');
+  const isPublic =
+    publicRoutes.includes(router.pathname) ||
+    isSuperAdminRoute ||
+    isPlatformExternalApis;
 
   if (!isPublic && !isAuthenticated && !isLoading) {
     if (typeof window !== 'undefined') {

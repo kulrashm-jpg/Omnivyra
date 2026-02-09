@@ -371,7 +371,7 @@ async function recommendIndexes() {
     },
     {
       table: 'content_analytics',
-      columns: ['scheduled_post_id', 'analytics_date'],
+      columns: ['scheduled_post_id', 'date'],
       query: 'Time-series analytics per post'
     },
     {

@@ -63,6 +63,9 @@ ADD COLUMN IF NOT EXISTS posting_constraints JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE external_api_sources
 ADD COLUMN IF NOT EXISTS requires_admin BOOLEAN DEFAULT true;
 
+ALTER TABLE external_api_sources
+ADD COLUMN IF NOT EXISTS company_id UUID;
+
 UPDATE external_api_sources
 SET platform_type = 'social'
 WHERE platform_type IS NULL;

@@ -8,6 +8,7 @@ import {
   isOmniVyraEnabled,
   TrendSignalInput,
 } from './omnivyraClientV1';
+import { getProfile } from './companyProfileService';
 
 export type ExternalApiSource = {
   id: string;
@@ -132,8 +133,76 @@ const rateLimitState = new Map<string, number[]>();
 let lastRateLimitedSources: string[] = [];
 let lastSignalConfidenceSummary: { average: number; min: number; max: number } | null = null;
 
+// External APIs are owned by Virality.
+// Community-AI may only consume signals, not configure or govern APIs.
 const buildUsageUserId = (userId?: string | null, companyId?: string | null) =>
   `${userId || 'system'}:${companyId || 'global'}`;
+
+const buildCompanyAccessUserId = (companyId: string) => `company:${companyId}`;
+
+const buildFeatureUsageUserId = (feature: string, companyId: string) =>
+  `feature:${feature}|company:${companyId}`;
+
+const pickFirst = (values?: string[] | null): string | null => {
+  if (!Array.isArray(values)) return null;
+  const first = values.find((value) => typeof value === 'string' && value.trim().length > 0);
+  return first ? first.trim() : null;
+};
+
+const buildProfileRuntimeValues = async (
+  companyId?: string | null
+): Promise<Record<string, string>> => {
+  if (!companyId) return {};
+  try {
+    const profile = await getProfile(companyId, { autoRefine: false });
+    if (!profile) return {};
+    const category =
+      (profile.category && profile.category.trim()) ||
+      pickFirst(profile.category_list) ||
+      (profile.industry && profile.industry.trim()) ||
+      pickFirst(profile.industry_list) ||
+      (profile.name && profile.name.trim()) ||
+      null;
+    const keywords = [
+      ...(profile.category_list || []),
+      ...(profile.industry_list || []),
+      ...(profile.content_themes_list || []),
+      ...(profile.products_services_list || []),
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .slice(0, 6)
+      .join(', ');
+    const runtimeValues: Record<string, string> = {};
+    if (category) runtimeValues.category = category;
+    if (profile.name) runtimeValues.brand = profile.name;
+    if (profile.website_url) runtimeValues.website = profile.website_url;
+    if (keywords) runtimeValues.keywords = keywords;
+    return runtimeValues;
+  } catch {
+    return {};
+  }
+};
+
+const parseUsageUserId = (value: string) => {
+  if (value.startsWith('feature:')) {
+    const parts = value.split('|');
+    const feature = parts[0]?.slice('feature:'.length) || null;
+    const companyPart = parts.find((part) => part.startsWith('company:'));
+    const companyId = companyPart?.slice('company:'.length) || null;
+    return { kind: 'feature' as const, feature, companyId, userId: null };
+  }
+  const idx = value.lastIndexOf(':');
+  if (idx > 0 && idx < value.length - 1) {
+    return {
+      kind: 'user' as const,
+      feature: null,
+      companyId: value.slice(idx + 1),
+      userId: value.slice(0, idx),
+    };
+  }
+  return { kind: 'unknown' as const, feature: null, companyId: null, userId: value };
+};
 
 const logCacheEvent = (type: 'CACHE_HIT' | 'CACHE_MISS', input: { source: string }) => {
   console.log(`EXTERNAL_API_${type}`, { source: input.source });
@@ -405,7 +474,10 @@ const resolveRecordPlaceholders = (
 
 export const buildExternalApiRequest = (
   source: ExternalApiSource,
-  options?: { queryParams?: Record<string, string | number | null | undefined> }
+  options?: {
+    queryParams?: Record<string, string | number | null | undefined>;
+    runtimeValues?: Record<string, string>;
+  }
 ): { details: ExternalApiRequestDetails; missingEnv: string[] } => {
   const method = String(source.method || 'GET').toUpperCase();
   const baseUrl = source.base_url;
@@ -416,14 +488,17 @@ export const buildExternalApiRequest = (
     if (typeof value === 'undefined' || value === null) return;
     mergedQuery[key] = value;
   });
-  const runtimeValues = Object.entries(options?.queryParams || {}).reduce<Record<string, string>>(
-    (acc, [key, value]) => {
-      if (typeof value === 'undefined' || value === null) return acc;
-      acc[key] = String(value);
-      return acc;
-    },
-    {}
-  );
+  const runtimeValuesFromQueryParams = Object.entries(options?.queryParams || {}).reduce<
+    Record<string, string>
+  >((acc, [key, value]) => {
+    if (typeof value === 'undefined' || value === null) return acc;
+    acc[key] = String(value);
+    return acc;
+  }, {});
+  const runtimeValues = {
+    ...(options?.runtimeValues || {}),
+    ...runtimeValuesFromQueryParams,
+  };
 
   const authType = source.auth_type ?? 'none';
   const apiKeyEnvName = source.api_key_env_name ?? source.api_key_name ?? null;
@@ -634,7 +709,7 @@ export async function getEnabledApis(companyId?: string | null): Promise<Externa
     const { data: accessRows } = await supabase
       .from('external_api_user_access')
       .select('api_source_id, is_enabled')
-      .eq('user_id', `company:${companyId}`);
+      .eq('user_id', buildCompanyAccessUserId(companyId));
     const accessMap = (accessRows || []).reduce<Record<string, boolean>>((acc, row) => {
       acc[row.api_source_id] = row.is_enabled === true;
       return acc;
@@ -658,6 +733,53 @@ export async function getEnabledApis(companyId?: string | null): Promise<Externa
     throw new Error(`Failed to load external APIs: ${fallbackResult.error.message}`);
   }
   return applyPresetSelections(fallbackResult.data || []);
+}
+
+export async function getAvailableApis(companyId?: string | null): Promise<ExternalApiSource[]> {
+  if (!companyId) {
+    console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
+    return [];
+  }
+  console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
+  const baseQuery = () =>
+    supabase
+      .from('external_api_sources')
+      .select('*')
+      .eq('is_active', true)
+      .order('created_at', { ascending: true });
+
+  const scoped = await baseQuery().eq('company_id', companyId);
+  if (!scoped.error) {
+    const companySpecific = (scoped.data || []).filter((row) => row.company_id === companyId);
+    const globalPresets = (scoped.data || []).filter((row) => row.is_preset && !row.company_id);
+    return [...companySpecific, ...globalPresets];
+  }
+  const message = scoped.error.message || '';
+  if (!message.toLowerCase().includes('company_id')) {
+    throw new Error(`Failed to load external APIs: ${message}`);
+  }
+  const fallback = await baseQuery();
+  if (fallback.error) {
+    throw new Error(`Failed to load external APIs: ${fallback.error.message}`);
+  }
+  const rows = fallback.data || [];
+  const companySpecific = rows.filter((row) => row.company_id === companyId);
+  const globalPresets = rows.filter((row) => row.is_preset && !row.company_id);
+  return [...companySpecific, ...globalPresets];
+}
+
+export async function getCompanyDefaultApiIds(companyId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('external_api_user_access')
+    .select('api_source_id, is_enabled')
+    .eq('user_id', buildCompanyAccessUserId(companyId));
+  if (error) {
+    console.warn('Failed to load company default API access', { companyId });
+    return [];
+  }
+  return (data || [])
+    .filter((row) => row.is_enabled === true)
+    .map((row) => row.api_source_id);
 }
 
 export async function getUserApiAccess(userId: string): Promise<ExternalApiUserAccess[]> {
@@ -698,7 +820,8 @@ const mergeSourceWithAccess = (
 
 export async function getExternalApiSourcesForUser(
   companyId?: string | null,
-  userId?: string | null
+  userId?: string | null,
+  selectedApiIds?: string[] | null
 ): Promise<ExternalApiAccessConfig[]> {
   const sources = await getEnabledApis(companyId);
   if (!companyId) return [];
@@ -706,6 +829,9 @@ export async function getExternalApiSourcesForUser(
 
   const accessRows = await getUserApiAccess(userId);
   if (accessRows.length === 0) {
+    if (Array.isArray(selectedApiIds)) {
+      return sources.filter((source) => selectedApiIds.includes(source.id));
+    }
     return sources;
   }
 
@@ -714,9 +840,13 @@ export async function getExternalApiSourcesForUser(
     return acc;
   }, {});
 
-  return sources
+  const filtered = sources
     .filter((source) => accessMap[source.id]?.is_enabled)
     .map((source) => mergeSourceWithAccess(source, accessMap[source.id]));
+  if (Array.isArray(selectedApiIds)) {
+    return filtered.filter((source) => selectedApiIds.includes(source.id));
+  }
+  return filtered;
 }
 
 export async function logExternalApiUsage(input: {
@@ -725,6 +855,8 @@ export async function logExternalApiUsage(input: {
   success: boolean;
   errorCode?: string | null;
   errorMessage?: string | null;
+  feature?: string | null;
+  companyId?: string | null;
 }): Promise<void> {
   try {
     const usageDate = resolveUsageDate();
@@ -783,39 +915,75 @@ export async function logExternalApiUsage(input: {
         userId: input.userId,
       });
     }
+
+    if (input.feature && input.companyId) {
+      const featureUserId = buildFeatureUsageUserId(input.feature, input.companyId);
+      await supabase.from('external_api_usage').upsert(
+        {
+          api_source_id: input.apiSourceId,
+          user_id: featureUserId,
+          usage_date: usageDate,
+          request_count: requestCount,
+          success_count: successCount,
+          failure_count: failureCount,
+          last_used_at: nowIso,
+          last_failure_at: lastFailureAt,
+          last_error_code: lastErrorCode,
+          last_error_message: lastErrorMessage,
+          last_error_at: lastErrorAt,
+          last_success_at: lastSuccessAt,
+          updated_at: nowIso,
+        },
+        { onConflict: 'api_source_id,user_id,usage_date' }
+      );
+    }
   } catch (error) {
     console.warn('API usage log failed', { apiSourceId: input.apiSourceId, userId: input.userId });
   }
 }
 
+const buildPlatformPayload = (input: Partial<ExternalApiSource>) => ({
+  name: input.name,
+  base_url: input.base_url,
+  purpose: input.purpose,
+  category: input.category ?? null,
+  is_active: input.is_active ?? true,
+  method: input.method ?? 'GET',
+  auth_type: input.auth_type ?? 'none',
+  api_key_name: input.api_key_name ?? null,
+  api_key_env_name: input.api_key_env_name ?? null,
+  headers: input.headers ?? {},
+  query_params: input.query_params ?? {},
+  is_preset: input.is_preset ?? false,
+  retry_count: input.retry_count ?? DEFAULT_RETRY_COUNT,
+  timeout_ms: input.timeout_ms ?? DEFAULT_TIMEOUT_MS * 1.6,
+  rate_limit_per_min: input.rate_limit_per_min ?? DEFAULT_RATE_LIMIT_PER_MIN,
+  platform_type: input.platform_type ?? 'social',
+  supported_content_types: input.supported_content_types ?? [],
+  promotion_modes: input.promotion_modes ?? [],
+  required_metadata: input.required_metadata ?? {},
+  posting_constraints: input.posting_constraints ?? {},
+  requires_admin: input.requires_admin ?? true,
+  created_at: input.created_at ?? new Date().toISOString(),
+});
+
 export async function savePlatformConfig(input: Partial<ExternalApiSource>): Promise<ExternalApiSource> {
-  const basePayload = {
-    name: input.name,
-    base_url: input.base_url,
-    purpose: input.purpose,
-    category: input.category ?? null,
-    is_active: input.is_active ?? true,
-    method: input.method ?? 'GET',
-    auth_type: input.auth_type ?? 'none',
-    api_key_name: input.api_key_name ?? null,
-    api_key_env_name: input.api_key_env_name ?? null,
-    headers: input.headers ?? {},
-    query_params: input.query_params ?? {},
-    is_preset: input.is_preset ?? false,
-    retry_count: input.retry_count ?? DEFAULT_RETRY_COUNT,
-    timeout_ms: input.timeout_ms ?? DEFAULT_TIMEOUT_MS * 1.6,
-    rate_limit_per_min: input.rate_limit_per_min ?? DEFAULT_RATE_LIMIT_PER_MIN,
-    platform_type: input.platform_type ?? 'social',
-    supported_content_types: input.supported_content_types ?? [],
-    promotion_modes: input.promotion_modes ?? [],
-    required_metadata: input.required_metadata ?? {},
-    posting_constraints: input.posting_constraints ?? {},
-    requires_admin: input.requires_admin ?? true,
-    created_at: input.created_at ?? new Date().toISOString(),
-  };
+  const basePayload = buildPlatformPayload(input);
   const payloadWithCompany = { ...basePayload, company_id: input.company_id ?? null };
 
-  const initial = await supabase
+  const sanitizePayload = (payload: Record<string, any>, message: string) => {
+    const next = { ...payload };
+    const lower = message.toLowerCase();
+    if (lower.includes('is_preset')) {
+      delete next.is_preset;
+    }
+    if (lower.includes('company_id')) {
+      delete next.company_id;
+    }
+    return next;
+  };
+
+  let initial = await supabase
     .from('external_api_sources')
     .insert(payloadWithCompany)
     .select('*')
@@ -825,19 +993,65 @@ export async function savePlatformConfig(input: Partial<ExternalApiSource>): Pro
     return initial.data as ExternalApiSource;
   }
   const message = initial.error.message || '';
+  const sanitized = sanitizePayload(payloadWithCompany, message);
+  if (Object.keys(sanitized).length !== Object.keys(payloadWithCompany).length) {
+    initial = await supabase
+      .from('external_api_sources')
+      .insert(sanitized)
+      .select('*')
+      .single();
+    if (!initial.error) {
+      return initial.data as ExternalApiSource;
+    }
+  }
   if (!message.toLowerCase().includes('company_id')) {
     throw new Error(`Failed to save platform config: ${message}`);
   }
 
   const fallback = await supabase
     .from('external_api_sources')
-    .insert(basePayload)
+    .insert(sanitizePayload(basePayload, message))
     .select('*')
     .single();
   if (fallback.error) {
     throw new Error(`Failed to save platform config: ${fallback.error.message}`);
   }
   return fallback.data as ExternalApiSource;
+}
+
+export async function saveTenantPlatformConfig(
+  input: Partial<ExternalApiSource> & { company_id: string }
+): Promise<ExternalApiSource> {
+  if (!input.company_id) {
+    throw new Error('company_id is required for tenant-scoped API');
+  }
+  const payload = { ...buildPlatformPayload(input), company_id: input.company_id };
+  let result = await supabase
+    .from('external_api_sources')
+    .insert(payload)
+    .select('*')
+    .single();
+
+  if (result.error) {
+    const message = result.error.message || '';
+    if (message.toLowerCase().includes('is_preset')) {
+      const sanitized = { ...payload };
+      delete (sanitized as any).is_preset;
+      result = await supabase
+        .from('external_api_sources')
+        .insert(sanitized)
+        .select('*')
+        .single();
+      if (!result.error) {
+        return result.data as ExternalApiSource;
+      }
+    }
+    if (message.toLowerCase().includes('company_id')) {
+      throw new Error('company_id column missing for tenant-scoped API');
+    }
+    throw new Error(`Failed to save tenant platform config: ${message}`);
+  }
+  return result.data as ExternalApiSource;
 }
 
 export async function getPlatformConfigs(companyId?: string | null): Promise<PlatformConfig[]> {
@@ -1219,11 +1433,20 @@ export async function fetchTrendsFromApis(
   companyId?: string | null,
   geo?: string,
   category?: string,
-  options?: { recordHealth?: boolean; minReliability?: number; userId?: string | null }
+  options?: {
+    recordHealth?: boolean;
+    minReliability?: number;
+    userId?: string | null;
+    selectedApiIds?: string[] | null;
+    feature?: string | null;
+  }
 ): Promise<TrendSignal[]> {
   const userId = options?.userId ?? null;
   const usageUserId = buildUsageUserId(userId, companyId);
-  const sources = await getExternalApiSourcesForUser(companyId, userId);
+  const selectedApiIds = options?.selectedApiIds;
+  if (Array.isArray(selectedApiIds) && selectedApiIds.length === 0) return [];
+  const profileRuntimeValues = await buildProfileRuntimeValues(companyId);
+  const sources = await getExternalApiSourcesForUser(companyId, userId, selectedApiIds);
   if (sources.length === 0) return [];
 
   const results: Array<{
@@ -1261,6 +1484,8 @@ export async function fetchTrendsFromApis(
           success: false,
           errorCode: 'rate_limited',
           errorMessage: 'Rate limited',
+          feature: options?.feature ?? null,
+          companyId: companyId ?? null,
         });
         console.warn('EXTERNAL_API_RATE_LIMITED', { source: source.name });
         continue;
@@ -1271,6 +1496,7 @@ export async function fetchTrendsFromApis(
           geo,
           category,
         },
+        runtimeValues: profileRuntimeValues,
       });
       if (request.missingEnv.length > 0) {
         console.warn('EXTERNAL_API_MISSING_ENV', {
@@ -1286,6 +1512,8 @@ export async function fetchTrendsFromApis(
           success: false,
           errorCode: 'missing_env',
           errorMessage: 'Missing API credentials',
+          feature: options?.feature ?? null,
+          companyId: companyId ?? null,
         });
         continue;
       }
@@ -1301,6 +1529,8 @@ export async function fetchTrendsFromApis(
           apiSourceId: source.id,
           userId: usageUserId,
           success: true,
+          feature: options?.feature ?? null,
+          companyId: companyId ?? null,
         });
         results.push({
           source,
@@ -1336,6 +1566,8 @@ export async function fetchTrendsFromApis(
           success: false,
           errorCode: `http_${response.status}`,
           errorMessage: mapHttpErrorMessage(response.status),
+          feature: options?.feature ?? null,
+          companyId: companyId ?? null,
         });
         continue;
       }
@@ -1349,6 +1581,8 @@ export async function fetchTrendsFromApis(
         apiSourceId: source.id,
         userId: usageUserId,
         success: true,
+        feature: options?.feature ?? null,
+        companyId: companyId ?? null,
       });
       results.push({
         source,
@@ -1369,6 +1603,8 @@ export async function fetchTrendsFromApis(
         success: false,
         errorCode: 'exception',
         errorMessage: (error as Error)?.message || 'Request failed',
+        feature: options?.feature ?? null,
+        companyId: companyId ?? null,
       });
     }
   }
@@ -1429,7 +1665,13 @@ export async function fetchExternalTrends(
   companyId?: string | null,
   geo?: string,
   category?: string,
-  options?: { recordHealth?: boolean; minReliability?: number; userId?: string | null }
+  options?: {
+    recordHealth?: boolean;
+    minReliability?: number;
+    userId?: string | null;
+    selectedApiIds?: string[] | null;
+    feature?: string | null;
+  }
 ): Promise<ExternalApiFetchSummary> {
   console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
   if (!companyId) {
@@ -1443,7 +1685,17 @@ export async function fetchExternalTrends(
   }
   const userId = options?.userId ?? null;
   const usageUserId = buildUsageUserId(userId, companyId);
-  const sources = await getExternalApiSourcesForUser(companyId, userId);
+  const selectedApiIds = options?.selectedApiIds;
+  if (Array.isArray(selectedApiIds) && selectedApiIds.length === 0) {
+    return {
+      results: [],
+      missing_env_placeholders: [],
+      cache_stats: getCacheStats(),
+      rate_limited_sources: [],
+      signal_confidence_summary: lastSignalConfidenceSummary,
+    };
+  }
+  const sources = await getExternalApiSourcesForUser(companyId, userId, selectedApiIds);
   const results: ExternalApiFetchResult[] = [];
   const missingEnv: string[] = [];
   const recordHealth = options?.recordHealth ?? true;
@@ -1478,6 +1730,8 @@ export async function fetchExternalTrends(
           success: false,
           errorCode: 'rate_limited',
           errorMessage: 'Rate limited',
+          feature: options?.feature ?? null,
+          companyId: companyId ?? null,
         });
         console.warn('EXTERNAL_API_RATE_LIMITED', { source: source.name });
         continue;
@@ -1504,6 +1758,8 @@ export async function fetchExternalTrends(
           success: false,
           errorCode: 'missing_env',
           errorMessage: 'Missing API credentials',
+          feature: options?.feature ?? null,
+          companyId: companyId ?? null,
         });
         results.push({
           source,
@@ -1527,6 +1783,8 @@ export async function fetchExternalTrends(
           apiSourceId: source.id,
           userId: usageUserId,
           success: true,
+          feature: options?.feature ?? null,
+          companyId: companyId ?? null,
         });
         results.push({
           source,
@@ -1563,6 +1821,8 @@ export async function fetchExternalTrends(
           success: false,
           errorCode: `http_${response.status}`,
           errorMessage: mapHttpErrorMessage(response.status),
+          feature: options?.feature ?? null,
+          companyId: companyId ?? null,
         });
         continue;
       }
@@ -1576,6 +1836,8 @@ export async function fetchExternalTrends(
         apiSourceId: source.id,
         userId: usageUserId,
         success: true,
+        feature: options?.feature ?? null,
+        companyId: companyId ?? null,
       });
       results.push({
         source,
@@ -1597,6 +1859,8 @@ export async function fetchExternalTrends(
         success: false,
         errorCode: 'exception',
         errorMessage: (error as Error)?.message || 'Request failed',
+        feature: options?.feature ?? null,
+        companyId: companyId ?? null,
       });
     }
   }

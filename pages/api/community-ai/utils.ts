@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
+import { hasCommunityAiCapability } from '../../../backend/services/rbac/communityAiCapabilities';
 
 const readParam = (req: NextApiRequest, key: string): string | null => {
   const fromQuery = req.query?.[key];
@@ -46,32 +47,11 @@ export const resolveBrandVoice = async (organizationId: string): Promise<string>
   return voice.length > 0 ? voice : 'professional';
 };
 
-export const ACTION_VIEW_ROLES: Role[] = [
-  Role.VIEW_ONLY,
-  Role.CONTENT_CREATOR,
-  Role.CONTENT_REVIEWER,
-  Role.CONTENT_PUBLISHER,
-  Role.COMPANY_ADMIN,
-  Role.SUPER_ADMIN,
-];
-
-export const ACTION_APPROVER_ROLES: Role[] = [
-  Role.CONTENT_REVIEWER,
-  Role.COMPANY_ADMIN,
-  Role.SUPER_ADMIN,
-];
-
-export const ACTION_EXECUTOR_ROLES: Role[] = [
-  Role.CONTENT_PUBLISHER,
-  Role.COMPANY_ADMIN,
-  Role.SUPER_ADMIN,
-];
-
 export const resolveActionRole = (role: Role | null) => {
   if (!role) return 'viewer';
-  if ([Role.COMPANY_ADMIN, Role.SUPER_ADMIN].includes(role)) return 'admin';
-  if (ACTION_EXECUTOR_ROLES.includes(role)) return 'executor';
-  if (ACTION_APPROVER_ROLES.includes(role)) return 'approver';
+  if (hasCommunityAiCapability(role, 'MANAGE_PLAYBOOKS')) return 'admin';
+  if (hasCommunityAiCapability(role, 'EXECUTE_ACTIONS')) return 'executor';
+  if (hasCommunityAiCapability(role, 'APPROVE_ACTIONS')) return 'approver';
   return 'viewer';
 };
 

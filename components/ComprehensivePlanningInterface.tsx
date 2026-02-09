@@ -398,6 +398,10 @@ export default function ComprehensivePlanningInterface({
 
   const renderOverviewTab = () => (
     <div className="space-y-8">
+      <div className="bg-indigo-50 border border-indigo-200 text-indigo-800 text-sm rounded-lg p-4">
+        Planning boundary: Virality produces plans, signals, and priorities only. Community-AI
+        executes via playbooks; credentials, APIs, and automation logic do not flow upstream.
+      </div>
       {/* Campaign Overview */}
       <div className="bg-white rounded-xl p-6 shadow-sm border">
         <h3 className="text-xl font-semibold mb-4">Campaign Overview</h3>

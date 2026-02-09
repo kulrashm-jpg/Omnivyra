@@ -4,6 +4,34 @@ import { evaluateCampaignReadiness } from '../../../backend/services/campaignRea
 import { ALL_ROLES } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 
+const resolveCampaignCompanyId = async (campaignId: string) => {
+  const { data, error } = await supabase
+    .from('campaign_versions')
+    .select('company_id')
+    .eq('campaign_id', campaignId)
+    .limit(1)
+    .maybeSingle();
+  if (error || !data?.company_id) {
+    return null;
+  }
+  return data.company_id as string;
+};
+
+const validatePlaybookReference = async (playbookId: string, companyId: string) => {
+  const { data, error } = await supabase
+    .from('virality_playbooks')
+    .select('id, company_id, status')
+    .eq('id', playbookId)
+    .single();
+  if (error || !data) {
+    return { ok: false, error: 'INVALID_PLAYBOOK_REFERENCE' };
+  }
+  if (data.company_id !== companyId) {
+    return { ok: false, error: 'INVALID_PLAYBOOK_REFERENCE' };
+  }
+  return { ok: true, error: null };
+};
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
 
@@ -35,7 +63,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   } else if (req.method === 'PUT') {
     try {
-      const { name, description, status, current_stage, start_date, end_date } = req.body;
+      const {
+        name,
+        description,
+        status,
+        current_stage,
+        start_date,
+        end_date,
+        virality_playbook_id,
+        viralityPlaybookId,
+        playbook,
+        api_inputs,
+      } = req.body;
+      // Ensure playbook is reference-only: ignore any playbook payload fields.
+      const playbookFieldProvided =
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'virality_playbook_id') ||
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'viralityPlaybookId');
+      const resolvedPlaybookId = virality_playbook_id ?? viralityPlaybookId ?? null;
+      if (playbookFieldProvided && resolvedPlaybookId) {
+        const companyId = await resolveCampaignCompanyId(id);
+        if (!companyId) {
+          return res.status(400).json({ error: 'companyId required' });
+        }
+        const validation = await validatePlaybookReference(resolvedPlaybookId, companyId);
+        if (!validation.ok) {
+          return res.status(400).json({ error: 'INVALID_PLAYBOOK_REFERENCE' });
+        }
+      }
 
       if (status === 'active') {
         const readiness = await evaluateCampaignReadiness(id);
@@ -61,6 +115,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           current_stage,
           start_date,
           end_date,
+          // Playbook reference only. It does NOT affect scheduling, publishing,
+          // approvals, or content generation. Campaign behavior remains unchanged.
+          ...(playbookFieldProvided && { virality_playbook_id: resolvedPlaybookId }),
           updated_at: new Date().toISOString()
         })
         .eq('id', id)

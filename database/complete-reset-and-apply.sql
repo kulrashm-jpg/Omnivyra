@@ -94,6 +94,7 @@ CREATE TABLE campaigns (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     description TEXT,
+    virality_playbook_id UUID REFERENCES virality_playbooks(id) ON DELETE SET NULL,
     start_date DATE,
     end_date DATE,
     status VARCHAR(50) DEFAULT 'draft', -- 'draft', 'active', 'paused', 'completed'

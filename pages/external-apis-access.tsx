@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
+import { supabase } from '../utils/supabaseClient';
 
 type ApiSource = {
   id: string;
@@ -7,15 +8,35 @@ type ApiSource = {
   base_url: string;
   purpose: string;
   category?: string | null;
+  company_id?: string | null;
   auth_type: string;
   method?: string | null;
   is_active: boolean;
+  is_preset?: boolean | null;
+  is_global_preset?: boolean | null;
   api_key_env_name?: string | null;
   headers?: Record<string, any> | null;
   query_params?: Record<string, any> | null;
   user_access?: UserAccess | null;
   usage_summary?: UsageSummary | null;
   usage_daily?: UsageDaily[];
+  usage_company?: {
+    total_calls: number;
+    success_count: number;
+    failure_count: number;
+  } | null;
+  usage_by_feature?: Array<{
+    feature: string;
+    request_count: number;
+    success_count: number;
+    failure_count: number;
+  }>;
+  usage_by_user?: Array<{
+    user_id: string;
+    request_count: number;
+    success_count: number;
+    failure_count: number;
+  }>;
 };
 
 type UserAccess = {
@@ -128,13 +149,32 @@ export default function ExternalApiAccessPage() {
   const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
   const [selectedApiId, setSelectedApiId] = useState<string | null>(null);
   const [expandedUsageId, setExpandedUsageId] = useState<string | null>(null);
+  const [canManageExternalApis, setCanManageExternalApis] = useState(false);
+  const [globalPresets, setGlobalPresets] = useState<ApiSource[]>([]);
+  const [companyDefaultApis, setCompanyDefaultApis] = useState<string[]>([]);
 
-  const buildDrafts = (sources: ApiSource[]) => {
+  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      throw new Error('Not authenticated');
+    }
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  };
+
+  const buildDrafts = (sources: ApiSource[], defaultIds: Set<string>) => {
     const next: Record<string, AccessDraft> = {};
     sources.forEach((source) => {
       const access = source.user_access;
+      const isDefaultEnabled = defaultIds.has(source.id);
       next[source.id] = {
-        is_enabled: access?.is_enabled ?? false,
+        is_enabled: isDefaultEnabled,
         api_key_env_name: access?.api_key_env_name || '',
         headers_override_json: JSON.stringify(access?.headers_override || {}, null, 2),
         query_params_override_json: JSON.stringify(access?.query_params_override || {}, null, 2),
@@ -154,13 +194,18 @@ export default function ExternalApiAccessPage() {
         setDrafts({});
         return;
       }
-      const response = await fetch(
+      const response = await fetchWithAuth(
         `/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`
       );
       if (!response.ok) throw new Error('Failed to load APIs');
       const data = await response.json();
-      setApis(data.apis || []);
-      setDrafts(buildDrafts(data.apis || []));
+      const available = data.availableApis || data.apis || [];
+      const defaults = Array.isArray(data.companyDefaultApis) ? data.companyDefaultApis : [];
+      setApis(available);
+      setCompanyDefaultApis(defaults);
+      setDrafts(buildDrafts(available, new Set(defaults)));
+      setCanManageExternalApis(!!data?.permissions?.canManageExternalApis);
+      setGlobalPresets(data.global_presets || []);
     } catch (error) {
       setSaveMessage('Failed to load external APIs.');
     } finally {
@@ -174,10 +219,13 @@ export default function ExternalApiAccessPage() {
         setRequests([]);
         return;
       }
-      const response = await fetch(
+      const response = await fetchWithAuth(
         `/api/external-apis/requests?companyId=${encodeURIComponent(selectedCompanyId)}`
       );
-      if (!response.ok) return;
+      if (!response.ok) {
+        setRequests([]);
+        return;
+      }
       const data = await response.json();
       setRequests(data.requests || []);
     } catch {
@@ -236,6 +284,7 @@ export default function ExternalApiAccessPage() {
           rate_limit_per_min: draft.rate_limit_per_min
             ? Number(draft.rate_limit_per_min)
             : null,
+          scope: 'company',
           companyId: selectedCompanyId,
         }),
       });
@@ -266,11 +315,11 @@ export default function ExternalApiAccessPage() {
         setRequestMessage('Select a company to submit a request.');
         return;
       }
-      const response = await fetch(
+      const response = await fetchWithAuth(
         `/api/external-apis/requests?companyId=${encodeURIComponent(selectedCompanyId)}`,
         {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: requestForm.name,
           base_url: requestForm.base_url,
@@ -298,6 +347,9 @@ export default function ExternalApiAccessPage() {
     }
   };
 
+  const visibleApis = canManageExternalApis
+    ? apis
+    : apis.filter((api) => drafts[api.id]?.is_enabled);
   const activeCount = useMemo(
     () => apis.filter((api) => drafts[api.id]?.is_enabled).length,
     [apis, drafts]
@@ -315,7 +367,7 @@ export default function ExternalApiAccessPage() {
   const usageTotals = useMemo(() => {
     let requestsToday = 0;
     let failuresToday = 0;
-    apis.forEach((api) => {
+    visibleApis.forEach((api) => {
       const day = (api.usage_daily || []).find((row) => row.usage_date === todayKey);
       if (day) {
         requestsToday += day.request_count || 0;
@@ -323,9 +375,13 @@ export default function ExternalApiAccessPage() {
       }
     });
     return { requestsToday, failuresToday };
-  }, [apis, todayKey]);
+  }, [visibleApis, todayKey]);
 
-  const selectedApi = apis.find((api) => api.id === selectedApiId) || null;
+  const isReadOnly = !canManageExternalApis;
+
+  const selectedApi = canManageExternalApis
+    ? apis.find((api) => api.id === selectedApiId) || null
+    : null;
   const selectedDraft = selectedApi ? drafts[selectedApi.id] : null;
 
   if (isCompanyLoading) {
@@ -352,17 +408,22 @@ export default function ExternalApiAccessPage() {
         <div className="bg-white rounded-lg shadow p-6">
           <h1 className="text-2xl font-bold text-gray-900 mb-2">External API Access</h1>
           <p className="text-sm text-gray-600">
-            Enable the APIs you want to use and provide your own environment variable names.
+            Company admins set default APIs. Users see the defaults in read-only mode.
           </p>
           <p className="text-xs text-gray-500 mt-2">
             Secrets are never stored. Enter only the env var name (ex: YOUTUBE_API_KEY).
           </p>
+          {isReadOnly && (
+            <p className="text-xs text-amber-600 mt-2">
+              You have read-only access. Submit a request or contact an admin to enable APIs.
+            </p>
+          )}
         </div>
 
         <div className="bg-white rounded-lg shadow p-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
             <div className="text-xs text-gray-500">Total APIs</div>
-            <div className="text-2xl font-semibold text-gray-900">{apis.length}</div>
+            <div className="text-2xl font-semibold text-gray-900">{visibleApis.length}</div>
           </div>
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
             <div className="text-xs text-gray-500">Requests today</div>
@@ -397,7 +458,7 @@ export default function ExternalApiAccessPage() {
             <div className="text-sm text-gray-500">Loading...</div>
           ) : (
             <div className="space-y-4">
-              {apis.map((api) => {
+              {visibleApis.map((api) => {
                 const draft = drafts[api.id];
                 const usage = api.usage_summary;
                 const isEnabled = draft?.is_enabled || false;
@@ -418,15 +479,22 @@ export default function ExternalApiAccessPage() {
                       <div>
                         <div className="flex items-center gap-2">
                           <div className="font-semibold text-gray-900">{api.name}</div>
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                            {api.is_global_preset
+                              ? 'Global (Virality)'
+                              : api.company_id === selectedCompanyId
+                                ? 'Tenant-Provided'
+                                : 'Company'}
+                          </span>
                           <span
                             className={`text-[11px] px-2 py-0.5 rounded-full ${
                               isEnabled
                                 ? 'bg-green-100 text-green-700'
                                 : 'bg-gray-100 text-gray-600'
                             }`}
-                            title={isEnabled ? 'Enabled for your account' : 'Disabled for your account'}
+                            title={isEnabled ? 'Enabled as company default' : 'Not in company defaults'}
                           >
-                            {isEnabled ? 'Enabled' : 'Disabled'}
+                            {isEnabled ? 'Default' : 'Not selected'}
                           </span>
                           {isPending && (
                             <span
@@ -468,20 +536,30 @@ export default function ExternalApiAccessPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 text-xs">
-                        <label className="flex items-center gap-2 text-gray-700">
-                          <input
-                            type="checkbox"
-                            checked={isEnabled}
-                            onChange={(e) => updateDraft(api.id, { is_enabled: e.target.checked })}
-                          />
-                          Enabled
-                        </label>
-                        <button
-                          onClick={() => setSelectedApiId(api.id)}
-                          className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg"
-                        >
-                          Configure
-                        </button>
+                        {canManageExternalApis ? (
+                          <>
+                            <label className="flex items-center gap-2 text-gray-700">
+                              <input
+                                type="checkbox"
+                                checked={isEnabled}
+                                onChange={(e) =>
+                                  updateDraft(api.id, { is_enabled: e.target.checked })
+                                }
+                              />
+                              Company Default
+                            </label>
+                            <button
+                              onClick={() => setSelectedApiId(api.id)}
+                              className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg"
+                            >
+                              Configure
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-xs text-gray-500">
+                            {isEnabled ? 'Default' : 'Not selected'}
+                          </span>
+                        )}
                         <button
                           onClick={() =>
                             setExpandedUsageId((prev) => (prev === api.id ? null : api.id))
@@ -503,14 +581,14 @@ export default function ExternalApiAccessPage() {
                       <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                         <div className="text-gray-500">Requests (14d)</div>
                         <div className="text-lg font-semibold text-gray-900">
-                          {usage?.request_count ?? 0}
+                          {api.usage_company?.total_calls ?? 0}
                         </div>
                       </div>
                       <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                         <div className="text-gray-500">Success rate</div>
                         <div className="text-lg font-semibold text-gray-900">
-                          {usage && usage.request_count > 0
-                            ? formatPercent(usage.success_count / usage.request_count)
+                          {api.usage_company && api.usage_company.total_calls > 0
+                            ? formatPercent(api.usage_company.success_count / api.usage_company.total_calls)
                             : '—'}
                         </div>
                       </div>
@@ -548,6 +626,32 @@ export default function ExternalApiAccessPage() {
                     {usage?.last_failure_at && (
                       <div className="text-xs text-red-600 mt-1">
                         Last failure: {new Date(usage.last_failure_at).toLocaleDateString()}
+                      </div>
+                    )}
+
+                    {(api.usage_by_feature || []).length > 0 && (
+                      <div className="mt-3 text-xs text-gray-600">
+                        <div className="text-gray-500 mb-1">Usage by feature</div>
+                        <div className="flex flex-wrap gap-2">
+                          {api.usage_by_feature?.map((entry) => (
+                            <div key={entry.feature} className="bg-white border rounded px-2 py-1">
+                              {entry.feature}: {entry.request_count}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {(api.usage_by_user || []).length > 0 && (
+                      <div className="mt-3 text-xs text-gray-600">
+                        <div className="text-gray-500 mb-1">Usage by user</div>
+                        <div className="flex flex-wrap gap-2">
+                          {api.usage_by_user?.map((entry) => (
+                            <div key={entry.user_id} className="bg-white border rounded px-2 py-1">
+                              {entry.user_id}: {entry.request_count}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
 
@@ -638,6 +742,26 @@ export default function ExternalApiAccessPage() {
               {apis.length === 0 && (
                 <div className="text-sm text-gray-500">No APIs are currently available.</div>
               )}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Global Presets</h2>
+          {globalPresets.length === 0 ? (
+            <div className="text-sm text-gray-500">No global presets are available.</div>
+          ) : (
+            <div className="space-y-3">
+              {globalPresets.map((preset) => (
+                <div key={preset.id} className="border rounded-lg p-3 text-sm">
+                  <div className="font-semibold text-gray-900">{preset.name}</div>
+                  <div className="text-xs text-gray-500">{preset.base_url}</div>
+                  <div className="text-xs text-gray-400">
+                    {preset.category || 'General'} • {preset.method || 'GET'} •{' '}
+                    {preset.auth_type || 'none'}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -775,7 +899,7 @@ export default function ExternalApiAccessPage() {
           )}
         </div>
 
-        {selectedApi && selectedDraft && (
+        {selectedApi && selectedDraft && canManageExternalApis && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6">
               <div className="flex items-center justify-between mb-4">
@@ -799,6 +923,7 @@ export default function ExternalApiAccessPage() {
                   onChange={(e) =>
                     updateDraft(selectedApi.id, { api_key_env_name: e.target.value })
                   }
+                  disabled={isReadOnly}
                 />
                 <input
                   className="border rounded-lg px-3 py-2"
@@ -807,6 +932,7 @@ export default function ExternalApiAccessPage() {
                   onChange={(e) =>
                     updateDraft(selectedApi.id, { rate_limit_per_min: e.target.value })
                   }
+                  disabled={isReadOnly}
                 />
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Headers overrides (JSON)</div>
@@ -816,6 +942,7 @@ export default function ExternalApiAccessPage() {
                     onChange={(e) =>
                       updateDraft(selectedApi.id, { headers_override_json: e.target.value })
                     }
+                    disabled={isReadOnly}
                   />
                 </div>
                 <div>
@@ -826,6 +953,7 @@ export default function ExternalApiAccessPage() {
                     onChange={(e) =>
                       updateDraft(selectedApi.id, { query_params_override_json: e.target.value })
                     }
+                    disabled={isReadOnly}
                   />
                 </div>
               </div>
@@ -845,7 +973,7 @@ export default function ExternalApiAccessPage() {
                 <button
                   onClick={() => saveAccess(selectedApi)}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm"
-                  disabled={selectedDraft.saving}
+                  disabled={selectedDraft.saving || isReadOnly}
                 >
                   {selectedDraft.saving ? 'Saving...' : 'Save settings'}
                 </button>

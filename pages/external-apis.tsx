@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import { supabase } from '../utils/supabaseClient';
@@ -51,6 +52,7 @@ type ApiSource = {
   base_url: string;
   purpose: string;
   category?: string | null;
+  company_id?: string | null;
   is_active: boolean;
   method?: string;
   auth_type: string;
@@ -59,6 +61,25 @@ type ApiSource = {
   headers?: Record<string, string> | null;
   query_params?: Record<string, string> | null;
   is_preset?: boolean | null;
+  enabled_companies?: string[];
+  usage_by_company?: Array<{
+    company_id: string;
+    request_count: number;
+    success_count: number;
+    failure_count: number;
+    by_feature?: Array<{
+      feature: string;
+      request_count: number;
+      success_count: number;
+      failure_count: number;
+    }>;
+    by_user?: Array<{
+      user_id: string;
+      request_count: number;
+      success_count: number;
+      failure_count: number;
+    }>;
+  }>;
   enabled_user_count?: number;
   usage_summary?: {
     request_count: number;
@@ -128,20 +149,27 @@ const emptyForm: Partial<ApiSource> = {
 };
 
 export default function ExternalApisPage() {
-  const { selectedCompanyId, isLoading: isCompanyLoading } = useCompanyContext();
+  const router = useRouter();
+  const {
+    selectedCompanyId,
+    isLoading: isCompanyLoading,
+    userRole,
+    hasPermission,
+    setSelectedCompanyId,
+  } = useCompanyContext();
   const [apis, setApis] = useState<ApiSource[]>([]);
   const [form, setForm] = useState<Partial<ApiSource>>(emptyForm);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [requests, setRequests] = useState<ApiRequest[]>([]);
   const [isLoadingRequests, setIsLoadingRequests] = useState(false);
   const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
   const [presets, setPresets] = useState<ExternalApiPreset[]>([]);
   const [isLoadingPresets, setIsLoadingPresets] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<ExternalApiPreset | null>(null);
+  const [selectedCatalogPreset, setSelectedCatalogPreset] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [queryMode, setQueryMode] = useState<'pairs' | 'json'>('pairs');
@@ -159,34 +187,87 @@ export default function ExternalApisPage() {
   const [showPresetModal, setShowPresetModal] = useState(false);
   const [presetSelection, setPresetSelection] = useState<Set<string>>(new Set());
   const [isSavingPresetSelection, setIsSavingPresetSelection] = useState(false);
+  const [platformCompanies, setPlatformCompanies] = useState<Array<{ id: string; name: string }>>(
+    []
+  );
+  const [platformCompanyId, setPlatformCompanyId] = useState('');
+  const [isLoadingPlatformCompanies, setIsLoadingPlatformCompanies] = useState(false);
+  const isSuperAdmin = userRole === 'SUPER_ADMIN';
+  const modeParam = Array.isArray(router.query?.mode)
+    ? router.query?.mode[0]
+    : router.query?.mode;
+  const isPlatformCatalogMode = modeParam === 'platform';
+  const isPlatformAdminView = isPlatformCatalogMode;
+  const canManageExternalApis = isPlatformCatalogMode
+    ? true
+    : hasPermission('MANAGE_EXTERNAL_APIS');
+  const [platformAccessDenied, setPlatformAccessDenied] = useState(false);
+  const canManagePresets = canManageExternalApis;
+  const companyContextId = isPlatformCatalogMode ? (platformCompanyId || null) : selectedCompanyId;
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
-    if (!token) {
-      throw new Error('Not authenticated');
+    if (token) {
+      return fetch(input, {
+        ...init,
+        headers: {
+          ...(init?.headers || {}),
+          Authorization: `Bearer ${token}`,
+        },
+      });
     }
     return fetch(input, {
       ...init,
+      credentials: 'include',
       headers: {
         ...(init?.headers || {}),
-        Authorization: `Bearer ${token}`,
       },
     });
   };
 
+  const loadPlatformCompanies = async () => {
+    if (!isPlatformCatalogMode) return;
+    setIsLoadingPlatformCompanies(true);
+    try {
+      const response = await fetchWithAuth('/api/super-admin/companies');
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.error || 'Failed to load companies');
+      }
+      const data = await response.json();
+      const companies = (data.companies || []).map((company: any) => ({
+        id: company.id,
+        name: company.name || 'Unnamed company',
+      }));
+      setPlatformCompanies(companies);
+      if (!selectedCompanyId && companies.length > 0 && !isPlatformCatalogMode) {
+        setSelectedCompanyId(companies[0].id);
+      }
+    } catch (error) {
+      console.error('Error loading platform companies:', error);
+    } finally {
+      setIsLoadingPlatformCompanies(false);
+    }
+  };
+
   const loadApis = async () => {
     try {
-      if (!selectedCompanyId) {
+      if (!companyContextId && !isPlatformCatalogMode) {
         console.warn('No company selected yet, skipping external API load');
         return;
       }
       setIsLoading(true);
-      const url = `/api/external-apis?companyId=${selectedCompanyId}`;
+      const url = companyContextId
+        ? `/api/external-apis?companyId=${companyContextId}`
+        : '/api/external-apis?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
       const response = await fetchWithAuth(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
+        if (isPlatformCatalogMode && [401, 403].includes(response.status)) {
+          setPlatformAccessDenied(true);
+        }
         throw new Error(errorBody?.error || 'Failed to load APIs');
       }
       const data = await response.json();
@@ -202,14 +283,20 @@ export default function ExternalApisPage() {
 
   const loadPresets = async () => {
     try {
-      if (!selectedCompanyId) return;
+      if (!companyContextId && !isPlatformCatalogMode) return;
       setIsLoadingPresets(true);
-      const url = `/api/external-apis/presets?companyId=${selectedCompanyId}`;
+      const url = companyContextId
+        ? `/api/external-apis/presets?companyId=${companyContextId}`
+        : '/api/external-apis/presets?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
       const response = await fetchWithAuth(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
-        throw new Error(errorBody?.error || 'Failed to load presets');
+        if (isPlatformCatalogMode && [401, 403].includes(response.status)) {
+          setPlatformAccessDenied(true);
+        }
+        setErrorMessage(errorBody?.error || 'Failed to load presets');
+        return null;
       }
       const data = await response.json();
       setPresets(data.presets || []);
@@ -227,6 +314,10 @@ export default function ExternalApisPage() {
     }
   };
   const openPresetModal = async () => {
+    if (!companyContextId && isPlatformCatalogMode) {
+      setErrorMessage('Select a company before assigning preset access.');
+      return;
+    }
     const fresh = presets.length === 0 ? await loadPresets() : null;
     const presetList = fresh?.presets ?? presets;
     const hiddenSet = new Set<string>(fresh?.hidden_ids ?? Array.from(hiddenPresetIds));
@@ -239,6 +330,48 @@ export default function ExternalApisPage() {
     });
     setPresetSelection(selected);
     setShowPresetModal(true);
+  };
+
+  const addPresetToCatalog = async (preset: ExternalApiPreset) => {
+    try {
+      resetMessages();
+      const payload = {
+        name: preset.name,
+        base_url: preset.base_url,
+        purpose: 'trends',
+        category: preset.description || null,
+        is_active: true,
+        method: preset.method,
+        auth_type: preset.auth_type,
+        api_key_env_name: preset.api_key_env_name || null,
+        headers: preset.headers || {},
+        query_params: preset.query_params || {},
+        is_preset: true,
+        platform_type: 'social',
+        supported_content_types: [],
+        promotion_modes: [],
+        required_metadata: {},
+        posting_constraints: {},
+        requires_admin: true,
+      };
+      const response = await fetchWithAuth('/api/external-apis?scope=platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        setErrorMessage(errorBody?.error || 'Failed to add preset to catalog');
+        return;
+      }
+      setSuccessMessage('Preset added to global catalog.');
+      setSelectedCatalogPreset('');
+      await loadPresets();
+      await loadApis();
+    } catch (error) {
+      console.error('Error adding preset to catalog:', error);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to add preset to catalog.');
+    }
   };
 
   const togglePresetSelection = (presetId: string, checked: boolean) => {
@@ -254,7 +387,14 @@ export default function ExternalApisPage() {
   };
 
   const savePresetSelection = async () => {
-    if (!selectedCompanyId) return;
+    if (!companyContextId) {
+      setErrorMessage('Select a company before updating preset access.');
+      return;
+    }
+    if (!canManagePresets) {
+      setSuccessMessage('Configured by company admin.');
+      return;
+    }
     const selectable = presets.filter((preset) => preset.id);
     setIsSavingPresetSelection(true);
     try {
@@ -264,7 +404,7 @@ export default function ExternalApisPage() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              companyId: selectedCompanyId,
+              companyId: companyContextId,
               api_source_id: preset.id,
               is_enabled: presetSelection.has(preset.id),
               scope: 'company',
@@ -287,12 +427,17 @@ export default function ExternalApisPage() {
   const loadRequests = async () => {
     try {
       setIsLoadingRequests(true);
-      if (!selectedCompanyId) return;
-      const url = `/api/external-apis/requests?companyId=${selectedCompanyId}`;
+      if (!companyContextId && !isPlatformCatalogMode) return;
+      const url = companyContextId
+        ? `/api/external-apis/requests?companyId=${companyContextId}`
+        : '/api/external-apis/requests?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
       const response = await fetchWithAuth(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
+        if (isPlatformCatalogMode && [401, 403].includes(response.status)) {
+          setPlatformAccessDenied(true);
+        }
         if (errorBody?.error === 'FORBIDDEN_ROLE') {
           setRequests([]);
           return;
@@ -309,24 +454,13 @@ export default function ExternalApisPage() {
   };
 
   useEffect(() => {
+    if (isPlatformCatalogMode && isPlatformAdminView) {
+      loadPlatformCompanies();
+    }
     loadApis();
     loadPresets();
     loadRequests();
-    const loadAdminStatus = async () => {
-      try {
-        if (!selectedCompanyId) return;
-        const url = `/api/admin/check-super-admin?companyId=${selectedCompanyId}`;
-        console.log('DASHBOARD_API_CALL', url);
-        const response = await fetchWithAuth(url);
-        if (!response.ok) return;
-        const data = await response.json();
-        setIsAdmin(!!data?.isSuperAdmin);
-      } catch (error) {
-        console.warn('Unable to load admin status');
-      }
-    };
-    loadAdminStatus();
-  }, [selectedCompanyId]);
+  }, [selectedCompanyId, platformCompanyId, isPlatformCatalogMode, isPlatformAdminView]);
 
   useEffect(() => {
     setQueryPairs(toPairs(form.query_params || {}));
@@ -437,16 +571,27 @@ export default function ExternalApisPage() {
         query_params: resolved.queryParams,
         is_preset: form.is_preset ?? false,
       };
+      if (!companyContextId && !isPlatformCatalogMode) {
+        throw new Error('Select a company before saving an API.');
+      }
       const url = editingId
-        ? `/api/external-apis/${editingId}?companyId=${selectedCompanyId}`
-        : `/api/external-apis?companyId=${selectedCompanyId}`;
+        ? companyContextId
+          ? `/api/external-apis/${editingId}?companyId=${companyContextId}`
+          : `/api/external-apis/${editingId}?scope=platform`
+        : companyContextId
+          ? `/api/external-apis?companyId=${companyContextId}`
+          : '/api/external-apis?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetch(url, {
+      const response = await fetchWithAuth(url, {
         method: editingId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!response.ok) throw new Error('Failed to save API');
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        setErrorMessage(errorBody?.error || 'Failed to save API');
+        return;
+      }
       setForm(emptyForm);
       setSelectedPreset(null);
       setEditingId(null);
@@ -475,16 +620,27 @@ export default function ExternalApisPage() {
         query_params: resolved.queryParams,
         is_preset: true,
       };
+      if (!companyContextId && !isPlatformCatalogMode) {
+        throw new Error('Select a company before saving a preset.');
+      }
       const url = editingPresetId
-        ? `/api/external-apis/${editingPresetId}?companyId=${selectedCompanyId}`
-        : `/api/external-apis?companyId=${selectedCompanyId}`;
+        ? companyContextId
+          ? `/api/external-apis/${editingPresetId}?companyId=${companyContextId}`
+          : `/api/external-apis/${editingPresetId}?scope=platform`
+        : companyContextId
+          ? `/api/external-apis?companyId=${companyContextId}`
+          : '/api/external-apis?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetch(url, {
+      const response = await fetchWithAuth(url, {
         method: editingPresetId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!response.ok) throw new Error('Failed to save preset');
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        setErrorMessage(errorBody?.error || 'Failed to save preset');
+        return;
+      }
       setSuccessMessage(editingPresetId ? 'Preset updated.' : 'Preset saved.');
       await loadPresets();
     } catch (error) {
@@ -498,9 +654,11 @@ export default function ExternalApisPage() {
   const updateApi = async (api: ApiSource) => {
     try {
       resetMessages();
-      const url = `/api/external-apis/${api.id}?companyId=${selectedCompanyId}`;
+      const url = companyContextId
+        ? `/api/external-apis/${api.id}?companyId=${companyContextId}`
+        : `/api/external-apis/${api.id}?scope=platform`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetch(url, {
+      const response = await fetchWithAuth(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(api),
@@ -517,15 +675,27 @@ export default function ExternalApisPage() {
   const deleteApi = async (id: string) => {
     try {
       resetMessages();
-      const url = `/api/external-apis/${id}?companyId=${selectedCompanyId}`;
+      if (!companyContextId && !isPlatformCatalogMode) {
+        setErrorMessage('Select a company before deleting an API source.');
+        return;
+      }
+      if (!confirm('Delete this API source? This will remove related health and usage records.')) {
+        return;
+      }
+      const url = companyContextId
+        ? `/api/external-apis/${id}?companyId=${companyContextId}`
+        : `/api/external-apis/${id}?scope=platform`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetch(url, { method: 'DELETE' });
-      if (!response.ok) throw new Error('Failed to delete API');
+      const response = await fetchWithAuth(url, { method: 'DELETE' });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.error || 'Failed to delete API');
+      }
       setSuccessMessage('API source deleted.');
       await loadApis();
     } catch (error) {
       console.error('Error deleting API:', error);
-      setErrorMessage('Failed to delete API source.');
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to delete API source.');
     }
   };
 
@@ -533,9 +703,11 @@ export default function ExternalApisPage() {
     try {
       resetMessages();
       const rejection_reason = status === 'rejected' ? rejectionReasons[id] : undefined;
-      const url = `/api/external-apis/requests/${id}?companyId=${selectedCompanyId}`;
+      const url = companyContextId
+        ? `/api/external-apis/requests/${id}?companyId=${companyContextId}`
+        : `/api/external-apis/requests/${id}?scope=platform`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetch(url, {
+      const response = await fetchWithAuth(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, rejection_reason }),
@@ -555,6 +727,10 @@ export default function ExternalApisPage() {
   const testFetch = async () => {
     try {
       resetMessages();
+      if (!companyContextId && !isPlatformCatalogMode) {
+        setErrorMessage('Select a company before testing an API.');
+        return;
+      }
       const resolved = resolveEditorPayload();
       if (!resolved.ok) {
         setErrorMessage(resolved.message || 'Invalid headers/query params.');
@@ -565,9 +741,11 @@ export default function ExternalApisPage() {
         headers: resolved.headers,
         query_params: resolved.queryParams,
       };
-      const url = `/api/external-apis/test?companyId=${selectedCompanyId}`;
+      const url = companyContextId
+        ? `/api/external-apis/test?companyId=${companyContextId}`
+        : '/api/external-apis/test?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetch(url, {
+      const response = await fetchWithAuth(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -587,9 +765,11 @@ export default function ExternalApisPage() {
   const validateApi = async (id: string) => {
     try {
       resetMessages();
-      const url = `/api/external-apis/${id}/validate?companyId=${selectedCompanyId}`;
+      const url = companyContextId
+        ? `/api/external-apis/${id}/validate?companyId=${companyContextId}`
+        : `/api/external-apis/${id}/validate?scope=platform`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetch(url);
+      const response = await fetchWithAuth(url);
       if (!response.ok) throw new Error('Failed to validate API');
       setSuccessMessage('API validation completed.');
       await loadApis();
@@ -602,9 +782,11 @@ export default function ExternalApisPage() {
   const testExistingApi = async (id: string) => {
     try {
       resetMessages();
-      const url = `/api/external-apis/${id}/test?companyId=${selectedCompanyId}`;
+      const url = companyContextId
+        ? `/api/external-apis/${id}/test?companyId=${companyContextId}`
+        : `/api/external-apis/${id}/test?scope=platform`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetch(url);
+      const response = await fetchWithAuth(url);
       const data = await response.json();
       setTestResult(data);
       setApiTestResults((prev) => ({ ...prev, [id]: data }));
@@ -698,7 +880,7 @@ export default function ExternalApisPage() {
     );
   }
 
-  if (!selectedCompanyId) {
+  if (!companyContextId && !isPlatformCatalogMode) {
     return (
       <div className="min-h-screen bg-gray-50">
         <Header />
@@ -714,18 +896,51 @@ export default function ExternalApisPage() {
       <Header />
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="bg-white rounded-lg shadow p-6">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">External API Sources</h1>
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-2xl font-bold text-gray-900">External API Sources</h1>
+            {isPlatformCatalogMode && (
+              <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-1">
+                Platform Catalog Mode
+              </span>
+            )}
+          </div>
           <p className="text-sm text-gray-600">
             Manage external sources for trend and signal discovery.
           </p>
           <p className="text-xs text-gray-500 mt-1">
             Super admins manage the global catalog. Users should enable access on `/external-apis-access`.
           </p>
+          {isPlatformCatalogMode && (
+            <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+              <span className="text-gray-600">Company context (optional):</span>
+              <select
+                className="border rounded-lg px-3 py-2 text-sm"
+                value={platformCompanyId}
+                onChange={(e) => setPlatformCompanyId(e.target.value)}
+              >
+                <option value="">Global catalog (no company selected)</option>
+                {platformCompanies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+              {isLoadingPlatformCompanies && (
+                <span className="text-xs text-gray-500">Loading companies…</span>
+              )}
+            </div>
+          )}
         </div>
 
-        {!isAdmin && (
-          <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 text-sm rounded-lg p-3">
-            Read-only mode: only super admins can edit the global catalog.
+        {!isPlatformAdminView && (
+          <div className="text-xs text-gray-500">
+            Global API sources are managed by Platform Admin.
+          </div>
+        )}
+
+        {isPlatformCatalogMode && platformAccessDenied && (
+          <div className="bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg p-3">
+            You are not authorized to manage the platform catalog.
           </div>
         )}
 
@@ -770,58 +985,93 @@ export default function ExternalApisPage() {
           <div className="bg-white rounded-lg shadow p-6">
           <div className="flex flex-col gap-4 mb-4">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Add External API</h2>
+              <h2 className="text-lg font-semibold text-gray-900">
+                {isPlatformAdminView ? 'Global API Catalog' : 'Select Global Presets'}
+              </h2>
               <p className="text-xs text-gray-500">
-                Start with a blank configuration or load a preset and customize it.
-              </p>
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 inline-block mt-2">
-                Global API presets are available on a paid plan.
+                {isPlatformAdminView
+                  ? 'Configure which APIs are visible and active for company admins.'
+                  : 'Company admins can select from global presets approved by the platform team.'}
               </p>
             </div>
             <div className="flex flex-wrap gap-3 items-center">
-              <button
-                onClick={addBlankApi}
-                className="px-3 py-2 bg-gray-100 text-gray-900 rounded-lg text-sm"
-              >
-                Add Blank API
-              </button>
-              <button
-                onClick={openPresetModal}
-                className="px-3 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm border border-indigo-100"
-              >
-                Select Global Presets
-              </button>
-              {isAdmin && (
-                <select
-                  className="border rounded-lg px-3 py-2 text-sm"
-                  value=""
-                  onChange={(e) => {
-                    const preset = presets.find((item) => item.name === e.target.value);
-                    if (preset) {
-                      applyPreset(preset);
-                    }
-                  }}
-                >
-                  <option value="" disabled>
-                    Add from Preset
-                  </option>
-                  {presets.map((preset) => (
-                    <option key={preset.name} value={preset.name}>
-                      {preset.name}
+              {isPlatformAdminView ? (
+                <>
+                  <button
+                    onClick={addBlankApi}
+                    className="px-3 py-2 bg-gray-100 text-gray-900 rounded-lg text-sm"
+                  >
+                    Add Blank API
+                  </button>
+                  <select
+                    className="border rounded-lg px-3 py-2 text-sm"
+                    value={selectedCatalogPreset}
+                    onChange={(e) => setSelectedCatalogPreset(e.target.value)}
+                  >
+                    <option value="" disabled>
+                      Add preset to catalog
                     </option>
-                  ))}
-                </select>
-              )}
-              {selectedPreset && (
-                <span className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-1">
-                  Preset loaded
-                </span>
+                    {presets
+                      .filter((preset) => !preset.id)
+                      .map((preset) => (
+                        <option key={preset.name} value={preset.name}>
+                          {preset.name}
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    onClick={() => {
+                      const preset = presets.find((item) => item.name === selectedCatalogPreset);
+                      if (preset) {
+                        addPresetToCatalog(preset);
+                      }
+                    }}
+                    disabled={!selectedCatalogPreset}
+                    className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
+                  >
+                    Add Preset
+                  </button>
+                  <select
+                    className="border rounded-lg px-3 py-2 text-sm"
+                    value=""
+                    onChange={(e) => {
+                      const preset = presets.find((item) => item.name === e.target.value);
+                      if (preset) {
+                        applyPreset(preset);
+                      }
+                    }}
+                  >
+                    <option value="" disabled>
+                      Load preset into editor
+                    </option>
+                    {presets.map((preset) => (
+                      <option key={preset.name} value={preset.name}>
+                        {preset.name}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedPreset && (
+                    <span className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-1">
+                      Preset loaded
+                    </span>
+                  )}
+                </>
+              ) : (
+                <button
+                  onClick={openPresetModal}
+                  className="px-3 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm border border-indigo-100"
+                  disabled={!canManagePresets}
+                >
+                  Select Global Presets
+                </button>
               )}
             </div>
           </div>
 
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Configure API Source</h2>
-          <div className="space-y-6">
+          {isPlatformAdminView && (
+            <>
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Configure API Source</h2>
+              <div className="space-y-6">
             {selectedPreset && (
               <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-4 text-sm text-indigo-900">
                 <div className="font-semibold">Preset: {selectedPreset.name}</div>
@@ -1084,14 +1334,14 @@ export default function ExternalApisPage() {
             <div className="flex flex-wrap gap-3">
               <button
                 onClick={saveApi}
-                disabled={isSaving || isSavingPreset || !isAdmin}
+                disabled={isSaving || isSavingPreset || !isPlatformAdminView}
                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
               >
                 {isSaving ? 'Saving...' : editingId ? 'Update API' : 'Add API'}
               </button>
               <button
                 onClick={savePreset}
-                disabled={isSaving || isSavingPreset || !isAdmin}
+                disabled={isSaving || isSavingPreset || !isPlatformAdminView}
                 className="px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm disabled:opacity-50 border border-indigo-100"
               >
                 {isSavingPreset ? 'Saving Preset...' : editingPresetId ? 'Update Preset' : 'Save Preset'}
@@ -1113,11 +1363,53 @@ export default function ExternalApisPage() {
               </div>
             )}
           </div>
+            </>
+          )}
         </div>
         )}
 
         {activeTab === 'global' && (
           <div className="bg-white rounded-lg shadow p-6">
+          {(() => {
+            const readyApis = apis.filter((api) => {
+              if (!api.is_active) return false;
+              if (isPlatformCatalogMode) {
+                return api.is_preset || Boolean(api.company_id);
+              }
+              return true;
+            });
+            return (
+              <div className="mb-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold text-gray-900">
+                    Ready-to-Use APIs ({readyApis.length})
+                  </h2>
+                  <span className="text-xs text-gray-500">
+                    Active + visible to companies
+                  </span>
+                </div>
+                {readyApis.length === 0 ? (
+                  <div className="text-sm text-gray-500 mt-2">
+                    No active APIs are currently visible to companies.
+                  </div>
+                ) : (
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {readyApis.map((api) => (
+                      <div key={`ready-${api.id}`} className="border rounded-lg p-3">
+                        <div className="font-medium text-gray-900">{api.name}</div>
+                        <div className="text-xs text-gray-500">
+                          {api.base_url}
+                        </div>
+                        <div className="mt-1 text-[11px] text-gray-600">
+                          {api.method || 'GET'} • {api.auth_type || 'none'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Configured APIs</h2>
           {isLoading ? (
             <div className="text-sm text-gray-500">Loading...</div>
@@ -1129,12 +1421,16 @@ export default function ExternalApisPage() {
                   runtime?.rate_limited_sources?.includes(api.name) ?? false;
                 const missingEnv = authRequiresKey(api.auth_type) &&
                   !(api.api_key_env_name || api.api_key_name);
+                const isGlobalCatalog = isPlatformCatalogMode && !api.company_id;
                 return (
                 <div key={api.id} className="border rounded-lg p-4">
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="font-semibold text-gray-900 flex items-center gap-2">
                         <span>{api.name}</span>
+                        <span className="text-[10px] uppercase tracking-wide bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
+                          {api.is_preset && !api.company_id ? 'Global (Virality)' : 'Tenant-Provided'}
+                        </span>
                         <span
                           className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${
                             api.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
@@ -1187,13 +1483,27 @@ export default function ExternalApisPage() {
                             Preset
                           </span>
                         )}
+                        {isPlatformCatalogMode && isPlatformAdminView && isGlobalCatalog && (
+                          <span
+                            className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${
+                              api.is_preset ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
+                            }`}
+                            title={
+                              api.is_preset
+                                ? 'Visible to company admins'
+                                : 'Hidden from company admins'
+                            }
+                          >
+                            {api.is_preset ? 'Visible' : 'Hidden'}
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-gray-500">
-                        {api.is_preset && !isAdmin ? 'Global preset details hidden' : api.base_url}
+                      {api.is_preset && !isPlatformAdminView ? 'Global preset details hidden' : api.base_url}
                       </div>
                       {(api.api_key_env_name || api.api_key_name) &&
                         api.auth_type !== 'none' &&
-                        !(api.is_preset && !isAdmin) && (
+                        !(api.is_preset && !isPlatformAdminView) && (
                         <div
                           className="text-xs text-gray-400"
                           title={`Uses env var: ${api.api_key_env_name || api.api_key_name}`}
@@ -1214,6 +1524,25 @@ export default function ExternalApisPage() {
                           {formatPercent(api.usage_summary?.failure_rate)}
                         </span>
                       </div>
+                      {api.is_preset && !api.company_id && (
+                        <div className="text-xs text-gray-400 mt-1">
+                          Enabled companies:{' '}
+                          {(api.enabled_companies || []).length > 0
+                            ? api.enabled_companies?.join(', ')
+                            : '—'}
+                        </div>
+                      )}
+                      {api.is_preset && !api.company_id && (api.usage_by_company || []).length > 0 && (
+                        <div className="text-xs text-gray-400 mt-1">
+                          Usage by company:{' '}
+                          {api.usage_by_company
+                            ?.map(
+                              (entry) =>
+                                `${entry.company_id}: ${entry.request_count} calls`
+                            )
+                            .join(' • ')}
+                        </div>
+                      )}
                       {(api.usage_summary?.last_error_message || api.usage_summary?.last_error_code) && (
                         <div className="text-xs text-red-600 mt-1">
                           Last error:{' '}
@@ -1241,11 +1570,23 @@ export default function ExternalApisPage() {
                       <input
                         type="checkbox"
                         checked={api.is_active}
-                        disabled={!isAdmin}
+                        disabled={!canManageExternalApis}
                         onChange={(e) => updateApi({ ...api, is_active: e.target.checked })}
                       />
                       Enabled
                     </label>
+                    {isPlatformCatalogMode && isPlatformAdminView && !api.company_id && (
+                      <label className="text-xs text-gray-600 flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={api.is_preset ?? false}
+                          onChange={(e) =>
+                            updateApi({ ...api, is_preset: e.target.checked })
+                          }
+                        />
+                        Visible to companies
+                      </label>
+                    )}
                     <span
                       className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${getHealthBadge(
                         api.health
@@ -1254,7 +1595,7 @@ export default function ExternalApisPage() {
                     >
                       {getHealthBadge(api.health).label}
                     </span>
-                    {!(api.is_preset && !isAdmin) && (
+                    {canManageExternalApis && (
                       <button
                         onClick={() => startEdit(api)}
                         className="text-xs text-gray-700"
@@ -1262,7 +1603,7 @@ export default function ExternalApisPage() {
                         Edit
                       </button>
                     )}
-                    {!(api.is_preset && !isAdmin) && (
+                    {canManageExternalApis && (
                       <button
                         onClick={() => validateApi(api.id)}
                         className="text-xs text-indigo-600"
@@ -1270,7 +1611,7 @@ export default function ExternalApisPage() {
                         Validate API
                       </button>
                     )}
-                    {!(api.is_preset && !isAdmin) && (
+                    {canManageExternalApis && (
                       <button
                         onClick={() => testExistingApi(api.id)}
                         className="text-xs text-gray-700"
@@ -1278,10 +1619,10 @@ export default function ExternalApisPage() {
                         Test API
                       </button>
                     )}
-                    {!(api.is_preset && !isAdmin) && (
+                    {canManageExternalApis && (
                       <button
                         onClick={() => deleteApi(api.id)}
-                        disabled={!isAdmin}
+                        disabled={!canManageExternalApis}
                         className="text-xs text-red-600 disabled:opacity-50"
                       >
                         Delete
@@ -1410,14 +1751,14 @@ export default function ExternalApisPage() {
                         />
                         <button
                           onClick={() => updateRequestStatus(request.id, 'approved')}
-                          disabled={!isAdmin}
+                          disabled={!isSuperAdmin}
                           className="text-xs text-green-700 disabled:opacity-50"
                         >
                           Approve
                         </button>
                         <button
                           onClick={() => updateRequestStatus(request.id, 'rejected')}
-                          disabled={!isAdmin}
+                          disabled={!isSuperAdmin}
                           className="text-xs text-red-600 disabled:opacity-50"
                         >
                           Reject
@@ -1482,6 +1823,36 @@ export default function ExternalApisPage() {
                         </div>
                       </div>
                     </div>
+                    {(api.usage_by_company || []).length > 0 && (
+                      <div className="mt-3 text-xs text-gray-700">
+                        <div className="text-gray-500 mb-1">Usage by company</div>
+                        <div className="space-y-2">
+                          {api.usage_by_company?.map((entry) => (
+                            <div key={entry.company_id} className="bg-gray-50 border rounded p-2">
+                              <div className="font-semibold text-gray-800">
+                                {entry.company_id} — {entry.request_count} calls
+                              </div>
+                              {(entry.by_feature || []).length > 0 && (
+                                <div className="text-[11px] text-gray-600 mt-1">
+                                  By feature:{' '}
+                                  {entry.by_feature
+                                    ?.map((feature) => `${feature.feature}: ${feature.request_count}`)
+                                    .join(' • ')}
+                                </div>
+                              )}
+                              {(entry.by_user || []).length > 0 && (
+                                <div className="text-[11px] text-gray-600 mt-1">
+                                  By user:{' '}
+                                  {entry.by_user
+                                    ?.map((user) => `${user.user_id}: ${user.request_count}`)
+                                    .join(' • ')}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div className="mt-2 text-xs">
                       {summary?.last_success_at && (
                         <span className="text-green-700 mr-3">
@@ -1596,6 +1967,14 @@ export default function ExternalApisPage() {
                 <p className="text-xs text-gray-500">
                   Choose which global APIs this company can use. You can select none.
                 </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Selected APIs will be available to your company's users.
+                </p>
+                {!canManagePresets && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Configured by company admin.
+                  </p>
+                )}
               </div>
               <button
                 onClick={() => setShowPresetModal(false)}
@@ -1623,10 +2002,10 @@ export default function ExternalApisPage() {
                   >
                     <input
                       type="checkbox"
-                      disabled={disabled}
+                      disabled={disabled || !canManageExternalApis}
                       checked={checked}
                       onChange={(e) => {
-                        if (preset.id) {
+                        if (preset.id && canManageExternalApis) {
                           togglePresetSelection(preset.id, e.target.checked);
                         }
                       }}
@@ -1654,7 +2033,7 @@ export default function ExternalApisPage() {
               </button>
               <button
                 onClick={savePresetSelection}
-                disabled={isSavingPresetSelection}
+                disabled={isSavingPresetSelection || !canManageExternalApis}
                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
               >
                 {isSavingPresetSelection ? 'Saving...' : 'Save Selection'}

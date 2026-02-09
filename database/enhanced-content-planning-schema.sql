@@ -247,6 +247,29 @@ CREATE TABLE content_templates_enhanced (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Strategy Templates (Planning Only, No Execution)
+CREATE TABLE strategy_templates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    company_id UUID,
+
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    objective TEXT NOT NULL,
+    campaign_intent TEXT,
+    target_audience TEXT NOT NULL,
+    key_platforms TEXT[] NOT NULL,
+
+    content_pillars JSONB,
+    content_frequency JSONB,
+    distribution_preferences JSONB,
+
+    tags TEXT[],
+    is_public BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ==============================================
 -- INDEXES FOR PERFORMANCE
 -- ==============================================
@@ -260,6 +283,8 @@ CREATE INDEX idx_platform_strategies_campaign ON platform_strategies(campaign_id
 CREATE INDEX idx_performance_metrics_campaign ON campaign_performance_metrics(campaign_id, date);
 CREATE INDEX idx_performance_metrics_week ON campaign_performance_metrics(campaign_id, week_number);
 CREATE INDEX idx_ai_enhancement_campaign ON ai_enhancement_logs(campaign_id);
+CREATE INDEX idx_strategy_templates_user ON strategy_templates(user_id);
+CREATE INDEX idx_strategy_templates_company ON strategy_templates(company_id);
 
 -- ==============================================
 -- TRIGGERS FOR AUTOMATIC UPDATES

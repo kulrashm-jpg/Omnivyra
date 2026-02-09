@@ -10,6 +10,11 @@ import {
 import { sendLearningSnapshot } from './omnivyraFeedbackService';
 import { getCampaignMemory, validateUniqueness } from './campaignMemoryService';
 import {
+  getCampaignIntelligence,
+  getRecentCampaignIntelligenceForCompany,
+  normalizeCampaignTopic,
+} from './campaignIntelligenceService';
+import {
   getTrendRanking,
   getTrendRelevance,
   getOmniVyraHealthReport,
@@ -35,6 +40,7 @@ export type RecommendationEngineInput = {
   durationWeeks?: number;
   userId?: string | null;
   simulate?: boolean;
+  selectedApiIds?: string[] | null;
 };
 
 export type PersonaSummary = {
@@ -320,12 +326,41 @@ const ensureCampaignCompanyLink = async (companyId: string, campaignId: string) 
 };
 
 export const generateRecommendations = async (
-  input: RecommendationEngineInput
+  input: RecommendationEngineInput,
+  options?: {
+    onContext?: (context: Record<string, any>) => void;
+  }
 ): Promise<RecommendationEngineResult> => {
   await ensureCampaignCompanyLink(input.companyId, input.campaignId);
   const profile = await getProfile(input.companyId, { autoRefine: true });
   await getCampaignMemory({ companyId: input.companyId, campaignId: input.campaignId });
   const personaSummary = extractPersonaSummary(profile);
+
+  let campaignIntelligence: any | null = null;
+  let recentCampaignIntelligence: any[] = [];
+  try {
+    campaignIntelligence = await getCampaignIntelligence(input.campaignId);
+  } catch {
+    campaignIntelligence = null;
+  }
+
+  if (!campaignIntelligence) {
+    try {
+      recentCampaignIntelligence = await getRecentCampaignIntelligenceForCompany(
+        input.companyId,
+        3
+      );
+    } catch {
+      recentCampaignIntelligence = [];
+    }
+  }
+
+  const recommendationContext = {
+    campaign_intelligence: campaignIntelligence,
+    recent_campaign_intelligence: recentCampaignIntelligence,
+    selected_api_ids: Array.isArray(input.selectedApiIds) ? input.selectedApiIds : null,
+  };
+  void recommendationContext;
 
   const durationWeeks = input.durationWeeks ?? DEFAULT_DURATION_WEEKS;
   const objective = input.objective ?? 'awareness';
@@ -345,11 +380,19 @@ export const generateRecommendations = async (
   let rawSignals: TrendSignal[] = [];
   let missingEnvPlaceholders: string[] = [];
   try {
-    const externalSummary = await fetchExternalApis(input.companyId, pickProfileGeo(profile), pickProfileCategory(profile), {
-      recordHealth: true,
-      minReliability: 0.3,
-      userId: input.userId ?? null,
-    });
+    // External APIs are governed by Virality only; this is read-only consumption.
+    const externalSummary = await fetchExternalApis(
+      input.companyId,
+      pickProfileGeo(profile),
+      pickProfileCategory(profile),
+      {
+        recordHealth: true,
+        minReliability: 0.3,
+        userId: input.userId ?? null,
+        selectedApiIds: input.selectedApiIds ?? null,
+        feature: 'recommendations',
+      }
+    );
     const normalizedTrends = normalizeTrends(
       externalSummary.results.map((result) => ({
         source: result.source,
@@ -393,7 +436,11 @@ export const generateRecommendations = async (
       durationWeeks,
     });
     const enabledApis = await getEnabledApis(input.companyId);
-    const signalQuality = await getExternalApiRuntimeSnapshot(enabledApis.map((api) => api.id));
+    const runtimeApiIds =
+      Array.isArray(input.selectedApiIds) && input.selectedApiIds.length > 0
+        ? input.selectedApiIds
+        : enabledApis.map((api) => api.id);
+    const signalQuality = await getExternalApiRuntimeSnapshot(runtimeApiIds);
     const healthReport = getOmniVyraHealthReport();
     const lastMeta = getLastMeta();
     if (!isOmniVyraEnabled()) {
@@ -523,6 +570,55 @@ export const generateRecommendations = async (
   const sources = Array.from(
     new Set(trendsUsed.flatMap((trend) => trend.sources).filter(Boolean))
   );
+
+  const buildTrendReasoning = () => {
+    const currentTopics = (campaignIntelligence?.primary_topics || [])
+      .map((topic: string) => normalizeCampaignTopic(topic))
+      .filter(Boolean) as string[];
+    const recentTopics = (recentCampaignIntelligence || []).flatMap((item) =>
+      (item?.primary_topics || [])
+        .map((topic: string) => normalizeCampaignTopic(topic))
+        .filter(Boolean)
+    ) as string[];
+
+    const normalizedCurrent = new Set(currentTopics.map((topic) => topic.toLowerCase()));
+    const normalizedRecent = new Set(recentTopics.map((topic) => topic.toLowerCase()));
+
+    return trendsUsed.map((trend) => {
+      const topic = normalizeCampaignTopic(trend.topic);
+      if (!topic) return null;
+      const key = topic.toLowerCase();
+      const signals: string[] = [];
+      if (normalizedCurrent.has(key)) signals.push('topic_overlap_detected');
+      if (normalizedRecent.has(key)) signals.push('related_to_recent_campaign');
+      if (normalizedRecent.has(key) && !normalizedCurrent.has(key)) {
+        signals.push('possible_campaign_continuation');
+      }
+      if (!normalizedCurrent.has(key) && !normalizedRecent.has(key)) {
+        signals.push('novel_theme');
+      }
+      return {
+        topic: trend.topic,
+        normalized_topic: topic,
+        signals,
+      };
+    }).filter(Boolean);
+  };
+
+  try {
+    if (campaignIntelligence || (recentCampaignIntelligence || []).length > 0) {
+      recommendationContext.trend_reasoning = buildTrendReasoning();
+    }
+  } catch {
+    // Best-effort only; never block recommendations.
+  }
+  if (options?.onContext) {
+    try {
+      options.onContext(recommendationContext);
+    } catch {
+      // Best-effort only; never block recommendations.
+    }
+  }
 
   const plan = await generateCampaignStrategy({
     companyId: input.companyId,

@@ -5,6 +5,7 @@ import { optimizeCampaignWeek } from '../../../backend/services/campaignOptimiza
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { validateCampaignHealth } from '../../../backend/services/campaignHealthService';
 import { getLatestCampaignVersion, saveCampaignHealthReport } from '../../../backend/db/campaignVersionStore';
+import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { getLatestLearningInsights, getLatestAnalyticsReport } from '../../../backend/db/performanceStore';
 import { sendLearningSnapshot } from '../../../backend/services/omnivyraFeedbackService';
@@ -68,10 +69,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const learningInsights = await getLatestLearningInsights(companyId, campaignId);
     const analyticsReport = await getLatestAnalyticsReport(companyId, campaignId);
-    const latestVersion = await getLatestCampaignVersion(companyId, campaignId);
+    const latestVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
     if (!latestVersion?.campaign_snapshot) {
       return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
     }
+    console.debug('Approved strategy used for optimization', {
+      campaignId,
+      companyId,
+      versionId: latestVersion?.id,
+      status: latestVersion?.status,
+    });
     const campaignObjective =
       latestVersion.campaign_snapshot?.campaign?.objective ??
       latestVersion.campaign_snapshot?.objective ??

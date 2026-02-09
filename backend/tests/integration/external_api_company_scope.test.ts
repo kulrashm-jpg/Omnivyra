@@ -10,8 +10,23 @@ jest.mock('../../services/userContextService', () => ({
   resolveUserContext: jest.fn(),
 }));
 
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn(),
+}));
+
+jest.mock('../../services/rbacService', () => ({
+  getUserRole: jest.fn(),
+  hasPermission: jest.fn(),
+  isPlatformSuperAdmin: jest.fn(),
+  isSuperAdmin: jest.fn(),
+}));
+
 const { supabase } = jest.requireMock('../../db/supabaseClient');
 const { resolveUserContext } = jest.requireMock('../../services/userContextService');
+const { getSupabaseUserFromRequest } = jest.requireMock('../../services/supabaseAuthService');
+const { getUserRole, hasPermission, isPlatformSuperAdmin, isSuperAdmin } = jest.requireMock(
+  '../../services/rbacService'
+);
 
 const sourcesStore = new Map<string, any>();
 
@@ -31,6 +46,7 @@ const buildQuery = (table: string) => {
       state.inFilter = { field, values };
       return query;
     }),
+    limit: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     single: jest.fn().mockReturnThis(),
     then: (resolve: any, reject: any) => {
@@ -50,6 +66,9 @@ const resolveQuery = (table: string, state: any) => {
   }
   if (table === 'external_api_user_access' || table === 'external_api_usage') {
     return { data: [], error: null };
+  }
+  if (table === 'campaign_versions') {
+    return { data: [{ id: 'v1' }], error: null };
   }
   return { data: [], error: null };
 };
@@ -71,6 +90,11 @@ describe('External API company scope', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
     (supabase.rpc as jest.Mock).mockResolvedValue({ data: true, error: null });
+    getSupabaseUserFromRequest.mockResolvedValue({ user: { id: 'user-1' }, error: null });
+    isPlatformSuperAdmin.mockResolvedValue(false);
+    isSuperAdmin.mockResolvedValue(false);
+    getUserRole.mockResolvedValue({ role: 'COMPANY_ADMIN', error: null });
+    hasPermission.mockReturnValue(true);
     sourcesStore.clear();
     (global as any).fetch = jest.fn().mockResolvedValue({
       ok: true,
@@ -104,7 +128,7 @@ describe('External API company scope', () => {
       created_at: new Date().toISOString(),
     });
 
-    const req = { method: 'GET' } as NextApiRequest;
+    const req = { method: 'GET', query: { companyId: 'company-a' }, headers: {} } as NextApiRequest;
     const res = createMockRes();
     await externalApisHandler(req, res);
     expect(res.statusCode).toBe(200);
@@ -205,7 +229,7 @@ describe('External API company scope', () => {
         })
           .then((value: any) => {
             expect(value.omnivyra_metadata?.placeholders).toContain('no_external_signals');
-            expect(value.confidence_score).toBe(30);
+            expect(value.confidence_score).toBe(35);
             resolve();
           })
           .catch(reject);

@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { ACTION_VIEW_ROLES, enforceActionRole, requireTenantScope } from './utils';
+import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/communityAiCapabilities';
+import { enforceActionRole, requireTenantScope } from './utils';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,7 +15,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     req,
     res,
     companyId: scope.organizationId,
-    allowedRoles: ACTION_VIEW_ROLES,
+    allowedRoles: [...COMMUNITY_AI_CAPABILITIES.VIEW_ACTIONS],
   });
   if (!roleGate) return;
 

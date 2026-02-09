@@ -3,6 +3,7 @@ import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
 import type { InfluencerCandidate, NetworkOpportunity } from '../../components/community-ai/types';
+import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 
 export default function CommunityAiNetwork() {
   const { selectedCompanyId } = useCompanyContext();
@@ -22,7 +23,7 @@ export default function CommunityAiNetwork() {
       setIsLoading(true);
       setErrorMessage(null);
       try {
-        const response = await fetch(
+        const response = await fetchWithAuth(
           `/api/community-ai/network?tenant_id=${encodeURIComponent(
             tenantId
           )}&organization_id=${encodeURIComponent(tenantId)}`

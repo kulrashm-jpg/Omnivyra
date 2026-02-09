@@ -19,13 +19,15 @@ CREATE INDEX IF NOT EXISTS idx_community_ai_action_logs_event_type
 
 DO $$
 BEGIN
-  IF NOT EXISTS (
+  IF EXISTS (
     SELECT 1
     FROM pg_constraint
     WHERE conname = 'community_ai_action_logs_event_type_check'
   ) THEN
     ALTER TABLE community_ai_action_logs
-      ADD CONSTRAINT community_ai_action_logs_event_type_check
-      CHECK (event_type IN ('approved', 'executed', 'failed', 'skipped', 'scheduled'));
+      DROP CONSTRAINT community_ai_action_logs_event_type_check;
   END IF;
+  ALTER TABLE community_ai_action_logs
+    ADD CONSTRAINT community_ai_action_logs_event_type_check
+    CHECK (event_type IN ('approved', 'executed', 'failed', 'skipped', 'scheduled', 'auto_executed'));
 END $$;

@@ -6,7 +6,7 @@
 -- ==============================================
 
 -- Users Table
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
@@ -33,11 +33,12 @@ CREATE TABLE social_accounts (
 );
 
 -- Campaigns Table
-CREATE TABLE campaigns (
+CREATE TABLE IF NOT EXISTS campaigns (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     description TEXT,
+    virality_playbook_id UUID REFERENCES virality_playbooks(id) ON DELETE SET NULL,
     start_date DATE,
     end_date DATE,
     status VARCHAR(50) DEFAULT 'draft', -- 'draft', 'active', 'paused', 'completed'

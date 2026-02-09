@@ -6,6 +6,7 @@ import {
   Role,
   getUserRole,
   hasPermission,
+  isPlatformSuperAdmin,
   isSuperAdmin,
 } from '../../../backend/services/rbacService';
 
@@ -20,8 +21,17 @@ const requireCompanyRole = async (
     res.status(400).json({ error: 'companyId required' });
     return null;
   }
-  const superAdmin = await isSuperAdmin(userId);
-  if (superAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
+  const platformAdmin = await isPlatformSuperAdmin(userId);
+  if (platformAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
+    return { userId, role: Role.SUPER_ADMIN };
+  }
+  const legacyAdmin = await isSuperAdmin(userId);
+  if (legacyAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
+    console.debug('SUPER_ADMIN_FALLBACK', {
+      path: req.url,
+      userId,
+      source: 'rbacService.isSuperAdmin',
+    });
     return { userId, role: Role.SUPER_ADMIN };
   }
   const { role, error } = await getUserRole(userId, companyId);
@@ -62,6 +72,42 @@ if (supabaseUrl && supabaseKey) {
     key: supabaseKey ? 'set' : 'missing'
   });
 }
+
+const validatePlaybookReference = async (playbookId: string, companyId: string) => {
+  if (!supabase) {
+    return { ok: false, error: 'Server configuration error' };
+  }
+  const { data, error } = await supabase
+    .from('virality_playbooks')
+    .select('id, company_id, status')
+    .eq('id', playbookId)
+    .single();
+  if (error || !data) {
+    return { ok: false, error: 'INVALID_PLAYBOOK_REFERENCE' };
+  }
+  if (data.company_id !== companyId) {
+    return { ok: false, error: 'INVALID_PLAYBOOK_REFERENCE' };
+  }
+  return { ok: true, error: null };
+};
+
+const mapCampaignPlaybook = (campaign: any) => ({
+  ...campaign,
+  // Playbooks are informational only:
+  // - Do NOT drive scheduling
+  // - Do NOT alter publishing logic
+  // - Do NOT affect approvals
+  // - Do NOT affect content generation
+  playbook: campaign.virality_playbooks
+    ? {
+        id: campaign.virality_playbooks.id,
+        name: campaign.virality_playbooks.name,
+        objective: campaign.virality_playbooks.objective,
+        platforms: campaign.virality_playbooks.platforms,
+        content_types: campaign.virality_playbooks.content_types,
+      }
+    : null,
+});
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
@@ -151,13 +197,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       console.log('Received campaign data:', campaignData);
       
       // Add required user_id field for development and map field names
-      const { startDate, endDate, goals, ...campaignDataWithoutCamelCase } = campaignData;
+      const {
+        startDate,
+        endDate,
+        goals,
+        virality_playbook_id,
+        viralityPlaybookId,
+        playbook,
+        api_inputs,
+        ...campaignDataWithoutCamelCase
+      } = campaignData;
+      // Ensure playbook is reference-only: ignore any playbook payload fields.
+      const resolvedPlaybookId = virality_playbook_id || viralityPlaybookId || null;
+      if (resolvedPlaybookId) {
+        const validation = await validatePlaybookReference(resolvedPlaybookId, companyId);
+        if (!validation.ok) {
+          return res.status(400).json({ error: 'INVALID_PLAYBOOK_REFERENCE' });
+        }
+      }
       const campaignDataWithUser = {
         ...campaignDataWithoutCamelCase,
         user_id: requester.id,
         start_date: startDate, // Map camelCase to snake_case
         end_date: endDate, // Map camelCase to snake_case
         status: 'pending_approval',
+        // Playbook reference only. It does NOT affect scheduling, publishing,
+        // approvals, or content generation. Campaign behavior remains unchanged.
+        virality_playbook_id: resolvedPlaybookId,
       };
 
       console.log('Processed campaign data for database:', campaignDataWithUser);
@@ -240,15 +306,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const { data: campaign, error } = await supabase
         .from('campaigns')
-        .select('*')
+        .select(
+          `*,
+           virality_playbooks(id, name, objective, platforms, content_types, company_id)`
+        )
         .eq('id', campaignId)
+        .or(`virality_playbook_id.is.null,virality_playbooks.company_id.eq.${companyId}`)
         .single();
 
       if (error) {
         return res.status(200).json({ campaign: null });
       }
-
-      return res.status(200).json({ campaign });
+      return res.status(200).json({ campaign: mapCampaignPlaybook(campaign) });
     } else if (type === 'goals' && campaignId) {
       // Validate Supabase configuration
       if (!supabase) {
@@ -312,8 +381,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
         const result = await supabase
           .from('campaigns')
-          .select('*')
+          .select(
+            `*,
+             virality_playbooks(id, name, objective, platforms, content_types, company_id)`
+          )
           .in('id', ids)
+          .or(`virality_playbook_id.is.null,virality_playbooks.company_id.eq.${companyId}`)
           .order('created_at', { ascending: false });
         campaigns = result.data;
         error = result.error;
@@ -348,7 +421,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       
       return res.status(200).json({ 
         success: true,
-        campaigns: campaigns || []
+        campaigns: (campaigns || []).map(mapCampaignPlaybook)
       });
     }
   } catch (error) {

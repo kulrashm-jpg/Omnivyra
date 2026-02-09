@@ -1,9 +1,15 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { savePlatformConfig } from '../../../../backend/services/externalApiService';
+import { saveTenantPlatformConfig } from '../../../../backend/services/externalApiService';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
-import { Role } from '../../../../backend/services/rbacService';
-import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import {
+  getUserRole,
+  hasPermission,
+  isPlatformSuperAdmin,
+  isSuperAdmin,
+} from '../../../../backend/services/rbacService';
+import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
@@ -15,7 +21,50 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const adminUser = await resolveUserContext(req);
+  const legacySession = getLegacySuperAdminSession(req);
+  const { user, error: userError } = legacySession
+    ? { user: { id: legacySession.userId }, error: null }
+    : await getSupabaseUserFromRequest(req);
+  if (userError || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+  const { defaultCompanyId } = await resolveUserContext(req);
+  const platformScopeRequested = req.query?.scope === 'platform';
+  const companyId =
+    (req.query.companyId as string | undefined) ||
+    (req.body?.companyId as string | undefined) ||
+    (platformScopeRequested ? undefined : defaultCompanyId);
+  if (!companyId && !platformScopeRequested) {
+    return res.status(400).json({ error: 'companyId required' });
+  }
+  let canManageExternalApis = false;
+  if (legacySession) {
+    canManageExternalApis = true;
+  } else {
+    const platformAdmin = await isPlatformSuperAdmin(user.id);
+    if (platformAdmin) {
+      canManageExternalApis = true;
+    } else if (await isSuperAdmin(user.id)) {
+      console.debug('SUPER_ADMIN_FALLBACK', {
+        path: req.url,
+        userId: user.id,
+        source: 'rbacService.isSuperAdmin',
+      });
+      canManageExternalApis = true;
+    } else {
+      if (!companyId) {
+        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      }
+      const { role, error: roleError } = await getUserRole(user.id, companyId);
+      if (roleError || !role || !hasPermission(role, 'MANAGE_EXTERNAL_APIS')) {
+        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      }
+      canManageExternalApis = true;
+    }
+  }
+  if (!canManageExternalApis) {
+    return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+  }
 
   const { status, rejection_reason } = req.body || {};
   if (!['approved', 'rejected', 'pending'].includes(String(status || ''))) {
@@ -34,7 +83,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (status === 'approved') {
     if (requestRow.status !== 'approved') {
-      await savePlatformConfig({
+      const tenantCompanyId = requestRow.company_id || companyId;
+      if (!tenantCompanyId) {
+        return res.status(400).json({ error: 'companyId required' });
+      }
+      await saveTenantPlatformConfig({
         name: requestRow.name,
         base_url: requestRow.base_url,
         purpose: requestRow.purpose,
@@ -52,6 +105,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         required_metadata: requestRow.required_metadata || {},
         posting_constraints: requestRow.posting_constraints || {},
         requires_admin: requestRow.requires_admin ?? true,
+        company_id: tenantCompanyId,
       });
     }
 
@@ -59,7 +113,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .from('external_api_source_requests')
       .update({
         status: 'approved',
-        approved_by_user_id: adminUser.userId,
+        approved_by_user_id: user.id,
         approved_at: new Date().toISOString(),
       })
       .eq('id', id);
@@ -74,7 +128,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .from('external_api_source_requests')
     .update({
       status,
-      approved_by_user_id: adminUser.userId,
+      approved_by_user_id: user.id,
       approved_at: new Date().toISOString(),
       rejection_reason: status === 'rejected' ? rejection_reason || null : null,
       rejected_at: status === 'rejected' ? new Date().toISOString() : null,
@@ -88,4 +142,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ status });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default handler;

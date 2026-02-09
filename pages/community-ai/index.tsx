@@ -4,6 +4,7 @@ import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
 import type { BrandProfile } from '../../components/community-ai/types';
+import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 
 type DashboardResponse = {
   priority_items: {
@@ -101,6 +102,32 @@ type AnomalyItem = {
   reason: string;
 };
 
+type ForecastItem = {
+  date: string;
+  platform: string;
+  content_type: string;
+  predicted_likes: number;
+  predicted_comments: number;
+  predicted_shares: number;
+  predicted_views: number;
+  confidence_level: number;
+};
+
+type ForecastRisk = {
+  platform: string;
+  content_type: string;
+  reason: string;
+  severity: 'low' | 'medium' | 'high';
+};
+
+type WebhookItem = {
+  id: string;
+  event_type: string;
+  webhook_url: string;
+  is_active: boolean;
+  created_at: string;
+};
+
 export default function CommunityAiHome() {
   const { selectedCompanyId } = useCompanyContext();
   const tenantId = selectedCompanyId || '';
@@ -120,11 +147,27 @@ export default function CommunityAiHome() {
   const [contentKpis, setContentKpis] = useState<ContentKpiResponse | null>(null);
   const [trends, setTrends] = useState<TrendItem[]>([]);
   const [anomalies, setAnomalies] = useState<AnomalyItem[]>([]);
+  const [forecast, setForecast] = useState<ForecastItem[]>([]);
+  const [forecastRisks, setForecastRisks] = useState<ForecastRisk[]>([]);
+  const [insights, setInsights] = useState<{
+    summary_insight: string;
+    key_findings: any[];
+    recommended_actions: any[];
+    risks: any;
+    confidence_level: number;
+  } | null>(null);
+  const [showInsightDetails, setShowInsightDetails] = useState(false);
+  const [webhooks, setWebhooks] = useState<WebhookItem[]>([]);
+  const [canManageWebhooks, setCanManageWebhooks] = useState(false);
+  const [webhookEventType, setWebhookEventType] = useState('failed');
+  const [webhookUrl, setWebhookUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [kpisLoading, setKpisLoading] = useState(false);
   const [trendsLoading, setTrendsLoading] = useState(false);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [webhookLoading, setWebhookLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const context = useMemo(
@@ -138,8 +181,25 @@ export default function CommunityAiHome() {
       content_kpis: contentKpis,
       trends,
       anomalies,
+      forecast,
+      forecast_risks: forecastRisks,
+      webhooks,
+      insights,
     }),
-    [tenantId, profile, dashboard, metrics, notifications, contentKpis, trends, anomalies]
+    [
+      tenantId,
+      profile,
+      dashboard,
+      metrics,
+      notifications,
+      contentKpis,
+      trends,
+      anomalies,
+      forecast,
+      forecastRisks,
+      webhooks,
+      insights,
+    ]
   );
 
   useEffect(() => {
@@ -151,7 +211,7 @@ export default function CommunityAiHome() {
       setIsLoading(true);
       setErrorMessage(null);
       try {
-        const response = await fetch(
+        const response = await fetchWithAuth(
           `/api/community-ai/dashboard?tenant_id=${encodeURIComponent(
             tenantId
           )}&organization_id=${encodeURIComponent(tenantId)}`
@@ -180,7 +240,7 @@ export default function CommunityAiHome() {
       setMetricsLoading(true);
       setErrorMessage(null);
       try {
-        const response = await fetch(
+        const response = await fetchWithAuth(
           `/api/community-ai/metrics?tenant_id=${encodeURIComponent(
             tenantId
           )}&organization_id=${encodeURIComponent(tenantId)}`
@@ -209,7 +269,7 @@ export default function CommunityAiHome() {
       setNotificationsLoading(true);
       setErrorMessage(null);
       try {
-        const response = await fetch(
+        const response = await fetchWithAuth(
           `/api/community-ai/notifications?tenant_id=${encodeURIComponent(
             tenantId
           )}&organization_id=${encodeURIComponent(tenantId)}`
@@ -238,7 +298,7 @@ export default function CommunityAiHome() {
       setKpisLoading(true);
       setErrorMessage(null);
       try {
-        const response = await fetch(
+        const response = await fetchWithAuth(
           `/api/community-ai/content-kpis?tenant_id=${encodeURIComponent(
             tenantId
           )}&organization_id=${encodeURIComponent(tenantId)}`
@@ -268,7 +328,7 @@ export default function CommunityAiHome() {
       setTrendsLoading(true);
       setErrorMessage(null);
       try {
-        const response = await fetch(
+        const response = await fetchWithAuth(
           `/api/community-ai/trends?tenant_id=${encodeURIComponent(
             tenantId
           )}&organization_id=${encodeURIComponent(tenantId)}`
@@ -288,6 +348,237 @@ export default function CommunityAiHome() {
     };
     loadTrends();
   }, [tenantId]);
+
+  useEffect(() => {
+    const loadForecast = async () => {
+      if (!tenantId) {
+        setForecast([]);
+        setForecastRisks([]);
+        return;
+      }
+      setForecastLoading(true);
+      setErrorMessage(null);
+      try {
+        const response = await fetchWithAuth(
+          `/api/community-ai/forecast?tenant_id=${encodeURIComponent(
+            tenantId
+          )}&organization_id=${encodeURIComponent(tenantId)}`
+        );
+        if (!response.ok) {
+          const data = await response.json().catch(() => null);
+          throw new Error(data?.error || 'Failed to load forecast');
+        }
+        const data = await response.json();
+        setForecast(data?.forecast || []);
+        setForecastRisks(data?.risk_flags || []);
+      } catch (error: any) {
+        setErrorMessage(error?.message || 'Failed to load forecast');
+      } finally {
+        setForecastLoading(false);
+      }
+    };
+    loadForecast();
+  }, [tenantId]);
+
+  useEffect(() => {
+    const loadInsights = async () => {
+      if (!tenantId) {
+        setInsights(null);
+        return;
+      }
+      try {
+        const response = await fetchWithAuth(
+          `/api/community-ai/insights?tenant_id=${encodeURIComponent(
+            tenantId
+          )}&organization_id=${encodeURIComponent(tenantId)}`
+        );
+        if (!response.ok) {
+          const data = await response.json().catch(() => null);
+          throw new Error(data?.error || 'Failed to load insights');
+        }
+        const data = await response.json();
+        setInsights(data);
+      } catch (error: any) {
+        setErrorMessage(error?.message || 'Failed to load insights');
+      }
+    };
+    loadInsights();
+  }, [tenantId]);
+
+  const handleExport = async (format: 'pdf' | 'csv') => {
+    if (!tenantId) return;
+    try {
+      const response = await fetchWithAuth(
+        `/api/community-ai/export?tenant_id=${encodeURIComponent(
+          tenantId
+        )}&organization_id=${encodeURIComponent(tenantId)}&type=full-report&format=${format}`
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || 'Failed to export report');
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || `community-ai-report.${format}`;
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      setErrorMessage(error?.message || 'Failed to export report');
+    }
+  };
+
+  const forecastPreview = useMemo(() => {
+    const grouped = new Map<string, ForecastItem[]>();
+    forecast.forEach((item) => {
+      const key = `${item.platform}::${item.content_type}`;
+      const bucket = grouped.get(key) || [];
+      bucket.push(item);
+      grouped.set(key, bucket);
+    });
+    const previews = Array.from(grouped.values()).map((items) => {
+      const sorted = items.slice().sort((a, b) => a.date.localeCompare(b.date));
+      const first = sorted[0];
+      const last = sorted[sorted.length - 1];
+      const total = (entry: ForecastItem) =>
+        entry.predicted_likes + entry.predicted_comments + entry.predicted_shares + entry.predicted_views;
+      const delta = total(last) - total(first);
+      return {
+        platform: first.platform,
+        content_type: first.content_type,
+        predicted_total: total(last),
+        trend: delta > 5 ? 'up' : delta < -5 ? 'down' : 'flat',
+        confidence: last.confidence_level,
+      };
+    });
+    return previews;
+  }, [forecast]);
+
+  const forecastRiskMap = useMemo(() => {
+    const severityRank: Record<string, number> = { low: 1, medium: 2, high: 3 };
+    const map = new Map<string, ForecastRisk>();
+    forecastRisks.forEach((risk) => {
+      const key = `${risk.platform}::${risk.content_type}`;
+      const existing = map.get(key);
+      if (!existing || severityRank[risk.severity] > severityRank[existing.severity]) {
+        map.set(key, risk);
+      }
+    });
+    return map;
+  }, [forecastRisks]);
+
+  const loadWebhooks = async () => {
+    if (!tenantId) {
+      setWebhooks([]);
+      setCanManageWebhooks(false);
+      return;
+    }
+    setWebhookLoading(true);
+    try {
+      const response = await fetchWithAuth(
+        `/api/community-ai/webhooks?tenant_id=${encodeURIComponent(
+          tenantId
+        )}&organization_id=${encodeURIComponent(tenantId)}`
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || 'Failed to load webhooks');
+      }
+      const data = await response.json();
+      setWebhooks(data?.webhooks || []);
+      setCanManageWebhooks(!!data?.can_manage);
+    } catch (error: any) {
+      setErrorMessage(error?.message || 'Failed to load webhooks');
+    } finally {
+      setWebhookLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadWebhooks();
+  }, [tenantId]);
+
+  const handleAddWebhook = async () => {
+    if (!tenantId || !webhookUrl) return;
+    setWebhookLoading(true);
+    try {
+      const response = await fetchWithAuth('/api/community-ai/webhooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenant_id: tenantId,
+          organization_id: tenantId,
+          event_type: webhookEventType,
+          webhook_url: webhookUrl,
+        }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || 'Failed to add webhook');
+      }
+      setWebhookUrl('');
+      await loadWebhooks();
+    } catch (error: any) {
+      setErrorMessage(error?.message || 'Failed to add webhook');
+    } finally {
+      setWebhookLoading(false);
+    }
+  };
+
+  const handleToggleWebhook = async (id: string, isActive: boolean) => {
+    if (!tenantId) return;
+    setWebhookLoading(true);
+    try {
+      const response = await fetchWithAuth('/api/community-ai/webhooks', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenant_id: tenantId,
+          organization_id: tenantId,
+          id,
+          is_active: isActive,
+        }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || 'Failed to update webhook');
+      }
+      await loadWebhooks();
+    } catch (error: any) {
+      setErrorMessage(error?.message || 'Failed to update webhook');
+    } finally {
+      setWebhookLoading(false);
+    }
+  };
+
+  const handleDeleteWebhook = async (id: string) => {
+    if (!tenantId) return;
+    setWebhookLoading(true);
+    try {
+      const response = await fetchWithAuth('/api/community-ai/webhooks', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenant_id: tenantId,
+          organization_id: tenantId,
+          id,
+        }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || 'Failed to delete webhook');
+      }
+      await loadWebhooks();
+    } catch (error: any) {
+      setErrorMessage(error?.message || 'Failed to delete webhook');
+    } finally {
+      setWebhookLoading(false);
+    }
+  };
 
   const attentionCounts = useMemo(() => {
     const priority = dashboard?.priority_items;
@@ -310,6 +601,23 @@ export default function CommunityAiHome() {
       )}
 
       <SectionCard title="Monitoring & KPI Overview">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-sm text-gray-600">Operational KPIs</div>
+          <div className="flex gap-2">
+            <button
+              className="px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
+              onClick={() => handleExport('pdf')}
+            >
+              Export PDF
+            </button>
+            <button
+              className="px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
+              onClick={() => handleExport('csv')}
+            >
+              Export CSV
+            </button>
+          </div>
+        </div>
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 text-sm">
           <div className="border rounded-lg p-4">
             <div className="text-xs text-gray-500">Action Overview</div>
@@ -381,6 +689,9 @@ export default function CommunityAiHome() {
           >
             View Action Center
           </Link>
+          <a href="#webhook-settings" className="text-xs text-indigo-600">
+            Manage Webhooks
+          </a>
         </div>
         {notificationsLoading && <div className="text-sm text-gray-500">Loading...</div>}
         {!notificationsLoading && notifications.length === 0 && (
@@ -439,6 +750,54 @@ export default function CommunityAiHome() {
               <div className="text-xs text-gray-500">Avg engagement: {entry.avg_engagement}</div>
             </div>
           ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Engagement Forecast (Next 7 Days)">
+        {forecastLoading && <div className="text-sm text-gray-500">Loading...</div>}
+        {!forecastLoading && forecastPreview.length === 0 && (
+          <div className="text-sm text-gray-400">No forecast data yet.</div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+          {forecastPreview.slice(0, 6).map((entry) => {
+            const risk = forecastRiskMap.get(`${entry.platform}::${entry.content_type}`);
+            return (
+              <Link
+                key={`${entry.platform}-${entry.content_type}`}
+                href={{
+                  pathname: '/community-ai/forecast',
+                  query: tenantId
+                    ? { platform: entry.platform, tenant_id: tenantId, organization_id: tenantId }
+                    : { platform: entry.platform },
+                }}
+                className="border rounded-lg p-4 hover:border-indigo-300 transition-colors"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold text-gray-900">{entry.platform}</div>
+                  <div className="text-xs text-gray-500">{entry.content_type}</div>
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  Predicted engagement: {Math.round(entry.predicted_total)}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
+                  <span>{entry.trend === 'up' ? '↑' : entry.trend === 'down' ? '↓' : '→'}</span>
+                  <span>Confidence: {entry.confidence}</span>
+                  {risk && (
+                    <span
+                      className={`px-2 py-0.5 rounded-full border ${
+                        risk.severity === 'high'
+                          ? 'border-red-200 text-red-600 bg-red-50'
+                          : 'border-amber-200 text-amber-600 bg-amber-50'
+                      }`}
+                      title={risk.reason}
+                    >
+                      {risk.severity} risk
+                    </span>
+                  )}
+                </div>
+              </Link>
+            );
+          })}
         </div>
       </SectionCard>
 
@@ -509,6 +868,161 @@ export default function CommunityAiHome() {
                 </div>
               </div>
             ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="AI Insights">
+        {!insights && <div className="text-sm text-gray-400">No insights yet.</div>}
+        {insights && (
+          <div className="space-y-2 text-sm">
+            <div className="text-gray-700">{insights.summary_insight || '—'}</div>
+            <div className="text-xs text-gray-500">Confidence: {insights.confidence_level}</div>
+            <div className="space-y-1">
+              {(insights.key_findings || []).slice(0, 3).map((item, index) => (
+                <div key={`finding-${index}`} className="text-xs text-gray-600">
+                  • {typeof item === 'string' ? item : JSON.stringify(item)}
+                </div>
+              ))}
+            </div>
+            <div className="space-y-1">
+              {(insights.recommended_actions || []).slice(0, 3).map((item, index) => (
+                <div key={`action-${index}`} className="text-xs text-gray-600">
+                  • {typeof item === 'string' ? item : JSON.stringify(item)}
+                </div>
+              ))}
+            </div>
+            <button
+              className="text-xs text-indigo-600"
+              onClick={() => setShowInsightDetails(true)}
+            >
+              View Details
+            </button>
+          </div>
+        )}
+      </SectionCard>
+      {showInsightDetails && insights && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-semibold">AI Insights</h3>
+              <button
+                className="text-sm text-gray-500"
+                onClick={() => setShowInsightDetails(false)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="space-y-4 text-sm">
+              <div>
+                <div className="text-xs text-gray-500">Summary Insight</div>
+                <div className="text-gray-700">{insights.summary_insight || '—'}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Key Findings</div>
+                <ul className="list-disc list-inside text-gray-700">
+                  {(insights.key_findings || []).map((item, index) => (
+                    <li key={`modal-finding-${index}`}>
+                      {typeof item === 'string' ? item : JSON.stringify(item)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Recommended Actions</div>
+                <ul className="list-disc list-inside text-gray-700">
+                  {(insights.recommended_actions || []).map((item, index) => (
+                    <li key={`modal-action-${index}`}>
+                      {typeof item === 'string' ? item : JSON.stringify(item)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              {insights.risks ? (
+                <div>
+                  <div className="text-xs text-gray-500">Risks</div>
+                  <div className="text-gray-700">
+                    {typeof insights.risks === 'string'
+                      ? insights.risks
+                      : JSON.stringify(insights.risks)}
+                  </div>
+                </div>
+              ) : null}
+              <div>
+                <div className="text-xs text-gray-500">Confidence Level</div>
+                <div className="text-gray-700">{insights.confidence_level}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <SectionCard title="Webhook Integrations" subtitle="Manage external notifications">
+        <div id="webhook-settings" className="space-y-3 text-sm">
+          {webhookLoading && <div className="text-sm text-gray-500">Loading...</div>}
+          {!webhookLoading && webhooks.length === 0 && (
+            <div className="text-sm text-gray-400">No webhooks configured.</div>
+          )}
+          <div className="space-y-2">
+            {webhooks.map((hook) => (
+              <div key={hook.id} className="border rounded-lg p-3 flex items-center justify-between">
+                <div>
+                  <div className="text-xs text-gray-500">{hook.event_type}</div>
+                  <div className="text-sm text-gray-800">{hook.webhook_url}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="text-xs text-indigo-600"
+                    disabled={!canManageWebhooks || webhookLoading}
+                    onClick={() => handleToggleWebhook(hook.id, !hook.is_active)}
+                  >
+                    {hook.is_active ? 'Disable' : 'Enable'}
+                  </button>
+                  <button
+                    className="text-xs text-red-600"
+                    disabled={!canManageWebhooks || webhookLoading}
+                    onClick={() => handleDeleteWebhook(hook.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {canManageWebhooks && (
+            <div className="border rounded-lg p-3 space-y-2">
+              <div className="text-xs text-gray-500">Add webhook</div>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  value={webhookEventType}
+                  onChange={(event) => setWebhookEventType(event.target.value)}
+                  className="border rounded px-2 py-1 text-xs"
+                >
+                  <option value="failed">failed</option>
+                  <option value="high_risk_pending">high_risk_pending</option>
+                  <option value="anomaly">anomaly</option>
+                  <option value="executed">executed</option>
+                </select>
+                <input
+                  className="border rounded px-2 py-1 text-xs flex-1"
+                  placeholder="https://hooks.example.com/..."
+                  value={webhookUrl}
+                  onChange={(event) => setWebhookUrl(event.target.value)}
+                />
+                <button
+                  className="px-3 py-1 text-xs rounded bg-indigo-600 text-white"
+                  onClick={handleAddWebhook}
+                  disabled={webhookLoading || !webhookUrl}
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          )}
+          {!canManageWebhooks && (
+            <div className="text-xs text-gray-400">
+              You do not have permission to manage webhooks.
+            </div>
+          )}
         </div>
       </SectionCard>
 

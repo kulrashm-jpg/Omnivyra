@@ -59,6 +59,31 @@ export default function CampaignPlanning() {
   const [showWeeklyRefinement, setShowWeeklyRefinement] = useState(false);
   const [hasExistingPlan, setHasExistingPlan] = useState(false);
   const [planDescription, setPlanDescription] = useState('');
+  const [strategyStatus, setStrategyStatus] = useState<string | null>(null);
+  const [isStrategyStatusLoading, setIsStrategyStatusLoading] = useState(false);
+  const [reapprovalStatus, setReapprovalStatus] = useState<{
+    status: 'none' | 'reapproval_required';
+    proposed_version: string | null;
+    approved_version: string | null;
+    proposed_created_at: string | null;
+  } | null>(null);
+  const [aiImprovements, setAiImprovements] = useState<any[]>([]);
+  const [isAiImprovementsLoading, setIsAiImprovementsLoading] = useState(false);
+  const [aiImprovementsError, setAiImprovementsError] = useState<string | null>(null);
+  const [aiSuggestionContext, setAiSuggestionContext] = useState<any | null>(null);
+  const [expandedSuggestionIds, setExpandedSuggestionIds] = useState<Set<string>>(new Set());
+  const [selectedSuggestionIds, setSelectedSuggestionIds] = useState<Set<string>>(new Set());
+  const [isRevisingStrategy, setIsRevisingStrategy] = useState(false);
+  const [reviseError, setReviseError] = useState<string | null>(null);
+  const [recommendationContext, setRecommendationContext] = useState<any | null>(null);
+  const [recommendationHash, setRecommendationHash] = useState<string | null>(null);
+  const [alignedPreview, setAlignedPreview] = useState<any | null>(null);
+  const [alignedPreviewError, setAlignedPreviewError] = useState<string | null>(null);
+
+  const isStrategyLocked = strategyStatus === 'approved';
+  const isStrategyProposed = strategyStatus === 'proposed';
+  const isDraftMode =
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'draft';
 
   // Initialize campaign from URL params or load existing campaign
   useEffect(() => {
@@ -69,7 +94,49 @@ export default function CampaignPlanning() {
     const urlParams = new URLSearchParams(window.location.search);
     const mode = urlParams.get('mode');
     const existingCampaignId = urlParams.get('campaignId');
+    const context = urlParams.get('context');
+    const hash = urlParams.get('hash');
+    const draftMode = mode === 'draft';
     console.log('URL params:', { mode, existingCampaignId, search: window.location.search });
+
+    if (context === 'recommendation' && hash) {
+      const stored = window.sessionStorage.getItem(`recommendation_plan_context_${hash}`);
+      const previewStored = window.sessionStorage.getItem(`recommendation_preview_${hash}`);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          setRecommendationContext(parsed?.recommendation_context || null);
+          setRecommendationHash(hash);
+        } catch {
+          setRecommendationContext(null);
+          setRecommendationHash(hash);
+        }
+      } else {
+        setRecommendationContext(null);
+        setRecommendationHash(hash);
+      }
+      if (previewStored) {
+        try {
+          const parsedPreview = JSON.parse(previewStored);
+          if (
+            parsedPreview &&
+            !parsedPreview.frequency_plan &&
+            parsedPreview.content_frequency &&
+            typeof parsedPreview.content_frequency === 'object'
+          ) {
+            parsedPreview.frequency_plan = parsedPreview.content_frequency;
+          }
+          setAlignedPreview(parsedPreview);
+        } catch {
+          setAlignedPreview(null);
+        }
+      } else {
+        setAlignedPreview(null);
+      }
+      if (draftMode) {
+        setIsLoading(false);
+      }
+    }
 
     if (mode === 'create') {
       console.log('Create mode - starting fresh campaign');
@@ -107,6 +174,29 @@ export default function CampaignPlanning() {
       loadExistingCampaign();
     }
   }, []);
+
+  useEffect(() => {
+    if (!campaignId) {
+      setStrategyStatus(null);
+      setReapprovalStatus(null);
+      return;
+    }
+    fetchStrategyStatus(campaignId);
+    fetchReapprovalStatus(campaignId);
+  }, [campaignId]);
+
+  useEffect(() => {
+    if (strategyStatus === 'approved' && campaignId) {
+      fetchAiImprovements(campaignId);
+    } else {
+      setAiImprovements([]);
+      setAiImprovementsError(null);
+      setAiSuggestionContext(null);
+      setExpandedSuggestionIds(new Set());
+      setSelectedSuggestionIds(new Set());
+      setReviseError(null);
+    }
+  }, [strategyStatus, campaignId]);
 
   // Initialize AI chat state based on URL params
   useEffect(() => {
@@ -160,6 +250,10 @@ export default function CampaignPlanning() {
   };
 
   const generate12WeekPlan = async () => {
+    if (isStrategyLocked) {
+      alert('Strategy approved. Editing locked by Company Admin.');
+      return;
+    }
     if (!campaignId) {
       alert('Please create a campaign first');
       return;
@@ -223,6 +317,166 @@ export default function CampaignPlanning() {
       console.error('Error checking existing plan:', error);
       setHasExistingPlan(false);
       setPlanDescription('');
+    }
+  };
+
+  const fetchStrategyStatus = async (id: string) => {
+    setIsStrategyStatusLoading(true);
+    try {
+      const response = await fetch(`/api/campaigns/${id}/strategy-status`);
+      if (!response.ok) {
+        setStrategyStatus(null);
+        return;
+      }
+      const data = await response.json();
+      setStrategyStatus(data?.status ?? null);
+    } catch (error) {
+      console.error('Error loading strategy status:', error);
+      setStrategyStatus(null);
+    } finally {
+      setIsStrategyStatusLoading(false);
+    }
+  };
+
+  const fetchReapprovalStatus = async (id: string) => {
+    try {
+      const response = await fetch(`/api/campaigns/${id}/reapproval-status`);
+      if (!response.ok) {
+        setReapprovalStatus(null);
+        return;
+      }
+      const data = await response.json();
+      setReapprovalStatus(data);
+    } catch (error) {
+      console.error('Error loading reapproval status:', error);
+      setReapprovalStatus(null);
+    }
+  };
+
+  const fetchAiImprovements = async (id: string) => {
+    setIsAiImprovementsLoading(true);
+    setAiImprovementsError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${id}/ai-improvements`);
+      if (!response.ok) {
+        setAiImprovements([]);
+        setAiImprovementsError('Failed to load AI suggestions.');
+        setAiSuggestionContext(null);
+        return;
+      }
+      const data = await response.json();
+      setAiImprovements(Array.isArray(data?.improvements) ? data.improvements : []);
+      setAiSuggestionContext(data?.context ?? null);
+    } catch (error) {
+      console.error('Error loading AI suggestions:', error);
+      setAiImprovements([]);
+      setAiImprovementsError('Failed to load AI suggestions.');
+      setAiSuggestionContext(null);
+    } finally {
+      setIsAiImprovementsLoading(false);
+    }
+  };
+
+  const toggleSuggestionDetails = (id: string) => {
+    setExpandedSuggestionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSuggestionSelection = (id: string) => {
+    setSelectedSuggestionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const reviseStrategyFromSuggestions = async () => {
+    if (!campaignId) return;
+    if (selectedSuggestionIds.size === 0) {
+      alert('Select at least one suggestion to revise the strategy.');
+      return;
+    }
+    setIsRevisingStrategy(true);
+    setReviseError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/revise-strategy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          selected_improvement_ids: Array.from(selectedSuggestionIds),
+        }),
+      });
+      if (!response.ok) {
+        setReviseError('Failed to revise strategy.');
+        return;
+      }
+      setSelectedSuggestionIds(new Set());
+      await fetchStrategyStatus(campaignId);
+      await fetchReapprovalStatus(campaignId);
+    } catch (error) {
+      console.error('Error revising strategy:', error);
+      setReviseError('Failed to revise strategy.');
+    } finally {
+      setIsRevisingStrategy(false);
+    }
+  };
+
+  const regenerateAlignedPreview = async () => {
+    if (!alignedPreview?.recommendation_id) return;
+    try {
+      setAlignedPreviewError(null);
+      const response = await fetch(
+        `/api/recommendations/${alignedPreview.recommendation_id}/preview-strategy`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            preview_overrides: {
+              platform_mix: alignedPreview.platform_mix ?? [],
+              content_mix: alignedPreview.content_mix ?? [],
+              frequency_plan:
+                alignedPreview.frequency_plan ??
+                alignedPreview.content_frequency ??
+                {},
+              reuse_plan: alignedPreview.reuse_plan ?? [],
+              narrative_direction: alignedPreview.narrative_direction ?? '',
+            },
+          }),
+        }
+      );
+      if (!response.ok) {
+        throw new Error('Failed to regenerate preview');
+      }
+      const data = await response.json();
+      if (data?.preview) {
+        const updated = {
+          ...data.preview,
+          recommendation_id: alignedPreview.recommendation_id,
+          snapshot_hash: alignedPreview.snapshot_hash,
+          content_frequency: data?.content_frequency ?? alignedPreview.content_frequency,
+        };
+        setAlignedPreview(updated);
+        if (typeof window !== 'undefined' && alignedPreview.snapshot_hash) {
+          window.sessionStorage.setItem(
+            `recommendation_preview_${alignedPreview.snapshot_hash}`,
+            JSON.stringify(updated)
+          );
+        }
+      }
+    } catch (error) {
+      console.error('Error regenerating aligned preview:', error);
+      setAlignedPreviewError('Failed to regenerate preview.');
     }
   };
 
@@ -737,8 +991,8 @@ export default function CampaignPlanning() {
                           
                           <button 
                             onClick={generate12WeekPlan}
-                            disabled={isLoading}
-                            className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-md flex items-center gap-2"
+                            disabled={isLoading || isStrategyLocked || isStrategyStatusLoading}
+                            className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Calendar className="h-4 w-4" />
                             Generate 12-Week Plan
@@ -803,6 +1057,314 @@ export default function CampaignPlanning() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
+        {recommendationContext && (
+          <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900">
+            Generated from shortlisted recommendation.
+          </div>
+        )}
+        {typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).get('mode') === 'draft' && (
+            <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">
+              Draft created from High-Priority Recommendation — requires Company Admin approval.
+            </div>
+          )}
+        {reapprovalStatus?.status === 'reapproval_required' && (
+          <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">
+            Strategy updated after approval — Company Admin re-approval required.
+          </div>
+        )}
+        {isStrategyProposed && (
+          <div className="mb-6 rounded-xl border border-blue-300 bg-blue-50 px-4 py-3 text-blue-900">
+            Draft revision created — awaiting approval.
+          </div>
+        )}
+        {recommendationContext && (
+          <div className="mb-6 rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-lg">
+            <h3 className="text-lg font-semibold text-gray-900 mb-3">
+              Recommendation Context
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
+              <div>
+                <div className="text-xs text-gray-500">Trend Topic</div>
+                <div className="font-medium text-gray-900">
+                  {recommendationContext.trend_topic || '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Confidence</div>
+                <div className="font-medium text-gray-900">
+                  {recommendationContext.confidence ?? '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Final Score</div>
+                <div className="font-medium text-gray-900">
+                  {recommendationContext.final_score ?? '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Platform Mix</div>
+                <div className="font-medium text-gray-900">
+                  {Array.isArray(recommendationContext.platforms)
+                    ? recommendationContext.platforms.join(', ')
+                    : '—'}
+                </div>
+              </div>
+              <div className="md:col-span-2">
+                <div className="text-xs text-gray-500">Audience</div>
+                <div className="font-medium text-gray-900 whitespace-pre-wrap">
+                  {recommendationContext.audience ? JSON.stringify(recommendationContext.audience) : '—'}
+                </div>
+              </div>
+              <div className="md:col-span-2">
+                <div className="text-xs text-gray-500">Scores</div>
+                <div className="font-medium text-gray-900 whitespace-pre-wrap">
+                  {recommendationContext.scores ? JSON.stringify(recommendationContext.scores) : '—'}
+                </div>
+              </div>
+            </div>
+            {recommendationHash && (
+              <div className="mt-3 text-xs text-gray-500">Snapshot: {recommendationHash}</div>
+            )}
+          </div>
+        )}
+        {isDraftMode && alignedPreview && (
+          <div className="mb-6 rounded-2xl border border-emerald-200 bg-white/90 p-6 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Aligned Strategy Inputs</h3>
+              <button
+                type="button"
+                onClick={regenerateAlignedPreview}
+                className="px-3 py-2 text-xs rounded-lg bg-emerald-600 text-white"
+              >
+                Regenerate 12-week plan using updated inputs
+              </button>
+            </div>
+            {alignedPreviewError && (
+              <div className="mb-3 text-sm text-red-600">{alignedPreviewError}</div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
+              <div className="md:col-span-2">
+                <label className="block text-xs text-gray-500">Platform Mix</label>
+                <input
+                  value={Array.isArray(alignedPreview.platform_mix) ? alignedPreview.platform_mix.join(', ') : ''}
+                  onChange={(event) =>
+                    setAlignedPreview((prev: any) => ({
+                      ...(prev || {}),
+                      platform_mix: event.target.value
+                        .split(',')
+                        .map((value) => value.trim())
+                        .filter(Boolean),
+                    }))
+                  }
+                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs text-gray-500">Content Mix</label>
+                <input
+                  value={Array.isArray(alignedPreview.content_mix) ? alignedPreview.content_mix.join(', ') : ''}
+                  onChange={(event) =>
+                    setAlignedPreview((prev: any) => ({
+                      ...(prev || {}),
+                      content_mix: event.target.value
+                        .split(',')
+                        .map((value) => value.trim())
+                        .filter(Boolean),
+                    }))
+                  }
+                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs text-gray-500">Weekly Frequency (JSON)</label>
+                <textarea
+                  value={
+                    alignedPreview.frequency_plan
+                      ? JSON.stringify(alignedPreview.frequency_plan, null, 2)
+                      : ''
+                  }
+                  onChange={(event) => {
+                    try {
+                      const next = event.target.value ? JSON.parse(event.target.value) : {};
+                      setAlignedPreview((prev: any) => ({
+                        ...(prev || {}),
+                        frequency_plan: next,
+                      }));
+                    } catch {
+                      // keep user input without updating parsed state
+                    }
+                  }}
+                  rows={4}
+                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs text-gray-500">Reuse Strategy</label>
+                <input
+                  value={Array.isArray(alignedPreview.reuse_plan) ? alignedPreview.reuse_plan.join(', ') : ''}
+                  onChange={(event) =>
+                    setAlignedPreview((prev: any) => ({
+                      ...(prev || {}),
+                      reuse_plan: event.target.value
+                        .split(',')
+                        .map((value) => value.trim())
+                        .filter(Boolean),
+                    }))
+                  }
+                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs text-gray-500">Narrative Direction</label>
+                <textarea
+                  value={alignedPreview.narrative_direction || ''}
+                  onChange={(event) =>
+                    setAlignedPreview((prev: any) => ({
+                      ...(prev || {}),
+                      narrative_direction: event.target.value,
+                    }))
+                  }
+                  rows={3}
+                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+        {isStrategyLocked && (
+          <div className="mb-6 space-y-4">
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900">
+              Strategy approved. Editing locked by Company Admin.
+            </div>
+            <div className="rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-lg">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  AI Suggestions (Read Only)
+                </h3>
+                <button
+                  type="button"
+                  onClick={reviseStrategyFromSuggestions}
+                  disabled={isRevisingStrategy || selectedSuggestionIds.size === 0}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isRevisingStrategy ? 'Revising...' : 'Revise Strategy Using Selected Suggestions'}
+                </button>
+              </div>
+              {reviseError && (
+                <div className="mb-3 text-sm text-red-600">{reviseError}</div>
+              )}
+              {isAiImprovementsLoading && (
+                <div className="text-sm text-gray-600">Loading AI suggestions...</div>
+              )}
+              {!isAiImprovementsLoading && aiImprovementsError && (
+                <div className="text-sm text-red-600">{aiImprovementsError}</div>
+              )}
+              {!isAiImprovementsLoading && !aiImprovementsError && aiImprovements.length === 0 && (
+                <div className="text-sm text-gray-600">No AI suggestions available.</div>
+              )}
+              {!isAiImprovementsLoading && !aiImprovementsError && aiImprovements.length > 0 && (
+                <div className="space-y-3">
+                  {aiImprovements.map((improvement) => (
+                    <div
+                      key={improvement.id}
+                      className="rounded-xl border border-gray-200 bg-white px-4 py-3"
+                    >
+                      <label className="flex items-center gap-2 text-sm text-gray-700 mb-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedSuggestionIds.has(improvement.id)}
+                          onChange={() => toggleSuggestionSelection(improvement.id)}
+                        />
+                        Select
+                      </label>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 mb-2">
+                        <span className="rounded-full bg-gray-100 px-2 py-1">
+                          {improvement.improvement_type}
+                        </span>
+                        {typeof improvement.impact_score === 'number' && (
+                          <span className="rounded-full bg-purple-100 px-2 py-1 text-purple-700">
+                            Impact {improvement.impact_score}
+                          </span>
+                        )}
+                        <span className="rounded-full bg-blue-100 px-2 py-1 text-blue-700">
+                          {improvement.implementation_status || 'pending'}
+                        </span>
+                        {aiSuggestionContext?.enhancement?.ai_provider && (
+                          <span className="rounded-full bg-gray-200 px-2 py-1 text-gray-700">
+                            Model {aiSuggestionContext.enhancement.ai_provider}
+                          </span>
+                        )}
+                        {typeof aiSuggestionContext?.enhancement?.confidence_score === 'number' && (
+                          <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">
+                            Confidence {aiSuggestionContext.enhancement.confidence_score}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-sm text-gray-800 whitespace-pre-wrap">
+                        {improvement.suggestion}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => toggleSuggestionDetails(improvement.id)}
+                        className="mt-3 text-sm text-indigo-600 hover:text-indigo-700"
+                      >
+                        Why suggested?
+                      </button>
+                      {expandedSuggestionIds.has(improvement.id) && (
+                        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700 space-y-2">
+                          {aiSuggestionContext?.enhancement?.improvement_notes && (
+                            <div>
+                              <div className="font-medium text-gray-800 mb-1">
+                                Improvement notes
+                              </div>
+                              <div className="whitespace-pre-wrap">
+                                {aiSuggestionContext.enhancement.improvement_notes}
+                              </div>
+                            </div>
+                          )}
+                          {(aiSuggestionContext?.learning?.performance ||
+                            aiSuggestionContext?.learning?.metrics) && (
+                            <div>
+                              <div className="font-medium text-gray-800 mb-1">
+                                Recent performance and metrics
+                              </div>
+                              <div className="space-y-1">
+                                {aiSuggestionContext?.learning?.performance &&
+                                  Object.entries(aiSuggestionContext.learning.performance)
+                                    .slice(0, 6)
+                                    .map(([key, value]) => (
+                                      <div key={`perf-${key}`}>
+                                        {key}: {String(value)}
+                                      </div>
+                                    ))}
+                                {aiSuggestionContext?.learning?.metrics &&
+                                  Object.entries(aiSuggestionContext.learning.metrics)
+                                    .slice(0, 6)
+                                    .map(([key, value]) => (
+                                      <div key={`metric-${key}`}>
+                                        {key}: {String(value)}
+                                      </div>
+                                    ))}
+                              </div>
+                            </div>
+                          )}
+                          {!aiSuggestionContext?.enhancement?.improvement_notes &&
+                            !aiSuggestionContext?.learning?.performance &&
+                            !aiSuggestionContext?.learning?.metrics && (
+                              <div className="text-gray-600">
+                                No additional context available.
+                              </div>
+                            )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Campaign Details */}
           <div className="lg:col-span-2 space-y-6">
@@ -1360,13 +1922,15 @@ export default function CampaignPlanning() {
                 )}
 
                 {activePlanningTab === 'refinement' && (
-                  <WeeklyRefinementInterface
-                    campaignId={campaignId}
-                    campaignData={campaignData}
-                    onWeekSelect={(weekNumber) => {
-                      console.log('Week selected for refinement:', weekNumber);
-                    }}
-                  />
+                  <div className={isStrategyLocked ? 'pointer-events-none opacity-60' : ''}>
+                    <WeeklyRefinementInterface
+                      campaignId={campaignId}
+                      campaignData={campaignData}
+                      onWeekSelect={(weekNumber) => {
+                        console.log('Week selected for refinement:', weekNumber);
+                      }}
+                    />
+                  </div>
                 )}
               </div>
             </div>

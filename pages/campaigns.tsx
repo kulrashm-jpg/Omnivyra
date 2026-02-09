@@ -25,6 +25,7 @@ export default function CampaignsList() {
   const { selectedCompanyId } = useCompanyContext();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [reapprovalMap, setReapprovalMap] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!selectedCompanyId) return;
@@ -39,6 +40,8 @@ export default function CampaignsList() {
       if (response.ok) {
         const data = await response.json();
         setCampaigns(data.campaigns || []);
+        const ids = (data.campaigns || []).map((campaign: Campaign) => campaign.id).filter(Boolean);
+        await fetchReapprovalStatuses(ids);
         
         // Only show real campaigns from database
         // No auto-creation of dummy campaigns
@@ -49,6 +52,31 @@ export default function CampaignsList() {
       console.error('Error fetching campaigns:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const fetchReapprovalStatuses = async (campaignIds: string[]) => {
+    if (campaignIds.length === 0) {
+      setReapprovalMap({});
+      return;
+    }
+    try {
+      const results = await Promise.all(
+        campaignIds.map(async (id) => {
+          const response = await fetch(`/api/campaigns/${id}/reapproval-status`);
+          if (!response.ok) return [id, false] as const;
+          const data = await response.json();
+          return [id, data?.status === 'reapproval_required'] as const;
+        })
+      );
+      const nextMap = results.reduce<Record<string, boolean>>((acc, [id, value]) => {
+        acc[id] = value;
+        return acc;
+      }, {});
+      setReapprovalMap(nextMap);
+    } catch (error) {
+      console.error('Error fetching reapproval statuses:', error);
+      setReapprovalMap({});
     }
   };
 
@@ -255,9 +283,16 @@ export default function CampaignsList() {
 
                     {/* Status */}
                     <div className="col-span-2">
-                      <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${statusColors[campaign.status] || 'bg-gray-100 text-gray-800'}`}>
-                        {campaign.status}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${statusColors[campaign.status] || 'bg-gray-100 text-gray-800'}`}>
+                          {campaign.status}
+                        </span>
+                        {reapprovalMap[campaign.id] && (
+                          <span className="inline-flex px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                            Re-Approval Required
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Type */}

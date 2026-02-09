@@ -252,10 +252,11 @@ CREATE TABLE facebook_events (
 );
 
 -- Campaign Management Tables
-CREATE TABLE campaigns (
+CREATE TABLE IF NOT EXISTS campaigns (
     id SERIAL PRIMARY KEY,
     name VARCHAR(200),
     description TEXT,
+    virality_playbook_id UUID REFERENCES virality_playbooks(id) ON DELETE SET NULL,
     start_date DATE,
     end_date DATE,
     status VARCHAR(50) DEFAULT 'draft',

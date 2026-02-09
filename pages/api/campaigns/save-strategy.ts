@@ -1,6 +1,34 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
 
+const RESTRICTED_KEY_FRAGMENTS = [
+  'apikey',
+  'api_key',
+  'access_token',
+  'refresh_token',
+  'client_secret',
+  'password',
+  'secret',
+  'connector',
+  'playbook',
+  'automation',
+  'execute',
+  'oauth',
+];
+
+const findRestrictedKey = (input: any): string | null => {
+  if (!input || typeof input !== 'object') return null;
+  for (const [key, value] of Object.entries(input)) {
+    const normalized = key.toLowerCase();
+    if (RESTRICTED_KEY_FRAGMENTS.some((fragment) => normalized.includes(fragment))) {
+      return key;
+    }
+    const nested = findRestrictedKey(value);
+    if (nested) return nested;
+  }
+  return null;
+};
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -13,7 +41,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Campaign ID and strategy are required' });
     }
 
-    // Save campaign strategy
+    // Virality planning boundary: strategy data must not include credentials or automation metadata.
+    const restrictedKey = findRestrictedKey(strategy);
+    if (restrictedKey) {
+      return res.status(400).json({
+        error: 'Strategy data cannot include credentials or automation fields',
+        field: restrictedKey,
+      });
+    }
+
+    // Save campaign strategy (planning-only, no execution or automation).
     const { data: strategyData, error: strategyError } = await supabase
       .from('campaign_strategies')
       .upsert({

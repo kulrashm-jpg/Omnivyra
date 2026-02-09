@@ -1,5 +1,5 @@
 import { supabase } from '../db/supabaseClient';
-import { fetchTrendsFromApis } from './externalApiService';
+import { fetchTrendsFromApis, getCompanyDefaultApiIds } from './externalApiService';
 import { generateRecommendations } from './recommendationEngine';
 import { getProfile } from './companyProfileService';
 
@@ -55,8 +55,11 @@ export async function runWeeklyRecommendationRefresh(): Promise<void> {
       const profile = await getProfile(companyId, { autoRefine: false });
       const geoHint = profile?.geography_list?.[0] ?? profile?.geography ?? undefined;
       const categoryHint = profile?.industry_list?.[0] ?? profile?.category ?? undefined;
+      const defaultApiIds = await getCompanyDefaultApiIds(companyId);
       const trends = await fetchTrendsFromApis(companyId, geoHint, categoryHint, {
         recordHealth: false,
+        selectedApiIds: defaultApiIds,
+        feature: 'recommendations',
       });
       const recommendations = await generateRecommendations({
         companyProfile: profile,
@@ -79,8 +82,11 @@ export async function runCompanyProfileTriggeredRefresh(companyId: string): Prom
     const profile = await getProfile(companyId, { autoRefine: false });
     const geoHint = profile?.geography_list?.[0] ?? profile?.geography ?? undefined;
     const categoryHint = profile?.industry_list?.[0] ?? profile?.category ?? undefined;
+    const defaultApiIds = await getCompanyDefaultApiIds(companyId);
     const trends = await fetchTrendsFromApis(companyId, geoHint, categoryHint, {
       recordHealth: false,
+      selectedApiIds: defaultApiIds,
+      feature: 'recommendations',
     });
     const recommendations = await generateRecommendations({
       companyProfile: profile,

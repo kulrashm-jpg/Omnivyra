@@ -22,8 +22,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { defaultCompanyId: companyId } = await resolveUserContext(req);
-  if (!companyId) {
+  const { defaultCompanyId } = await resolveUserContext(req);
+  const platformScopeRequested = req.query?.scope === 'platform';
+  const companyId =
+    (req.query.companyId as string | undefined) ||
+    (req.body?.companyId as string | undefined) ||
+    (platformScopeRequested ? undefined : defaultCompanyId);
+  if (!companyId && !platformScopeRequested) {
     return res.status(400).json({ error: 'companyId required' });
   }
 
@@ -59,10 +64,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       headers: input.headers || {},
       query_params: input.query_params || {},
       created_at: new Date().toISOString(),
-      company_id: companyId,
+      company_id: companyId ?? null,
     };
 
-    const request = buildExternalApiRequest(source);
+    const request = buildExternalApiRequest(source, {
+      runtimeValues: {
+        category: input.category || '',
+        geo: input.geo || '',
+      },
+    });
     if (request.missingEnv.length > 0) {
       console.warn('EXTERNAL_API_TEST_MISSING_ENV', { missing: request.missingEnv });
       return res.status(400).json({
@@ -100,7 +110,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const truncated = truncate(rawText);
       if (contentType.includes('application/json')) {
         try {
-          parsed = JSON.parse(truncated);
+          parsed = JSON.parse(rawText);
         } catch (error) {
           parsed = truncated;
         }

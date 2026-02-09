@@ -41,6 +41,21 @@ const summarizeCompanyProfile = (profile: CompanyProfile) => ({
 
 const deriveCampaignSnapshot = (snapshot: any) => snapshot?.campaign_snapshot ?? {};
 
+const resolvePlaybookReferenceId = (snapshot: any): string | null =>
+  snapshot?.virality_playbook_id ?? snapshot?.campaign?.virality_playbook_id ?? null;
+
+const fetchPlaybookContext = async (companyId: string, playbookId: string | null) => {
+  if (!playbookId) return null;
+  const { data, error } = await supabase
+    .from('virality_playbooks')
+    .select('id, name, objective, company_id')
+    .eq('id', playbookId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return { id: data.id, name: data.name, objective: data.objective };
+};
+
 const extractWeeklyPlan = (snapshot: any) => snapshot?.campaign_snapshot?.weekly_plan ?? [];
 
 const extractDailyPlan = (snapshot: any) => snapshot?.campaign_snapshot?.daily_plan ?? [];
@@ -130,6 +145,8 @@ export async function generateCampaignAuditReport(
   }
 
   const campaignSnapshot = deriveCampaignSnapshot(campaignVersion);
+  const playbookReferenceId = resolvePlaybookReferenceId(campaignSnapshot);
+  const playbookContext = await fetchPlaybookContext(resolvedCompanyId, playbookReferenceId);
   const omnivyraSnapshot = campaignSnapshot?.omnivyra ?? campaignSnapshot?.campaign?.omnivyra ?? null;
   const weeklyPlan = extractWeeklyPlan(campaignVersion);
   const dailyPlan = extractDailyPlan(campaignVersion);
@@ -303,6 +320,12 @@ export async function generateCampaignAuditReport(
   });
 
   return {
+    // Playbook fields are for interpretation/reporting only.
+    // Campaign KPIs are evaluated independently.
+    // No downstream system should infer execution behavior from playbook data.
+    playbook_id: playbookContext?.id ?? playbookReferenceId ?? null,
+    playbook_name: playbookContext?.name ?? null,
+    playbook_objective: playbookContext?.objective ?? null,
     company_profile_used: summarizeCompanyProfile(profile),
     trends: {
       used: usedTrends,
