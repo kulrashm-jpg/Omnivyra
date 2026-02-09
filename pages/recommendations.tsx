@@ -104,6 +104,18 @@ type RecommendationEngineResult = {
   };
 };
 
+type DetectedOpportunity = {
+  topic: string;
+  category?: string | null;
+  confidence?: number | null;
+  source?: string | null;
+  risk_level?: string | null;
+  priority_score?: number | null;
+  trend_classification?: string | null;
+  trend_reasoning?: string | null;
+  growth_opportunity_score?: number | null;
+};
+
 type TrendSourceLegendItem = {
   key: string;
   label: string;
@@ -181,6 +193,16 @@ export default function RecommendationsPage() {
   const [stateError, setStateError] = useState<string | null>(null);
   const [sortByPriority, setSortByPriority] = useState(true);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [detectedOpportunities, setDetectedOpportunities] = useState<DetectedOpportunity[]>([]);
+  const [detectedLoading, setDetectedLoading] = useState(false);
+  const [detectedError, setDetectedError] = useState<string | null>(null);
+  const [dismissedOpportunities, setDismissedOpportunities] = useState<Set<string>>(new Set());
+  const [detectedPlaybooks, setDetectedPlaybooks] = useState<Record<string, any>>({});
+  const [detectedPlaybookLoading, setDetectedPlaybookLoading] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [detectedPlaybookOpen, setDetectedPlaybookOpen] = useState<Set<string>>(new Set());
+  const [detectedReasoningOpen, setDetectedReasoningOpen] = useState<Set<string>>(new Set());
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -193,11 +215,73 @@ export default function RecommendationsPage() {
   const [previewConfidenceRating, setPreviewConfidenceRating] = useState<number | ''>('');
   const [previewConfidence, setPreviewConfidence] = useState<number | null>(null);
   const [previewContentFrequency, setPreviewContentFrequency] = useState<any | null>(null);
+  const [selectedRecommendations, setSelectedRecommendations] = useState<Set<string>>(new Set());
+  const [groupPreviewOpen, setGroupPreviewOpen] = useState(false);
+  const [groupPreviewLoading, setGroupPreviewLoading] = useState(false);
+  const [groupPreviewError, setGroupPreviewError] = useState<string | null>(null);
+  const [groupPreview, setGroupPreview] = useState<any | null>(null);
+  const [groupAssignments, setGroupAssignments] = useState<Record<string, string>>({});
+  const [groupNames, setGroupNames] = useState<Record<string, string>>({});
+  const [isCreatingGroupedCampaign, setIsCreatingGroupedCampaign] = useState(false);
+  const [groupSortMode, setGroupSortMode] = useState<
+    | 'reach'
+    | 'complexity'
+    | 'lead'
+    | 'priority'
+    | 'urgency'
+    | 'revenue'
+    | 'leads'
+    | 'roi'
+    | 'reliability'
+  >('reach');
   const isAdmin = useMemo(() => user?.role === 'admin', [user]);
   const canManageRecommendationState = useMemo(() => {
     const role = (userRole || '').toUpperCase();
     return ['COMPANY_ADMIN', 'CONTENT_CREATOR', 'SUPER_ADMIN'].includes(role);
   }, [userRole]);
+  const canSeeDetectedOpportunities = useMemo(() => {
+    const role = (userRole || '').toUpperCase();
+    return ['COMPANY_ADMIN', 'CONTENT_CREATOR', 'CONTENT_MANAGER', 'SUPER_ADMIN'].includes(role);
+  }, [userRole]);
+  const canGenerateDetectedPlaybook = useMemo(() => {
+    const role = (userRole || '').toUpperCase();
+    return ['COMPANY_ADMIN', 'CONTENT_MANAGER'].includes(role);
+  }, [userRole]);
+  const canGroupRecommendations = useMemo(() => {
+    const role = (userRole || '').toUpperCase();
+    return ['COMPANY_ADMIN', 'CONTENT_MANAGER'].includes(role);
+  }, [userRole]);
+  const recommendedThisWeek = useMemo(() => {
+    const withPriority = detectedOpportunities.map((item) => {
+      const score = typeof item.priority_score === 'number' ? item.priority_score : 0;
+      const bucket = score >= 0.6 ? 'High' : score >= 0.35 ? 'Medium' : 'Low';
+      return { ...item, priority_bucket: bucket };
+    });
+    const sortFn = (a: any, b: any) => {
+      if (b.priority_score !== a.priority_score) return b.priority_score - a.priority_score;
+      const aMomentum = a.trend_classification === 'Momentum' ? 1 : 0;
+      const bMomentum = b.trend_classification === 'Momentum' ? 1 : 0;
+      return bMomentum - aMomentum;
+    };
+    const high = withPriority.filter((item) => item.priority_bucket === 'High').sort(sortFn);
+    const medium = withPriority.filter((item) => item.priority_bucket === 'Medium').sort(sortFn);
+    const selected = [...high, ...medium].slice(0, 3);
+    return selected;
+  }, [detectedOpportunities]);
+  const detectedTopicSources = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    detectedOpportunities.forEach((item) => {
+      const key = String(item.topic || '').toLowerCase().trim();
+      if (!key) return;
+      if (!map.has(key)) {
+        map.set(key, new Set());
+      }
+      if (item.source) {
+        map.get(key)?.add(String(item.source));
+      }
+    });
+    return map;
+  }, [detectedOpportunities]);
   const trendExplanationMap = useMemo(() => {
     const map = new Map<string, string[]>();
     const explanations = engineResult?.chat_meta?.trend_explanations || [];
@@ -232,6 +316,15 @@ export default function RecommendationsPage() {
       setSelectedCampaignId(stored);
     }
   }, [selectedCompanyId]);
+
+  useEffect(() => {
+    if (!selectedCompanyId || !selectedCampaignId) {
+      setDetectedOpportunities([]);
+      setDismissedOpportunities(new Set());
+      return;
+    }
+    fetchDetectedOpportunities();
+  }, [selectedCompanyId, selectedCampaignId, canSeeDetectedOpportunities]);
 
   const toggleApiSelection = (apiId: string) => {
     setSelectedApiIds((prev) =>
@@ -345,21 +438,22 @@ export default function RecommendationsPage() {
     narrative?: string;
     objective?: string;
     platform_preferences?: string[];
-  }) => {
-    if (!selectedCompanyId || !selectedCampaignId) {
-      setErrorMessage('Please select or create a campaign first.');
-      return;
+    source?: string;
+  }): Promise<RecommendationEngineResult | null> => {
+    if (!selectedCompanyId) {
+      setErrorMessage('Please select a company first.');
+      return null;
     }
     try {
       setIsLoading(true);
       setErrorMessage(null);
       setExpandedTrendKey(null);
-      const response = await fetch('/api/recommendations/generate', {
+      const response = await fetchWithAuth('/api/recommendations/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           companyId: selectedCompanyId,
-          campaignId: selectedCampaignId,
+          campaignId: selectedCampaignId || null,
           simulate: simulateScenarios,
           chat: true,
           selected_api_ids: selectedApiIds,
@@ -370,10 +464,18 @@ export default function RecommendationsPage() {
       const data = await response.json();
       setEngineResult(data);
       setLastRefresh(new Date().toLocaleString());
-      setLastRefreshSource(manualContext?.type === 'opportunity' ? 'opportunity' : 'manual');
+      setLastRefreshSource(
+        manualContext?.type === 'opportunity'
+          ? 'opportunity'
+          : manualContext?.type === 'detected_opportunity'
+          ? 'detected_opportunity'
+          : 'manual'
+      );
+      return data;
     } catch (error) {
       console.error('Error generating recommendations:', error);
       setErrorMessage('Failed to generate recommendations.');
+      return null;
     } finally {
       setIsLoading(false);
     }
@@ -381,13 +483,17 @@ export default function RecommendationsPage() {
 
   const refreshRecommendations = async () => {
     if (!selectedCompanyId) {
-      setErrorMessage('Please select or create a campaign first.');
+      setErrorMessage('Please select a company first.');
+      return;
+    }
+    if (!hasPermission('GENERATE_RECOMMENDATIONS')) {
+      setErrorMessage('You do not have permission to refresh recommendations.');
       return;
     }
     try {
       setIsLoading(true);
       setErrorMessage(null);
-      const response = await fetch('/api/recommendations/refresh', {
+      const response = await fetchWithAuth('/api/recommendations/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -395,14 +501,45 @@ export default function RecommendationsPage() {
           companyId: selectedCompanyId,
         }),
       });
-      if (!response.ok) throw new Error('Failed to refresh recommendations');
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        const message =
+          data?.error ||
+          (response.status ? `Failed to refresh recommendations (${response.status}).` : null) ||
+          'Failed to refresh recommendations.';
+        throw new Error(message);
+      }
       setLastRefresh(new Date().toLocaleString());
       setLastRefreshSource('profile_update');
       await generateRecommendations();
     } catch (error) {
       console.error('Error refreshing recommendations:', error);
-      setErrorMessage('Failed to refresh recommendations.');
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh recommendations.');
       setIsLoading(false);
+    }
+  };
+
+  const fetchDetectedOpportunities = async () => {
+    if (!selectedCompanyId || !selectedCampaignId || !canSeeDetectedOpportunities) return;
+    try {
+      setDetectedLoading(true);
+      setDetectedError(null);
+      const params = new URLSearchParams({
+        companyId: selectedCompanyId,
+        campaignId: selectedCampaignId,
+      });
+      const response = await fetch(`/api/recommendations/detected-opportunities?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error('Failed to load detected opportunities');
+      }
+      const data = await response.json();
+      setDetectedOpportunities(Array.isArray(data?.opportunities) ? data.opportunities : []);
+    } catch (error) {
+      console.error('Error loading detected opportunities:', error);
+      setDetectedError('Failed to load detected opportunities.');
+      setDetectedOpportunities([]);
+    } finally {
+      setDetectedLoading(false);
     }
   };
 
@@ -433,6 +570,174 @@ export default function RecommendationsPage() {
       setRecommendationDetails({});
       setRecommendationSummaries({});
       setRecommendationBySnapshot({});
+    }
+  };
+
+  const resolveRecommendationIdBySnapshot = async (snapshotHash: string) => {
+    if (recommendationBySnapshot[snapshotHash]) {
+      return recommendationBySnapshot[snapshotHash];
+    }
+    if (!selectedCompanyId) return null;
+    try {
+      const params = new URLSearchParams({
+        companyId: selectedCompanyId,
+        snapshot_hashes: snapshotHash,
+      });
+      const response = await fetch(`/api/recommendations/state-map?${params.toString()}`);
+      if (!response.ok) return null;
+      const data = await response.json();
+      const mapping = data?.recommendations || {};
+      if (mapping) {
+        setRecommendationStates((prev) => ({ ...prev, ...(data?.states || {}) }));
+        setRecommendationDetails((prev) => ({ ...prev, ...(data?.details || {}) }));
+        setRecommendationSummaries((prev) => ({ ...prev, ...(data?.summaries || {}) }));
+        setRecommendationBySnapshot((prev) => ({ ...prev, ...mapping }));
+      }
+      return mapping?.[snapshotHash] || null;
+    } catch (error) {
+      console.error('Error resolving recommendation id:', error);
+      return null;
+    }
+  };
+
+  const evaluateDetectedOpportunity = async (
+    opportunity: DetectedOpportunity,
+    options?: { state?: 'shortlisted' | 'discarded' }
+  ) => {
+    const data = await generateRecommendations({
+      type: 'detected_opportunity',
+      topic: opportunity.topic,
+      source: opportunity.source || undefined,
+    });
+    if (!data) return;
+    const match = (data.trends_used || []).find(
+      (trend: any) => String(trend.topic || '').toLowerCase() === opportunity.topic.toLowerCase()
+    );
+    const snapshotHash = match?.snapshot_hash;
+    if (snapshotHash && options?.state) {
+      const recommendationId = await resolveRecommendationIdBySnapshot(String(snapshotHash));
+      if (recommendationId) {
+        await updateRecommendationState(recommendationId, options.state);
+      }
+    }
+  };
+
+  const openPreviewForDetectedOpportunity = async (opportunity: DetectedOpportunity) => {
+    if (!selectedCompanyId) {
+      setPreviewError('Select a company to preview.');
+      return;
+    }
+    try {
+      setPreviewError(null);
+      setPreviewLoading(true);
+      setPreviewModalOpen(true);
+      setPreviewRecommendationId(null);
+      setPreviewSnapshotHash(null);
+      setPreviewPriorityBucket(null);
+      setPreviewCurrentState(null);
+      setPreviewOpinionNote('');
+      setPreviewConfidenceRating('');
+      setPreviewConfidence(null);
+      setPreviewContentFrequency(null);
+      const previewResponse = await fetch(`/api/recommendations/manual/preview-strategy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: selectedCompanyId,
+          preview_context: {
+            topic: opportunity.topic,
+            source: opportunity.source || null,
+            category: opportunity.category || null,
+          },
+        }),
+      });
+      if (!previewResponse.ok) {
+        throw new Error('Failed to generate preview');
+      }
+      const data = await previewResponse.json();
+      setPreviewData(data?.preview || null);
+      setPreviewConfidence(typeof data?.confidence === 'number' ? data.confidence : null);
+      setPreviewContentFrequency(data?.content_frequency ?? null);
+    } catch (error) {
+      console.error('Error generating detected preview:', error);
+      setPreviewError('Failed to generate preview.');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const dismissDetectedOpportunity = (key: string) => {
+    setDismissedOpportunities((prev) => new Set([...Array.from(prev), key]));
+  };
+
+  const toggleDetectedReasoning = (key: string) => {
+    setDetectedReasoningOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const toggleDetectedPlaybook = async (key: string, opportunity: DetectedOpportunity) => {
+    if (!canGenerateDetectedPlaybook) return;
+    if (detectedPlaybooks[key]) {
+      setDetectedPlaybookOpen((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) {
+          next.delete(key);
+        } else {
+          next.add(key);
+        }
+        return next;
+      });
+      return;
+    }
+    try {
+      setDetectedPlaybookLoading((prev) => ({ ...prev, [key]: true }));
+      let previewResponse: Response | null = null;
+      const match = (engineResult?.trends_used || []).find(
+        (trend: any) => String(trend.topic || '').toLowerCase() === opportunity.topic.toLowerCase()
+      );
+      const snapshotHash = match?.snapshot_hash;
+      const recommendationId = snapshotHash ? recommendationBySnapshot[snapshotHash] : null;
+      if (recommendationId) {
+        previewResponse = await fetch(
+          `/api/recommendations/${encodeURIComponent(recommendationId)}/preview-strategy`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      } else {
+        previewResponse = await fetch(`/api/recommendations/manual/preview-strategy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            company_id: selectedCompanyId,
+            preview_context: {
+              topic: opportunity.topic,
+              category: opportunity.category || null,
+              source: opportunity.source || null,
+              priority_bucket: opportunity.priority_score ?? null,
+              trend_classification: opportunity.trend_classification || null,
+            },
+          }),
+        });
+      }
+      if (!previewResponse?.ok) {
+        throw new Error('Failed to generate playbook');
+      }
+      const data = await previewResponse.json();
+      setDetectedPlaybooks((prev) => ({ ...prev, [key]: data?.preview || null }));
+      setDetectedPlaybookOpen((prev) => new Set([...Array.from(prev), key]));
+    } catch (error) {
+      console.error('Error generating playbook:', error);
+    } finally {
+      setDetectedPlaybookLoading((prev) => ({ ...prev, [key]: false }));
     }
   };
 
@@ -689,6 +994,158 @@ export default function RecommendationsPage() {
       setIsSubmittingManual(false);
     }
   };
+
+  const toggleRecommendationSelection = (snapshotHash?: string | null) => {
+    if (!snapshotHash) return;
+    setSelectedRecommendations((prev) => {
+      const next = new Set(prev);
+      if (next.has(snapshotHash)) {
+        next.delete(snapshotHash);
+      } else {
+        next.add(snapshotHash);
+      }
+      return next;
+    });
+  };
+
+  const getSelectedRecommendationPayload = () => {
+    const selected = Array.from(selectedRecommendations);
+    return (engineResult?.trends_used || [])
+      .filter((trend: any) => selected.includes(trend.snapshot_hash))
+      .map((trend: any) => {
+        const snapshotHash = trend.snapshot_hash;
+        const recommendationId = snapshotHash ? recommendationBySnapshot[snapshotHash] : undefined;
+        const summary = recommendationId ? recommendationSummaries[recommendationId] : undefined;
+        return {
+          id: recommendationId || null,
+          snapshot_hash: snapshotHash,
+          topic: trend.topic,
+          priority_score: summary?.priority_score ?? null,
+          trend_classification: summary?.priority_bucket ? summary.priority_bucket : null,
+          category: trend.category ?? null,
+        };
+      })
+      .filter((item: any) => item.snapshot_hash);
+  };
+
+  const openGroupPreview = async () => {
+    if (!selectedCompanyId) return;
+    const selectedPayload = getSelectedRecommendationPayload();
+    if (selectedPayload.length < 2) return;
+    try {
+      setGroupPreviewError(null);
+      setGroupPreviewLoading(true);
+      const response = await fetch('/api/recommendations/group-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: selectedCompanyId,
+          selected_recommendations: selectedPayload,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to generate grouping preview');
+      }
+      const data = await response.json();
+      setGroupPreview(data);
+      const assignments: Record<string, string> = {};
+      const names: Record<string, string> = {};
+      (data?.groups || []).forEach((group: any) => {
+        const groupId = group.group_id || `group_${Math.random().toString(36).slice(2, 8)}`;
+        names[groupId] = group.theme_name || 'Group';
+        (group.recommendations || []).forEach((hash: string) => {
+          assignments[hash] = groupId;
+        });
+      });
+      selectedPayload.forEach((item: any) => {
+        if (!assignments[item.snapshot_hash]) {
+          const fallback = Object.keys(names)[0] || `group_${Math.random().toString(36).slice(2, 8)}`;
+          if (!names[fallback]) names[fallback] = 'Group';
+          assignments[item.snapshot_hash] = fallback;
+        }
+      });
+      setGroupAssignments(assignments);
+      setGroupNames(names);
+      setGroupPreviewOpen(true);
+    } catch (error) {
+      console.error('Group preview failed', error);
+      setGroupPreviewError('Failed to generate grouping preview.');
+      setGroupPreviewOpen(true);
+    } finally {
+      setGroupPreviewLoading(false);
+    }
+  };
+
+  const addGroup = () => {
+    const groupId = `group_${Math.random().toString(36).slice(2, 8)}`;
+    setGroupNames((prev) => ({ ...prev, [groupId]: 'New Group' }));
+  };
+
+  const removeEmptyGroup = (groupId: string) => {
+    const hasMembers = Object.values(groupAssignments).some((id) => id === groupId);
+    if (hasMembers) return;
+    setGroupNames((prev) => {
+      const next = { ...prev };
+      delete next[groupId];
+      return next;
+    });
+  };
+
+  const confirmGroupedCampaign = async () => {
+    if (!selectedCompanyId) return;
+    const selectedPayload = getSelectedRecommendationPayload();
+    if (selectedPayload.length < 2) return;
+    try {
+      setIsCreatingGroupedCampaign(true);
+      const grouped: Record<string, string[]> = {};
+      Object.entries(groupAssignments).forEach(([hash, groupId]) => {
+        if (!grouped[groupId]) grouped[groupId] = [];
+        grouped[groupId].push(hash);
+      });
+      const groups = Object.entries(grouped).map(([groupId, hashes]) => ({
+        group_id: groupId,
+        theme_name: groupNames[groupId] || 'Group',
+        recommendations: hashes,
+        rationale:
+          groupPreview?.groups?.find((grp: any) => grp.group_id === groupId)?.rationale || null,
+      }));
+      const response = await fetch('/api/recommendations/create-campaign-from-group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: selectedCompanyId,
+          selected_recommendations: selectedPayload,
+          groups,
+          suggested_platform_mix: groupPreview?.suggested_platform_mix || [],
+          suggested_frequency: groupPreview?.suggested_frequency || {},
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to create grouped campaign');
+      }
+      const data = await response.json();
+      if (typeof window !== 'undefined' && data?.campaign_id) {
+        window.sessionStorage.setItem(
+          `recommendation_grouping_${data.campaign_id}`,
+          JSON.stringify({
+            groups,
+            suggested_platform_mix: groupPreview?.suggested_platform_mix || [],
+            suggested_frequency: groupPreview?.suggested_frequency || {},
+          })
+        );
+      }
+      setSelectedRecommendations(new Set());
+      setGroupPreviewOpen(false);
+      if (data?.campaign_id) {
+        window.location.href = `/campaign-planning?mode=edit&campaignId=${data.campaign_id}&grouped=1`;
+      }
+    } catch (error) {
+      console.error('Grouped campaign failed', error);
+      setGroupPreviewError('Failed to create grouped campaign.');
+    } finally {
+      setIsCreatingGroupedCampaign(false);
+    }
+  };
   const confidencePercent = engineResult?.confidence_score ?? 0;
   const confidenceRatio = Math.max(0, Math.min(1, confidencePercent / 100));
   const confidenceMeta = getConfidenceLabel(confidenceRatio);
@@ -816,7 +1273,16 @@ export default function RecommendationsPage() {
               </button>
               <button
                 onClick={refreshRecommendations}
-                disabled={isLoading || !selectedCompanyId}
+                disabled={
+                  isLoading ||
+                  !selectedCompanyId ||
+                  !hasPermission('GENERATE_RECOMMENDATIONS')
+                }
+                title={
+                  hasPermission('GENERATE_RECOMMENDATIONS')
+                    ? ''
+                    : 'You do not have permission to refresh recommendations.'
+                }
                 className="px-4 py-2 bg-gray-100 text-gray-900 rounded-lg text-sm disabled:opacity-50"
               >
                 🔄 Refresh Recommendations
@@ -853,9 +1319,9 @@ export default function RecommendationsPage() {
               )}
             </div>
           </div>
-          {!selectedCompanyId || !selectedCampaignId ? (
+          {!selectedCompanyId ? (
             <div className="mt-4 text-xs text-amber-600">
-              Please select a company and campaign.
+              Please select a company.
             </div>
           ) : null}
           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
@@ -883,7 +1349,7 @@ export default function RecommendationsPage() {
               )}
             </div>
             <div>
-              <label className="block text-xs text-gray-500">Campaign</label>
+              <label className="block text-xs text-gray-500">Campaign (optional)</label>
               <div className="flex gap-2">
                 <select
                   value={selectedCampaignId}
@@ -891,7 +1357,7 @@ export default function RecommendationsPage() {
                   disabled={!selectedCompanyId || isCampaignLoading || campaignIdLocked}
                   className="mt-1 flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
                 >
-                  <option value="">Select campaign</option>
+                  <option value="">No campaign selected</option>
                   {campaigns.map((campaign) => (
                     <option key={campaign.id} value={campaign.id}>
                       {campaign.name} ({campaign.status})
@@ -901,7 +1367,7 @@ export default function RecommendationsPage() {
                 <button
                   onClick={async () => {
                     if (!selectedCompanyId) {
-                      setErrorMessage('Please select or create a campaign first.');
+                      setErrorMessage('Please select a company first.');
                       return;
                     }
                     try {
@@ -951,6 +1417,354 @@ export default function RecommendationsPage() {
             </div>
           </div>
         </div>
+
+        {canSeeDetectedOpportunities && (
+          <div className="bg-white rounded-lg shadow p-6">
+            {recommendedThisWeek.length > 0 && (
+              <div className="mb-6 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 via-white to-amber-50 px-4 py-4">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <h2 className="text-lg font-semibold text-amber-900">
+                    Recommended to Execute This Week
+                  </h2>
+                  <span className="text-[10px] px-2 py-1 rounded-full bg-amber-200 text-amber-900">
+                    Act Now
+                  </span>
+                </div>
+                <div className="flex gap-3 overflow-x-auto pb-2">
+                  {recommendedThisWeek.map((item) => {
+                    const key = `${item.topic}-${item.source || 'unknown'}`;
+                    const momentumLabel =
+                      item.trend_classification === 'Momentum'
+                        ? 'High Momentum'
+                        : item.trend_classification === 'Emerging'
+                        ? 'Building Trend'
+                        : 'Early Signal';
+                    return (
+                      <div
+                        key={key}
+                        className="min-w-[240px] rounded-lg border border-amber-200 bg-white px-4 py-3 shadow-sm"
+                      >
+                        <div className="font-semibold text-gray-900 text-sm">{item.topic}</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          Source: {item.source || '—'}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">
+                            Priority: {item.priority_bucket}
+                          </span>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">
+                            {momentumLabel}
+                          </span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {canGenerateDetectedPlaybook && (
+                            <button
+                              onClick={() => toggleDetectedPlaybook(key, item)}
+                              className="px-2 py-1 text-[10px] rounded-full border border-gray-300"
+                            >
+                              Generate Playbook
+                            </button>
+                          )}
+                          <button
+                            onClick={() => evaluateDetectedOpportunity(item)}
+                            className="px-2 py-1 text-[10px] rounded-full border border-gray-300"
+                          >
+                            Evaluate with AI
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <h2 className="text-lg font-semibold text-gray-900">Detected Market Opportunities</h2>
+            <p className="text-xs text-gray-500 mt-1">
+              Read-only opportunities derived from external API signals.
+            </p>
+            {detectedLoading && (
+              <div className="mt-3 text-xs text-gray-500">Loading opportunities...</div>
+            )}
+            {detectedError && (
+              <div className="mt-3 text-xs text-red-600">{detectedError}</div>
+            )}
+            {!detectedLoading &&
+              !detectedError &&
+              detectedOpportunities.filter((item) => {
+                const key = `${item.topic}-${item.source || 'unknown'}`;
+                return !dismissedOpportunities.has(key);
+              }).length === 0 && (
+                <div className="mt-3 text-xs text-gray-500">No detected opportunities yet.</div>
+              )}
+            <div className="mt-4 space-y-3">
+              {detectedOpportunities
+                .filter((item) => {
+                  const key = `${item.topic}-${item.source || 'unknown'}`;
+                  return !dismissedOpportunities.has(key);
+                })
+                .map((item) => {
+                  const key = `${item.topic}-${item.source || 'unknown'}`;
+                  const confidenceLabel =
+                    typeof item.confidence === 'number' ? item.confidence.toFixed(2) : '—';
+                  const classification = item.trend_classification || 'Wildcard';
+                  const momentumLabel =
+                    classification === 'Momentum'
+                      ? 'High Momentum'
+                      : classification === 'Emerging'
+                      ? 'Building Trend'
+                      : 'Early Signal';
+                  const categoryValue = String(item.category || '').toLowerCase();
+                  const effortEstimate = categoryValue.includes('news') || categoryValue.includes('event')
+                    ? 'Low Effort'
+                    : categoryValue.includes('analysis') || categoryValue.includes('research')
+                    ? 'Medium Effort'
+                    : 'Variable';
+                  const topicKey = String(item.topic || '').toLowerCase().trim();
+                  const sourceCount = detectedTopicSources.get(topicKey)?.size ?? 0;
+                  const reusePotential = sourceCount > 1 ? 'High Reuse' : 'Single Channel';
+                  const timeSensitivity =
+                    classification === 'Momentum'
+                      ? 'Act This Week'
+                      : classification === 'Emerging'
+                      ? 'Monitor + Prepare'
+                      : 'Experiment';
+                  const trendStage =
+                    classification === 'Momentum' && (item.priority_score ?? 0) >= 0.6
+                      ? 'Rising'
+                      : classification === 'Momentum'
+                      ? 'Peaking'
+                      : classification === 'Emerging'
+                      ? 'Building'
+                      : 'Experimental';
+                  const viralityPotential =
+                    classification === 'Momentum' && (item.priority_score ?? 0) >= 0.6
+                      ? 'High'
+                      : classification === 'Emerging'
+                      ? 'Medium'
+                      : 'Experimental';
+                  const growthScore =
+                    typeof item.growth_opportunity_score === 'number'
+                      ? item.growth_opportunity_score
+                      : 0;
+                  const platformBoost = sourceCount >= 2 ? 0.1 : 0;
+                  const momentumBoost = momentumLabel === 'High Momentum' ? 0.1 : 0;
+                  const reachScore = Math.min(1, growthScore + platformBoost + momentumBoost);
+                  const estimatedReach =
+                    reachScore >= 0.65 ? 'High' : reachScore >= 0.4 ? 'Medium' : 'Low';
+                  return (
+                    <div key={key} className="border rounded-lg p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="font-semibold text-gray-900">{item.topic}</div>
+                          <div className="text-xs text-gray-500">
+                            Source: {item.source || '—'} • Confidence: {confidenceLabel} • Category:{' '}
+                            {item.category || '—'}
+                          </div>
+                          <div className="text-xs text-gray-500">Risk: {item.risk_level || '—'}</div>
+                          <div className="mt-3">
+                            <div className="hidden md:block">
+                              <div className="text-xs font-semibold text-gray-700">Virality Scorecard</div>
+                              <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Momentum Level: {momentumLabel}
+                                </span>
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Effort Estimate: {effortEstimate}
+                                </span>
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Reuse Potential: {reusePotential}
+                                </span>
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Time Sensitivity: {timeSensitivity}
+                                </span>
+                                <span className="rounded-full bg-indigo-100 px-2 py-1 text-indigo-700">
+                                  Virality Potential: {viralityPotential}
+                                </span>
+                                <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">
+                                  Trend Stage: {trendStage}
+                                </span>
+                                <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800">
+                                  Estimated Reach: {estimatedReach}
+                                </span>
+                              </div>
+                            </div>
+                            <details className="md:hidden mt-2">
+                              <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
+                                Virality Scorecard
+                              </summary>
+                              <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Momentum Level: {momentumLabel}
+                                </span>
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Effort Estimate: {effortEstimate}
+                                </span>
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Reuse Potential: {reusePotential}
+                                </span>
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Time Sensitivity: {timeSensitivity}
+                                </span>
+                                <span className="rounded-full bg-indigo-100 px-2 py-1 text-indigo-700">
+                                  Virality Potential: {viralityPotential}
+                                </span>
+                                <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">
+                                  Trend Stage: {trendStage}
+                                </span>
+                                <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800">
+                                  Estimated Reach: {estimatedReach}
+                                </span>
+                              </div>
+                            </details>
+                          </div>
+                          {item.trend_reasoning && (
+                            <div className="mt-3 text-xs text-gray-600">
+                              <div className="font-semibold text-gray-700">Why This Is Trending</div>
+                              <div className={detectedReasoningOpen.has(key) ? '' : 'line-clamp-2'}>
+                                {item.trend_reasoning}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => toggleDetectedReasoning(key)}
+                                className="mt-1 text-[10px] text-indigo-600 hover:text-indigo-700"
+                              >
+                                {detectedReasoningOpen.has(key) ? 'Show less' : 'Show more'}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => evaluateDetectedOpportunity(item)}
+                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                          >
+                            Evaluate with AI
+                          </button>
+                          <button
+                            onClick={() => openPreviewForDetectedOpportunity(item)}
+                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                          >
+                            Preview Strategy
+                          </button>
+                          {canGenerateDetectedPlaybook && (
+                            <button
+                              onClick={() => toggleDetectedPlaybook(key, item)}
+                              className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                            >
+                              {detectedPlaybookLoading[key] ? 'Generating...' : 'Generate Playbook'}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => evaluateDetectedOpportunity(item, { state: 'shortlisted' })}
+                            className="px-3 py-1 text-xs rounded-full bg-indigo-600 text-white"
+                          >
+                            Shortlist
+                          </button>
+                          <button
+                            onClick={() => dismissDetectedOpportunity(key)}
+                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      </div>
+                      {detectedPlaybookOpen.has(key) && detectedPlaybooks[key] && (
+                        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                          <div className="text-xs font-semibold text-gray-700">Instant Content Playbook</div>
+                          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-gray-700">
+                            <div>
+                              <div className="text-[10px] text-gray-500">Platforms</div>
+                              <div className="font-medium">
+                                {Array.isArray(detectedPlaybooks[key]?.platform_mix)
+                                  ? detectedPlaybooks[key]?.platform_mix.join(', ')
+                                  : '—'}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] text-gray-500">Content Types</div>
+                              <div className="font-medium">
+                                {Array.isArray(detectedPlaybooks[key]?.content_mix)
+                                  ? detectedPlaybooks[key]?.content_mix.join(', ')
+                                  : '—'}
+                              </div>
+                            </div>
+                            <div className="md:col-span-2">
+                              <div className="text-[10px] text-gray-500">Weekly Frequency</div>
+                              <div className="font-medium whitespace-pre-wrap">
+                                {detectedPlaybooks[key]?.frequency_plan
+                                  ? JSON.stringify(detectedPlaybooks[key]?.frequency_plan, null, 2)
+                                  : '—'}
+                              </div>
+                            </div>
+                            <div className="md:col-span-2">
+                              <div className="text-[10px] text-gray-500">Reuse Opportunities</div>
+                              <div className="font-medium">
+                                {Array.isArray(detectedPlaybooks[key]?.reuse_plan)
+                                  ? detectedPlaybooks[key]?.reuse_plan.join(', ')
+                                  : '—'}
+                              </div>
+                            </div>
+                            <div className="md:col-span-2">
+                              <div className="text-[10px] text-gray-500">
+                                Content Repurposing Opportunities
+                              </div>
+                              {(() => {
+                                const platforms: string[] = Array.isArray(
+                                  detectedPlaybooks[key]?.platform_mix
+                                )
+                                  ? detectedPlaybooks[key].platform_mix
+                                  : [];
+                                const contentTypes: string[] = Array.isArray(
+                                  detectedPlaybooks[key]?.content_mix
+                                )
+                                  ? detectedPlaybooks[key].content_mix
+                                  : [];
+                                const categoryValue = String(item.category || '').toLowerCase();
+                                const primaryAsset = contentTypes.some((type) =>
+                                  String(type).toLowerCase().includes('video')
+                                )
+                                  ? 'Video'
+                                  : categoryValue.includes('news') || categoryValue.includes('event')
+                                  ? 'Short Video'
+                                  : 'Blog';
+                                const repurpose = new Set<string>();
+                                if (platforms.some((platform) => String(platform).toLowerCase().includes('linkedin'))) {
+                                  repurpose.add('LinkedIn Post');
+                                  repurpose.add('Carousel');
+                                }
+                                if (
+                                  platforms.some((platform) =>
+                                    ['youtube', 'tiktok', 'reels', 'shorts'].some((label) =>
+                                      String(platform).toLowerCase().includes(label)
+                                    )
+                                  )
+                                ) {
+                                  repurpose.add('Short Video');
+                                }
+                                if (platforms.some((platform) => String(platform).toLowerCase().includes('twitter'))) {
+                                  repurpose.add('Thread');
+                                }
+                                if (repurpose.size === 0) {
+                                  repurpose.add('Email Snippet');
+                                  repurpose.add('Social Post');
+                                }
+                                return (
+                                  <div className="font-medium">
+                                    <div>Primary Asset: {primaryAsset}</div>
+                                    <div>Repurpose Into: {Array.from(repurpose).join(', ')}</div>
+                                  </div>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
 
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-lg font-semibold text-gray-900">Opportunity / Market Event</h2>
@@ -1097,6 +1911,24 @@ export default function RecommendationsPage() {
             {draftError && (
               <div className="mt-2 text-xs text-red-600">{draftError}</div>
             )}
+            {canGroupRecommendations && selectedRecommendations.size >= 2 && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
+                <span>{selectedRecommendations.size} selected</span>
+                <button
+                  onClick={openGroupPreview}
+                  disabled={groupPreviewLoading}
+                  className="px-2 py-1 rounded bg-indigo-600 text-white disabled:opacity-50"
+                >
+                  {groupPreviewLoading ? 'Preparing...' : 'Create Campaign from Selected'}
+                </button>
+                <button
+                  onClick={() => setSelectedRecommendations(new Set())}
+                  className="px-2 py-1 rounded border border-indigo-300"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
             <div className="mt-4 space-y-3">
               {(engineResult?.trends_used || [])
                 .filter((trend) => {
@@ -1139,6 +1971,16 @@ export default function RecommendationsPage() {
                     <div key={`${trend.topic}-${index}`} className="border rounded-lg p-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
+                          {canGroupRecommendations && snapshotHash && (
+                            <label className="flex items-center gap-2 text-xs text-gray-500 mb-1">
+                              <input
+                                type="checkbox"
+                                checked={selectedRecommendations.has(snapshotHash)}
+                                onChange={() => toggleRecommendationSelection(snapshotHash)}
+                              />
+                              Select
+                            </label>
+                          )}
                           <div className="font-semibold text-gray-900">{trend.topic}</div>
                           <div className="text-xs text-gray-500">
                             Source: {trend.source || '—'} • State: {state || 'active'}
@@ -1398,17 +2240,379 @@ export default function RecommendationsPage() {
                 </button>
                 <button
                   onClick={savePreviewOpinion}
-                  disabled={previewLoading}
+                  disabled={previewLoading || !previewRecommendationId}
                   className="px-3 py-2 text-xs rounded-lg border border-gray-300"
                 >
                   Add Opinion
                 </button>
                 <button
                   onClick={acceptPreviewAndDraftPlan}
-                  disabled={previewLoading}
+                  disabled={previewLoading || !previewRecommendationId || !previewSnapshotHash}
                   className="px-3 py-2 text-xs rounded-lg bg-emerald-600 text-white"
                 >
                   Accept Preview
+                </button>
+                {!previewRecommendationId && (
+                  <div className="text-xs text-gray-500">
+                    Evaluate with AI to enable opinions and drafting.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {groupPreviewOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="max-w-4xl w-full rounded-xl bg-white shadow-xl border border-gray-200 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Group Recommendations</h3>
+                <button
+                  onClick={() => setGroupPreviewOpen(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </div>
+              {groupPreviewError && (
+                <div className="mb-3 text-sm text-red-600">{groupPreviewError}</div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div className="space-y-3">
+                  <div className="text-xs font-semibold text-gray-700">Groups</div>
+                  {Object.entries(groupNames)
+                    .sort((a, b) => {
+                      const aGroup = groupPreview?.groups?.find((grp: any) => grp.group_id === a[0]) || {};
+                      const bGroup = groupPreview?.groups?.find((grp: any) => grp.group_id === b[0]) || {};
+                      if (groupSortMode === 'reach') {
+                        const rank = (value: string) =>
+                          value === 'High' ? 3 : value === 'Medium' ? 2 : value === 'Low' ? 1 : 0;
+                        return rank(bGroup.expected_reach) - rank(aGroup.expected_reach);
+                      }
+                      if (groupSortMode === 'lead') {
+                        const rank = (value: string) =>
+                          value === 'High' ? 3 : value === 'Medium' ? 2 : value === 'Low' ? 1 : 0;
+                        return rank(bGroup.expected_lead_potential) - rank(aGroup.expected_lead_potential);
+                      }
+                      if (groupSortMode === 'priority') {
+                        const aPriority =
+                          typeof aGroup.go_live_priority === 'number' ? aGroup.go_live_priority : 999;
+                        const bPriority =
+                          typeof bGroup.go_live_priority === 'number' ? bGroup.go_live_priority : 999;
+                        return aPriority - bPriority;
+                      }
+                      if (groupSortMode === 'urgency') {
+                        const aDays =
+                          typeof aGroup.execution_window?.recommended_start_within_days === 'number'
+                            ? aGroup.execution_window.recommended_start_within_days
+                            : 999;
+                        const bDays =
+                          typeof bGroup.execution_window?.recommended_start_within_days === 'number'
+                            ? bGroup.execution_window.recommended_start_within_days
+                            : 999;
+                        return aDays - bDays;
+                      }
+                      if (groupSortMode === 'revenue') {
+                        const aRevenue = aGroup.growth_forecast?.estimated_revenue_30d?.max ?? 0;
+                        const bRevenue = bGroup.growth_forecast?.estimated_revenue_30d?.max ?? 0;
+                        return bRevenue - aRevenue;
+                      }
+                      if (groupSortMode === 'leads') {
+                        const aLeads = aGroup.growth_forecast?.estimated_leads_30d?.max ?? 0;
+                        const bLeads = bGroup.growth_forecast?.estimated_leads_30d?.max ?? 0;
+                        return bLeads - aLeads;
+                      }
+                      if (groupSortMode === 'roi') {
+                        const complexityRank = (value: string) =>
+                          value === 'Low' ? 3 : value === 'Medium' ? 2 : value === 'High' ? 1 : 0;
+                        const aRevenue = aGroup.growth_forecast?.estimated_revenue_30d?.max ?? 0;
+                        const bRevenue = bGroup.growth_forecast?.estimated_revenue_30d?.max ?? 0;
+                        const aComplex = complexityRank(aGroup.execution_complexity);
+                        const bComplex = complexityRank(bGroup.execution_complexity);
+                        const aScore = aComplex ? aRevenue / aComplex : aRevenue;
+                        const bScore = bComplex ? bRevenue / bComplex : bRevenue;
+                        return bScore - aScore;
+                      }
+                      if (groupSortMode === 'reliability') {
+                        const aConfidence =
+                          aGroup.growth_forecast?.forecast_confidence_band?.confidence_percentage_range?.max ?? 0;
+                        const bConfidence =
+                          bGroup.growth_forecast?.forecast_confidence_band?.confidence_percentage_range?.max ?? 0;
+                        return bConfidence - aConfidence;
+                      }
+                      const rank = (value: string) =>
+                        value === 'Low' ? 3 : value === 'Medium' ? 2 : value === 'High' ? 1 : 0;
+                      return rank(bGroup.execution_complexity) - rank(aGroup.execution_complexity);
+                    })
+                    .map(([groupId, name]) => {
+                    const groupData = groupPreview?.groups?.find((grp: any) => grp.group_id === groupId) || {};
+                    return (
+                    <div key={groupId} className="border rounded-lg p-3">
+                      <input
+                        value={name}
+                        onChange={(event) =>
+                          setGroupNames((prev) => ({ ...prev, [groupId]: event.target.value }))
+                        }
+                        className="w-full border border-gray-200 rounded px-2 py-1 text-xs"
+                      />
+                      <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                        {typeof groupData.go_live_priority === 'number' && (
+                          <span className="rounded-full bg-indigo-600 px-2 py-1 text-white">
+                            #{groupData.go_live_priority}
+                          </span>
+                        )}
+                        {groupData.execution_window?.urgency_level && (
+                          <span className="rounded-full bg-red-100 px-2 py-1 text-red-700">
+                            Urgency: {groupData.execution_window.urgency_level}
+                          </span>
+                        )}
+                        {typeof groupData.execution_window?.recommended_start_within_days === 'number' && (
+                          <span className="rounded-full bg-rose-100 px-2 py-1 text-rose-700">
+                            Start within {groupData.execution_window.recommended_start_within_days} days
+                          </span>
+                        )}
+                        {groupData.expected_reach && (
+                          <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">
+                            Reach: {groupData.expected_reach}
+                          </span>
+                        )}
+                        {groupData.expected_engagement && (
+                          <span className="rounded-full bg-blue-100 px-2 py-1 text-blue-700">
+                            Engagement: {groupData.expected_engagement}
+                          </span>
+                        )}
+                        {groupData.execution_complexity && (
+                          <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800">
+                            Complexity: {groupData.execution_complexity}
+                          </span>
+                        )}
+                        {groupData.expected_lead_potential && (
+                          <span className="rounded-full bg-purple-100 px-2 py-1 text-purple-700">
+                            Lead Potential: {groupData.expected_lead_potential}
+                          </span>
+                        )}
+                      </div>
+                      {groupData.priority_rationale && (
+                        <div className="mt-2 text-[11px] text-gray-600">
+                          {groupData.priority_rationale}
+                        </div>
+                      )}
+                      {groupData.execution_window?.timing_rationale && (
+                        <div className="mt-1 text-[11px] text-gray-500">
+                          {groupData.execution_window.timing_rationale}
+                        </div>
+                      )}
+                      {groupData.growth_forecast && (
+                        <div className="mt-3 text-[11px] text-gray-600 space-y-2">
+                          <div>
+                            Estimated Leads: {groupData.growth_forecast.estimated_leads_30d?.min ?? '—'}–
+                            {groupData.growth_forecast.estimated_leads_30d?.max ?? '—'}
+                          </div>
+                          <div>
+                            Estimated Revenue: {groupData.growth_forecast.estimated_revenue_30d?.min ?? '—'}–
+                            {groupData.growth_forecast.estimated_revenue_30d?.max ?? '—'}{' '}
+                            {groupData.growth_forecast.estimated_revenue_30d?.currency || 'INR'}
+                          </div>
+                          {(() => {
+                            const band = groupData.growth_forecast.forecast_confidence_band;
+                            if (!band) {
+                              return null;
+                            }
+                            const level = band.level || 'Low';
+                            const minRange = band.confidence_percentage_range?.min ?? 0;
+                            const maxRange = band.confidence_percentage_range?.max ?? 0;
+                            const barValue = Math.max(0, Math.min(100, maxRange));
+                            const barClass =
+                              level === 'High'
+                                ? 'bg-green-500'
+                                : level === 'Medium'
+                                ? 'bg-amber-500'
+                                : 'bg-red-500';
+                            return (
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={`rounded-full px-2 py-1 text-[10px] ${
+                                      level === 'High'
+                                        ? 'bg-green-100 text-green-700'
+                                        : level === 'Medium'
+                                        ? 'bg-amber-100 text-amber-700'
+                                        : 'bg-red-100 text-red-700'
+                                    }`}
+                                  >
+                                    Forecast Confidence: {level}
+                                  </span>
+                                  <span className="text-[10px] text-gray-500">
+                                    {minRange}%–{maxRange}%
+                                  </span>
+                                </div>
+                                <div className="h-2 w-full rounded bg-gray-100">
+                                  <div className={`h-2 rounded ${barClass}`} style={{ width: `${barValue}%` }} />
+                                </div>
+                                {Array.isArray(band.drivers) && band.drivers.length > 0 && (
+                                  <div className="text-[10px] text-gray-500">
+                                    Key drivers: {band.drivers.join(', ')}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                          {Array.isArray(groupData.growth_forecast.recommended_budget_allocation) && (
+                            <div>
+                              <div className="text-[10px] text-gray-500 mb-1">Budget Split</div>
+                              <div className="space-y-1">
+                                {groupData.growth_forecast.recommended_budget_allocation.map(
+                                  (item: any) => (
+                                    <div key={item.platform} className="flex items-center gap-2">
+                                      <div className="w-20 text-[10px] text-gray-600">
+                                        {item.platform}
+                                      </div>
+                                      <div className="flex-1 h-2 bg-gray-100 rounded">
+                                        <div
+                                          className="h-2 bg-indigo-500 rounded"
+                                          style={{ width: `${Math.min(100, item.percentage || 0)}%` }}
+                                        />
+                                      </div>
+                                      <div className="text-[10px] text-gray-600 w-10 text-right">
+                                        {item.percentage ?? 0}%
+                                      </div>
+                                    </div>
+                                  )
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <div className="mt-2 text-[11px] text-gray-500">
+                        {groupData?.rationale || '—'}
+                      </div>
+                      <button
+                        onClick={() => removeEmptyGroup(groupId)}
+                        className="mt-2 text-[10px] text-red-600"
+                      >
+                        Remove empty group
+                      </button>
+                    </div>
+                  )})}
+                  <button
+                    onClick={addGroup}
+                    className="px-2 py-1 text-xs rounded border border-gray-300"
+                  >
+                    Add Group
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  <div className="text-xs font-semibold text-gray-700">Recommendations</div>
+                  {getSelectedRecommendationPayload().map((item: any) => (
+                    <div key={item.snapshot_hash} className="border rounded-lg p-3">
+                      <div className="text-xs font-semibold text-gray-900">{item.topic}</div>
+                      <div className="mt-2">
+                        <label className="text-[10px] text-gray-500">Group</label>
+                        <select
+                          value={groupAssignments[item.snapshot_hash] || ''}
+                          onChange={(event) =>
+                            setGroupAssignments((prev) => ({
+                              ...prev,
+                              [item.snapshot_hash]: event.target.value,
+                            }))
+                          }
+                          className="mt-1 w-full border border-gray-200 rounded px-2 py-1 text-xs"
+                        >
+                          <option value="">Unassigned</option>
+                          {Object.entries(groupNames).map(([groupId, name]) => (
+                            <option key={groupId} value={groupId}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-gray-600">
+                <span className="text-xs font-semibold text-gray-700">Sort groups by:</span>
+                <button
+                  onClick={() => setGroupSortMode('reach')}
+                  className={`px-2 py-1 rounded border ${
+                    groupSortMode === 'reach' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Highest reach
+                </button>
+                <button
+                  onClick={() => setGroupSortMode('lead')}
+                  className={`px-2 py-1 rounded border ${
+                    groupSortMode === 'lead' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Highest lead potential
+                </button>
+                <button
+                  onClick={() => setGroupSortMode('priority')}
+                  className={`px-2 py-1 rounded border ${
+                    groupSortMode === 'priority' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Recommended launch order
+                </button>
+                <button
+                  onClick={() => setGroupSortMode('urgency')}
+                  className={`px-2 py-1 rounded border ${
+                    groupSortMode === 'urgency' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Most time sensitive
+                </button>
+                <button
+                  onClick={() => setGroupSortMode('revenue')}
+                  className={`px-2 py-1 rounded border ${
+                    groupSortMode === 'revenue' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Highest revenue
+                </button>
+                <button
+                  onClick={() => setGroupSortMode('leads')}
+                  className={`px-2 py-1 rounded border ${
+                    groupSortMode === 'leads' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Highest leads
+                </button>
+                <button
+                  onClick={() => setGroupSortMode('roi')}
+                  className={`px-2 py-1 rounded border ${
+                    groupSortMode === 'roi' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Best ROI
+                </button>
+                <button
+                  onClick={() => setGroupSortMode('reliability')}
+                  className={`px-2 py-1 rounded border ${
+                    groupSortMode === 'reliability' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Most reliable forecast
+                </button>
+                <button
+                  onClick={() => setGroupSortMode('complexity')}
+                  className={`px-2 py-1 rounded border ${
+                    groupSortMode === 'complexity' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Lowest complexity
+                </button>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  onClick={confirmGroupedCampaign}
+                  disabled={isCreatingGroupedCampaign}
+                  className="px-3 py-2 text-xs rounded bg-indigo-600 text-white disabled:opacity-50"
+                >
+                  {isCreatingGroupedCampaign ? 'Creating...' : 'Confirm & Create Campaign'}
                 </button>
               </div>
             </div>

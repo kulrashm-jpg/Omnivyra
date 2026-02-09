@@ -19,7 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { role } = await getUserCompanyRole(req, companyId);
-  if (!hasPermission(role, 'approve')) {
+  if (!(await hasPermission(role, 'approve'))) {
     return res.status(403).json({ error: 'NOT_ALLOWED' });
   }
 

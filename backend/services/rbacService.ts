@@ -18,6 +18,12 @@ export const Role = {
 
 export type Role = (typeof Role)[keyof typeof Role];
 
+type RbacPermissions = Record<string, string[]>;
+type RbacConfig = {
+  roles: Role[];
+  permissions: RbacPermissions;
+};
+
 export const ALL_ROLES: Role[] = [
   Role.SUPER_ADMIN,
   Role.COMPANY_ADMIN,
@@ -27,7 +33,7 @@ export const ALL_ROLES: Role[] = [
   Role.VIEW_ONLY,
 ];
 
-export const PERMISSIONS: Record<string, string[]> = {
+export const PERMISSIONS: RbacPermissions = {
   VIEW_DASHBOARD: [
     Role.COMPANY_ADMIN,
     Role.CONTENT_CREATOR,
@@ -67,6 +73,102 @@ export const PERMISSIONS: Record<string, string[]> = {
   VIEW_CONTENT: ['*'],
 };
 
+const RBAC_CACHE_TTL_MS = 30000;
+let rbacCache: { value: RbacConfig; fetchedAt: number } | null = null;
+
+const normalizePermissionKey = (value: string) =>
+  value.trim().toUpperCase().replace(/\s+/g, '_');
+
+const normalizeRoles = (roles: unknown): Role[] => {
+  if (!Array.isArray(roles)) return ALL_ROLES;
+  const normalized = Array.from(
+    new Set(
+      roles
+        .map((role) => String(role || '').trim().toUpperCase())
+        .filter((role) => (ALL_ROLES as string[]).includes(role))
+    )
+  ) as Role[];
+  if (!normalized.includes(Role.SUPER_ADMIN)) {
+    normalized.unshift(Role.SUPER_ADMIN);
+  }
+  return normalized.length ? normalized : ALL_ROLES;
+};
+
+const normalizePermissions = (permissions: unknown, roles: Role[]): RbacPermissions => {
+  if (!permissions || typeof permissions !== 'object') return { ...PERMISSIONS };
+  const allowedRoles = new Set(roles);
+  const entries = Object.entries(permissions as Record<string, unknown>);
+  const normalized = entries.reduce<RbacPermissions>((acc, [key, value]) => {
+    const permissionKey = normalizePermissionKey(key);
+    if (!permissionKey) return acc;
+    const rawList = Array.isArray(value) ? value : value ? [value] : [];
+    const cleaned = Array.from(
+      new Set(
+        rawList
+          .map((item) => String(item || '').trim().toUpperCase())
+          .filter((role) => role === '*' || allowedRoles.has(role as Role))
+      )
+    );
+    acc[permissionKey] = cleaned;
+    return acc;
+  }, {});
+  return Object.keys(normalized).length ? normalized : { ...PERMISSIONS };
+};
+
+export const clearRbacCache = () => {
+  rbacCache = null;
+};
+
+export const getRbacConfig = async (): Promise<RbacConfig> => {
+  const now = Date.now();
+  if (rbacCache && now - rbacCache.fetchedAt < RBAC_CACHE_TTL_MS) {
+    return rbacCache.value;
+  }
+  const fallback: RbacConfig = { roles: ALL_ROLES, permissions: { ...PERMISSIONS } };
+  const { data, error } = await supabase
+    .from('rbac_config')
+    .select('roles, permissions, updated_at')
+    .order('updated_at', { ascending: false })
+    .limit(1);
+  if (error || !data || data.length === 0) {
+    rbacCache = { value: fallback, fetchedAt: now };
+    return fallback;
+  }
+  const row = data[0] || {};
+  const roles = normalizeRoles(row.roles);
+  const permissions = normalizePermissions(row.permissions, roles);
+  const value = { roles, permissions };
+  rbacCache = { value, fetchedAt: now };
+  return value;
+};
+
+export const saveRbacConfig = async (input: {
+  roles: Role[];
+  permissions: RbacPermissions;
+  updatedBy?: string | null;
+}): Promise<RbacConfig> => {
+  const roles = normalizeRoles(input.roles);
+  const permissions = normalizePermissions(input.permissions, roles);
+  const payload = {
+    roles,
+    permissions,
+    updated_by: input.updatedBy || null,
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from('rbac_config')
+    .insert(payload)
+    .select('roles, permissions')
+    .single();
+  if (error) {
+    throw new Error(error.message);
+  }
+  clearRbacCache();
+  const storedRoles = normalizeRoles(data?.roles);
+  const storedPermissions = normalizePermissions(data?.permissions, storedRoles);
+  return { roles: storedRoles, permissions: storedPermissions };
+};
+
 export const normalizePermissionRole = (role: string) => {
   if (role === Role.ADMIN) return Role.COMPANY_ADMIN;
   if (role === Role.CONTENT_MANAGER) return Role.CONTENT_CREATOR;
@@ -76,9 +178,10 @@ export const normalizePermissionRole = (role: string) => {
   return role;
 };
 
-export const hasPermission = (role: string | null, action: string): boolean => {
+export const hasPermission = async (role: string | null, action: string): Promise<boolean> => {
   if (!role) return false;
-  const allowed = PERMISSIONS[action] || [];
+  const { permissions } = await getRbacConfig();
+  const allowed = permissions[action] || [];
   if (allowed.includes('*')) return true;
   const normalized = normalizePermissionRole(role);
   return allowed.includes(normalized);

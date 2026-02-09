@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import { z } from 'zod';
 import { CompanyProfile, getProfile } from './companyProfileService';
 import { WeeklyPlan } from './campaignRecommendationService';
@@ -34,15 +33,10 @@ const clampConfidence = (value: number): number => {
   return Math.round(value);
 };
 
-const getOpenAiClient = (): OpenAI => {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing OPENAI_API_KEY');
-  }
-  return new OpenAI({ apiKey });
-};
+import { optimizeWeek } from './aiGateway';
 
 export async function optimizeWeekPlan(input: {
+  companyId?: string | null;
   profile: CompanyProfile;
   campaign_objective: string;
   week_plan: WeekPlanItem;
@@ -53,7 +47,6 @@ export async function optimizeWeekPlan(input: {
   change_summary: string;
   confidence: number;
 }> {
-  const client = getOpenAiClient();
   const systemPrompt =
     'You are a campaign optimization assistant. Return JSON only. No prose.';
   const userPrompt = `
@@ -90,7 +83,8 @@ Platform Rules:
 ${JSON.stringify(input.platform_rules ?? {}, null, 2)}
 `;
 
-  const completion = await client.chat.completions.create({
+  const completion = await optimizeWeek({
+    companyId: input.companyId ?? null,
     model: 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
@@ -100,8 +94,7 @@ ${JSON.stringify(input.platform_rules ?? {}, null, 2)}
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content ?? '{}';
-  const parsed = optimizedWeekSchema.parse(JSON.parse(raw));
+  const parsed = optimizedWeekSchema.parse(completion.output || {});
   const confidence = clampConfidence(parsed.confidence);
 
   const optimized_week_plan: WeekPlanItem = {
@@ -157,6 +150,7 @@ export async function optimizeCampaignWeek(input: {
   }
 
   const proposal = await optimizeWeekPlan({
+    companyId: input.companyId,
     profile,
     campaign_objective: input.campaignObjective,
     week_plan: targetWeek,

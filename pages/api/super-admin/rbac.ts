@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin, ALL_ROLES, PERMISSIONS } from '../../../backend/services/rbacService';
+import { isPlatformSuperAdmin, getRbacConfig, saveRbacConfig } from '../../../backend/services/rbacService';
 
 const requireSuperAdminAccess = async (
   req: NextApiRequest,
@@ -28,10 +28,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!(await requireSuperAdminAccess(req, res))) return;
 
   if (req.method === 'GET') {
-    return res.status(200).json({
-      roles: ALL_ROLES,
-      permissions: PERMISSIONS,
-    });
+    const config = await getRbacConfig();
+    return res.status(200).json(config);
+  }
+
+  if (req.method === 'POST') {
+    const { user } = await getSupabaseUserFromRequest(req);
+    const { roles, permissions } = req.body || {};
+    if (!permissions || typeof permissions !== 'object') {
+      return res.status(400).json({ error: 'permissions_required' });
+    }
+    try {
+      const updated = await saveRbacConfig({
+        roles: Array.isArray(roles) ? roles : [],
+        permissions,
+        updatedBy: user?.id || null,
+      });
+      return res.status(200).json(updated);
+    } catch (error: any) {
+      return res.status(500).json({ error: error?.message || 'Failed to update RBAC config' });
+    }
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

@@ -82,7 +82,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'companyId required' });
     }
     const { role } = await getUserCompanyRole(req, companyId);
-    if (!hasPermission(role, 'view')) {
+    if (!(await hasPermission(role, 'view'))) {
       return res.status(403).json({ error: 'NOT_ALLOWED' });
     }
 

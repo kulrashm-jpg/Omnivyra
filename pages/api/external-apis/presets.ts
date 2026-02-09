@@ -71,7 +71,7 @@ const requireExternalApiAccess = async (
     res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
   }
-  if (requireManage && !hasPermission(role, 'MANAGE_EXTERNAL_APIS')) {
+  if (requireManage && !(await hasPermission(role, 'MANAGE_EXTERNAL_APIS'))) {
     res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
   }

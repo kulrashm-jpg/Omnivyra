@@ -1324,6 +1324,24 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
     }
   };
 
+  const handleTrackingLinkClick = async (trackingUrl: string, platform: string) => {
+    try {
+      await fetch('/api/tracking/link-click', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tracking_url: trackingUrl,
+          campaign_id: campaignId,
+          platform,
+        }),
+      });
+    } catch (error) {
+      console.error('Tracking link click failed', error);
+    } finally {
+      window.location.href = trackingUrl;
+    }
+  };
+
   const loadPerformanceInsights = async (id: string) => {
     try {
       setIsPerformanceLoading(true);
@@ -2100,6 +2118,21 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
                       <div className="mt-1 text-gray-600">
                         {asset.latest_content?.headline || asset.latest_content?.caption || 'No content'}
                       </div>
+                      {asset.latest_content?.tracking_link && (
+                        <div className="mt-2 text-gray-600">
+                          <button
+                            onClick={() =>
+                              handleTrackingLinkClick(
+                                asset.latest_content.tracking_link,
+                                asset.platform
+                              )
+                            }
+                            className="text-indigo-600 hover:text-indigo-700 underline"
+                          >
+                            Open tracking link
+                          </button>
+                        </div>
+                      )}
                       <div className="mt-2 flex gap-2">
                         <button
                           onClick={() => handleRegenerateContent(asset.asset_id)}

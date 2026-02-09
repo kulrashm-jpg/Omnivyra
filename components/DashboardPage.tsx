@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Edit, Trash2, ExternalLink as ExternalLinkIcon } from 'lucide-react';
+import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Edit, Trash2, ExternalLink as ExternalLinkIcon, Link2 } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import Header from './Header';
 import { supabase } from '../utils/supabaseClient';
@@ -33,7 +33,7 @@ interface DashboardStats {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { selectedCompanyId, isAdmin, isLoading, hasPermission } = useCompanyContext();
+  const { selectedCompanyId, isAdmin, isLoading, hasPermission, userRole } = useCompanyContext();
   const canCreateCampaign = hasPermission('CREATE_CAMPAIGN');
   const canScheduleContent = hasPermission('SCHEDULE_CONTENT');
   const [activeTab, setActiveTab] = useState('overview');
@@ -47,6 +47,9 @@ export default function DashboardPage() {
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<{[key: string]: CampaignProgress}>({});
+  const [leadCaptureModalOpen, setLeadCaptureModalOpen] = useState(false);
+  const [leadCaptureToast, setLeadCaptureToast] = useState<string | null>(null);
+  const isCompanyAdmin = (userRole || '').toString() === 'COMPANY_ADMIN';
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     const { data } = await supabase.auth.getSession();
@@ -321,7 +324,8 @@ export default function DashboardPage() {
             { id: 'campaigns', label: 'Campaigns', icon: Target },
             { id: 'team', label: 'Team', icon: Users },
             { id: 'analytics', label: 'Analytics', icon: TrendingUp },
-            { id: 'calendar', label: 'Calendar', icon: Calendar }
+            { id: 'calendar', label: 'Calendar', icon: Calendar },
+            { id: 'integrations', label: 'Integrations', icon: Link2 }
           ].map((tab) => {
             const Icon = tab.icon;
             if (tab.id === 'team') {
@@ -1005,7 +1009,147 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
+        {activeTab === 'integrations' && (
+          <div className="space-y-8">
+            {leadCaptureToast && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                {leadCaptureToast}
+              </div>
+            )}
+            {isCompanyAdmin && (
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    Connect Website Lead Form (Coming Soon)
+                  </h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    This integration will allow the platform to capture leads generated from your campaigns
+                    and attribute them to specific content, channels, and themes.
+                  </p>
+                </div>
+                <span className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600">
+                  Not Connected
+                </span>
+              </div>
+              <div className="space-y-4 text-sm text-gray-700">
+                <div>
+                  <div className="text-xs font-semibold text-gray-600 mb-1">What you’ll gain once connected</div>
+                  <ul className="list-disc list-inside space-y-1 text-gray-700">
+                    <li>Identify which platforms generate qualified leads</li>
+                    <li>Track conversions from campaigns to website inquiries</li>
+                    <li>Improve AI recommendations using real lead data</li>
+                    <li>Measure ROI across channels</li>
+                  </ul>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-gray-600 mb-1">Data expected from your website form</div>
+                  <ul className="list-disc list-inside space-y-1 text-gray-700">
+                    <li>Name</li>
+                    <li>Email</li>
+                    <li>Company (optional)</li>
+                    <li>Message / Inquiry</li>
+                    <li>UTM parameters (auto-captured)</li>
+                  </ul>
+                </div>
+                <div className="text-xs text-gray-600">
+                  Next step (when enabled): You will be able to paste your form endpoint or install a lightweight
+                  tracking snippet.
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
+                <div className="space-y-1">
+                  <div className="text-xs text-gray-500">Integration Status</div>
+                  <div className="font-medium">Not Connected</div>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-gray-500">Source</div>
+                  <div className="font-medium">Website Form</div>
+                </div>
+              </div>
+              <div className="mt-5">
+                <button
+                  onClick={() => setLeadCaptureModalOpen(true)}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+                >
+                  View Setup Details
+                </button>
+              </div>
+            </div>
+            )}
+          </div>
+        )}
       </div>
+      {leadCaptureModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl border border-gray-200">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-semibold text-gray-900">
+                Website Lead Capture Integration (Coming Soon)
+              </h3>
+              <button
+                onClick={() => setLeadCaptureModalOpen(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-5 text-sm text-gray-700">
+              <div>
+                <div className="text-xs font-semibold text-gray-600 mb-1">
+                  What this integration will do
+                </div>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Track inbound leads from website forms</li>
+                  <li>Connect leads to campaign source (UTM tracking)</li>
+                  <li>Measure platform effectiveness</li>
+                  <li>Improve lead conversion intelligence</li>
+                </ul>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-gray-600 mb-1">
+                  Information Company Admin should keep ready
+                </div>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Website domain</li>
+                  <li>Form provider (WordPress / Webflow / Custom)</li>
+                  <li>Email destination</li>
+                  <li>CRM (if any)</li>
+                </ul>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-gray-600 mb-1">
+                  Expected Data Once Connected
+                </div>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Name</li>
+                  <li>Email</li>
+                  <li>Phone (optional)</li>
+                  <li>Landing page URL</li>
+                  <li>UTM source/campaign</li>
+                </ul>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                onClick={() => {
+                  setLeadCaptureToast('Feature will be enabled soon.');
+                  setLeadCaptureModalOpen(false);
+                }}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+              >
+                Notify Me When Available
+              </button>
+              <button
+                onClick={() => setLeadCaptureModalOpen(false)}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

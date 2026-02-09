@@ -49,7 +49,7 @@ const ensureCompanyAdminAccess = async (
   if (access.role === Role.SUPER_ADMIN) {
     return { userId: access.userId, role: Role.SUPER_ADMIN };
   }
-  if (!access.role || !hasPermission(access.role, 'CREATE_USER')) {
+  if (!access.role || !(await hasPermission(access.role, 'CREATE_USER'))) {
     try {
       await supabase.from('audit_logs').insert({
         actor_user_id: access.userId,
@@ -478,7 +478,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
     }
 
-    if (!hasPermission(access.role, 'ASSIGN_ROLE')) {
+    if (!(await hasPermission(access.role, 'ASSIGN_ROLE'))) {
       await insertAuditLog({
         actorUserId: access.userId,
         action: 'PERMISSION_DENIED',
@@ -532,7 +532,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'userId is required' });
     }
 
-    if (!hasPermission(access.role, 'ASSIGN_ROLE')) {
+    if (!(await hasPermission(access.role, 'ASSIGN_ROLE'))) {
       await insertAuditLog({
         actorUserId: access.userId,
         action: 'PERMISSION_DENIED',

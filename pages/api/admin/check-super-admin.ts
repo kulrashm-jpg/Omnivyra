@@ -16,17 +16,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const companyId =
       (req.query.companyId as string | undefined) ||
       (req.query.company_id as string | undefined);
-    if (!companyId) {
-      return res.status(400).json({ error: 'companyId required' });
-    }
 
-    const { data, error } = await supabase
+    const query = supabase
       .from('user_company_roles')
       .select('role')
       .eq('user_id', userId)
-      .eq('company_id', companyId)
       .eq('role', 'SUPER_ADMIN')
-      .maybeSingle();
+      .limit(1);
+
+    const { data, error } = companyId ? await query.eq('company_id', companyId).maybeSingle() : await query.maybeSingle();
 
     if (error) {
       console.error('Error checking super admin status:', error);

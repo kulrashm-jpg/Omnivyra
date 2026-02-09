@@ -2,8 +2,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getUserRole, Role } from '../../../../backend/services/rbacService';
-import OpenAI from 'openai';
 import { getProfile } from '../../../../backend/services/companyProfileService';
+import { previewStrategy } from '../../../../backend/services/aiGateway';
 
 const allowedRoles = new Set([Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.SUPER_ADMIN]);
 
@@ -85,25 +85,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!process.env.OPENAI_API_KEY) {
     return res.status(500).json({ error: 'OpenAI API key not configured' });
   }
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  const completion = await openai.chat.completions.create({
-    model,
-    temperature: 0.4,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: 'You generate preview-only strategy JSON for campaign planning.',
-      },
-      { role: 'user', content: message },
-    ],
-  });
-  const raw = completion.choices?.[0]?.message?.content || '{}';
   let parsed: any = {};
   try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
+    const completion = await previewStrategy({
+      companyId,
+      model,
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: 'You generate preview-only strategy JSON for campaign planning.',
+        },
+        { role: 'user', content: message },
+      ],
+    });
+    parsed = completion.output || {};
+  } catch {
     return res.status(500).json({ error: 'Failed to parse preview response' });
   }
 

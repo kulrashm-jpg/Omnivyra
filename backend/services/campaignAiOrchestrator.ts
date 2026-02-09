@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { generateCampaignPlan } from './aiGateway';
 import { assessVirality } from './viralityAdvisorService';
 import { buildCampaignSnapshotWithHash, canonicalJsonStringify } from './viralitySnapshotBuilder';
 import { buildDecideRequest, requestDecision, DecisionResult } from './omnivyreClient';
@@ -63,14 +63,6 @@ export interface CampaignAiPlanResult {
     platforms: Record<string, string>;
   };
   raw_plan_text: string;
-}
-
-function getOpenAiClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing OPENAI_API_KEY');
-  }
-  return new OpenAI({ apiKey });
 }
 
 function buildPromptContext(input: {
@@ -162,8 +154,7 @@ export async function runCampaignAiPlan(
     platformStrategies,
   });
 
-  const client = getOpenAiClient();
-  const completion = await client.chat.completions.create({
+  const completion = await generateCampaignPlan({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     messages: [
@@ -172,7 +163,7 @@ export async function runCampaignAiPlan(
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content?.trim() || '';
+  const raw = completion.output?.trim() || '';
   if (input.mode === 'refine_day') {
     const dayPlan = await parseAiRefinedDay(raw);
 

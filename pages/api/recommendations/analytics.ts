@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getRecommendationAnalytics } from '../../../backend/services/recommendationAnalyticsService';
-import { Role } from '../../../backend/services/rbacService';
+import { PERMISSIONS } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -22,4 +22,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.COMPANY_ADMIN]);
+export default withRBAC(handler, PERMISSIONS.VIEW_ANALYTICS);

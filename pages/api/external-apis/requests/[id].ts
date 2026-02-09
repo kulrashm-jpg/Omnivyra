@@ -56,7 +56,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }
       const { role, error: roleError } = await getUserRole(user.id, companyId);
-      if (roleError || !role || !hasPermission(role, 'MANAGE_EXTERNAL_APIS')) {
+      if (roleError || !role || !(await hasPermission(role, 'MANAGE_EXTERNAL_APIS'))) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }
       canManageExternalApis = true;

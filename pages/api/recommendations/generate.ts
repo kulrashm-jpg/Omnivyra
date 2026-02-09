@@ -6,7 +6,7 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import OpenAI from 'openai';
+import { generateRecommendation } from '../../../backend/services/aiGateway';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -24,29 +24,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       selected_api_ids,
       manual_context,
     } = req.body || {};
-    if (!companyId || !campaignId) {
-      return res.status(400).json({ error: 'companyId and campaignId are required' });
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId is required' });
     }
+    const resolvedCampaignId =
+      typeof campaignId === 'string' && campaignId.trim().length > 0 ? campaignId : null;
     const access = await enforceCompanyAccess({
       req,
       res,
       companyId,
-      campaignId,
-      requireCampaignId: true,
+      campaignId: resolvedCampaignId ?? undefined,
+      requireCampaignId: false,
     });
     if (!access) return;
-    console.log('RECOMMENDATION_REQUEST', { companyId, campaignId });
+    console.log('RECOMMENDATION_REQUEST', { companyId, campaignId: resolvedCampaignId });
 
-    const { data: mappingRows, error: mappingError } = await supabase
-      .from('campaign_versions')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('campaign_id', campaignId);
-    if (mappingError) {
-      return res.status(500).json({ error: 'Failed to verify campaign link' });
-    }
-    if (!mappingRows || mappingRows.length === 0) {
-      return res.status(403).json({ error: 'CAMPAIGN_NOT_IN_COMPANY' });
+    if (resolvedCampaignId) {
+      const { data: mappingRows, error: mappingError } = await supabase
+        .from('campaign_versions')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('campaign_id', resolvedCampaignId);
+      if (mappingError) {
+        return res.status(500).json({ error: 'Failed to verify campaign link' });
+      }
+      if (!mappingRows || mappingRows.length === 0) {
+        return res.status(403).json({ error: 'CAMPAIGN_NOT_IN_COMPANY' });
+      }
     }
 
     const chatMode = Boolean(chat);
@@ -58,7 +62,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const result = await generateRecommendations(
       {
         companyId,
-        campaignId,
+        campaignId: resolvedCampaignId ?? undefined,
         objective,
         durationWeeks,
         simulate: Boolean(simulate),
@@ -75,13 +79,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     );
 
     let opportunityAnalysis: any | null = null;
-    if (manualContext?.type === 'opportunity') {
+    if (manualContext?.type === 'opportunity' || manualContext?.type === 'detected_opportunity') {
       try {
         if (!process.env.OPENAI_API_KEY) {
           console.warn('OPENAI_API_KEY_MISSING_FOR_OPPORTUNITY_ANALYSIS');
         } else {
           const profile = await getProfile(companyId, { autoRefine: false });
-          const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
           const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
           const message =
             'Evaluate this opportunity against the company profile.\n' +
@@ -93,7 +96,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             '- confidence (0 to 1)\n' +
             `Company Profile:\n${JSON.stringify(profile || {}, null, 2)}\n` +
             `Opportunity:\n${JSON.stringify(manualContext || {}, null, 2)}`;
-          const completion = await openai.chat.completions.create({
+          const completion = await generateRecommendation({
+            companyId,
             model,
             temperature: 0.3,
             response_format: { type: 'json_object' },
@@ -102,8 +106,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               { role: 'user', content: message },
             ],
           });
-          const raw = completion.choices?.[0]?.message?.content || '{}';
-          opportunityAnalysis = JSON.parse(raw);
+          opportunityAnalysis = completion.output;
         }
       } catch (error) {
         console.warn('OPPORTUNITY_ANALYSIS_FAILED', error);
@@ -111,7 +114,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     }
 
-    if (manualContext?.type === 'opportunity' && manualContext?.topic) {
+    if ((manualContext?.type === 'opportunity' || manualContext?.type === 'detected_opportunity') && manualContext?.topic) {
       const manualTopic = String(manualContext.topic).trim();
       if (manualTopic) {
         const exists = (result.trends_used || []).some(
@@ -121,7 +124,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           result.trends_used = [
             {
               topic: manualTopic,
-              source: 'opportunity',
+              source: manualContext?.type === 'detected_opportunity' ? 'detected_opportunity' : 'opportunity',
               sources: ['manual'],
               platform_tag: Array.isArray(manualContext.platform_preferences)
                 ? manualContext.platform_preferences[0]
@@ -148,7 +151,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           : [fallbackTopic];
       const records = topics.map((topic) => ({
         company_id: companyId,
-        campaign_id: campaignId,
+        campaign_id: resolvedCampaignId,
         trend_topic: topic,
         confidence: result.confidence_score,
         explanation: result.explanation,
@@ -208,7 +211,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       : result;
 
-    if (!simulate && opportunityAnalysis && manualContext?.type === 'opportunity') {
+    if (!simulate && opportunityAnalysis && (manualContext?.type === 'opportunity' || manualContext?.type === 'detected_opportunity')) {
       try {
         const topicKey = manualContext?.topic ? String(manualContext.topic) : null;
         const targetRow = topicKey ? snapshotRowsByTopic[topicKey] : null;

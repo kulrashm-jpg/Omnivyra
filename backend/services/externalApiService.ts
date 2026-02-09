@@ -698,7 +698,7 @@ export async function getEnabledApis(companyId?: string | null): Promise<Externa
       .eq('is_active', true)
       .order('created_at', { ascending: true });
 
-  const scopedResult = await createQuery().eq('company_id', companyId);
+  const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
   const applyPresetSelections = async (sources: ExternalApiSource[]) => {
     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
     const companySpecific = companyScoped
@@ -748,7 +748,7 @@ export async function getAvailableApis(companyId?: string | null): Promise<Exter
       .eq('is_active', true)
       .order('created_at', { ascending: true });
 
-  const scoped = await baseQuery().eq('company_id', companyId);
+  const scoped = await baseQuery().or(`company_id.eq.${companyId},company_id.is.null`);
   if (!scoped.error) {
     const companySpecific = (scoped.data || []).filter((row) => row.company_id === companyId);
     const globalPresets = (scoped.data || []).filter((row) => row.is_preset && !row.company_id);
@@ -1066,7 +1066,7 @@ export async function getPlatformConfigs(companyId?: string | null): Promise<Pla
       .select('*')
       .order('created_at', { ascending: true });
 
-  const scopedResult = await createQuery().eq('company_id', companyId);
+  const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
   const applyPresetSelections = async (sources: any[]) => {
     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
     const companySpecific = companyScoped

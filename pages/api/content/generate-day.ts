@@ -6,6 +6,7 @@ import { generateContentForDay } from '../../../backend/services/contentGenerati
 import { getCampaignMemory } from '../../../backend/services/campaignMemoryService';
 import { createContentAsset } from '../../../backend/services/contentAssetService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { generateTrackingLink } from '../../../backend/services/trackingLinkService';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 
@@ -66,12 +67,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       campaignMemory: await getCampaignMemory({ companyId, campaignId }),
     });
 
+    const contentType = dayPlan.content_type || dayPlan.contentType || 'content';
+    const derivedDayNumber = Number(
+      dayPlan.day_number ?? dayPlan.dayNumber ?? dayPlan.dayIndex ?? dayPlan.day ?? 0
+    );
+    const tracking = await generateTrackingLink({
+      companyId,
+      campaignId,
+      platform: dayPlan.platform,
+      contentType,
+      weekNumber: Number(weekNumber),
+      dayNumber: Number.isFinite(derivedDayNumber) ? derivedDayNumber : 0,
+    });
+    const enrichedContent = {
+      ...content,
+      primary_cta_url: tracking.url,
+      tracking_link: tracking.url,
+    };
+
     const asset = await createContentAsset({
       campaignId,
       weekNumber: Number(weekNumber),
       day,
       platform: dayPlan.platform,
-      content,
+      content: enrichedContent,
     });
 
     return res.status(200).json(asset);

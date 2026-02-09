@@ -75,15 +75,72 @@ export default function CampaignPlanning() {
   const [selectedSuggestionIds, setSelectedSuggestionIds] = useState<Set<string>>(new Set());
   const [isRevisingStrategy, setIsRevisingStrategy] = useState(false);
   const [reviseError, setReviseError] = useState<string | null>(null);
+  const [forecastVsActual, setForecastVsActual] = useState<any | null>(null);
+  const [isForecastLoading, setIsForecastLoading] = useState(false);
+  const [forecastError, setForecastError] = useState<string | null>(null);
+  const [optimizationAdvice, setOptimizationAdvice] = useState<any | null>(null);
+  const [isOptimizationLoading, setIsOptimizationLoading] = useState(false);
+  const [optimizationError, setOptimizationError] = useState<string | null>(null);
+  const [viralTopicMemory, setViralTopicMemory] = useState<any | null>(null);
+  const [isViralTopicLoading, setIsViralTopicLoading] = useState(false);
+  const [viralTopicError, setViralTopicError] = useState<string | null>(null);
+  const [leadConversionIntel, setLeadConversionIntel] = useState<any | null>(null);
+  const [isLeadIntelLoading, setIsLeadIntelLoading] = useState(false);
+  const [leadIntelError, setLeadIntelError] = useState<string | null>(null);
+  const [momentumData, setMomentumData] = useState<any | null>(null);
+  const [isMomentumLoading, setIsMomentumLoading] = useState(false);
+  const [momentumError, setMomentumError] = useState<string | null>(null);
+  const [stableThemesOpen, setStableThemesOpen] = useState(false);
+  const [platformAdvice, setPlatformAdvice] = useState<any | null>(null);
+  const [isPlatformAdviceLoading, setIsPlatformAdviceLoading] = useState(false);
+  const [platformAdviceError, setPlatformAdviceError] = useState<string | null>(null);
+  const [platformSortMode, setPlatformSortMode] = useState<'roi' | 'growth' | 'reduce'>('roi');
+  const [rebalanceProposal, setRebalanceProposal] = useState<any | null>(null);
+  const [rebalanceStatus, setRebalanceStatus] = useState<'pending' | 'approved' | 'rejected' | null>(null);
+  const [rebalanceError, setRebalanceError] = useState<string | null>(null);
+  const [isRebalanceLoading, setIsRebalanceLoading] = useState(false);
+  const [showRebalanceRationale, setShowRebalanceRationale] = useState(false);
+  const [showRebalanceRejectModal, setShowRebalanceRejectModal] = useState(false);
+  const [rebalanceRejectReason, setRebalanceRejectReason] = useState('');
   const [recommendationContext, setRecommendationContext] = useState<any | null>(null);
   const [recommendationHash, setRecommendationHash] = useState<string | null>(null);
   const [alignedPreview, setAlignedPreview] = useState<any | null>(null);
   const [alignedPreviewError, setAlignedPreviewError] = useState<string | null>(null);
+  const [groupedContext, setGroupedContext] = useState<any | null>(null);
 
   const isStrategyLocked = strategyStatus === 'approved';
   const isStrategyProposed = strategyStatus === 'proposed';
   const isDraftMode =
     typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'draft';
+  const forecastDelta = (() => {
+    const variance = forecastVsActual?.variance || {};
+    const candidates = [
+      { key: 'revenue_delta_pct', label: 'Revenue' },
+      { key: 'lead_delta_pct', label: 'Leads' },
+      { key: 'reach_delta_pct', label: 'Reach' },
+    ];
+    for (const candidate of candidates) {
+      const value = variance[candidate.key];
+      if (typeof value === 'number') {
+        return { value, label: candidate.label };
+      }
+    }
+    return null;
+  })();
+  const accuracyPct =
+    forecastDelta && typeof forecastDelta.value === 'number'
+      ? Math.max(0, Math.min(100, 100 - Math.abs(forecastDelta.value)))
+      : null;
+  const platformAccuracyEntries = Object.entries(
+    forecastVsActual?.learning_signals?.platform_accuracy || {}
+  )
+    .sort((a: any, b: any) => (b?.[1]?.share_pct ?? 0) - (a?.[1]?.share_pct ?? 0))
+    .slice(0, 4);
+  const platformAdviceEntries = Object.entries(
+    optimizationAdvice?.learning_signals?.platform_accuracy || {}
+  )
+    .sort((a: any, b: any) => (b?.[1]?.share_pct ?? 0) - (a?.[1]?.share_pct ?? 0))
+    .slice(0, 4);
 
   // Initialize campaign from URL params or load existing campaign
   useEffect(() => {
@@ -138,6 +195,19 @@ export default function CampaignPlanning() {
       }
     }
 
+    if (typeof window !== 'undefined' && urlParams.get('grouped') === '1' && existingCampaignId) {
+      const grouped = window.sessionStorage.getItem(
+        `recommendation_grouping_${existingCampaignId}`
+      );
+      if (grouped) {
+        try {
+          setGroupedContext(JSON.parse(grouped));
+        } catch {
+          setGroupedContext(null);
+        }
+      }
+    }
+
     if (mode === 'create') {
       console.log('Create mode - starting fresh campaign');
       // Don't load any existing campaign, start fresh
@@ -179,10 +249,31 @@ export default function CampaignPlanning() {
     if (!campaignId) {
       setStrategyStatus(null);
       setReapprovalStatus(null);
+      setForecastVsActual(null);
+      setForecastError(null);
+      setOptimizationAdvice(null);
+      setOptimizationError(null);
+      setViralTopicMemory(null);
+      setViralTopicError(null);
+      setLeadConversionIntel(null);
+      setLeadIntelError(null);
+      setMomentumData(null);
+      setMomentumError(null);
+      setPlatformAdvice(null);
+      setPlatformAdviceError(null);
+      setRebalanceProposal(null);
+      setRebalanceStatus(null);
+      setRebalanceError(null);
       return;
     }
     fetchStrategyStatus(campaignId);
     fetchReapprovalStatus(campaignId);
+    fetchForecastVsActual(campaignId);
+    fetchOptimizationAdvice(campaignId);
+    fetchViralTopicMemory(campaignId);
+    fetchLeadConversionIntel(campaignId);
+    fetchMomentumData(campaignId);
+    fetchPlatformAdvice(campaignId);
   }, [campaignId]);
 
   useEffect(() => {
@@ -374,6 +465,209 @@ export default function CampaignPlanning() {
       setAiSuggestionContext(null);
     } finally {
       setIsAiImprovementsLoading(false);
+    }
+  };
+
+  const fetchForecastVsActual = async (id: string) => {
+    setIsForecastLoading(true);
+    setForecastError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${id}/forecast-vs-actual`);
+      if (!response.ok) {
+        setForecastVsActual(null);
+        setForecastError('Failed to load forecast accuracy.');
+        return;
+      }
+      const data = await response.json();
+      setForecastVsActual(data || null);
+    } catch (error) {
+      console.error('Error loading forecast accuracy:', error);
+      setForecastVsActual(null);
+      setForecastError('Failed to load forecast accuracy.');
+    } finally {
+      setIsForecastLoading(false);
+    }
+  };
+
+  const fetchOptimizationAdvice = async (id: string) => {
+    setIsOptimizationLoading(true);
+    setOptimizationError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${id}/optimization-advice`);
+      if (!response.ok) {
+        setOptimizationAdvice(null);
+        setOptimizationError('Failed to load optimization advice.');
+        return;
+      }
+      const data = await response.json();
+      setOptimizationAdvice(data || null);
+    } catch (error) {
+      console.error('Error loading optimization advice:', error);
+      setOptimizationAdvice(null);
+      setOptimizationError('Failed to load optimization advice.');
+    } finally {
+      setIsOptimizationLoading(false);
+    }
+  };
+
+  const fetchViralTopicMemory = async (id: string) => {
+    setIsViralTopicLoading(true);
+    setViralTopicError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${id}/viral-topic-memory`);
+      if (!response.ok) {
+        setViralTopicMemory(null);
+        setViralTopicError('Failed to load viral topic memory.');
+        return;
+      }
+      const data = await response.json();
+      setViralTopicMemory(data || null);
+    } catch (error) {
+      console.error('Error loading viral topic memory:', error);
+      setViralTopicMemory(null);
+      setViralTopicError('Failed to load viral topic memory.');
+    } finally {
+      setIsViralTopicLoading(false);
+    }
+  };
+
+  const fetchLeadConversionIntel = async (id: string) => {
+    setIsLeadIntelLoading(true);
+    setLeadIntelError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${id}/lead-conversion-intelligence`);
+      if (!response.ok) {
+        setLeadConversionIntel(null);
+        setLeadIntelError('Failed to load lead conversion intelligence.');
+        return;
+      }
+      const data = await response.json();
+      setLeadConversionIntel(data || null);
+    } catch (error) {
+      console.error('Error loading lead conversion intelligence:', error);
+      setLeadConversionIntel(null);
+      setLeadIntelError('Failed to load lead conversion intelligence.');
+    } finally {
+      setIsLeadIntelLoading(false);
+    }
+  };
+
+  const fetchMomentumData = async (id: string) => {
+    setIsMomentumLoading(true);
+    setMomentumError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${id}/momentum-amplifier`);
+      if (!response.ok) {
+        setMomentumData(null);
+        setMomentumError('Failed to load momentum insights.');
+        return;
+      }
+      const data = await response.json();
+      setMomentumData(data || null);
+    } catch (error) {
+      console.error('Error loading momentum insights:', error);
+      setMomentumData(null);
+      setMomentumError('Failed to load momentum insights.');
+    } finally {
+      setIsMomentumLoading(false);
+    }
+  };
+
+  const fetchPlatformAdvice = async (id: string) => {
+    setIsPlatformAdviceLoading(true);
+    setPlatformAdviceError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${id}/platform-allocation-advice`);
+      if (!response.ok) {
+        setPlatformAdvice(null);
+        setPlatformAdviceError('Failed to load platform allocation advice.');
+        return;
+      }
+      const data = await response.json();
+      setPlatformAdvice(data || null);
+    } catch (error) {
+      console.error('Error loading platform allocation advice:', error);
+      setPlatformAdvice(null);
+      setPlatformAdviceError('Failed to load platform allocation advice.');
+    } finally {
+      setIsPlatformAdviceLoading(false);
+    }
+  };
+
+  const proposeFrequencyRebalance = async () => {
+    if (!campaignId) return;
+    setIsRebalanceLoading(true);
+    setRebalanceError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/propose-frequency-rebalance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        setRebalanceError(errorBody?.error || 'Failed to propose frequency rebalance.');
+        return;
+      }
+      const data = await response.json();
+      setRebalanceProposal(data || null);
+      setRebalanceStatus('pending');
+    } catch (error) {
+      console.error('Error proposing rebalance:', error);
+      setRebalanceError('Failed to propose frequency rebalance.');
+    } finally {
+      setIsRebalanceLoading(false);
+    }
+  };
+
+  const approveFrequencyRebalance = async () => {
+    if (!campaignId) return;
+    setIsRebalanceLoading(true);
+    setRebalanceError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/approve-frequency-rebalance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        setRebalanceError(errorBody?.error || 'Failed to approve rebalance.');
+        return;
+      }
+      await fetchPlatformAdvice(campaignId);
+      setRebalanceStatus('approved');
+    } catch (error) {
+      console.error('Error approving rebalance:', error);
+      setRebalanceError('Failed to approve rebalance.');
+    } finally {
+      setIsRebalanceLoading(false);
+    }
+  };
+
+  const rejectFrequencyRebalance = async () => {
+    if (!campaignId) return;
+    setIsRebalanceLoading(true);
+    setRebalanceError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/reject-frequency-rebalance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rejection_reason: rebalanceRejectReason || null,
+        }),
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        setRebalanceError(errorBody?.error || 'Failed to reject rebalance.');
+        return;
+      }
+      setRebalanceStatus('rejected');
+      setShowRebalanceRejectModal(false);
+      setRebalanceRejectReason('');
+    } catch (error) {
+      console.error('Error rejecting rebalance:', error);
+      setRebalanceError('Failed to reject rebalance.');
+    } finally {
+      setIsRebalanceLoading(false);
     }
   };
 
@@ -1128,6 +1422,41 @@ export default function CampaignPlanning() {
             )}
           </div>
         )}
+        {groupedContext && (
+          <div className="mb-6 rounded-2xl border border-indigo-200 bg-white/90 p-6 shadow-lg">
+            <h3 className="text-lg font-semibold text-gray-900 mb-3">Trend Groups</h3>
+            <div className="text-sm text-gray-700 space-y-3">
+              {(groupedContext.groups || []).map((group: any) => (
+                <div key={group.group_id} className="rounded-lg border border-gray-200 p-3">
+                  <div className="font-semibold text-gray-900">{group.theme_name || 'Group'}</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {Array.isArray(group.recommendations)
+                      ? group.recommendations.join(', ')
+                      : '—'}
+                  </div>
+                </div>
+              ))}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-gray-600">
+                <div>
+                  <div className="text-[10px] text-gray-500">Suggested Platform Mix</div>
+                  <div className="font-medium">
+                    {Array.isArray(groupedContext.suggested_platform_mix)
+                      ? groupedContext.suggested_platform_mix.join(', ')
+                      : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-gray-500">Suggested Frequency</div>
+                  <div className="font-medium whitespace-pre-wrap">
+                    {groupedContext.suggested_frequency
+                      ? JSON.stringify(groupedContext.suggested_frequency, null, 2)
+                      : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {isDraftMode && alignedPreview && (
           <div className="mb-6 rounded-2xl border border-emerald-200 bg-white/90 p-6 shadow-lg">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -1363,6 +1692,551 @@ export default function CampaignPlanning() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+        {campaignId && (
+          <div className="mb-6 rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Prediction Accuracy</h3>
+            </div>
+            {isForecastLoading && (
+              <div className="text-sm text-gray-600">Loading prediction accuracy...</div>
+            )}
+            {!isForecastLoading && forecastError && (
+              <div className="text-sm text-red-600">{forecastError}</div>
+            )}
+            {!isForecastLoading && !forecastError && !forecastVsActual && (
+              <div className="text-sm text-gray-600">No prediction accuracy data available.</div>
+            )}
+            {!isForecastLoading && !forecastError && forecastVsActual && (
+              <div className="space-y-3 text-sm text-gray-700">
+                <div className="flex flex-wrap items-center gap-3">
+                  {typeof accuracyPct === 'number' && (
+                    <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-700 text-xs">
+                      Accuracy {accuracyPct.toFixed(0)}%
+                    </span>
+                  )}
+                  {forecastDelta && (
+                    <span className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">
+                      {forecastDelta.value >= 0 ? 'Over-performed' : 'Under-performed'}{' '}
+                      {Math.abs(forecastDelta.value).toFixed(1)}% ({forecastDelta.label})
+                    </span>
+                  )}
+                </div>
+                {platformAccuracyEntries.length > 0 && (
+                  <div>
+                    <div className="text-xs font-semibold text-gray-600 mb-2">Platform insights</div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {platformAccuracyEntries.map(([platform, stats]) => (
+                        <span
+                          key={platform}
+                          className="rounded-full bg-indigo-50 px-3 py-1 text-indigo-700"
+                        >
+                          {platform}: {stats?.share_pct ?? 0}% ({stats?.clicks ?? 0} clicks)
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {campaignId && (
+          <div className="mb-6 rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">AI Optimization Advice</h3>
+            </div>
+            {isOptimizationLoading && (
+              <div className="text-sm text-gray-600">Loading optimization advice...</div>
+            )}
+            {!isOptimizationLoading && optimizationError && (
+              <div className="text-sm text-red-600">{optimizationError}</div>
+            )}
+            {!isOptimizationLoading && !optimizationError && !optimizationAdvice && (
+              <div className="text-sm text-gray-600">No optimization advice available.</div>
+            )}
+            {!isOptimizationLoading && !optimizationError && optimizationAdvice && (
+              <div className="space-y-3 text-sm text-gray-700">
+                {Array.isArray(optimizationAdvice.frequency_adjustment) &&
+                  optimizationAdvice.frequency_adjustment.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 mb-2">
+                        Frequency adjustments
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {optimizationAdvice.frequency_adjustment.slice(0, 4).map((item: any) => (
+                          <span
+                            key={`${item.platform}-freq`}
+                            className="rounded-full bg-indigo-50 px-3 py-1 text-indigo-700"
+                          >
+                            {item.recommended_posts_per_week > item.current_posts_per_week
+                              ? `Increase ${item.platform} to ${item.recommended_posts_per_week}/wk`
+                              : item.recommended_posts_per_week < item.current_posts_per_week
+                              ? `Reduce ${item.platform} to ${item.recommended_posts_per_week}/wk`
+                              : `Maintain ${item.platform} at ${item.current_posts_per_week}/wk`}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                {Array.isArray(optimizationAdvice.platform_reallocation) &&
+                  optimizationAdvice.platform_reallocation.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 mb-2">
+                        Platform effort signals
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {optimizationAdvice.platform_reallocation.slice(0, 4).map((item: any) => (
+                          <span
+                            key={`${item.platform}-alloc`}
+                            className="rounded-full bg-amber-50 px-3 py-1 text-amber-700"
+                          >
+                            {item.recommended_weight > item.current_weight
+                              ? `Boost ${item.platform} allocation`
+                              : item.recommended_weight < item.current_weight
+                              ? `Reduce ${item.platform} effort`
+                              : `Maintain ${item.platform} allocation`}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                {Array.isArray(optimizationAdvice.topic_cluster_boost) &&
+                  optimizationAdvice.topic_cluster_boost.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 mb-2">
+                        Theme cluster focus
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {optimizationAdvice.topic_cluster_boost.slice(0, 4).map((item: any) => (
+                          <span
+                            key={`${item.theme_name}-boost`}
+                            className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700"
+                          >
+                            Boost {item.theme_name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                {platformAdviceEntries.length > 0 && (
+                  <div>
+                    <div className="text-xs font-semibold text-gray-600 mb-2">
+                      Platform click distribution
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {platformAdviceEntries.map(([platform, stats]) => (
+                        <span
+                          key={`opt-${platform}`}
+                          className="rounded-full bg-gray-100 px-3 py-1 text-gray-700"
+                        >
+                          {platform}: {stats?.share_pct ?? 0}%
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {campaignId && (
+          <div className="mb-6 rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Viral Topic Intelligence</h3>
+            </div>
+            {isViralTopicLoading && (
+              <div className="text-sm text-gray-600">Loading viral topic intelligence...</div>
+            )}
+            {!isViralTopicLoading && viralTopicError && (
+              <div className="text-sm text-red-600">{viralTopicError}</div>
+            )}
+            {!isViralTopicLoading && !viralTopicError && !viralTopicMemory && (
+              <div className="text-sm text-gray-600">No viral topic intelligence available.</div>
+            )}
+            {!isViralTopicLoading && !viralTopicError && viralTopicMemory && (
+              <div className="space-y-3 text-sm text-gray-700">
+                {Array.isArray(viralTopicMemory.high_performing_clusters) &&
+                  viralTopicMemory.high_performing_clusters.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 mb-2">
+                        Top repeatable themes
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {viralTopicMemory.high_performing_clusters.slice(0, 5).map((item: any) => (
+                          <span
+                            key={`${item.theme_name}-repeat`}
+                            className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700"
+                          >
+                            {item.theme_name} · {item.recommended_reuse_frequency || 'reuse cadence'}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                {Array.isArray(viralTopicMemory.declining_clusters) &&
+                  viralTopicMemory.declining_clusters.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 mb-2">
+                        Declining themes
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {viralTopicMemory.declining_clusters.slice(0, 5).map((item: any) => (
+                          <span
+                            key={`${item.theme_name}-decline`}
+                            className="rounded-full bg-amber-50 px-3 py-1 text-amber-700"
+                          >
+                            {item.theme_name}: {item.suggested_action || 'refresh'}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                {Array.isArray(viralTopicMemory.high_performing_clusters) &&
+                  viralTopicMemory.high_performing_clusters.length === 0 &&
+                  Array.isArray(viralTopicMemory.declining_clusters) &&
+                  viralTopicMemory.declining_clusters.length === 0 && (
+                    <div className="text-sm text-gray-600">
+                      No theme clusters detected yet.
+                    </div>
+                  )}
+              </div>
+            )}
+          </div>
+        )}
+        {campaignId && (
+          <div className="mb-6 rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Lead Conversion Intelligence</h3>
+            </div>
+            {isLeadIntelLoading && (
+              <div className="text-sm text-gray-600">Loading lead conversion intelligence...</div>
+            )}
+            {!isLeadIntelLoading && leadIntelError && (
+              <div className="text-sm text-red-600">{leadIntelError}</div>
+            )}
+            {!isLeadIntelLoading && !leadIntelError && !leadConversionIntel && (
+              <div className="text-sm text-gray-600">No lead conversion intelligence available.</div>
+            )}
+            {!isLeadIntelLoading && !leadIntelError && leadConversionIntel && (
+              <div className="space-y-3 text-sm text-gray-700">
+                {Array.isArray(leadConversionIntel.top_converting_platforms) &&
+                  leadConversionIntel.top_converting_platforms.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 mb-2">
+                        Top converting platforms
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {leadConversionIntel.top_converting_platforms.slice(0, 5).map((item: any) => (
+                          <span
+                            key={`${item.platform}-convert`}
+                            className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700"
+                          >
+                            {item.platform}: {item.recommendation}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                {Array.isArray(leadConversionIntel.high_intent_themes) &&
+                  leadConversionIntel.high_intent_themes.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 mb-2">
+                        High intent themes
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {leadConversionIntel.high_intent_themes.slice(0, 5).map((item: any) => (
+                          <span
+                            key={`${item.theme_name}-intent`}
+                            className="rounded-full bg-indigo-50 px-3 py-1 text-indigo-700"
+                          >
+                            {item.theme_name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                {Array.isArray(leadConversionIntel.weak_conversion_areas) &&
+                  leadConversionIntel.weak_conversion_areas.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 mb-2">
+                        Weak conversion areas
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {leadConversionIntel.weak_conversion_areas.slice(0, 5).map((item: any) => (
+                          <span
+                            key={`${item.platform}-${item.theme_name}-weak`}
+                            className="rounded-full bg-amber-50 px-3 py-1 text-amber-700"
+                          >
+                            {item.platform}: {item.theme_name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+              </div>
+            )}
+          </div>
+        )}
+        {campaignId && (
+          <div className="mb-6 rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Campaign Momentum</h3>
+            </div>
+            {isMomentumLoading && (
+              <div className="text-sm text-gray-600">Loading momentum insights...</div>
+            )}
+            {!isMomentumLoading && momentumError && (
+              <div className="text-sm text-red-600">{momentumError}</div>
+            )}
+            {!isMomentumLoading && !momentumError && !momentumData && (
+              <div className="text-sm text-gray-600">No momentum insights available.</div>
+            )}
+            {!isMomentumLoading && !momentumError && momentumData && (
+              <div className="space-y-3 text-sm text-gray-700">
+                <button
+                  type="button"
+                  onClick={() => setStableThemesOpen((prev) => !prev)}
+                  className="flex w-full items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-700"
+                >
+                  <span>Stable Themes (Baseline Performance)</span>
+                  <span className="flex items-center gap-2">
+                    <span className="rounded-full bg-gray-200 px-2 py-1 text-[10px] text-gray-700">
+                      Stable
+                    </span>
+                    <span className="text-xs text-gray-500">{stableThemesOpen ? 'Hide' : 'Show'}</span>
+                  </span>
+                </button>
+                {stableThemesOpen && (
+                  <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                    {Array.isArray(momentumData.stable_topics) &&
+                    momentumData.stable_topics.length > 0 ? (
+                      <div className="space-y-2 text-xs text-gray-700">
+                        {momentumData.stable_topics.slice(0, 6).map((item: any) => (
+                          <div
+                            key={`${item.theme_name}-stable`}
+                            className="flex flex-wrap items-center gap-3"
+                          >
+                            <span className="font-semibold text-gray-800">{item.theme_name}</span>
+                            <span className="rounded-full bg-gray-100 px-2 py-1">
+                              Baseline {item.baseline_clicks ?? 0}
+                            </span>
+                            <span className="rounded-full bg-gray-100 px-2 py-1">
+                              Current {item.current_clicks ?? 0}
+                            </span>
+                            <span className="rounded-full bg-gray-100 px-2 py-1">
+                              Stability {item.stability_score ?? 0}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-500">No stable themes detected.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {campaignId && (
+          <div className="mb-6 rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Platform Investment Optimizer</h3>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <button
+                  onClick={() => setPlatformSortMode('roi')}
+                  className={`px-3 py-1 rounded border ${
+                    platformSortMode === 'roi' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Highest ROI
+                </button>
+                <button
+                  onClick={() => setPlatformSortMode('growth')}
+                  className={`px-3 py-1 rounded border ${
+                    platformSortMode === 'growth' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Most Growth Potential
+                </button>
+                <button
+                  onClick={() => setPlatformSortMode('reduce')}
+                  className={`px-3 py-1 rounded border ${
+                    platformSortMode === 'reduce' ? 'bg-indigo-600 text-white' : 'border-gray-300'
+                  }`}
+                >
+                  Reduce Waste First
+                </button>
+              </div>
+            </div>
+            {isPlatformAdviceLoading && (
+              <div className="text-sm text-gray-600">Loading platform investment advice...</div>
+            )}
+            {!isPlatformAdviceLoading && platformAdviceError && (
+              <div className="text-sm text-red-600">{platformAdviceError}</div>
+            )}
+            {!isPlatformAdviceLoading && !platformAdviceError && !platformAdvice && (
+              <div className="text-sm text-gray-600">No platform allocation advice available.</div>
+            )}
+            {!isPlatformAdviceLoading && !platformAdviceError && platformAdvice && (
+              <div className="space-y-3 text-sm text-gray-700">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm text-left text-gray-700">
+                    <thead className="text-xs uppercase text-gray-500 border-b">
+                      <tr>
+                        <th className="px-3 py-2">Platform</th>
+                        <th className="px-3 py-2">Recommendation</th>
+                        <th className="px-3 py-2">Score</th>
+                        <th className="px-3 py-2">Suggested Frequency</th>
+                        <th className="px-3 py-2">Rationale</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(platformAdvice.platform_advice || [])
+                        .slice()
+                        .sort((a: any, b: any) => {
+                          if (platformSortMode === 'growth') {
+                            return (b.allocation_score ?? 0) - (a.allocation_score ?? 0);
+                          }
+                          if (platformSortMode === 'reduce') {
+                            return (a.allocation_score ?? 0) - (b.allocation_score ?? 0);
+                          }
+                          return (b.allocation_score ?? 0) - (a.allocation_score ?? 0);
+                        })
+                        .map((item: any) => (
+                          <tr key={item.platform} className="border-b">
+                            <td className="px-3 py-2 font-medium">{item.platform}</td>
+                            <td className="px-3 py-2">
+                              <span
+                                className={`rounded-full px-2 py-1 text-xs ${
+                                  item.recommendation === 'Increase'
+                                    ? 'bg-emerald-50 text-emerald-700'
+                                    : item.recommendation === 'Reduce'
+                                    ? 'bg-amber-50 text-amber-700'
+                                    : 'bg-gray-100 text-gray-600'
+                                }`}
+                              >
+                                {item.recommendation}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">{item.allocation_score ?? 0}</td>
+                            <td className="px-3 py-2">
+                              {item.suggested_frequency_delta > 0
+                                ? `+${item.suggested_frequency_delta}`
+                                : item.suggested_frequency_delta < 0
+                                ? `${item.suggested_frequency_delta}`
+                                : '0'}
+                            </td>
+                            <td className="px-3 py-2 text-xs text-gray-600">{item.rationale}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {campaignId && (
+          <div className="mb-6 rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Recommended Platform Frequency Changes
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={proposeFrequencyRebalance}
+                  disabled={isRebalanceLoading}
+                  className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {isRebalanceLoading ? 'Preparing...' : 'Generate Proposal'}
+                </button>
+                <button
+                  onClick={() => setShowRebalanceRationale((prev) => !prev)}
+                  className="px-3 py-2 rounded-lg border border-gray-300 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  {showRebalanceRationale ? 'Hide Rationale' : 'View Rationale'}
+                </button>
+              </div>
+            </div>
+            {rebalanceError && <div className="text-sm text-red-600 mb-3">{rebalanceError}</div>}
+            {rebalanceStatus === 'pending' && (
+              <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Awaiting approval
+              </div>
+            )}
+            {rebalanceStatus === 'approved' && (
+              <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                Rebalance approved and applied.
+              </div>
+            )}
+            {rebalanceStatus === 'rejected' && (
+              <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+                Proposal rejected.
+              </div>
+            )}
+            {!rebalanceProposal && !rebalanceStatus && (
+              <div className="text-sm text-gray-600">
+                Generate a proposal to review recommended platform frequency changes.
+              </div>
+            )}
+            {rebalanceProposal && (
+              <div className="space-y-3 text-sm text-gray-700">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm text-left text-gray-700">
+                    <thead className="text-xs uppercase text-gray-500 border-b">
+                      <tr>
+                        <th className="px-3 py-2">Platform</th>
+                        <th className="px-3 py-2">Current</th>
+                        <th className="px-3 py-2">Proposed</th>
+                        <th className="px-3 py-2">Impact</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(rebalanceProposal.proposed_changes || []).map((item: any) => (
+                        <tr key={`rebalance-${item.platform}`} className="border-b">
+                          <td className="px-3 py-2 font-medium">{item.platform}</td>
+                          <td className="px-3 py-2">{item.current_frequency}</td>
+                          <td className="px-3 py-2">{item.recommended_frequency}</td>
+                          <td className="px-3 py-2 text-xs text-gray-600">
+                            {rebalanceProposal.impact_projection?.expected_reach_delta || '—'} reach /
+                            {` ${rebalanceProposal.impact_projection?.expected_leads_delta || '—'} leads`}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {showRebalanceRationale && (
+                  <div className="space-y-2 text-xs text-gray-600">
+                    {(rebalanceProposal.proposed_changes || []).map((item: any) => (
+                      <div key={`reason-${item.platform}`}>
+                        <span className="font-semibold text-gray-700">{item.platform}:</span>{' '}
+                        {item.reason}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={approveFrequencyRebalance}
+                    disabled={isRebalanceLoading || rebalanceStatus === 'approved' || rebalanceStatus === 'rejected'}
+                    className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    Approve Changes
+                  </button>
+                  <button
+                    onClick={() => setShowRebalanceRejectModal(true)}
+                    disabled={isRebalanceLoading || rebalanceStatus === 'approved' || rebalanceStatus === 'rejected'}
+                    className="px-3 py-2 rounded-lg border border-gray-300 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -2025,7 +2899,48 @@ export default function CampaignPlanning() {
         </div>
       </div>
 
-          {/* Campaign-Specific AI Chat Modal */}
+      {showRebalanceRejectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl border border-gray-200">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Reject Optimization Proposal</h3>
+              <button
+                onClick={() => setShowRebalanceRejectModal(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-2 text-sm text-gray-700">
+              <div className="text-xs text-gray-500">Why rejecting? (optional)</div>
+              <textarea
+                value={rebalanceRejectReason}
+                onChange={(event) => setRebalanceRejectReason(event.target.value)}
+                rows={3}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                placeholder="Add a short reason for rejecting this proposal."
+              />
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={rejectFrequencyRebalance}
+                disabled={isRebalanceLoading}
+                className="px-4 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+              >
+                Reject Proposal
+              </button>
+              <button
+                onClick={() => setShowRebalanceRejectModal(false)}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Campaign-Specific AI Chat Modal */}
           <CampaignAIChat 
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}

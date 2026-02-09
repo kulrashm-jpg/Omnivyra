@@ -50,7 +50,7 @@ const requireExternalApiAccess = async (
     res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
   }
-  if (requireManage && !hasPermission(role, 'MANAGE_EXTERNAL_APIS')) {
+  if (requireManage && !(await hasPermission(role, 'MANAGE_EXTERNAL_APIS'))) {
     res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
   }
@@ -117,7 +117,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       : await requireExternalApiAccess(req, res, companyId, false);
     if (!access) return;
     const canManageExternalApis =
-      access.role === 'SUPER_ADMIN' || hasPermission(access.role, 'MANAGE_EXTERNAL_APIS');
+      access.role === 'SUPER_ADMIN' || (await hasPermission(access.role, 'MANAGE_EXTERNAL_APIS'));
     try {
       const apis = platformScopeRequested && !companyId
         ? (await supabase

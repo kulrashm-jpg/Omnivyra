@@ -140,7 +140,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     }
     const action = req.method === 'POST' ? 'CREATE_CAMPAIGN' : 'VIEW_CAMPAIGNS';
-    if (!hasPermission(roleRow.role, action)) {
+    if (!(await hasPermission(roleRow.role, action))) {
       return res.status(403).json({ error: 'NOT_ALLOWED' });
     }
 

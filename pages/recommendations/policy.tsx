@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
+import { supabase } from '../../utils/supabaseClient';
 
 type PolicyWeights = {
   trend_score: number;
@@ -68,11 +69,26 @@ export default function RecommendationPolicyPage() {
   const [auditSnapshot, setAuditSnapshot] = useState<AuditSnapshot | null>(null);
   const [prefilledFromAudit, setPrefilledFromAudit] = useState(false);
 
+  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      throw new Error('Not authenticated');
+    }
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  };
+
   useEffect(() => {
     const loadPolicy = async () => {
       try {
         setIsLoading(true);
-        const response = await fetch('/api/recommendation-policy');
+        const response = await fetchWithAuth('/api/recommendation-policy');
         if (!response.ok) throw new Error('Failed to load policy');
         const data = await response.json();
         if (data?.policy) {
@@ -156,7 +172,7 @@ export default function RecommendationPolicyPage() {
       setIsLoading(true);
       setErrorMessage(null);
       setSuccessMessage(null);
-      const response = await fetch('/api/recommendation-policy', {
+      const response = await fetchWithAuth('/api/recommendation-policy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: policy.id, weights }),

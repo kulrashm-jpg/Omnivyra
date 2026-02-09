@@ -35,7 +35,7 @@ import { supabase } from '../db/supabaseClient';
 
 export type RecommendationEngineInput = {
   companyId: string;
-  campaignId: string;
+  campaignId?: string | null;
   objective?: string;
   durationWeeks?: number;
   userId?: string | null;
@@ -147,6 +147,239 @@ const normalizePlatformName = (value: string): string => {
   const normalized = value.trim().toLowerCase();
   if (normalized === 'twitter' || normalized === 'x') return 'x';
   return normalized;
+};
+
+const normalizeObject = (value: any) => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
+
+const pickObject = (sources: any[], keys: string[]) => {
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') continue;
+    for (const key of keys) {
+      const value = (source as any)[key];
+      if (value && typeof value === 'object') {
+        return value;
+      }
+    }
+  }
+  return {};
+};
+
+const extractContentType = (utmContent?: string | null) => {
+  if (!utmContent) return null;
+  const raw = String(utmContent);
+  const [prefix] = raw.split('_');
+  return prefix ? prefix.toLowerCase() : null;
+};
+
+const loadLearningSignals = async (companyId: string, campaignId: string) => {
+  const { data: learningRow } = await supabase
+    .from('campaign_learnings')
+    .select('performance, metrics, created_at')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: enhancementRow } = await supabase
+    .from('ai_enhancement_logs')
+    .select('confidence_score, created_at')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const lookbackWindow = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const { data: clickRows } = await supabase
+    .from('audit_logs')
+    .select('metadata, created_at')
+    .eq('action', 'TRACKING_LINK_CLICK')
+    .gte('created_at', lookbackWindow)
+    .filter('metadata->>campaign_id', 'eq', campaignId);
+
+  const performance = normalizeObject(learningRow?.performance);
+  const metrics = normalizeObject(learningRow?.metrics);
+  const sources = [performance, metrics];
+
+  const platformClicks: Record<string, number> = {};
+  const contentTypeClicks: Record<string, number> = {};
+  (clickRows || []).forEach((row: any) => {
+    const metadata = row?.metadata || {};
+    const platform = String(metadata?.platform || metadata?.utm_source || '').toLowerCase();
+    if (platform) {
+      platformClicks[platform] = (platformClicks[platform] || 0) + 1;
+    }
+    const contentType = extractContentType(metadata?.utm_content);
+    if (contentType) {
+      contentTypeClicks[contentType] = (contentTypeClicks[contentType] || 0) + 1;
+    }
+  });
+  const totalClicks = Object.values(platformClicks).reduce((sum, value) => sum + value, 0);
+  const platformAccuracy = Object.entries(platformClicks).reduce<Record<string, any>>(
+    (acc, [platform, clicks]) => {
+      acc[platform] = {
+        clicks,
+        share_pct: totalClicks > 0 ? Number(((clicks / totalClicks) * 100).toFixed(2)) : 0,
+      };
+      return acc;
+    },
+    {}
+  );
+  const contentTypeAccuracy = Object.entries(contentTypeClicks).reduce<Record<string, any>>(
+    (acc, [contentType, clicks]) => {
+      acc[contentType] = {
+        clicks,
+        share_pct: totalClicks > 0 ? Number(((clicks / totalClicks) * 100).toFixed(2)) : 0,
+      };
+      return acc;
+    },
+    {}
+  );
+
+  const momentumAccuracy =
+    pickObject(sources, ['momentum_accuracy', 'momentum_insights']) ||
+    (typeof enhancementRow?.confidence_score === 'number'
+      ? { overall_confidence: enhancementRow.confidence_score }
+      : {});
+
+  return {
+    platform_accuracy: platformAccuracy,
+    content_type_accuracy: contentTypeAccuracy,
+    momentum_accuracy: momentumAccuracy,
+  };
+};
+
+const loadViralTopicMemory = async (campaignId: string) => {
+  const { data: learningRow } = await supabase
+    .from('campaign_learnings')
+    .select('performance, metrics, created_at')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: enhancementRow } = await supabase
+    .from('ai_enhancement_logs')
+    .select('confidence_score, created_at')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const performance = normalizeObject(learningRow?.performance);
+  const metrics = normalizeObject(learningRow?.metrics);
+  const themePerformance =
+    metrics.theme_performance ||
+    metrics.topic_clusters ||
+    performance.theme_performance ||
+    performance.topic_clusters ||
+    {};
+  const themeEntries = Array.isArray(themePerformance)
+    ? themePerformance
+    : Object.entries(themePerformance).map(([theme, value]) => ({
+        theme_name: theme,
+        ...((value && typeof value === 'object') ? value : {}),
+      }));
+
+  const momentumAccuracy =
+    normalizeObject(metrics.momentum_accuracy || performance.momentum_accuracy) ||
+    (typeof enhancementRow?.confidence_score === 'number'
+      ? { overall_confidence: enhancementRow.confidence_score }
+      : {});
+
+  const highPerforming = (themeEntries || [])
+    .map((entry: any) => {
+      const trend = String(entry.performance_trend || entry.trend || entry.performance || 'stable').toLowerCase();
+      const avgEngagement =
+        (typeof entry.avg_engagement === 'number' ? entry.avg_engagement : null) ??
+        (typeof entry.engagement_rate === 'number' ? entry.engagement_rate : null) ??
+        (typeof entry.engagement === 'number' ? entry.engagement : null);
+      const repeatSuccessRate =
+        (typeof entry.repeat_success_rate === 'number' ? entry.repeat_success_rate : null) ??
+        (typeof entry.success_rate === 'number' ? entry.success_rate : null) ??
+        (typeof momentumAccuracy?.overall_confidence === 'number'
+          ? Math.round(momentumAccuracy.overall_confidence) / 100
+          : null);
+      const recommendedReuseFrequency = trend === 'down' ? 'Refresh before reuse' : '1-2x per month';
+      return {
+        theme_name: entry.theme_name || entry.theme || 'Theme',
+        avg_engagement: avgEngagement,
+        repeat_success_rate: repeatSuccessRate,
+        recommended_reuse_frequency: recommendedReuseFrequency,
+      };
+    })
+    .filter((entry: any) => entry && entry.theme_name)
+    .slice(0, 6);
+
+  return {
+    high_performing_clusters: highPerforming,
+  };
+};
+
+const loadLeadConversionIntelligence = async (campaignId: string) => {
+  const { data: learningRow } = await supabase
+    .from('campaign_learnings')
+    .select('performance, metrics, created_at')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: enhancementRow } = await supabase
+    .from('ai_enhancement_logs')
+    .select('confidence_score, created_at')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const performance = normalizeObject(learningRow?.performance);
+  const metrics = normalizeObject(learningRow?.metrics);
+  const themePerformance =
+    metrics.theme_performance ||
+    metrics.topic_clusters ||
+    performance.theme_performance ||
+    performance.topic_clusters ||
+    {};
+  const themeEntries = Array.isArray(themePerformance)
+    ? themePerformance
+    : Object.entries(themePerformance).map(([theme, value]) => ({
+        theme_name: theme,
+        ...((value && typeof value === 'object') ? value : {}),
+      }));
+
+  const highIntent = (themeEntries || [])
+    .map((entry: any) => {
+      const inboundSignal =
+        (typeof entry.inbound_signal_score === 'number' ? entry.inbound_signal_score : null) ??
+        (typeof entry.intent_score === 'number' ? entry.intent_score : null) ??
+        (typeof entry.conversion_signal === 'number' ? entry.conversion_signal : null);
+      const bestPlatforms = Array.isArray(entry.best_platforms) ? entry.best_platforms : [];
+      return {
+        theme_name: entry.theme_name || entry.theme || 'Theme',
+        inbound_signal_score: inboundSignal ?? 0,
+        best_platforms: bestPlatforms,
+        confidence:
+          typeof enhancementRow?.confidence_score === 'number' ? enhancementRow.confidence_score : null,
+      };
+    })
+    .sort((a, b) => (b.inbound_signal_score ?? 0) - (a.inbound_signal_score ?? 0))
+    .slice(0, 5);
+
+  return {
+    high_intent_themes: highIntent,
+  };
 };
 
 const extractPersonaSummary = (profile: any): PersonaSummary => {
@@ -309,7 +542,8 @@ const toProposalPlan = (weeklyPlan: any[], dailyPlan: any[]) => ({
   messages: weeklyPlan.flatMap((week: any) => week.new_content_needed || []).filter(Boolean),
 });
 
-const ensureCampaignCompanyLink = async (companyId: string, campaignId: string) => {
+const ensureCampaignCompanyLink = async (companyId: string, campaignId?: string | null) => {
+  if (!campaignId) return;
   const { data, error } = await supabase
     .from('campaign_versions')
     .select('id')
@@ -333,15 +567,17 @@ export const generateRecommendations = async (
 ): Promise<RecommendationEngineResult> => {
   await ensureCampaignCompanyLink(input.companyId, input.campaignId);
   const profile = await getProfile(input.companyId, { autoRefine: true });
-  await getCampaignMemory({ companyId: input.companyId, campaignId: input.campaignId });
+  await getCampaignMemory({ companyId: input.companyId, campaignId: input.campaignId ?? undefined });
   const personaSummary = extractPersonaSummary(profile);
 
   let campaignIntelligence: any | null = null;
   let recentCampaignIntelligence: any[] = [];
-  try {
-    campaignIntelligence = await getCampaignIntelligence(input.campaignId);
-  } catch {
-    campaignIntelligence = null;
+  if (input.campaignId) {
+    try {
+      campaignIntelligence = await getCampaignIntelligence(input.campaignId);
+    } catch {
+      campaignIntelligence = null;
+    }
   }
 
   if (!campaignIntelligence) {
@@ -360,6 +596,28 @@ export const generateRecommendations = async (
     recent_campaign_intelligence: recentCampaignIntelligence,
     selected_api_ids: Array.isArray(input.selectedApiIds) ? input.selectedApiIds : null,
   };
+  if (input.campaignId) {
+    try {
+      recommendationContext.learning_signals = await loadLearningSignals(
+        input.companyId,
+        input.campaignId
+      );
+    } catch {
+      recommendationContext.learning_signals = null;
+    }
+    try {
+      const viralMemory = await loadViralTopicMemory(input.campaignId);
+      recommendationContext.high_performing_clusters = viralMemory?.high_performing_clusters ?? null;
+    } catch {
+      recommendationContext.high_performing_clusters = null;
+    }
+    try {
+      const leadSignals = await loadLeadConversionIntelligence(input.campaignId);
+      recommendationContext.high_intent_themes = leadSignals?.high_intent_themes ?? null;
+    } catch {
+      recommendationContext.high_intent_themes = null;
+    }
+  }
   void recommendationContext;
 
   const durationWeeks = input.durationWeeks ?? DEFAULT_DURATION_WEEKS;
@@ -489,7 +747,7 @@ export const generateRecommendations = async (
     if (isOmniVyraEnabled()) {
       const learning = await sendLearningSnapshot({
         companyId: input.companyId,
-        campaignId: input.campaignId,
+        campaignId: input.campaignId ?? undefined,
         trends_used: [],
         trends_ignored: [],
         signal_confidence_summary: result.signal_quality?.signal_confidence_summary ?? null,
@@ -632,7 +890,7 @@ export const generateRecommendations = async (
 
   const uniqueness = await validateUniqueness({
     companyId: input.companyId,
-    campaignId: input.campaignId,
+    campaignId: input.campaignId ?? undefined,
     proposedPlan: toProposalPlan(weeklyPlan, dailyPlan),
   });
   const noveltyScore = uniqueness.similarityScore;
@@ -718,7 +976,7 @@ export const generateRecommendations = async (
     if (isOmniVyraEnabled()) {
       const learning = await sendLearningSnapshot({
         companyId: input.companyId,
-        campaignId: input.campaignId,
+        campaignId: input.campaignId ?? undefined,
         trends_used: [],
         trends_ignored: [],
         signal_confidence_summary: result.signal_quality?.signal_confidence_summary ?? null,
@@ -779,7 +1037,7 @@ export const generateRecommendations = async (
   if (isOmniVyraEnabled()) {
     const learning = await sendLearningSnapshot({
       companyId: input.companyId,
-      campaignId: input.campaignId,
+      campaignId: input.campaignId ?? undefined,
       trends_used: trendsUsed.map((trend) => ({
         topic: trend.topic,
         source: trend.source,
