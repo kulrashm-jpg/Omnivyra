@@ -146,6 +146,7 @@ export default function SuperAdminPanel() {
   const [pendingPolicy, setPendingPolicy] = useState<CommunityAiPolicy | null>(null);
   const [pendingPolicyLabel, setPendingPolicyLabel] = useState('');
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [externalApisHealth, setExternalApisHealth] = useState<{ healthy: number; warning: number; failed: number; status: string } | null>(null);
   const [showCreateCompanyModal, setShowCreateCompanyModal] = useState(false);
   const [showCreateCompanyAdminModal, setShowCreateCompanyAdminModal] = useState(false);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
@@ -260,6 +261,14 @@ export default function SuperAdminPanel() {
         setIsSuperAdminSession(true);
       } else {
         setRbacError('Failed to load RBAC configuration');
+      }
+
+      const healthRes = await fetchWithAuth('/api/external-apis/health-summary');
+      if (healthRes.ok) {
+        const healthData = await healthRes.json();
+        setExternalApisHealth(healthData);
+      } else {
+        setExternalApisHealth(null);
       }
     } catch (error) {
       console.error('Error loading super admin data:', error);
@@ -822,6 +831,21 @@ export default function SuperAdminPanel() {
                 </div>
               </div>
             </div>
+
+            {externalApisHealth != null && (
+              <button
+                type="button"
+                onClick={() => router.push('/external-apis?mode=platform')}
+                className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+                  externalApisHealth.status === 'healthy'
+                    ? 'bg-green-50 border-green-200 text-green-800 hover:bg-green-100'
+                    : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                }`}
+              >
+                <Key className="h-4 w-4" />
+                External APIs: {externalApisHealth.status === 'healthy' ? 'HEALTHY' : 'ATTENTION REQUIRED'}
+              </button>
+            )}
 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200">
               <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">

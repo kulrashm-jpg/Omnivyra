@@ -16,7 +16,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const {
       companyId,
+      regions: regionsBody,
       campaignId,
+      enrichmentEnabled,
       objective,
       durationWeeks,
       simulate,
@@ -27,6 +29,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
+    const regions = Array.isArray(regionsBody)
+      ? regionsBody.map((r: unknown) => String(r).trim()).filter(Boolean)
+      : typeof regionsBody === 'string'
+      ? String(regionsBody)
+          .split(',')
+          .map((r) => r.trim())
+          .filter(Boolean)
+      : [];
     const resolvedCampaignId =
       typeof campaignId === 'string' && campaignId.trim().length > 0 ? campaignId : null;
     const access = await enforceCompanyAccess({
@@ -68,6 +78,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         simulate: Boolean(simulate),
         userId: access.userId,
         selectedApiIds: resolvedSelection,
+        regions: regions.length > 0 ? regions : undefined,
+        enrichmentEnabled: enrichmentEnabled !== false,
       },
       {
         onContext: chatMode
@@ -77,6 +89,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           : undefined,
       }
     );
+
+    const sourceSignalsCount = result.trends_used?.length ?? 0;
+    const signalsSource = result.signals_source ?? 'EXTERNAL';
+
+    if (regions.length > 1) {
+      try {
+        await supabase.from('audit_logs').insert({
+          action: 'REGION_REQUEST_SPLIT',
+          actor_user_id: access.userId ?? null,
+          company_id: companyId,
+          metadata: { regions, company_id: companyId },
+          created_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.warn('REGION_REQUEST_SPLIT audit failed', e);
+      }
+    }
+    try {
+      await supabase.from('audit_logs').insert({
+        action: 'TREND_SIGNAL_MERGE_COMPLETE',
+        actor_user_id: access.userId ?? null,
+        company_id: companyId,
+        metadata: {
+          topic_count: sourceSignalsCount,
+          regions: regions.length > 0 ? regions : null,
+          signals_source: signalsSource,
+        },
+        created_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('TREND_SIGNAL_MERGE_COMPLETE audit failed', e);
+    }
 
     let opportunityAnalysis: any | null = null;
     if (manualContext?.type === 'opportunity' || manualContext?.type === 'detected_opportunity') {
@@ -158,6 +202,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         refresh_source: 'manual',
         refreshed_at: createdAt,
         created_at: createdAt,
+        status: 'DRAFT',
+        regions: regions.length > 0 ? regions : [],
+        source_signals_count: sourceSignalsCount,
+        signals_source: signalsSource,
       }));
       const { error: snapshotError } = await supabase
         .from('recommendation_snapshots')
@@ -175,7 +223,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           .gte('refreshed_at', windowStart)
           .lte('refreshed_at', windowEnd)
           .in('trend_topic', topics);
-        if (!snapshotLookupError && snapshotRows) {
+        try {
+        await supabase.from('audit_logs').insert({
+          action: 'RECOMMENDATION_GENERATED',
+          actor_user_id: access.userId ?? null,
+          company_id: companyId,
+          metadata: {
+            campaign_id: resolvedCampaignId,
+            regions: regions.length > 0 ? regions : null,
+            source_signals_count: sourceSignalsCount,
+            signals_source: signalsSource,
+            status: 'DRAFT',
+          },
+          created_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.warn('RECOMMENDATION_GENERATED audit failed', e);
+      }
+
+      if (!snapshotLookupError && snapshotRows) {
           snapshotHashByTopic = snapshotRows.reduce<Record<string, string>>((acc, row: any) => {
             if (row?.trend_topic && row?.snapshot_hash) {
               acc[String(row.trend_topic)] = String(row.snapshot_hash);

@@ -67,6 +67,9 @@ export const updateApiHealth = async (input: {
   apiId: string;
   success: boolean;
   latencyMs: number;
+  /** Set when this update is from a Test API run; used for health status (dot/header). */
+  last_test_status?: 'SUCCESS' | 'FAILED';
+  last_test_at?: string;
 }): Promise<ApiHealthSnapshot | null> => {
   try {
     const { data, error } = await supabase
@@ -93,20 +96,40 @@ export const updateApiHealth = async (input: {
       avg_latency_ms: avgLatencyMs,
     });
 
-    const { error: upsertError } = await supabase
+    const lastTestStatus = input.last_test_status ?? (input.success ? 'SUCCESS' : 'FAILED');
+    const lastTestAt = input.last_test_at ?? nowIso;
+
+    const payloadWithLastTest: Record<string, unknown> = {
+      api_source_id: input.apiId,
+      last_success_at: lastSuccessAt,
+      last_failure_at: lastFailureAt,
+      success_count: successCount,
+      failure_count: failureCount,
+      freshness_score: freshnessScore,
+      reliability_score: reliabilityScore,
+      last_test_status: lastTestStatus,
+      last_test_at: lastTestAt,
+      last_test_latency_ms: input.latencyMs,
+    };
+
+    let upsertError = (await supabase
       .from('external_api_health')
-      .upsert(
-        {
-          api_source_id: input.apiId,
-          last_success_at: lastSuccessAt,
-          last_failure_at: lastFailureAt,
-          success_count: successCount,
-          failure_count: failureCount,
-          freshness_score: freshnessScore,
-          reliability_score: reliabilityScore,
-        },
-        { onConflict: 'api_source_id' }
-      );
+      .upsert(payloadWithLastTest, { onConflict: 'api_source_id' })).error;
+
+    if (upsertError && (upsertError.message?.includes('last_test') || upsertError.message?.includes('column'))) {
+      const payloadWithoutLastTest = {
+        api_source_id: input.apiId,
+        last_success_at: lastSuccessAt,
+        last_failure_at: lastFailureAt,
+        success_count: successCount,
+        failure_count: failureCount,
+        freshness_score: freshnessScore,
+        reliability_score: reliabilityScore,
+      };
+      upsertError = (await supabase
+        .from('external_api_health')
+        .upsert(payloadWithoutLastTest, { onConflict: 'api_source_id' })).error;
+    }
 
     if (upsertError) {
       console.warn('Failed to persist API health record', { apiId: input.apiId });

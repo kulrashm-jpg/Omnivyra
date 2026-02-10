@@ -102,6 +102,9 @@ type ApiSource = {
   health?: {
     freshness_score?: number;
     reliability_score?: number;
+    last_test_status?: string | null;
+    last_test_at?: string | null;
+    last_test_latency_ms?: number | null;
   } | null;
 };
 
@@ -192,6 +195,11 @@ export default function ExternalApisPage() {
   );
   const [platformCompanyId, setPlatformCompanyId] = useState('');
   const [isLoadingPlatformCompanies, setIsLoadingPlatformCompanies] = useState(false);
+  const [lastHealthCheckAt, setLastHealthCheckAt] = useState<Date | null>(null);
+  const [testAllRunning, setTestAllRunning] = useState(false);
+  const [testAllSummary, setTestAllSummary] = useState<{ healthy: number; warning: number; failed: number } | null>(null);
+  const [expandedCardIds, setExpandedCardIds] = useState<Set<string>>(new Set());
+  const [actionsOpenId, setActionsOpenId] = useState<string | null>(null);
   const isSuperAdmin = userRole === 'SUPER_ADMIN';
   const modeParam = Array.isArray(router.query?.mode)
     ? router.query?.mode[0]
@@ -273,6 +281,7 @@ export default function ExternalApisPage() {
       const data = await response.json();
       setApis(data.apis || []);
       setRuntime(data.runtime || null);
+      setLastHealthCheckAt(new Date());
     } catch (error) {
       console.error('Error loading APIs:', error);
       setErrorMessage('Failed to load API sources.');
@@ -461,6 +470,12 @@ export default function ExternalApisPage() {
     loadPresets();
     loadRequests();
   }, [selectedCompanyId, platformCompanyId, isPlatformCatalogMode, isPlatformAdminView]);
+
+  useEffect(() => {
+    if (!isPlatformCatalogMode && !companyContextId) return;
+    const interval = setInterval(() => { loadApis(); }, 15 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [companyContextId, isPlatformCatalogMode]);
 
   useEffect(() => {
     setQueryPairs(toPairs(form.query_params || {}));
@@ -794,11 +809,47 @@ export default function ExternalApisPage() {
         throw new Error(data?.error || 'Failed to test API');
       }
       setSuccessMessage('Test fetch completed.');
+      await loadApis();
     } catch (error) {
       console.error('Error testing API:', error);
       setErrorMessage('Failed to test API.');
     }
   };
+
+  const runAllTests = async () => {
+    if (!apis.length || !canManageExternalApis) return;
+    setTestAllRunning(true);
+    setTestAllSummary(null);
+    resetMessages();
+    let healthy = 0;
+    let warning = 0;
+    let failed = 0;
+    for (const api of apis) {
+      try {
+        const url = companyContextId
+          ? `/api/external-apis/${api.id}/test?companyId=${companyContextId}`
+          : `/api/external-apis/${api.id}/test?scope=platform`;
+        const response = await fetchWithAuth(url);
+        const data = await response.json();
+        setApiTestResults((prev) => ({ ...prev, [api.id]: data }));
+        const ok = response.ok && data?.response?.ok;
+        if (ok) healthy += 1;
+        else if (response.ok && !data?.response?.ok) warning += 1;
+        else failed += 1;
+      } catch {
+        setApiTestResults((prev) => ({ ...prev, [api.id]: { response: { ok: false }, error: 'Request failed' } }));
+        failed += 1;
+      }
+    }
+    setTestAllSummary({ healthy, warning, failed });
+    setLastHealthCheckAt(new Date());
+    setTestAllRunning(false);
+    setSuccessMessage(`Tests complete: ${healthy} healthy, ${warning} warning, ${failed} failed.`);
+    await loadApis();
+  };
+
+  const authRequiresKey = (authType?: string | null) =>
+    ['api_key', 'bearer', 'query', 'header'].includes(String(authType || 'none'));
 
   const getHealthBadge = (health?: ApiSource['health']) => {
     if (!health) return { label: 'Health: N/A', className: 'bg-gray-100 text-gray-700' };
@@ -808,8 +859,47 @@ export default function ExternalApisPage() {
     return { label: 'Health: Poor', className: 'bg-red-100 text-red-700' };
   };
 
-  const authRequiresKey = (authType?: string | null) =>
-    ['api_key', 'bearer', 'query', 'header'].includes(String(authType || 'none'));
+  const LATENCY_WARNING_MS = 2000;
+
+  const getHealthStatus = (api: ApiSource, lastTest?: { response?: { ok?: boolean }; latency_ms?: number }): 'healthy' | 'warning' | 'failed' => {
+    const missingEnv = authRequiresKey(api.auth_type) && !(api.api_key_env_name || api.api_key_name);
+    if (missingEnv) return 'failed';
+    if (lastTest) {
+      if (lastTest.response?.ok === false) return 'failed';
+      if (lastTest.response?.ok === true) {
+        if ((lastTest.latency_ms ?? 0) > LATENCY_WARNING_MS) return 'warning';
+        return 'healthy';
+      }
+    }
+    const lastStatus = api.health?.last_test_status;
+    const lastLatency = api.health?.last_test_latency_ms ?? 0;
+    if (lastStatus === 'FAILED') return 'failed';
+    if (lastStatus === 'SUCCESS') {
+      if (lastLatency > LATENCY_WARNING_MS) return 'warning';
+      return 'healthy';
+    }
+    const fr = api.usage_summary?.failure_rate ?? 0;
+    const reqCount = api.usage_summary?.request_count ?? 0;
+    const combined = (api.health?.freshness_score ?? 1) * (api.health?.reliability_score ?? 1);
+    if (reqCount >= 5 && fr > 0.1) return 'failed';
+    if (reqCount >= 5 && fr >= 0.02 && fr <= 0.1) return 'warning';
+    if (combined >= 0.75 && (reqCount < 5 || fr < 0.02)) return 'healthy';
+    if (combined >= 0.4 || (reqCount < 5 && fr < 0.02)) return 'warning';
+    return 'failed';
+  };
+
+  const healthCounts = (() => {
+    let healthy = 0;
+    let warning = 0;
+    let failed = 0;
+    apis.forEach((api) => {
+      const s = getHealthStatus(api, apiTestResults[api.id]);
+      if (s === 'healthy') healthy += 1;
+      else if (s === 'warning') warning += 1;
+      else failed += 1;
+    });
+    return { healthy, warning, failed };
+  })();
 
   const formatPercent = (value?: number | null) => {
     if (typeof value !== 'number') return '—';
@@ -1410,6 +1500,47 @@ export default function ExternalApisPage() {
               </div>
             );
           })()}
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-gray-200">
+            <div className="flex flex-wrap items-center gap-4 text-sm text-gray-700">
+              <span>
+                External Integrations Health: <strong className="text-green-600">{healthCounts.healthy} Healthy</strong>
+                {' | '}
+                <strong className="text-amber-600">{healthCounts.warning} Warning</strong>
+                {' | '}
+                <strong className="text-red-600">{healthCounts.failed} Failed</strong>
+              </span>
+              <span className="text-gray-500">
+                Last Auto Check: {lastHealthCheckAt
+                  ? (() => {
+                      const mins = Math.floor((Date.now() - lastHealthCheckAt.getTime()) / 60000);
+                      if (mins < 1) return 'just now';
+                      if (mins === 1) return '1 min ago';
+                      return `${mins} min ago`;
+                    })()
+                  : '—'}
+              </span>
+            </div>
+            {canManageExternalApis && (
+              <button
+                type="button"
+                onClick={runAllTests}
+                disabled={testAllRunning || apis.length === 0}
+                className="px-3 py-1.5 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {testAllRunning ? 'Running tests…' : 'Run All Tests'}
+              </button>
+            )}
+          </div>
+          {testAllSummary && (
+            <div className="mb-4 p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-700">
+              Test summary: {testAllSummary.healthy} healthy, {testAllSummary.warning} warning, {testAllSummary.failed} failed.
+            </div>
+          )}
+          {healthCounts.failed > 0 && (
+            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm font-medium">
+              One or more external integrations failing. Campaign execution may be impacted.
+            </div>
+          )}
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Configured APIs</h2>
           {isLoading ? (
             <div className="text-sm text-gray-500">Loading...</div>
@@ -1422,260 +1553,151 @@ export default function ExternalApisPage() {
                 const missingEnv = authRequiresKey(api.auth_type) &&
                   !(api.api_key_env_name || api.api_key_name);
                 const isGlobalCatalog = isPlatformCatalogMode && !api.company_id;
+                const status = getHealthStatus(api, apiTestResults[api.id]);
+                const expanded = expandedCardIds.has(api.id);
+                const actionsOpen = actionsOpenId === api.id;
+                const statusDot = status === 'healthy' ? 'bg-green-500' : status === 'warning' ? 'bg-amber-500' : 'bg-red-500';
                 return (
                 <div key={api.id} className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-semibold text-gray-900 flex items-center gap-2">
-                        <span>{api.name}</span>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusDot}`} title={status} />
+                        <span className="font-semibold text-gray-900">{api.name}</span>
                         <span className="text-[10px] uppercase tracking-wide bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
-                          {api.is_preset && !api.company_id ? 'Global (Virality)' : 'Tenant-Provided'}
+                          {api.is_preset && !api.company_id ? 'GLOBAL (VIRALITY)' : 'Tenant-Provided'}
                         </span>
-                        <span
-                          className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${
-                            api.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
-                          }`}
-                          title={api.is_active ? 'Enabled globally' : 'Disabled globally'}
-                        >
-                          {api.is_active ? 'Enabled' : 'Disabled'}
+                        <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${api.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                          {api.is_active ? 'ENABLED' : 'Disabled'}
                         </span>
-                        {(api.usage_summary?.failure_rate ?? 0) > 0.1 &&
-                          (api.usage_summary?.request_count ?? 0) >= 5 && (
-                            <span
-                              className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-red-100 text-red-700"
-                              title={`Unhealthy • Failure rate ${formatPercent(
-                                api.usage_summary?.failure_rate
-                              )} • Last error ${api.usage_summary?.last_error_message || '—'}`}
-                            >
-                              Error
-                            </span>
-                          )}
-                        {(api.usage_summary?.failure_rate ?? 0) >= 0.02 &&
-                          (api.usage_summary?.failure_rate ?? 0) <= 0.1 &&
-                          (api.usage_summary?.request_count ?? 0) >= 5 && (
-                            <span
-                              className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700"
-                              title={`Degraded • Failure rate ${formatPercent(
-                                api.usage_summary?.failure_rate
-                              )} • Last error ${api.usage_summary?.last_error_message || '—'}`}
-                            >
-                              Degraded
-                            </span>
-                          )}
-                        {isRateLimited && (
-                          <span
-                            className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700"
-                            title="Rate limited recently"
-                          >
-                            Rate limited
-                          </span>
-                        )}
-                        {missingEnv && (
-                          <span
-                            className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-red-100 text-red-700"
-                            title="Missing required env var name"
-                          >
-                            Missing env
-                          </span>
-                        )}
                         {api.is_preset && (
-                          <span className="text-[10px] uppercase tracking-wide bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
-                            Preset
-                          </span>
+                          <span className="text-[10px] uppercase tracking-wide bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">PRESET</span>
                         )}
                         {isPlatformCatalogMode && isPlatformAdminView && isGlobalCatalog && (
-                          <span
-                            className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${
-                              api.is_preset ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
-                            }`}
-                            title={
-                              api.is_preset
-                                ? 'Visible to company admins'
-                                : 'Hidden from company admins'
-                            }
-                          >
-                            {api.is_preset ? 'Visible' : 'Hidden'}
+                          <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${api.is_preset ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                            {api.is_preset ? 'VISIBLE' : 'Hidden'}
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-gray-500">
-                      {api.is_preset && !isPlatformAdminView ? 'Global preset details hidden' : api.base_url}
-                      </div>
-                      {(api.api_key_env_name || api.api_key_name) &&
-                        api.auth_type !== 'none' &&
-                        !(api.is_preset && !isPlatformAdminView) && (
-                        <div
-                          className="text-xs text-gray-400"
-                          title={`Uses env var: ${api.api_key_env_name || api.api_key_name}`}
-                        >
-                          Uses env var: {api.api_key_env_name || api.api_key_name}
-                        </div>
-                      )}
-                      {api.is_preset && findPresetByName(api.name)?.description && (
-                        <div className="text-xs text-gray-400">
-                          {findPresetByName(api.name)?.description}
-                        </div>
-                      )}
-                      <div className="text-xs text-gray-400 mt-1">
-                        Enabled users: {api.enabled_user_count ?? 0} • Failure rate:{' '}
-                        <span
-                          title="Healthy < 2%, Degraded 2–10%, Unhealthy > 10%"
-                        >
-                          {formatPercent(api.usage_summary?.failure_rate)}
+                      <div className="mt-1 flex items-center gap-3 flex-wrap">
+                        <label className="text-xs text-gray-600 flex items-center gap-1">
+                          <input
+                            type="checkbox"
+                            checked={api.is_active}
+                            disabled={!canManageExternalApis}
+                            onChange={(e) => updateApi({ ...api, is_active: e.target.checked })}
+                          />
+                          Enabled
+                        </label>
+                        {isPlatformCatalogMode && isPlatformAdminView && !api.company_id && (
+                          <label className="text-xs text-gray-600 flex items-center gap-1">
+                            <input
+                              type="checkbox"
+                              checked={api.is_preset ?? false}
+                              onChange={(e) => updateApi({ ...api, is_preset: e.target.checked })}
+                            />
+                            Visible to companies
+                          </label>
+                        )}
+                        <span className="text-xs text-gray-500">
+                          Failure rate: {formatPercent(api.usage_summary?.failure_rate)}
                         </span>
                       </div>
-                      {api.is_preset && !api.company_id && (
-                        <div className="text-xs text-gray-400 mt-1">
-                          Enabled companies:{' '}
-                          {(api.enabled_companies || []).length > 0
-                            ? api.enabled_companies?.join(', ')
-                            : '—'}
-                        </div>
-                      )}
-                      {api.is_preset && !api.company_id && (api.usage_by_company || []).length > 0 && (
-                        <div className="text-xs text-gray-400 mt-1">
-                          Usage by company:{' '}
-                          {api.usage_by_company
-                            ?.map(
-                              (entry) =>
-                                `${entry.company_id}: ${entry.request_count} calls`
-                            )
-                            .join(' • ')}
-                        </div>
-                      )}
-                      {(api.usage_summary?.last_error_message || api.usage_summary?.last_error_code) && (
-                        <div className="text-xs text-red-600 mt-1">
-                          Last error:{' '}
-                          {api.usage_summary?.last_error_code
-                            ? `[${api.usage_summary.last_error_code}] `
-                            : ''}
-                          {api.usage_summary?.last_error_message || '—'}
-                          {api.usage_summary?.last_failure_at
-                            ? ` • ${new Date(api.usage_summary.last_failure_at).toLocaleDateString()}`
-                            : ''}
-                        </div>
-                      )}
-                      {api.usage_summary?.last_success_at && (
-                        <div className="text-xs text-green-700 mt-1">
-                          Last success: {new Date(api.usage_summary.last_success_at).toLocaleDateString()}
-                        </div>
+                    </div>
+                    <div className="relative shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setActionsOpenId(actionsOpen ? null : api.id)}
+                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50"
+                      >
+                        Actions ▼
+                      </button>
+                      {actionsOpen && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setActionsOpenId(null)} />
+                          <div className="absolute right-0 top-full mt-1 py-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
+                            {canManageExternalApis && (
+                              <>
+                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { validateApi(api.id); setActionsOpenId(null); }}>
+                                  Validate Credentials
+                                </button>
+                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { testExistingApi(api.id); setActionsOpenId(null); }}>
+                                  Run Test
+                                </button>
+                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { setActiveTab('queue'); setActionsOpenId(null); }}>
+                                  View Logs
+                                </button>
+                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { startEdit(api); setActionsOpenId(null); }}>
+                                  Edit
+                                </button>
+                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50" onClick={() => { setActionsOpenId(null); if (confirm('Delete this API source?')) deleteApi(api.id); }}>
+                                  Delete
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </>
                       )}
                     </div>
-                    <div className="text-xs text-gray-500">
-                      {api.purpose} • {api.method || 'GET'} • {api.auth_type || 'none'}
-                    </div>
-                  </div>
-                  <div className="mt-3 flex items-center gap-3">
-                    <label className="text-xs text-gray-600 flex items-center gap-1">
-                      <input
-                        type="checkbox"
-                        checked={api.is_active}
-                        disabled={!canManageExternalApis}
-                        onChange={(e) => updateApi({ ...api, is_active: e.target.checked })}
-                      />
-                      Enabled
-                    </label>
-                    {isPlatformCatalogMode && isPlatformAdminView && !api.company_id && (
-                      <label className="text-xs text-gray-600 flex items-center gap-1">
-                        <input
-                          type="checkbox"
-                          checked={api.is_preset ?? false}
-                          onChange={(e) =>
-                            updateApi({ ...api, is_preset: e.target.checked })
-                          }
-                        />
-                        Visible to companies
-                      </label>
-                    )}
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${getHealthBadge(
-                        api.health
-                      ).className}`}
-                      title="Based on freshness & reliability of data source"
-                    >
-                      {getHealthBadge(api.health).label}
-                    </span>
-                    {canManageExternalApis && (
-                      <button
-                        onClick={() => startEdit(api)}
-                        className="text-xs text-gray-700"
-                      >
-                        Edit
-                      </button>
-                    )}
-                    {canManageExternalApis && (
-                      <button
-                        onClick={() => validateApi(api.id)}
-                        className="text-xs text-indigo-600"
-                      >
-                        Validate API
-                      </button>
-                    )}
-                    {canManageExternalApis && (
-                      <button
-                        onClick={() => testExistingApi(api.id)}
-                        className="text-xs text-gray-700"
-                      >
-                        Test API
-                      </button>
-                    )}
-                    {canManageExternalApis && (
-                      <button
-                        onClick={() => deleteApi(api.id)}
-                        disabled={!canManageExternalApis}
-                        className="text-xs text-red-600 disabled:opacity-50"
-                      >
-                        Delete
-                      </button>
-                    )}
                   </div>
 
-                  {missingEnv && (
-                    <div className="text-xs text-red-600 mt-2">
-                      Missing required env var name for this API.
+                  <button
+                    type="button"
+                    className="mt-2 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                    onClick={() => setExpandedCardIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(api.id)) next.delete(api.id);
+                      else next.add(api.id);
+                      return next;
+                    })}
+                  >
+                    {expanded ? '▼' : '▶'} Advanced details
+                  </button>
+                  {expanded && (
+                    <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-600 space-y-1">
+                      <div><span className="text-gray-500">Endpoint:</span> {api.is_preset && !isPlatformAdminView ? 'Hidden' : api.base_url}</div>
+                      {(api.api_key_env_name || api.api_key_name) && api.auth_type !== 'none' && !(api.is_preset && !isPlatformAdminView) && (
+                        <div><span className="text-gray-500">ENV Key:</span> {api.api_key_env_name || api.api_key_name}</div>
+                      )}
+                      <div><span className="text-gray-500">Usage:</span> Enabled users {api.enabled_user_count ?? 0} • {api.purpose} • {api.method || 'GET'} • {api.auth_type || 'none'}</div>
+                      {api.is_preset && findPresetByName(api.name)?.description && (
+                        <div className="text-gray-500">{findPresetByName(api.name)?.description}</div>
+                      )}
                     </div>
                   )}
 
-                  {testData && (
-                    <div className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-700">
-                      <div className="flex items-center justify-between">
-                        <div className="font-semibold text-gray-800">Latest Test</div>
-                        <div className="text-[10px] text-gray-500">
-                          Cache: {testData.cache?.hit ? 'Hit' : 'Miss'}
-                        </div>
+                  {missingEnv && (
+                    <div className="text-xs text-red-600 mt-2">Missing required env var name for this API.</div>
+                  )}
+
+                  {testData && (testData.tested_at || testData.response) && (
+                    <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs">
+                      <div className="font-medium text-gray-800 mb-1">Last Test Result</div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-gray-600">
+                        <span>Result: <strong className={testData.response?.ok ? 'text-green-700' : 'text-red-700'}>{testData.response?.ok ? 'SUCCESS' : 'FAILED'}</strong></span>
+                        {typeof testData.latency_ms === 'number' && <span>Latency: {testData.latency_ms}ms</span>}
+                        {testData.tested_at && <span>Time: {new Date(testData.tested_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
                       </div>
-                      {testData.health && (
-                        <div className="text-[10px] text-gray-500 mt-1">
-                          Health: freshness {testData.health.freshness_score ?? '—'} • reliability{' '}
-                          {testData.health.reliability_score ?? '—'}
+                      {!testData.response?.ok && testData.response && (
+                        <div className="mt-1.5 font-mono text-[11px] text-red-700 bg-red-50 px-2 py-1 rounded border border-red-100">
+                          {testData.response.status} {testData.response.statusText}
+                          {(testData.response.body?.error?.message || testData.response.body?.error?.reason || testData.response.body?.message) && (
+                            <span> — {testData.response.body?.error?.message ?? testData.response.body?.error?.reason ?? testData.response.body?.message}</span>
+                          )}
                         </div>
                       )}
-                      {testData.normalized_trends && testData.normalized_trends.length > 0 ? (
-                        <div className="mt-2 space-y-2">
-                          {testData.normalized_trends.slice(0, 3).map((trend: any, index: number) => (
-                            <div key={`${api.id}-trend-${index}`} className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold text-gray-900">{trend.title}</div>
-                                <div className="text-xs text-gray-500">{trend.description || 'No description'}</div>
-                              </div>
-                              <div className="flex flex-col items-end gap-1">
-                                <span className="text-[10px] uppercase bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
-                                  {trend.source}
-                                </span>
-                                <span className="text-[10px] text-gray-500">
-                                  Conf {Math.round((trend.confidence || 0) * 100)}%
-                                </span>
-                              </div>
-                            </div>
+                      <div className="text-[10px] text-gray-600 mt-1">
+                        Health: {testData.response?.ok ? 'OK' : 'Failed'} (Last check {testData.tested_at ? new Date(testData.tested_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'})
+                      </div>
+                      {testData.normalized_trends && testData.normalized_trends.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {testData.normalized_trends.slice(0, 2).map((trend: any, index: number) => (
+                            <div key={`${api.id}-t-${index}`} className="text-gray-600">{trend.title}</div>
                           ))}
                         </div>
-                      ) : (
-                        <div className="text-xs text-gray-500 mt-2">No normalized trends returned.</div>
                       )}
                       {testData.missing && (
-                        <div className="text-xs text-red-600 mt-2">
-                          Missing env vars: {Array.isArray(testData.missing) ? testData.missing.join(', ') : String(testData.missing)}
-                        </div>
+                        <div className="text-red-600 mt-1">Missing env: {Array.isArray(testData.missing) ? testData.missing.join(', ') : String(testData.missing)}</div>
                       )}
                     </div>
                   )}

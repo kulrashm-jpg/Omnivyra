@@ -50,45 +50,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 async function transcribeWithWhisper(audioFile: any) {
   const openaiApiKey = process.env.OPENAI_API_KEY;
-  
+
   if (!openaiApiKey) {
     throw new Error('OpenAI API key not configured');
   }
 
-  // Convert base64 to buffer if needed
-  let audioBuffer;
+  let audioBuffer: Buffer;
+  let contentType = 'audio/webm';
+  let filename = 'voice-note.webm';
   if (typeof audioFile === 'string' && audioFile.startsWith('data:')) {
-    const base64Data = audioFile.split(',')[1];
+    const [header, base64Data] = audioFile.split(',');
+    if (!base64Data) throw new Error('Invalid base64 audio data');
+    const mimeMatch = header.match(/data:([^;]+)/);
+    if (mimeMatch) {
+      contentType = mimeMatch[1].trim();
+      const ext = contentType.includes('mp4') ? 'mp4' : contentType.includes('ogg') ? 'ogg' : 'webm';
+      filename = `voice-note.${ext}`;
+    }
     audioBuffer = Buffer.from(base64Data, 'base64');
   } else {
     audioBuffer = audioFile;
   }
 
-  // Create form data for Whisper API
-  const formData = new FormData();
-  formData.append('file', audioBuffer, {
-    filename: 'voice-note.webm',
-    contentType: 'audio/webm'
-  });
-  formData.append('model', 'whisper-1');
-  formData.append('language', 'en');
-  formData.append('response_format', 'verbose_json');
+  if (!audioBuffer.length) {
+    throw new Error('Audio data is empty');
+  }
+
+  const file = new File([audioBuffer], filename, { type: contentType });
+  const webFormData = new (globalThis as any).FormData();
+  webFormData.append('file', file);
+  webFormData.append('model', 'whisper-1');
+  webFormData.append('language', 'en');
+  webFormData.append('response_format', 'verbose_json');
 
   const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${openaiApiKey}`,
+      Authorization: `Bearer ${openaiApiKey}`,
     },
-    body: formData as any
+    body: webFormData,
   });
 
   if (!response.ok) {
-    throw new Error(`Whisper API error: ${response.statusText}`);
+    const errText = await response.text();
+    console.error('Whisper API error:', response.status, errText);
+    throw new Error(`Whisper API error: ${response.status} ${errText.slice(0, 200)}`);
   }
 
   const result = await response.json();
   return {
-    text: result.text,
+    text: result.text ?? '',
     confidence: result.confidence || 0.95,
     duration: result.duration || 0,
     language: result.language || 'en'

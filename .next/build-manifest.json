@@ -23,25 +23,20 @@
       "static/chunks/main.js",
       "static/chunks/pages/_error.js"
     ],
+    "/company-profile": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/company-profile.js"
+    ],
     "/external-apis": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",
       "static/chunks/pages/external-apis.js"
     ],
-    "/recommendations/audit": [
+    "/recommendations": [
       "static/chunks/webpack.js",
       "static/chunks/main.js",
-      "static/chunks/pages/recommendations/audit.js"
-    ],
-    "/recommendations/policy": [
-      "static/chunks/webpack.js",
-      "static/chunks/main.js",
-      "static/chunks/pages/recommendations/policy.js"
-    ],
-    "/super-admin/dashboard": [
-      "static/chunks/webpack.js",
-      "static/chunks/main.js",
-      "static/chunks/pages/super-admin/dashboard.js"
+      "static/chunks/pages/recommendations.js"
     ]
   },
   "ampFirstPages": []

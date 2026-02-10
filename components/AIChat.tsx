@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Send, 
-  Mic, 
-  MicOff, 
   Upload, 
   FileText, 
   Image, 
@@ -12,6 +10,7 @@ import {
   Minimize2,
   Maximize2
 } from 'lucide-react';
+import ChatVoiceButton from './ChatVoiceButton';
 
 interface ChatMessage {
   id: number;
@@ -38,7 +37,6 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     }
   ]);
   const [newMessage, setNewMessage] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -131,11 +129,6 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
 
   const removeAttachment = (index: number) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const toggleRecording = () => {
-    setIsRecording(!isRecording);
-    // In a real implementation, this would start/stop voice recording
   };
 
   if (!isOpen) return null;
@@ -273,14 +266,11 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
               placeholder="Ask me anything about your content..."
               className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200"
             />
-            <button
-              onClick={toggleRecording}
-              className={`p-3 rounded-lg transition-colors ${
-                isRecording ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            </button>
+            <ChatVoiceButton
+              onTranscription={(text) => setNewMessage(text)}
+              context="ai-chat"
+              className="p-3 rounded-lg"
+            />
             <button
               onClick={sendMessage}
               disabled={!newMessage.trim() && attachments.length === 0}

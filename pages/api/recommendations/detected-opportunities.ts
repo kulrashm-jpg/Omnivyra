@@ -7,6 +7,14 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
+import {
+  countActive,
+  upsertOpportunities,
+  listActiveOpportunities,
+  MAX_SLOTS_PER_TYPE,
+  type OpportunityItem,
+  type OpportunityInput,
+} from '../../../backend/services/opportunityService';
 
 const DEFAULT_LOOKBACK_DAYS = 90;
 
@@ -440,7 +448,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           finalMap.set(normalized, item);
         }
       });
-    const filtered = Array.from(finalMap.values()).slice(0, 10);
+    const filtered = Array.from(finalMap.values());
 
     console.debug('Diversified opportunity mix', {
       momentumCount: momentum.length,
@@ -448,7 +456,48 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       wildcardCount: wildcard.length,
     });
 
-    return res.status(200).json({ opportunities: filtered });
+    // Persist to opportunity_items (type PULSE), respecting ACTIVE slot limit
+    const activeCount = await countActive(companyId, 'PULSE');
+    const slotsAvailable = Math.max(0, MAX_SLOTS_PER_TYPE - activeCount);
+    const toUpsert = filtered.slice(0, slotsAvailable).map((item: any): OpportunityInput => ({
+      title: String(item.topic || ''),
+      summary: item.trend_reasoning ?? null,
+      problem_domain: item.category ?? null,
+      region_tags: [],
+      source_refs: { source: item.source ?? 'pulse' },
+      conversion_score: typeof item.priority_score === 'number' ? Math.round(item.priority_score * 100) : null,
+      payload: {
+        category: item.category ?? null,
+        source: item.source ?? null,
+        risk_level: item.risk_level ?? null,
+        trend_classification: item.trend_classification ?? null,
+        growth_opportunity_score: item.growth_opportunity_score ?? null,
+        growth_bucket: item.growth_bucket ?? null,
+      },
+    }));
+
+    if (toUpsert.length > 0) {
+      await upsertOpportunities(companyId, 'PULSE', toUpsert);
+    }
+
+    const rows = await listActiveOpportunities(companyId, 'PULSE');
+    const payload = (row: OpportunityItem) => (row.payload && typeof row.payload === 'object' ? row.payload as Record<string, unknown> : {});
+
+    const opportunities = rows.map((row) => ({
+      id: row.id,
+      topic: row.title,
+      category: payload(row).category ?? null,
+      confidence: row.conversion_score != null ? row.conversion_score / 100 : null,
+      source: payload(row).source ?? 'pulse',
+      risk_level: payload(row).risk_level ?? null,
+      priority_score: row.conversion_score != null ? row.conversion_score / 100 : null,
+      trend_classification: payload(row).trend_classification ?? null,
+      trend_reasoning: row.summary ?? null,
+      growth_opportunity_score: row.conversion_score != null ? row.conversion_score / 100 : null,
+      growth_bucket: payload(row).growth_bucket ?? null,
+    }));
+
+    return res.status(200).json({ opportunities });
   } catch (error) {
     console.error('Error loading detected opportunities:', error);
     return res.status(500).json({ error: 'Failed to load detected opportunities' });

@@ -50,3 +50,25 @@ ALTER TABLE company_profiles
     ADD COLUMN IF NOT EXISTS field_confidence JSONB,
     ADD COLUMN IF NOT EXISTS overall_confidence INTEGER DEFAULT 0,
     ADD COLUMN IF NOT EXISTS source_urls JSONB;
+
+-- Commercial Strategy (target customer / commercial fields)
+ALTER TABLE company_profiles
+    ADD COLUMN IF NOT EXISTS target_customer_segment TEXT,
+    ADD COLUMN IF NOT EXISTS ideal_customer_profile TEXT,
+    ADD COLUMN IF NOT EXISTS pricing_model TEXT,
+    ADD COLUMN IF NOT EXISTS sales_motion TEXT,
+    ADD COLUMN IF NOT EXISTS avg_deal_size TEXT,
+    ADD COLUMN IF NOT EXISTS sales_cycle TEXT,
+    ADD COLUMN IF NOT EXISTS key_metrics TEXT,
+    ADD COLUMN IF NOT EXISTS user_locked_fields JSONB DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS last_edited_by TEXT;
+
+-- Marketing Intelligence
+ALTER TABLE company_profiles
+    ADD COLUMN IF NOT EXISTS marketing_channels TEXT,
+    ADD COLUMN IF NOT EXISTS content_strategy TEXT,
+    ADD COLUMN IF NOT EXISTS campaign_focus TEXT,
+    ADD COLUMN IF NOT EXISTS key_messages TEXT,
+    ADD COLUMN IF NOT EXISTS brand_positioning TEXT,
+    ADD COLUMN IF NOT EXISTS competitive_advantages TEXT,
+    ADD COLUMN IF NOT EXISTS growth_priorities TEXT;

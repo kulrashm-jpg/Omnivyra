@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import ChatVoiceButton from '../ChatVoiceButton';
 import type { ChatMessage } from './types';
 
 type ChatPanelProps = {
@@ -49,12 +50,19 @@ export default function ChatPanel({ context, title = 'Chat' }: ChatPanelProps) {
           value={input}
           onChange={(event) => setInput(event.target.value)}
         />
-        <button
-          onClick={sendMessage}
-          className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm"
-        >
-          Send
-        </button>
+        <div className="flex items-center gap-2">
+          <ChatVoiceButton
+            onTranscription={(text) => setInput(text)}
+            context="community-ai-chat"
+            className="p-2 rounded-lg"
+          />
+          <button
+            onClick={sendMessage}
+            className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm"
+          >
+            Send
+          </button>
+        </div>
         <textarea className="hidden" readOnly value={contextPayload} aria-hidden="true" />
       </div>
     </div>

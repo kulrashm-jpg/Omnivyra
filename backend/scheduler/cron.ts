@@ -21,8 +21,11 @@
  */
 
 import { findDuePostsAndEnqueue } from './schedulerService';
+import { runOpportunitySlotsScheduler } from '../services/opportunitySlotsScheduler';
 
 const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_SECONDS || '60') * 1000;
+const OPPORTUNITY_SLOTS_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+let lastOpportunitySlotsRun = 0;
 
 let cronInterval: NodeJS.Timeout | null = null;
 
@@ -74,6 +77,23 @@ async function runSchedulerCycle() {
   } catch (error: any) {
     console.error('❌ Scheduler cycle error:', error.message);
     // Don't throw - continue running on next interval
+  }
+
+  // Run opportunity slots task once per day
+  if (Date.now() - lastOpportunitySlotsRun >= OPPORTUNITY_SLOTS_INTERVAL_MS) {
+    lastOpportunitySlotsRun = Date.now();
+    try {
+      const opp = await runOpportunitySlotsScheduler();
+      console.log(
+        `✅ Opportunity slots: reopened ${opp.reopened}, companies ${opp.companiesProcessed}, types ${opp.typesProcessed}` +
+        (opp.errors.length ? `; ${opp.errors.length} error(s)` : '')
+      );
+      if (opp.errors.length) {
+        opp.errors.forEach((e) => console.warn('Opportunity slots:', e));
+      }
+    } catch (error: any) {
+      console.error('❌ Opportunity slots scheduler error:', error.message);
+    }
   }
 }
 

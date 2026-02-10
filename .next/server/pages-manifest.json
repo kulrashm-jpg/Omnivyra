@@ -2,11 +2,6 @@
   "/_app": "pages/_app.js",
   "/_error": "pages/_error.js",
   "/_document": "pages/_document.js",
-  "/external-apis": "pages/external-apis.js",
-  "/recommendations": "pages/recommendations.js",
-  "/recommendations/policy": "pages/recommendations/policy.js",
-  "/api/admin/check-super-admin": "pages/api/admin/check-super-admin.js",
-  "/api/recommendation-policy": "pages/api/recommendation-policy.js",
-  "/recommendations/audit": "pages/recommendations/audit.js",
-  "/super-admin/dashboard": "pages/super-admin/dashboard.js"
+  "/company-profile": "pages/company-profile.js",
+  "/recommendations": "pages/recommendations.js"
 }

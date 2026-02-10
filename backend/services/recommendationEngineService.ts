@@ -25,6 +25,7 @@ import { getLastFallbackReason, getLastMeta, setLastFallbackReason } from './omn
 import { generateCampaignStrategy } from './campaignRecommendationService';
 import {
   mergeTrendsAcrossSources,
+  mergeSignalsAcrossRegions,
   removeDuplicates,
   scoreByFrequency,
   tagByPlatform,
@@ -41,6 +42,10 @@ export type RecommendationEngineInput = {
   userId?: string | null;
   simulate?: boolean;
   selectedApiIds?: string[] | null;
+  /** Multi-region: run external APIs per region and merge. Empty = use profile geo only. */
+  regions?: string[];
+  /** If false, use only stored company profile (skip website crawling / social discovery). */
+  enrichmentEnabled?: boolean;
 };
 
 export type PersonaSummary = {
@@ -101,6 +106,10 @@ export type RecommendationEngineResult = {
     endpoint?: string | null;
   };
   novelty_score?: number;
+  /** When multiple regions selected. */
+  global_disclaimer?: string;
+  /** EXTERNAL = from APIs; PROFILE_ONLY = no external signals. */
+  signals_source?: 'EXTERNAL' | 'PROFILE_ONLY';
 };
 
 const DEFAULT_DURATION_WEEKS = 12;
@@ -566,7 +575,8 @@ export const generateRecommendations = async (
   }
 ): Promise<RecommendationEngineResult> => {
   await ensureCampaignCompanyLink(input.companyId, input.campaignId);
-  const profile = await getProfile(input.companyId, { autoRefine: true });
+  const useEnrichment = input.enrichmentEnabled !== false;
+  const profile = await getProfile(input.companyId, { autoRefine: useEnrichment });
   await getCampaignMemory({ companyId: input.companyId, campaignId: input.campaignId ?? undefined });
   const personaSummary = extractPersonaSummary(profile);
 
@@ -635,56 +645,107 @@ export const generateRecommendations = async (
     {}
   );
 
+  const regions = Array.isArray(input.regions) ? input.regions.filter((r) => String(r).trim()) : [];
   let rawSignals: TrendSignal[] = [];
   let missingEnvPlaceholders: string[] = [];
-  try {
-    // External APIs are governed by Virality only; this is read-only consumption.
-    const externalSummary = await fetchExternalApis(
-      input.companyId,
-      pickProfileGeo(profile),
-      pickProfileCategory(profile),
-      {
-        recordHealth: true,
-        minReliability: 0.3,
-        userId: input.userId ?? null,
-        selectedApiIds: input.selectedApiIds ?? null,
-        feature: 'recommendations',
-      }
-    );
-    const normalizedTrends = normalizeTrends(
-      externalSummary.results.map((result) => ({
-        source: result.source,
-        payload: result.payload,
-        health: result.health ?? null,
-        geo: pickProfileGeo(profile),
-        category: pickProfileCategory(profile),
-      }))
-    );
-    missingEnvPlaceholders = externalSummary.missing_env_placeholders;
-    if (missingEnvPlaceholders.length > 0) {
-      console.warn('EXTERNAL_API_MISSING_ENV_PLACEHOLDERS', { placeholders: missingEnvPlaceholders });
-    }
-    console.log('EXTERNAL_API_NORMALIZED_TRENDS', { count: normalizedTrends.length });
-    if (typeof recordSignalConfidenceSummary === 'function') {
-      recordSignalConfidenceSummary(normalizedTrends.map((trend) => trend.confidence));
-    }
-    rawSignals = normalizedTrends.map((trend) => ({
-      topic: trend.title,
-      source: trend.source,
-      geo: trend.geo,
-      volume: trend.volume,
-      sentiment: undefined,
-      velocity: undefined,
-      signal_confidence: trend.confidence,
-      trend_source_health: undefined,
-    }));
-  } catch (error) {
-    console.warn('EXTERNAL_API_FETCH_FAILED');
-  }
+  const category = pickProfileCategory(profile);
 
-  const deduped = removeDuplicates(rawSignals);
-  const merged = mergeTrendsAcrossSources(deduped);
-  const tagged = tagByPlatform(merged);
+  let merged: TrendSignalNormalized[];
+  let tagged: TrendSignalNormalized[];
+
+  if (regions.length > 0) {
+    const perRegionSignals: Array<{ region: string; signals: TrendSignal[] }> = [];
+    for (const regionCode of regions) {
+      const geo = String(regionCode).trim().toUpperCase() === 'GLOBAL' ? undefined : String(regionCode).trim();
+      try {
+        const externalSummary = await fetchExternalApis(
+          input.companyId,
+          geo ?? pickProfileGeo(profile),
+          category,
+          {
+            recordHealth: true,
+            minReliability: 0.3,
+            userId: input.userId ?? null,
+            selectedApiIds: input.selectedApiIds ?? null,
+            feature: 'recommendations',
+          }
+        );
+        const normalizedTrends = normalizeTrends(
+          externalSummary.results.map((result) => ({
+            source: result.source,
+            payload: result.payload,
+            health: result.health ?? null,
+            geo: geo ?? pickProfileGeo(profile),
+            category,
+          }))
+        );
+        if (!missingEnvPlaceholders.length && externalSummary.missing_env_placeholders?.length)
+          missingEnvPlaceholders = externalSummary.missing_env_placeholders;
+        const signals: TrendSignal[] = normalizedTrends.map((trend) => ({
+          topic: trend.title,
+          source: trend.source,
+          geo: trend.geo,
+          volume: trend.volume,
+          sentiment: undefined,
+          velocity: undefined,
+          signal_confidence: trend.confidence,
+          trend_source_health: undefined,
+        }));
+        perRegionSignals.push({ region: regionCode.trim(), signals });
+      } catch (err) {
+        console.warn('EXTERNAL_API_FETCH_FAILED_REGION', { region: regionCode });
+      }
+    }
+    merged = mergeSignalsAcrossRegions(perRegionSignals);
+    tagged = tagByPlatform(merged);
+  } else {
+    try {
+      const externalSummary = await fetchExternalApis(
+        input.companyId,
+        pickProfileGeo(profile),
+        category,
+        {
+          recordHealth: true,
+          minReliability: 0.3,
+          userId: input.userId ?? null,
+          selectedApiIds: input.selectedApiIds ?? null,
+          feature: 'recommendations',
+        }
+      );
+      const normalizedTrends = normalizeTrends(
+        externalSummary.results.map((result) => ({
+          source: result.source,
+          payload: result.payload,
+          health: result.health ?? null,
+          geo: pickProfileGeo(profile),
+          category,
+        }))
+      );
+      missingEnvPlaceholders = externalSummary.missing_env_placeholders;
+      if (missingEnvPlaceholders.length > 0) {
+        console.warn('EXTERNAL_API_MISSING_ENV_PLACEHOLDERS', { placeholders: missingEnvPlaceholders });
+      }
+      console.log('EXTERNAL_API_NORMALIZED_TRENDS', { count: normalizedTrends.length });
+      if (typeof recordSignalConfidenceSummary === 'function') {
+        recordSignalConfidenceSummary(normalizedTrends.map((trend) => trend.confidence));
+      }
+      rawSignals = normalizedTrends.map((trend) => ({
+        topic: trend.title,
+        source: trend.source,
+        geo: trend.geo,
+        volume: trend.volume,
+        sentiment: undefined,
+        velocity: undefined,
+        signal_confidence: trend.confidence,
+        trend_source_health: undefined,
+      }));
+    } catch (error) {
+      console.warn('EXTERNAL_API_FETCH_FAILED');
+    }
+    const deduped = removeDuplicates(rawSignals);
+    merged = mergeTrendsAcrossSources(deduped);
+    tagged = tagByPlatform(merged);
+  }
 
   if (tagged.length === 0) {
     console.warn('EXTERNAL_API_NO_SIGNALS');
@@ -742,6 +803,8 @@ export const generateRecommendations = async (
         last_error: healthReport.last_error,
         endpoint: lastMeta?.endpoint ?? null,
       },
+      global_disclaimer: regions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
+      signals_source: 'PROFILE_ONLY' as const,
     } as RecommendationEngineResult;
 
     if (isOmniVyraEnabled()) {
@@ -971,6 +1034,8 @@ export const generateRecommendations = async (
         last_error: healthReport.last_error,
         endpoint: lastMeta?.endpoint ?? null,
       },
+      global_disclaimer: regions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
+      signals_source: 'PROFILE_ONLY' as const,
     } as RecommendationEngineResult;
 
     if (isOmniVyraEnabled()) {
@@ -1032,6 +1097,8 @@ export const generateRecommendations = async (
       endpoint: lastMeta?.endpoint ?? null,
     },
     novelty_score: noveltyScore,
+    global_disclaimer: regions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
+    signals_source: 'EXTERNAL' as const,
   } as RecommendationEngineResult;
 
   if (isOmniVyraEnabled()) {

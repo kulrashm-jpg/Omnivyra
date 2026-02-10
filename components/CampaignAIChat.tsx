@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { 
   Send, 
-  Mic, 
-  MicOff, 
   Upload, 
   FileText, 
   Image, 
@@ -25,6 +23,7 @@ import {
   Calendar,
   Save
 } from 'lucide-react';
+import ChatVoiceButton from './ChatVoiceButton';
 
 interface ChatMessage {
   id: number;
@@ -129,7 +128,6 @@ type AiHistoryEntry = {
 export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, onProgramGenerated }: AIChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [showSettings, setShowSettings] = useState(false);
@@ -141,8 +139,6 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [campaignLearnings, setCampaignLearnings] = useState<CampaignLearning[]>([]);
   const [showDateSelection, setShowDateSelection] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<string>('');
-  const [isProcessingVoice, setIsProcessingVoice] = useState(false);
-  const [speechRecognition, setSpeechRecognition] = useState<any>(null);
   const [showPlanPreview, setShowPlanPreview] = useState(false);
   const [structuredPlan, setStructuredPlan] = useState<StructuredPlan | null>(null);
   const [structuredPlanMessageId, setStructuredPlanMessageId] = useState<number | null>(null);
@@ -275,7 +271,6 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   useEffect(() => {
     loadCampaignLearnings();
     detectConfiguredAPI();
-    initializeSpeechRecognition();
   }, []);
 
   useEffect(() => {
@@ -291,46 +286,6 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     };
     loadAdminStatus();
   }, []);
-
-  const initializeSpeechRecognition = () => {
-    if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
-      const SpeechRecognition = (window as any).webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = 'en-US';
-      
-      recognition.onstart = () => {
-        setIsRecording(true);
-        setIsProcessingVoice(true);
-      };
-      
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        setNewMessage(transcript);
-        setIsRecording(false);
-        setIsProcessingVoice(false);
-        
-        // No messages in chat - just put transcript in input box
-      };
-      
-      recognition.onerror = (event: any) => {
-        console.error('Speech recognition error:', event.error);
-        setIsRecording(false);
-        setIsProcessingVoice(false);
-        
-        // No error messages in chat - just log to console
-      };
-      
-      recognition.onend = () => {
-        setIsRecording(false);
-        setIsProcessingVoice(false);
-      };
-      
-      setSpeechRecognition(recognition);
-    }
-  };
 
   const detectConfiguredAPI = async () => {
     // Since Claude is configured, always use Claude
@@ -875,19 +830,6 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
 
   const removeAttachment = (index: number) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const toggleRecording = () => {
-    if (!speechRecognition) {
-      console.error('Speech recognition not supported in this browser. Please use Chrome or Edge.');
-      return;
-    }
-
-    if (!isRecording) {
-      speechRecognition.start();
-    } else {
-      speechRecognition.stop();
-    }
   };
 
   const getProviderIcon = (provider: AIProvider) => {
@@ -2666,26 +2608,12 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
               className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200"
               disabled={isBusy}
             />
-            <button
-              onClick={toggleRecording}
-              disabled={isProcessingVoice || isBusy}
-              className={`p-3 rounded-lg transition-colors ${
-                isRecording 
-                  ? 'bg-red-100 text-red-600 animate-pulse' 
-                  : isProcessingVoice
-                  ? 'bg-blue-100 text-blue-600'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-              title={isRecording ? 'Stop Recording' : isProcessingVoice ? 'Processing Voice...' : 'Start Voice Recording'}
-            >
-              {isProcessingVoice ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : isRecording ? (
-                <MicOff className="h-4 w-4" />
-              ) : (
-                <Mic className="h-4 w-4" />
-              )}
-            </button>
+            <ChatVoiceButton
+              onTranscription={(text) => setNewMessage(text)}
+              disabled={isBusy}
+              context="campaign-chat"
+              className="p-3 rounded-lg"
+            />
             <button
               onClick={sendMessage}
               disabled={(!newMessage.trim() && attachments.length === 0) || isBusy}

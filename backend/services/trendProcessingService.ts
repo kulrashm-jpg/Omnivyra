@@ -4,6 +4,8 @@ export type TrendSignalNormalized = TrendSignal & {
   sources: string[];
   frequency: number;
   platform_tag?: string;
+  /** Regions this signal was seen in (multi-region merge). */
+  regions?: string[];
 };
 
 const normalizeTopic = (topic: string) => topic.trim().toLowerCase();
@@ -77,4 +79,68 @@ export const tagByPlatform = (signals: TrendSignalNormalized[]): TrendSignalNorm
     else if (source.includes('google') || source.includes('serp')) platform_tag = 'google';
     return { ...signal, platform_tag };
   });
+};
+
+/** Per-region signal with region code. */
+export type RegionSignal = { region: string; signal: TrendSignal };
+
+/**
+ * Merge signals from multiple regions: dedupe by topic, score by average + recency weighting, attach region metadata.
+ */
+export const mergeSignalsAcrossRegions = (
+  perRegion: Array<{ region: string; signals: TrendSignal[] }>
+): TrendSignalNormalized[] => {
+  const byTopic = new Map<
+    string,
+    { regions: string[]; volumes: number[]; confidences: number[]; recencyWeights: number[]; first: TrendSignal }
+  >();
+  let regionIndex = 0;
+  for (const { region, signals } of perRegion) {
+    const recencyWeight = 1 + 0.1 * regionIndex;
+    regionIndex += 1;
+    for (const signal of signals) {
+      const key = normalizeTopic(signal.topic);
+      if (!key) continue;
+      const existing = byTopic.get(key);
+      const vol = signal.volume ?? 0;
+      const conf = signal.signal_confidence ?? 0.5;
+      if (!existing) {
+        byTopic.set(key, {
+          regions: [region],
+          volumes: [vol],
+          confidences: [conf],
+          recencyWeights: [recencyWeight],
+          first: signal,
+        });
+      } else {
+        existing.regions.push(region);
+        existing.volumes.push(vol);
+        existing.confidences.push(conf);
+        existing.recencyWeights.push(recencyWeight);
+      }
+    }
+  }
+  const merged: TrendSignalNormalized[] = [];
+  for (const [topicKey, data] of byTopic.entries()) {
+    const { regions, volumes, confidences, recencyWeights, first } = data;
+    const sumW = recencyWeights.reduce((a, b) => a + b, 0);
+    const avgVolume =
+      sumW > 0
+        ? volumes.reduce((acc, v, i) => acc + v * recencyWeights[i], 0) / sumW
+        : (volumes[0] ?? 0);
+    const avgConf =
+      sumW > 0
+        ? confidences.reduce((acc, c, i) => acc + c * recencyWeights[i], 0) / sumW
+        : (confidences[0] ?? 0.5);
+    merged.push({
+      ...first,
+      topic: first.topic.trim(),
+      sources: Array.from(new Set([first.source].filter(Boolean))),
+      frequency: regions.length,
+      volume: Math.round(avgVolume * 100) / 100,
+      signal_confidence: Math.min(1, Math.round(avgConf * 1000) / 1000),
+      regions,
+    });
+  }
+  return scoreByFrequency(merged);
 };

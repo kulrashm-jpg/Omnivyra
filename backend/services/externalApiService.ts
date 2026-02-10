@@ -1671,6 +1671,8 @@ export async function fetchExternalTrends(
     userId?: string | null;
     selectedApiIds?: string[] | null;
     feature?: string | null;
+    /** Override or extend profile-derived values (e.g. geo, category, keywords). Used for company profile now and user inputs later. */
+    runtimeOverrides?: Record<string, string>;
   }
 ): Promise<ExternalApiFetchSummary> {
   console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
@@ -1701,6 +1703,14 @@ export async function fetchExternalTrends(
   const recordHealth = options?.recordHealth ?? true;
   const minReliability = options?.minReliability ?? 0;
   lastRateLimitedSources = [];
+
+  const profileRuntimeValues = await buildProfileRuntimeValues(companyId);
+  const runtimeValues = {
+    ...profileRuntimeValues,
+    ...(options?.runtimeOverrides && typeof options.runtimeOverrides === 'object' ? options.runtimeOverrides : {}),
+  };
+  if (typeof geo !== 'undefined' && geo != null) runtimeValues.geo = String(geo);
+  if (typeof category !== 'undefined' && category != null) runtimeValues.category = String(category);
 
   const apiIds = sources.map((source) => source.id);
   console.log('EXTERNAL_API_SOURCES_USED', apiIds);
@@ -1742,6 +1752,7 @@ export async function fetchExternalTrends(
           geo,
           category,
         },
+        runtimeValues,
       });
       if (request.missingEnv.length > 0) {
         missingEnv.push(...request.missingEnv);
@@ -1878,7 +1889,15 @@ export async function fetchExternalApis(
   companyId: string,
   geo?: string,
   category?: string,
-  options?: { recordHealth?: boolean; minReliability?: number; userId?: string | null }
+  options?: {
+    recordHealth?: boolean;
+    minReliability?: number;
+    userId?: string | null;
+    selectedApiIds?: string[] | null;
+    feature?: string | null;
+    /** Override profile-derived values; use for user inputs (e.g. user-selected geo, category, keywords). */
+    runtimeOverrides?: Record<string, string>;
+  }
 ): Promise<ExternalApiFetchSummary> {
   return fetchExternalTrends(companyId, geo, category, options);
 }

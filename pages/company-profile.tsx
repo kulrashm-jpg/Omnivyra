@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
+import ChatVoiceButton from '../components/ChatVoiceButton';
 import { supabase } from '../utils/supabaseClient';
 
 type CompanyProfile = {
@@ -43,6 +44,22 @@ type CompanyProfile = {
   confidence_score?: number;
   source?: string;
   last_refined_at?: string | null;
+  target_customer_segment?: string | null;
+  ideal_customer_profile?: string | null;
+  pricing_model?: string | null;
+  sales_motion?: string | null;
+  avg_deal_size?: string | null;
+  sales_cycle?: string | null;
+  key_metrics?: string | null;
+  user_locked_fields?: string[] | null;
+  last_edited_by?: string | null;
+  marketing_channels?: string | null;
+  content_strategy?: string | null;
+  campaign_focus?: string | null;
+  key_messages?: string | null;
+  brand_positioning?: string | null;
+  competitive_advantages?: string | null;
+  growth_priorities?: string | null;
 };
 
 type CompanyProfileRefinement = {
@@ -80,6 +97,20 @@ const emptyProfile: CompanyProfile = {
   competitors: '',
   unique_value: '',
   content_themes: '',
+  target_customer_segment: '',
+  ideal_customer_profile: '',
+  pricing_model: '',
+  sales_motion: '',
+  avg_deal_size: '',
+  sales_cycle: '',
+  key_metrics: '',
+  marketing_channels: '',
+  content_strategy: '',
+  campaign_focus: '',
+  key_messages: '',
+  brand_positioning: '',
+  competitive_advantages: '',
+  growth_priorities: '',
 };
 
 const splitToList = (value?: string): string[] => {
@@ -148,6 +179,11 @@ export default function CompanyProfilePage() {
   const [latestRefinement, setLatestRefinement] = useState<CompanyProfileRefinement | null>(null);
   const [refinementHistory, setRefinementHistory] = useState<CompanyProfileRefinement[]>([]);
   const [missingFieldAnswers, setMissingFieldAnswers] = useState<Record<string, string[]>>({});
+  const [targetCustomerPanelOpen, setTargetCustomerPanelOpen] = useState(false);
+  const [targetCustomerMessages, setTargetCustomerMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  const [targetCustomerInput, setTargetCustomerInput] = useState('');
+  const [targetCustomerLoading, setTargetCustomerLoading] = useState(false);
+  const [marketingIntelligenceLoading, setMarketingIntelligenceLoading] = useState(false);
 
   const activeProfile = profile ?? draftProfile;
 
@@ -447,6 +483,93 @@ export default function CompanyProfilePage() {
       setErrorMessage('Failed to refine company profile.');
     } finally {
       setIsRefining(false);
+    }
+  };
+
+  const sendTargetCustomerMessage = async (userContent?: string) => {
+    const content = (userContent ?? targetCustomerInput).trim();
+    const isInitial = targetCustomerMessages.length === 0 && !content;
+    if (!content && !isInitial) return;
+    if (!companyId) return;
+
+    const nextMessages = isInitial
+      ? []
+      : [...targetCustomerMessages, { role: 'user' as const, content }];
+    if (!isInitial && content) setTargetCustomerMessages(nextMessages);
+    setTargetCustomerInput('');
+    setTargetCustomerLoading(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetchWithAuth(
+        `/api/company-profile/define-target-customer?companyId=${encodeURIComponent(companyId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companyId,
+            company_id: companyId,
+            conversation: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+          }),
+        }
+      );
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.error || 'Request failed');
+      }
+      const data = await response.json();
+      if (data.done && data.structuredFields) {
+        const updated = {
+          ...activeProfile,
+          ...data.structuredFields,
+        };
+        updateActiveProfile(updated);
+        setTargetCustomerPanelOpen(false);
+        setTargetCustomerMessages([]);
+        setSuccessMessage('Target customer fields updated. Click Save Profile to lock them.');
+      } else if (data.nextQuestion) {
+        setTargetCustomerMessages((prev) =>
+          isInitial ? [{ role: 'assistant' as const, content: data.nextQuestion }] : [...prev, { role: 'assistant' as const, content: data.nextQuestion }]
+        );
+      }
+    } catch (e) {
+      setErrorMessage((e as Error).message || 'Define target customer failed');
+    } finally {
+      setTargetCustomerLoading(false);
+    }
+  };
+
+  const openTargetCustomerPanel = () => {
+    setTargetCustomerMessages([]);
+    setTargetCustomerInput('');
+    setTargetCustomerPanelOpen(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    setTargetCustomerLoading(true);
+    sendTargetCustomerMessage();
+  };
+
+  const generateMarketingIntelligence = async () => {
+    if (!companyId) return;
+    setMarketingIntelligenceLoading(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const response = await fetchWithAuth(
+        `/api/company-profile/generate-marketing-intelligence?companyId=${encodeURIComponent(companyId)}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId, company_id: companyId }) }
+      );
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.error || 'Generate failed');
+      }
+      const data = await response.json();
+      const structuredFields = data.structuredFields || {};
+      updateActiveProfile({ ...activeProfile, ...structuredFields });
+      setSuccessMessage('Marketing intelligence generated. Review, edit if needed, then click Save Profile to persist and lock.');
+    } catch (e) {
+      setErrorMessage((e as Error).message || 'Failed to generate marketing intelligence');
+    } finally {
+      setMarketingIntelligenceLoading(false);
     }
   };
 
@@ -828,6 +951,180 @@ export default function CompanyProfilePage() {
               </div>
             </div>
 
+            <div className="border-t pt-6 mt-6">
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Commercial Strategy</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Define your target customer and commercial model. These fields are locked from AI overwrite once you save.
+              </p>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <button
+                  type="button"
+                  onClick={openTargetCustomerPanel}
+                  className="px-4 py-2 bg-indigo-100 text-indigo-800 rounded-lg text-sm font-medium hover:bg-indigo-200"
+                >
+                  Define Target Customer
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Target customer segment</label>
+                  <input
+                    value={activeProfile.target_customer_segment || ''}
+                    onChange={(e) => handleChange('target_customer_segment', e.target.value)}
+                    placeholder="e.g. SMB, enterprise"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Ideal customer profile</label>
+                  <textarea
+                    value={activeProfile.ideal_customer_profile || ''}
+                    onChange={(e) => handleChange('ideal_customer_profile', e.target.value)}
+                    placeholder="1–2 sentences"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Pricing model</label>
+                  <input
+                    value={activeProfile.pricing_model || ''}
+                    onChange={(e) => handleChange('pricing_model', e.target.value)}
+                    placeholder="e.g. subscription, usage-based"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Sales motion</label>
+                  <input
+                    value={activeProfile.sales_motion || ''}
+                    onChange={(e) => handleChange('sales_motion', e.target.value)}
+                    placeholder="e.g. self-serve, sales-led"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Avg deal size</label>
+                  <input
+                    value={activeProfile.avg_deal_size || ''}
+                    onChange={(e) => handleChange('avg_deal_size', e.target.value)}
+                    placeholder="e.g. $5k, $50k"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Sales cycle</label>
+                  <input
+                    value={activeProfile.sales_cycle || ''}
+                    onChange={(e) => handleChange('sales_cycle', e.target.value)}
+                    placeholder="e.g. 2 weeks, 3 months"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-sm font-medium text-gray-700">Key metrics</label>
+                  <input
+                    value={activeProfile.key_metrics || ''}
+                    onChange={(e) => handleChange('key_metrics', e.target.value)}
+                    placeholder="e.g. MRR, CAC, LTV"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+              {activeProfile.last_edited_by === 'user' && (
+                <p className="text-xs text-gray-500 mt-2">
+                  Last edited by you; refinement will not overwrite locked commercial fields.
+                </p>
+              )}
+            </div>
+
+            <div className="border-t pt-6 mt-6">
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Marketing Intelligence</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                AI-generated marketing insights from your profile and commercial strategy. Save to persist and lock from refinement overwrite.
+              </p>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <button
+                  type="button"
+                  onClick={generateMarketingIntelligence}
+                  disabled={marketingIntelligenceLoading}
+                  className="px-4 py-2 bg-emerald-100 text-emerald-800 rounded-lg text-sm font-medium hover:bg-emerald-200 disabled:opacity-50"
+                >
+                  {marketingIntelligenceLoading ? 'Generating...' : 'Generate Marketing Intelligence'}
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Marketing channels</label>
+                  <input
+                    value={activeProfile.marketing_channels || ''}
+                    onChange={(e) => handleChange('marketing_channels', e.target.value)}
+                    placeholder="e.g. social, email, events"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Content strategy</label>
+                  <textarea
+                    value={activeProfile.content_strategy || ''}
+                    onChange={(e) => handleChange('content_strategy', e.target.value)}
+                    placeholder="High-level content approach"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Campaign focus</label>
+                  <input
+                    value={activeProfile.campaign_focus || ''}
+                    onChange={(e) => handleChange('campaign_focus', e.target.value)}
+                    placeholder="What campaigns typically focus on"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Key messages</label>
+                  <textarea
+                    value={activeProfile.key_messages || ''}
+                    onChange={(e) => handleChange('key_messages', e.target.value)}
+                    placeholder="Core messages to convey"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Brand positioning</label>
+                  <textarea
+                    value={activeProfile.brand_positioning || ''}
+                    onChange={(e) => handleChange('brand_positioning', e.target.value)}
+                    placeholder="How the brand wants to be perceived"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Competitive advantages</label>
+                  <textarea
+                    value={activeProfile.competitive_advantages || ''}
+                    onChange={(e) => handleChange('competitive_advantages', e.target.value)}
+                    placeholder="Differentiators vs competitors"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-sm font-medium text-gray-700">Growth priorities</label>
+                  <textarea
+                    value={activeProfile.growth_priorities || ''}
+                    onChange={(e) => handleChange('growth_priorities', e.target.value)}
+                    placeholder="Marketing/growth priorities"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+
             {latestRefinement?.missing_fields_questions &&
               latestRefinement.missing_fields_questions.length > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
@@ -923,6 +1220,73 @@ export default function CompanyProfilePage() {
           </div>
         )}
       </div>
+
+      {targetCustomerPanelOpen && (
+        <div className="fixed inset-0 z-50 flex">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setTargetCustomerPanelOpen(false)} aria-hidden />
+          <div className="relative ml-auto w-full max-w-md bg-white shadow-xl flex flex-col h-full">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Define Target Customer</h3>
+              <button
+                type="button"
+                onClick={() => setTargetCustomerPanelOpen(false)}
+                className="p-2 text-gray-500 hover:text-gray-700 rounded"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {targetCustomerMessages.map((msg, i) => (
+                <div
+                  key={i}
+                  className={`rounded-lg p-3 text-sm ${
+                    msg.role === 'user'
+                      ? 'ml-8 bg-indigo-100 text-indigo-900'
+                      : 'mr-8 bg-gray-100 text-gray-900'
+                  }`}
+                >
+                  {msg.content}
+                </div>
+              ))}
+              {targetCustomerLoading && (
+                <div className="mr-8 rounded-lg p-3 text-sm bg-gray-100 text-gray-600">Thinking...</div>
+              )}
+            </div>
+            <div className="p-4 border-t">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  sendTargetCustomerMessage();
+                }}
+                className="flex gap-2 items-center"
+              >
+                <input
+                  type="text"
+                  value={targetCustomerInput}
+                  onChange={(e) => setTargetCustomerInput(e.target.value)}
+                  placeholder="Type your answer..."
+                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  disabled={targetCustomerLoading}
+                />
+                <ChatVoiceButton
+                  onTranscription={(text) => setTargetCustomerInput(text)}
+                  disabled={targetCustomerLoading}
+                  context="company-profile"
+                  title={undefined}
+                />
+                <button
+                  type="submit"
+                  disabled={targetCustomerLoading}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                >
+                  Send
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {refinementHistory.length > 0 && (
         <div className="max-w-4xl mx-auto bg-white shadow rounded-lg p-6 mt-6 space-y-3">

@@ -2,7 +2,6 @@ import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { supabase } from '../db/supabaseClient';
-import { runCompanyProfileTriggeredRefresh } from './recommendationScheduler';
 
 export type CompanyProfile = {
   id?: string;
@@ -46,7 +45,47 @@ export type CompanyProfile = {
   last_refined_at?: string | null;
   created_at?: string;
   updated_at?: string;
+  // Commercial Strategy
+  target_customer_segment?: string | null;
+  ideal_customer_profile?: string | null;
+  pricing_model?: string | null;
+  sales_motion?: string | null;
+  avg_deal_size?: string | null;
+  sales_cycle?: string | null;
+  key_metrics?: string | null;
+  user_locked_fields?: string[] | null;
+  last_edited_by?: string | null;
+  // Marketing Intelligence
+  marketing_channels?: string | null;
+  content_strategy?: string | null;
+  campaign_focus?: string | null;
+  key_messages?: string | null;
+  brand_positioning?: string | null;
+  competitive_advantages?: string | null;
+  growth_priorities?: string | null;
 };
+
+/** Commercial strategy fields; when saved by user they are added to user_locked_fields. */
+export const COMMERCIAL_FIELD_NAMES = [
+  'target_customer_segment',
+  'ideal_customer_profile',
+  'pricing_model',
+  'sales_motion',
+  'avg_deal_size',
+  'sales_cycle',
+  'key_metrics',
+] as const;
+
+/** Marketing intelligence fields; when saved by user they are added to user_locked_fields. */
+export const MARKETING_INTELLIGENCE_FIELD_NAMES = [
+  'marketing_channels',
+  'content_strategy',
+  'campaign_focus',
+  'key_messages',
+  'brand_positioning',
+  'competitive_advantages',
+  'growth_priorities',
+] as const;
 
 export type CompanyProfileRefinementDetails = {
   company_id: string;
@@ -1573,7 +1612,44 @@ export async function saveProfile(input: Partial<CompanyProfile>): Promise<Compa
     source: 'user' as const,
     last_refined_at: lastRefinedAt,
     updated_at: new Date().toISOString(),
+    target_customer_segment: input.target_customer_segment ?? existing?.target_customer_segment ?? null,
+    ideal_customer_profile: input.ideal_customer_profile ?? existing?.ideal_customer_profile ?? null,
+    pricing_model: input.pricing_model ?? existing?.pricing_model ?? null,
+    sales_motion: input.sales_motion ?? existing?.sales_motion ?? null,
+    avg_deal_size: input.avg_deal_size ?? existing?.avg_deal_size ?? null,
+    sales_cycle: input.sales_cycle ?? existing?.sales_cycle ?? null,
+    key_metrics: input.key_metrics ?? existing?.key_metrics ?? null,
+    user_locked_fields: existing?.user_locked_fields ?? [],
+    last_edited_by: existing?.last_edited_by ?? null,
+    marketing_channels: input.marketing_channels ?? existing?.marketing_channels ?? null,
+    content_strategy: input.content_strategy ?? existing?.content_strategy ?? null,
+    campaign_focus: input.campaign_focus ?? existing?.campaign_focus ?? null,
+    key_messages: input.key_messages ?? existing?.key_messages ?? null,
+    brand_positioning: input.brand_positioning ?? existing?.brand_positioning ?? null,
+    competitive_advantages: input.competitive_advantages ?? existing?.competitive_advantages ?? null,
+    growth_priorities: input.growth_priorities ?? existing?.growth_priorities ?? null,
   };
+
+  const lockedSet = new Set<string>(Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []);
+  let didLock = false;
+  for (const key of COMMERCIAL_FIELD_NAMES) {
+    const val = input[key];
+    if (val !== undefined && val !== null && String(val).trim() !== '') {
+      lockedSet.add(key);
+      didLock = true;
+    }
+  }
+  for (const key of MARKETING_INTELLIGENCE_FIELD_NAMES) {
+    const val = input[key];
+    if (val !== undefined && val !== null && String(val).trim() !== '') {
+      lockedSet.add(key);
+      didLock = true;
+    }
+  }
+  if (didLock) {
+    payload.user_locked_fields = Array.from(lockedSet);
+    payload.last_edited_by = 'user';
+  }
 
   const { data, error } = await supabase
     .from('company_profiles')
@@ -1882,12 +1958,18 @@ const runProfileRefinement = async (
       source_urls: refined.source_urls?.length || 0,
     },
   });
+  const locked = new Set<string>(
+    Array.isArray(workingProfile.user_locked_fields) ? workingProfile.user_locked_fields : []
+  );
+  const pick = <T>(refinedVal: T, workingVal: T, field: string): T =>
+    locked.has(field) ? workingVal : (refinedVal ?? workingVal ?? null);
+
   const refinedPayload = {
     company_id: workingProfile.company_id,
-    name: refined.name ?? workingProfile.name ?? null,
-    industry: refined.industry ?? workingProfile.industry ?? null,
-    category: refined.category ?? workingProfile.category ?? null,
-    website_url: refined.website_url ?? workingProfile.website_url ?? null,
+    name: pick(refined.name, workingProfile.name, 'name'),
+    industry: pick(refined.industry, workingProfile.industry, 'industry'),
+    category: pick(refined.category, workingProfile.category, 'category'),
+    website_url: pick(refined.website_url, workingProfile.website_url, 'website_url'),
     linkedin_url: workingProfile.linkedin_url ?? null,
     facebook_url: workingProfile.facebook_url ?? null,
     instagram_url: workingProfile.instagram_url ?? null,
@@ -1897,24 +1979,24 @@ const runProfileRefinement = async (
     reddit_url: workingProfile.reddit_url ?? null,
     blog_url: workingProfile.blog_url ?? null,
     other_social_links: workingProfile.other_social_links ?? null,
-    products_services: refined.products_services ?? workingProfile.products_services ?? null,
-    target_audience: refined.target_audience ?? workingProfile.target_audience ?? null,
-    geography: refined.geography ?? workingProfile.geography ?? null,
-    brand_voice: refined.brand_voice ?? workingProfile.brand_voice ?? null,
-    goals: refined.goals ?? workingProfile.goals ?? null,
-    competitors: refined.competitors ?? workingProfile.competitors ?? null,
-    unique_value: refined.unique_value ?? workingProfile.unique_value ?? null,
-    content_themes: refined.content_themes ?? workingProfile.content_themes ?? null,
-    industry_list: refined.industry_list ?? workingProfile.industry_list ?? null,
-    category_list: refined.category_list ?? workingProfile.category_list ?? null,
-    geography_list: refined.geography_list ?? workingProfile.geography_list ?? null,
-    competitors_list: refined.competitors_list ?? workingProfile.competitors_list ?? null,
-    content_themes_list: refined.content_themes_list ?? workingProfile.content_themes_list ?? null,
-    products_services_list: refined.products_services_list ?? workingProfile.products_services_list ?? null,
-    target_audience_list: refined.target_audience_list ?? workingProfile.target_audience_list ?? null,
-    goals_list: refined.goals_list ?? workingProfile.goals_list ?? null,
-    brand_voice_list: refined.brand_voice_list ?? workingProfile.brand_voice_list ?? null,
-    social_profiles: refined.social_profiles ?? workingProfile.social_profiles ?? null,
+    products_services: pick(refined.products_services, workingProfile.products_services, 'products_services'),
+    target_audience: pick(refined.target_audience, workingProfile.target_audience, 'target_audience'),
+    geography: pick(refined.geography, workingProfile.geography, 'geography'),
+    brand_voice: pick(refined.brand_voice, workingProfile.brand_voice, 'brand_voice'),
+    goals: pick(refined.goals, workingProfile.goals, 'goals'),
+    competitors: pick(refined.competitors, workingProfile.competitors, 'competitors'),
+    unique_value: pick(refined.unique_value, workingProfile.unique_value, 'unique_value'),
+    content_themes: pick(refined.content_themes, workingProfile.content_themes, 'content_themes'),
+    industry_list: pick(refined.industry_list, workingProfile.industry_list, 'industry_list'),
+    category_list: pick(refined.category_list, workingProfile.category_list, 'category_list'),
+    geography_list: pick(refined.geography_list, workingProfile.geography_list, 'geography_list'),
+    competitors_list: pick(refined.competitors_list, workingProfile.competitors_list, 'competitors_list'),
+    content_themes_list: pick(refined.content_themes_list, workingProfile.content_themes_list, 'content_themes_list'),
+    products_services_list: pick(refined.products_services_list, workingProfile.products_services_list, 'products_services_list'),
+    target_audience_list: pick(refined.target_audience_list, workingProfile.target_audience_list, 'target_audience_list'),
+    goals_list: pick(refined.goals_list, workingProfile.goals_list, 'goals_list'),
+    brand_voice_list: pick(refined.brand_voice_list, workingProfile.brand_voice_list, 'brand_voice_list'),
+    social_profiles: locked.has('social_profiles') ? workingProfile.social_profiles : (refined.social_profiles ?? workingProfile.social_profiles ?? null),
     field_confidence: refined.field_confidence ?? workingProfile.field_confidence ?? null,
     overall_confidence: refined.overall_confidence ?? workingProfile.overall_confidence ?? 0,
     source_urls: refined.source_urls ?? workingProfile.source_urls ?? null,
@@ -1922,6 +2004,22 @@ const runProfileRefinement = async (
     source: 'ai_refined' as const,
     last_refined_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    target_customer_segment: workingProfile.target_customer_segment ?? null,
+    ideal_customer_profile: workingProfile.ideal_customer_profile ?? null,
+    pricing_model: workingProfile.pricing_model ?? null,
+    sales_motion: workingProfile.sales_motion ?? null,
+    avg_deal_size: workingProfile.avg_deal_size ?? null,
+    sales_cycle: workingProfile.sales_cycle ?? null,
+    key_metrics: workingProfile.key_metrics ?? null,
+    user_locked_fields: workingProfile.user_locked_fields ?? null,
+    last_edited_by: workingProfile.last_edited_by ?? null,
+    marketing_channels: workingProfile.marketing_channels ?? null,
+    content_strategy: workingProfile.content_strategy ?? null,
+    campaign_focus: workingProfile.campaign_focus ?? null,
+    key_messages: workingProfile.key_messages ?? null,
+    brand_positioning: workingProfile.brand_positioning ?? null,
+    competitive_advantages: workingProfile.competitive_advantages ?? null,
+    growth_priorities: workingProfile.growth_priorities ?? null,
   };
 
   const { data, error } = await supabase
@@ -1948,11 +2046,8 @@ const runProfileRefinement = async (
   };
   await storeRefinementAudit(auditDetails);
 
-  try {
-    await runCompanyProfileTriggeredRefresh(profile.company_id);
-  } catch (refreshError) {
-    console.warn('Recommendation refresh failed after profile refinement');
-  }
+  // User-initiated recommendations only: no automatic recommendation generation on profile update.
+  // Recommendations are generated only via POST /api/recommendations/generate.
 
   return { profile: data, details: auditDetails };
 };

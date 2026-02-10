@@ -74,13 +74,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let responseStatusText = 'Cached';
     let responseOk = true;
     let healthSnapshot = null;
+    let latencyMs = 0;
+    const testedAt = new Date().toISOString();
 
     if (!cached) {
-      const { response, latencyMs } = await executeExternalApiRequest({
+      const result = await executeExternalApiRequest({
         source: data,
         request: request.details,
         timeoutMs: DEFAULT_TIMEOUT_MS,
       });
+      latencyMs = result.latencyMs;
+      const { response } = result;
       cacheHit = false;
       responseStatus = response.status;
       responseStatusText = response.statusText;
@@ -101,6 +105,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         apiId: data.id,
         success: response.ok,
         latencyMs,
+        last_test_status: response.ok ? 'SUCCESS' : 'FAILED',
+        last_test_at: testedAt,
       });
       if (response.ok) {
         setCachedResponse(cacheKey, parsed, DEFAULT_TIMEOUT_MS);
@@ -131,6 +137,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         statusText: responseStatusText,
         body: parsed,
       },
+      latency_ms: latencyMs,
+      tested_at: testedAt,
     });
   } catch (error: any) {
     return res.status(500).json({ error: normalizeError(error) });

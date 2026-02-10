@@ -142,6 +142,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               api_source_id: row.api_source_id,
               freshness_score: row.freshness_score ?? 1,
               reliability_score: row.reliability_score ?? 1,
+              last_test_status: row.last_test_status ?? null,
+              last_test_at: row.last_test_at ?? null,
+              last_test_latency_ms: row.last_test_latency_ms ?? null,
             };
             return acc;
           }, {});
