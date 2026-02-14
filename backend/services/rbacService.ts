@@ -134,7 +134,7 @@ export const getRbacConfig = async (): Promise<RbacConfig> => {
     rbacCache = { value: fallback, fetchedAt: now };
     return fallback;
   }
-  const row = data[0] || {};
+  const row = (data[0] || {}) as { roles?: unknown; permissions?: unknown };
   const roles = normalizeRoles(row.roles);
   const permissions = normalizePermissions(row.permissions, roles);
   const value = { roles, permissions };

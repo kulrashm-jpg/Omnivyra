@@ -1,9 +1,21 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../utils/supabaseClient';
+import { supabase } from '../../../utils/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { isSuperAdmin } from '../../../backend/services/rbacService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const superAdmin = await isSuperAdmin(user.id);
+  if (!superAdmin) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
 
   try {
@@ -15,13 +27,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Get current user ID (you'll need to implement proper auth)
-    const userId = 'current-user-id'; // Replace with actual user ID from auth
-
-    // Call the safe delete function
     const { data, error } = await supabase.rpc('safe_delete_campaign', {
       p_campaign_id: campaignId,
-      p_user_id: userId,
+      p_user_id: user.id,
       p_reason: reason,
       p_ip_address: ipAddress || '127.0.0.1',
       p_user_agent: userAgent || 'Unknown'

@@ -491,11 +491,11 @@ export default function ComprehensivePlanningInterface({
 
   const renderWeeklyTab = () => (
     <div className="space-y-6">
-      {/* 12-Week Overview */}
+      {/* Campaign weeks overview */}
       <div className="bg-white rounded-xl p-6 shadow-sm border">
-        <h3 className="text-xl font-semibold mb-4">12-Week Content Plan</h3>
+        <h3 className="text-xl font-semibold mb-4">Content Plan</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 12 }, (_, i) => i + 1).map(weekNumber => {
+          {Array.from({ length: weeklyPlans.length || 12 }, (_, i) => i + 1).map(weekNumber => {
             const weekPlan = weeklyPlans.find(w => w.weekNumber === weekNumber);
             return (
               <div
@@ -1001,7 +1001,7 @@ export default function ComprehensivePlanningInterface({
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Comprehensive Content Planning</h1>
-              <p className="text-gray-600 mt-1">Strategic 12-week content marketing plan</p>
+              <p className="text-gray-600 mt-1">Strategic campaign content marketing plan</p>
             </div>
             <div className="flex items-center gap-4">
               <button

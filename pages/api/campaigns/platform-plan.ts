@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
+import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
 import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
 import {
   buildPlatformExecutionPlan,
@@ -40,27 +40,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
-    if (!campaignVersion?.campaign_snapshot?.weekly_plan) {
+    const resolved = await getResolvedCampaignPlanContext(companyId, campaignId, true);
+    if (!resolved) {
       return res.status(404).json({ error: 'Campaign plan not found' });
     }
-
-    const weeklyPlan = campaignVersion.campaign_snapshot.weekly_plan.find(
+    const weeklyPlan = resolved.weekly_plan.find(
       (week: any) => week.week_number === Number(weekNumber)
     );
     if (!weeklyPlan) {
       return res.status(404).json({ error: 'Week plan not found' });
     }
-
     const trendSnapshots = await getTrendSnapshots(companyId, campaignId);
     const trends = trendSnapshots
       .flatMap((snap) => snap.snapshot?.emerging_trends ?? [])
       .map((trend: any) => trend?.topic)
       .filter(Boolean);
-
     const plan = buildPlatformExecutionPlan({
       companyProfile: profile,
-      campaign: campaignVersion.campaign_snapshot.campaign ?? campaignVersion.campaign_snapshot,
+      campaign: resolved.campaign,
       weekPlan: weeklyPlan,
       trends,
     });
@@ -81,9 +78,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const healthReport = validateCampaignHealth({
       companyProfile: profile,
       trends,
-      campaign: campaignVersion.campaign_snapshot.campaign ?? campaignVersion.campaign_snapshot,
-      weeklyPlans: campaignVersion.campaign_snapshot.weekly_plan ?? [],
-      dailyPlans: campaignVersion.campaign_snapshot.daily_plan ?? [],
+      campaign: resolved.campaign,
+      weeklyPlans: resolved.weekly_plan,
+      dailyPlans: resolved.daily_plan,
+      expectedDurationWeeks: resolved.duration_weeks,
       platformExecutionPlan: plan,
       contentAssets: await listAssetsWithLatestContent({ campaignId }),
     });

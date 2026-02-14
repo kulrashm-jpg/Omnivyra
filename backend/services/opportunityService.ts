@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import type { StrategicPayload } from './opportunityGenerators';
 
 export const MAX_SLOTS_PER_TYPE = 10;
 
@@ -144,7 +145,7 @@ export async function upsertOpportunities(
  * Fill ACTIVE opportunity slots for (companyId, type) up to MAX_SLOTS_PER_TYPE (10).
  *
  * - Count ACTIVE slots for (companyId, type).
- * - If count < 10: call generator(), then insert up to (10 - count) items via upsertOpportunities.
+ * - If count < 10: call generator(companyId, strategicPayload), then insert up to (10 - count) items via upsertOpportunities.
  * - If count >= 10: do nothing (return without calling generator).
  *
  * Called from:
@@ -155,13 +156,15 @@ export async function upsertOpportunities(
 export async function fillOpportunitySlots(
   companyId: string,
   type: string,
-  generator: () => Promise<OpportunityInput[]>
+  strategicPayload?: StrategicPayload
 ): Promise<void> {
   const active = await countActive(companyId, type);
   const remaining = MAX_SLOTS_PER_TYPE - active;
   if (remaining <= 0) return;
 
-  const items = await generator();
+  const { getGenerator } = await import('./opportunityGenerators');
+  const generator = getGenerator(type);
+  const items = await generator(companyId, strategicPayload);
   const toUpsert = items.slice(0, remaining);
   if (toUpsert.length === 0) return;
 
@@ -251,6 +254,26 @@ export async function promoteToCampaign(
   const campaignId = campaign.id as string;
 
   // campaign_snapshot: metadata.source_opportunity_id, target_regions, context_payload (for downstream; no workflow change)
+  // Hybrid context: opportunity → default focused_context
+  const {
+    DEFAULT_BUILD_MODE_OPPORTUNITY,
+    normalizeCampaignTypes,
+    normalizeCampaignWeights,
+  } = await import('./campaignContextConfig');
+  const campaign_types = normalizeCampaignTypes(
+    (opportunity.payload as any)?.campaign_types ?? undefined
+  );
+  const campaign_weights = normalizeCampaignWeights(
+    campaign_types,
+    (opportunity.payload as any)?.campaign_weights
+  );
+  const context_scope = Array.isArray((opportunity.payload as any)?.context_scope)
+    ? (opportunity.payload as any).context_scope.filter((s: unknown) => typeof s === 'string')
+    : null;
+
+  const market_scope = (opportunity.payload as any)?.market_scope ?? 'niche';
+  const company_stage = (opportunity.payload as any)?.company_stage ?? 'early_stage';
+
   const { error: linkError } = await supabase.from('campaign_versions').insert({
     company_id: companyId,
     campaign_id: campaignId,
@@ -269,6 +292,12 @@ export async function promoteToCampaign(
     status: 'draft',
     version: 1,
     created_at: now,
+    build_mode: DEFAULT_BUILD_MODE_OPPORTUNITY,
+    context_scope: context_scope && context_scope.length > 0 ? context_scope : null,
+    campaign_types,
+    campaign_weights,
+    company_stage,
+    market_scope,
   });
 
   if (linkError) {

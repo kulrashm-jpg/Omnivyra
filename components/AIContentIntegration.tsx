@@ -15,9 +15,16 @@ interface AIContentIntegrationProps {
   campaignId: string;
   aiContent: any; // Content from Campaign AI Assistant
   onContentIntegrated: (weekNumber: number, content: any) => void;
+  durationWeeks?: number; // From blueprint.duration_weeks when available
 }
 
-export default function AIContentIntegration({ campaignId, aiContent, onContentIntegrated }: AIContentIntegrationProps) {
+export default function AIContentIntegration({ campaignId, aiContent, onContentIntegrated, durationWeeks }: AIContentIntegrationProps) {
+  const weeks = durationWeeks ?? 12;
+  React.useEffect(() => {
+    if (!durationWeeks) {
+      console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+    }
+  }, [durationWeeks]);
   const [selectedWeek, setSelectedWeek] = useState<number>(1);
   const [processedContent, setProcessedContent] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -167,13 +174,13 @@ export default function AIContentIntegration({ campaignId, aiContent, onContentI
     setIsProcessing(true);
     
     try {
-      for (let week = 1; week <= 12; week++) {
+      for (let week = 1; week <= weeks; week++) {
         await generateWeeklyContent(week);
         // Small delay to avoid overwhelming the API
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       
-      alert('All 12 weeks of content generated successfully!');
+      alert(`All ${weeks} weeks of content generated successfully!`);
     } catch (error) {
       console.error('Error generating all weeks:', error);
       alert('Error generating all weeks');
@@ -209,7 +216,7 @@ export default function AIContentIntegration({ campaignId, aiContent, onContentI
               className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
             >
               <Plus className="w-4 h-4 mr-2" />
-              Generate All 12 Weeks
+              Generate All Weeks
             </button>
           </div>
         </div>
@@ -245,7 +252,7 @@ export default function AIContentIntegration({ campaignId, aiContent, onContentI
             onChange={(e) => setSelectedWeek(parseInt(e.target.value))}
             className="border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
           >
-            {Array.from({ length: 12 }, (_, i) => i + 1).map(week => (
+            {Array.from({ length: weeks }, (_, i) => i + 1).map(week => (
               <option key={week} value={week}>Week {week}</option>
             ))}
           </select>

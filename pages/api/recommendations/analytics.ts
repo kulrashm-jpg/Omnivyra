@@ -22,4 +22,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, PERMISSIONS.VIEW_ANALYTICS);
+export default withRBAC(handler, PERMISSIONS.VIEW_ANALYTICS as import('../../../backend/services/rbacService').Role[]);

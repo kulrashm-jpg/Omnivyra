@@ -6,7 +6,8 @@ type ActionEventType =
   | 'failed'
   | 'skipped'
   | 'scheduled'
-  | 'auto_executed';
+  | 'auto_executed'
+  | 'skipped_due_to_platform_policy';
 
 export const logCommunityAiActionEvent = async (input: {
   action_id: string;

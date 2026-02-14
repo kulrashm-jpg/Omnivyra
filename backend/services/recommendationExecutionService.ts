@@ -127,7 +127,9 @@ export async function executeRecommendationJob(jobId: string): Promise<void> {
       const normalized = normalizeExternalTrends({
         source: result.source,
         payload: result.payload,
-        health: result.health ?? null,
+        health: result.health && result.source
+          ? { api_source_id: result.source.id, ...result.health }
+          : null,
         geo: geo ?? undefined,
         category,
       });

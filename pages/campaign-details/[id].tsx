@@ -24,10 +24,12 @@ import {
   Hash,
   ExternalLink,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Settings,
 } from 'lucide-react';
-import ComprehensivePlanEditor from '../../components/ComprehensivePlanEditor';
+import CampaignAIChat from '../../components/CampaignAIChat';
 import { useCompanyContext } from '../../components/CompanyContext';
+import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 
 interface Campaign {
   id: string;
@@ -132,8 +134,9 @@ interface PerformanceSummary {
 
 export default function CampaignDetails() {
   const router = useRouter();
-  const { id } = router.query;
-  const { selectedCompanyId, isLoading: isCompanyLoading } = useCompanyContext();
+  const { id, companyId: companyIdFromUrl } = router.query;
+  const { selectedCompanyId, isLoading: isCompanyLoading, setSelectedCompanyId } = useCompanyContext();
+  const effectiveCompanyId = selectedCompanyId || (typeof companyIdFromUrl === 'string' ? companyIdFromUrl : '');
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [weeklyPlans, setWeeklyPlans] = useState<WeeklyPlan[]>([]);
   const [dailyPlans, setDailyPlans] = useState<DailyPlan[]>([]);
@@ -143,7 +146,6 @@ export default function CampaignDetails() {
   const [isLoading, setIsLoading] = useState(true);
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(new Set());
   const [isGeneratingWeek, setIsGeneratingWeek] = useState<number | null>(null);
-  const [showComprehensiveEditor, setShowComprehensiveEditor] = useState(false);
   const [isViralityExpanded, setIsViralityExpanded] = useState(false);
   const [expandedDiagnostics, setExpandedDiagnostics] = useState<Set<string>>(new Set());
   const [recommendationSummary, setRecommendationSummary] = useState<RecommendationSummary | null>(null);
@@ -151,12 +153,24 @@ export default function CampaignDetails() {
   const [performanceSummary, setPerformanceSummary] = useState<PerformanceSummary | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'performance'>('overview');
   const [isAdmin, setIsAdmin] = useState(false);
+  const [recommendationContext, setRecommendationContext] = useState<{
+    target_regions?: string[] | null;
+    context_payload?: Record<string, unknown> | null;
+    source_opportunity_id?: string | null;
+  } | null>(null);
+  const [showAIChat, setShowAIChat] = useState(false);
 
   useEffect(() => {
-    if (id && selectedCompanyId) {
+    if (id && effectiveCompanyId) {
       loadCampaignDetails(id as string);
     }
-  }, [id, selectedCompanyId]);
+  }, [id, effectiveCompanyId]);
+
+  useEffect(() => {
+    if (typeof companyIdFromUrl === 'string' && companyIdFromUrl && !selectedCompanyId && setSelectedCompanyId) {
+      setSelectedCompanyId(companyIdFromUrl);
+    }
+  }, [companyIdFromUrl, selectedCompanyId, setSelectedCompanyId]);
 
   useEffect(() => {
     const recId =
@@ -176,9 +190,9 @@ export default function CampaignDetails() {
   useEffect(() => {
     const loadAdminStatus = async () => {
       try {
-        if (!selectedCompanyId) return;
-        const response = await fetch(
-          `/api/admin/check-super-admin?companyId=${encodeURIComponent(selectedCompanyId)}`
+        if (!effectiveCompanyId) return;
+        const response = await fetchWithAuth(
+          `/api/admin/check-super-admin?companyId=${encodeURIComponent(effectiveCompanyId)}`
         );
         if (!response.ok) return;
         const data = await response.json();
@@ -188,30 +202,30 @@ export default function CampaignDetails() {
       }
     };
     loadAdminStatus();
-  }, [selectedCompanyId]);
+  }, [effectiveCompanyId]);
 
   const loadCampaignDetails = async (campaignId: string) => {
     setIsLoading(true);
     try {
-      // Load campaign data
-      if (!selectedCompanyId) {
+      if (!effectiveCompanyId) {
         setIsLoading(false);
         return;
       }
-      const campaignResponse = await fetch(
+      const campaignResponse = await fetchWithAuth(
         `/api/campaigns?type=campaign&campaignId=${campaignId}&companyId=${encodeURIComponent(
-          selectedCompanyId
+          effectiveCompanyId
         )}`
       );
       if (campaignResponse.ok) {
         const campaignData = await campaignResponse.json();
         setCampaign(campaignData.campaign);
+        setRecommendationContext(campaignData.recommendationContext ?? null);
       }
 
       // Load weekly plans
-      const weeklyResponse = await fetch(
+      const weeklyResponse = await fetchWithAuth(
         `/api/campaigns/get-weekly-plans?campaignId=${campaignId}&companyId=${encodeURIComponent(
-          selectedCompanyId
+          effectiveCompanyId
         )}`
       );
       if (weeklyResponse.ok) {
@@ -220,9 +234,9 @@ export default function CampaignDetails() {
       }
 
       // Load daily plans
-      const dailyResponse = await fetch(
+      const dailyResponse = await fetchWithAuth(
         `/api/campaigns/daily-plans?campaignId=${campaignId}&companyId=${encodeURIComponent(
-          selectedCompanyId
+          effectiveCompanyId
         )}`
       );
       if (dailyResponse.ok) {
@@ -230,36 +244,36 @@ export default function CampaignDetails() {
         setDailyPlans(dailyData);
       }
 
-      const readinessResponse = await fetch(
-        `/api/campaigns/${campaignId}/readiness?companyId=${encodeURIComponent(selectedCompanyId)}`
+      const readinessResponse = await fetchWithAuth(
+        `/api/campaigns/${campaignId}/readiness?companyId=${encodeURIComponent(effectiveCompanyId)}`
       );
       if (readinessResponse.ok) {
         const readinessData = await readinessResponse.json();
         setReadiness(readinessData);
       }
 
-      const gateResponse = await fetch(`/api/campaigns/${campaignId}/virality/gate`, {
+      const gateResponse = await fetchWithAuth(`/api/campaigns/${campaignId}/virality/gate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: selectedCompanyId, campaignId }),
+        body: JSON.stringify({ companyId: effectiveCompanyId, campaignId }),
       });
       if (gateResponse.ok) {
         const gateData = await gateResponse.json();
         setViralityGate(gateData);
       }
 
-      const diagnosticsResponse = await fetch(`/api/campaigns/${campaignId}/virality/assess`, {
+      const diagnosticsResponse = await fetchWithAuth(`/api/campaigns/${campaignId}/virality/assess`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: selectedCompanyId, campaignId }),
+        body: JSON.stringify({ companyId: effectiveCompanyId, campaignId }),
       });
       if (diagnosticsResponse.ok) {
         const diagnosticsData = await diagnosticsResponse.json();
         setViralityDiagnostics(diagnosticsData);
       }
 
-      const performanceResponse = await fetch(
-        `/api/performance/campaign/${campaignId}?companyId=${encodeURIComponent(selectedCompanyId)}`
+      const performanceResponse = await fetchWithAuth(
+        `/api/performance/campaign/${campaignId}?companyId=${encodeURIComponent(effectiveCompanyId)}`
       );
       if (performanceResponse.ok) {
         const performanceData = await performanceResponse.json();
@@ -287,11 +301,11 @@ export default function CampaignDetails() {
     
     setIsGeneratingWeek(weekNumber);
     try {
-      const response = await fetch('/api/campaigns/generate-weekly-structure', {
+      const response = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId: selectedCompanyId,
+          companyId: effectiveCompanyId,
           campaignId: id,
           week: weekNumber,
           theme: `Week ${weekNumber} Theme`,
@@ -335,9 +349,18 @@ export default function CampaignDetails() {
   const getGateBadgeColor = (decision?: GateResponse['gate_decision']) => {
     switch (decision) {
       case 'pass': return 'bg-green-100 text-green-800';
-      case 'warn': return 'bg-yellow-100 text-yellow-800';
+      case 'warn': return 'bg-amber-100 text-amber-800';
       case 'block': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-700';
+    }
+  };
+
+  const getGateLabel = (decision?: GateResponse['gate_decision']) => {
+    switch (decision) {
+      case 'warn': return 'Gate: setup needed';
+      case 'block': return 'Gate: block';
+      case 'pass': return 'Gate: pass';
+      default: return 'Gate: ' + (decision || 'unknown');
     }
   };
 
@@ -370,7 +393,7 @@ export default function CampaignDetails() {
     );
   }
 
-  if (!selectedCompanyId) {
+  if (!effectiveCompanyId) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center">
         <div className="text-center">
@@ -441,7 +464,7 @@ export default function CampaignDetails() {
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
                   {campaign.name}
                 </h1>
-                <p className="text-gray-600 mt-1">12-Week Content Marketing Plan</p>
+                <p className="text-gray-600 mt-1">Content Marketing Plan</p>
                 <div className="flex items-center gap-4 mt-2">
                   <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(campaign.status)}`}>
                     {campaign.status}
@@ -450,7 +473,7 @@ export default function CampaignDetails() {
                     Readiness: <span className="font-semibold">{readiness?.readiness_percentage ?? '--'}%</span>
                   </span>
                   <span className={`px-3 py-1 rounded-full text-sm font-medium ${getGateBadgeColor(viralityGate?.gate_decision)}`}>
-                    Gate: {viralityGate?.gate_decision || 'unknown'}
+                    {getGateLabel(viralityGate?.gate_decision)}
                   </span>
                   <span className="text-sm text-gray-500">
                     {campaign.start_date ? new Date(campaign.start_date).toLocaleDateString() : 'Not scheduled'} - 
@@ -486,7 +509,7 @@ export default function CampaignDetails() {
               </button>
               
               <button 
-                onClick={() => setShowComprehensiveEditor(true)}
+                onClick={() => setShowAIChat(true)}
                 className="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg hover:from-purple-700 hover:to-pink-700 transition-colors flex items-center gap-2"
               >
                 <Sparkles className="h-4 w-4" />
@@ -589,20 +612,28 @@ export default function CampaignDetails() {
 
               <div className="flex flex-wrap items-center gap-3 mb-4">
                 <span className={`px-3 py-1 rounded-full text-sm font-medium ${getGateBadgeColor(viralityGate?.gate_decision)}`}>
-                  Gate: {viralityGate?.gate_decision || 'unknown'}
+                  {getGateLabel(viralityGate?.gate_decision)}
                 </span>
                 <span className="text-sm text-gray-700">
                   Readiness: <span className="font-semibold">{readiness?.readiness_percentage ?? '--'}%</span>
                 </span>
               </div>
 
-              {viralityGate?.gate_decision === 'block' && (
-                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3">
-                  <div className="flex items-center gap-2 text-red-700 font-medium mb-2">
+              {(viralityGate?.gate_decision === 'block' || viralityGate?.gate_decision === 'warn') && (viralityGate?.reasons?.length ?? 0) > 0 && (
+                <div className={`mb-4 rounded-lg border p-3 ${
+                  viralityGate.gate_decision === 'block'
+                    ? 'border-red-200 bg-red-50'
+                    : 'border-amber-200 bg-amber-50'
+                }`}>
+                  <div className={`flex items-center gap-2 font-medium mb-2 ${
+                    viralityGate.gate_decision === 'block' ? 'text-red-700' : 'text-amber-800'
+                  }`}>
                     <AlertCircle className="h-4 w-4" />
-                    Blocking reasons
+                    {viralityGate.gate_decision === 'block' ? 'Blocking reasons' : 'Next steps'}
                   </div>
-                  <ul className="text-sm text-red-700 space-y-1">
+                  <ul className={`text-sm space-y-1 ${
+                    viralityGate.gate_decision === 'block' ? 'text-red-700' : 'text-amber-800'
+                  }`}>
                     {(viralityGate?.reasons || []).map((reason, index) => (
                       <li key={`reason-${index}`} className="flex items-start gap-2">
                         <span className="mt-0.5">•</span>
@@ -723,10 +754,10 @@ export default function CampaignDetails() {
               </div>
             </div>
 
-            {/* 12-Week Plan */}
+            {/* Campaign Plan */}
             <div className="bg-white rounded-xl p-6 shadow-sm border">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-semibold">12-Week Content Plan</h2>
+                <h2 className="text-xl font-semibold">Content Plan</h2>
                 <button 
                   onClick={() => router.push(`/ai-chat?campaignId=${campaign.id}&context=12week-plan`)}
                   className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all flex items-center gap-2"
@@ -737,7 +768,7 @@ export default function CampaignDetails() {
               </div>
 
               <div className="space-y-4">
-                {Array.from({ length: 12 }, (_, i) => i + 1).map(weekNumber => {
+                {Array.from({ length: weeklyPlans.length > 0 ? weeklyPlans.length : 12 }, (_, i) => i + 1).map(weekNumber => {
                   const weekPlan = weeklyPlans.find(w => w.weekNumber === weekNumber);
                   const isExpanded = expandedWeeks.has(weekNumber);
                   const weekDailyPlans = dailyPlans.filter(d => d.weekNumber === weekNumber);
@@ -960,19 +991,42 @@ export default function CampaignDetails() {
         )}
       </div>
 
-      {/* Comprehensive Plan Editor Modal */}
+      {/* AI Assistant - Campaign Chat with recommendation context, linked to campaign plan */}
       {campaign && (
-        <ComprehensivePlanEditor
-          isOpen={showComprehensiveEditor}
-          onClose={() => setShowComprehensiveEditor(false)}
+        <CampaignAIChat
+          isOpen={showAIChat}
+          onClose={() => setShowAIChat(false)}
+          onMinimize={() => setShowAIChat(false)}
+          context="campaign-planning"
+          companyId={effectiveCompanyId || undefined}
           campaignId={campaign.id}
           campaignData={campaign}
-          onSave={(result) => {
-            // Reload campaign data after saving
-            if (id) {
-              loadCampaignDetails(id as string);
+          recommendationContext={recommendationContext}
+          onProgramGenerated={async (program) => {
+            if (!campaign?.id || !effectiveCompanyId || !program?.weeks) return;
+            const campaignSummary = {
+              objective: campaign.description || campaign.name,
+              targetAudience: '',
+              keyMessages: [],
+              successMetrics: [],
+            };
+            const weeklyPlans = program.weeks.map((w: any) => ({
+              weekNumber: w.weekNumber || 0,
+              theme: w.theme || `Week ${w.weekNumber} Theme`,
+              focusArea: w.theme || '',
+              marketingChannels: [...new Set((w.content || []).map((c: any) => (c.platform || 'linkedin').charAt(0).toUpperCase() + (c.platform || 'linkedin').slice(1)))],
+              existingContent: '',
+              contentNotes: (w.content || []).map((c: any) => c.description).filter(Boolean).join('\n') || '',
+            }));
+            const res = await fetchWithAuth('/api/campaigns/save-comprehensive-plan', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ campaignId: campaign.id, campaignSummary, weeklyPlans }),
+            });
+            if (res.ok) {
+              loadCampaignDetails(campaign.id);
+              setShowAIChat(false);
             }
-            setShowComprehensiveEditor(false);
           }}
         />
       )}

@@ -67,7 +67,7 @@ export default function SocialPlatformsPage() {
   const loadConfigs = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/external-apis');
+      const response = await fetch('/api/external-apis?scope=platform');
       if (!response.ok) throw new Error('Failed to load configs');
       const data = await response.json();
       setConfigs(data.apis || []);
@@ -118,7 +118,7 @@ export default function SocialPlatformsPage() {
         auth_type: form.api_key_name ? 'header' : 'none',
       };
 
-      const response = await fetch('/api/external-apis', {
+      const response = await fetch('/api/external-apis?scope=platform', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -139,7 +139,7 @@ export default function SocialPlatformsPage() {
   const updateConfig = async (config: PlatformConfig) => {
     try {
       resetMessages();
-      const response = await fetch(`/api/external-apis/${config.id}`, {
+      const response = await fetch(`/api/external-apis/${config.id}?scope=platform`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -156,7 +156,7 @@ export default function SocialPlatformsPage() {
   const deleteConfig = async (id: string) => {
     try {
       resetMessages();
-      const response = await fetch(`/api/external-apis/${id}`, { method: 'DELETE' });
+      const response = await fetch(`/api/external-apis/${id}?scope=platform`, { method: 'DELETE' });
       if (!response.ok) throw new Error('Failed to delete config');
       setSuccessMessage('Platform config deleted.');
       await loadConfigs();

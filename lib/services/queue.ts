@@ -1,5 +1,5 @@
 // Simple Queue System for Background Processing
-import { ScheduledPost } from './types/scheduling';
+import { ScheduledPost } from '../types/scheduling';
 
 interface QueueJob {
   id: string;

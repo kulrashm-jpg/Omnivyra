@@ -1,8 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
+import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
 import { validateCampaignHealth } from '../../../backend/services/campaignHealthService';
 import {
-  getLatestCampaignVersion,
   getTrendSnapshots,
   saveCampaignHealthReport,
 } from '../../../backend/db/campaignVersionStore';
@@ -59,13 +59,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ status: 'blocked', reason: 'company profile not found' });
     }
 
-    const campaignVersion = await getLatestCampaignVersion(companyId, campaignId);
-    if (!campaignVersion?.campaign_snapshot) {
+    const resolved = await getResolvedCampaignPlanContext(companyId, campaignId);
+    if (!resolved) {
       return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
     }
-
-    const weeklyPlans = campaignVersion.campaign_snapshot.weekly_plan ?? [];
-    const dailyPlans = campaignVersion.campaign_snapshot.daily_plan ?? [];
+    const weeklyPlans = resolved.weekly_plan;
+    const dailyPlans = resolved.daily_plan;
     const trendSnapshots = await getTrendSnapshots(companyId, campaignId);
     const contentAssets = await listAssetsWithLatestContent({ campaignId });
     const analyticsReport = await getLatestAnalyticsReport(companyId, campaignId);
@@ -74,9 +73,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const report = validateCampaignHealth({
       companyProfile: profile,
       trends: trendSnapshots,
-      campaign: campaignVersion.campaign_snapshot.campaign ?? campaignVersion.campaign_snapshot,
+      campaign: resolved.campaign,
       weeklyPlans,
       dailyPlans,
+      expectedDurationWeeks: resolved.duration_weeks,
       contentAssets,
       analyticsReport: analyticsReport?.report_json ?? null,
       learningInsights: learningInsights?.insights_json ?? null,

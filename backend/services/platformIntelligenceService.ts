@@ -111,7 +111,7 @@ export function buildPlatformExecutionPlan(input: {
       if (entry?.platform) platformSet.add(normalizePlatform(entry.platform));
     });
   }
-  const platforms = Array.from(platformSet).slice(0, 5);
+  const platforms = Array.from(platformSet).slice(0, 5) as string[];
   const frequencySummary: Record<string, number> = {};
   const contentTypeCounts: Record<string, number> = {};
   const alignmentTokens = buildAlignmentTokens(input.companyProfile, input.campaign);

@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
+import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
 import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
 import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
 import {
@@ -50,27 +51,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
     if (!plan?.plan_json) {
-      const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
-      if (!campaignVersion?.campaign_snapshot?.weekly_plan) {
+      const resolved = await getResolvedCampaignPlanContext(companyId, campaignId, true);
+      if (!resolved) {
         return res.status(404).json({ error: 'Campaign plan not found' });
       }
-
-      const weeklyPlan = campaignVersion.campaign_snapshot.weekly_plan.find(
+      const weeklyPlan = resolved.weekly_plan.find(
         (week: any) => week.week_number === Number(weekNumber)
       );
       if (!weeklyPlan) {
         return res.status(404).json({ error: 'Week plan not found' });
       }
-
       const trendSnapshots = await getTrendSnapshots(companyId, campaignId);
       const trends = trendSnapshots
         .flatMap((snap) => snap.snapshot?.emerging_trends ?? [])
         .map((trend: any) => trend?.topic)
         .filter(Boolean);
-
       const builtPlan = buildPlatformExecutionPlan({
         companyProfile: profile,
-        campaign: campaignVersion.campaign_snapshot.campaign ?? campaignVersion.campaign_snapshot,
+        campaign: resolved.campaign,
         weekPlan: weeklyPlan,
         trends,
       });
@@ -126,14 +124,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     console.log('AUTOMATION PAYLOAD READY', { jobs: payload.jobs.length });
 
-    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
+    const resolvedForHealth = await getResolvedCampaignPlanContext(companyId, campaignId, true);
     const contentAssets = await listAssetsWithLatestContent({ campaignId });
     const healthReport = validateCampaignHealth({
       companyProfile: profile,
       trends: [],
-      campaign: campaignVersion?.campaign_snapshot?.campaign ?? {},
-      weeklyPlans: campaignVersion?.campaign_snapshot?.weekly_plan ?? [],
-      dailyPlans: campaignVersion?.campaign_snapshot?.daily_plan ?? [],
+      campaign: resolvedForHealth?.campaign ?? {},
+      weeklyPlans: resolvedForHealth?.weekly_plan ?? [],
+      dailyPlans: resolvedForHealth?.daily_plan ?? [],
+      expectedDurationWeeks: resolvedForHealth?.duration_weeks,
       platformExecutionPlan: plan.plan_json,
       contentAssets,
       complianceReports: Array.from(complianceReports.values()),

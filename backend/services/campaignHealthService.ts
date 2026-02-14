@@ -138,6 +138,8 @@ export function validateCampaignHealth(input: {
   complianceReports?: Array<{ status: string }>;
   promotionMetadataCount?: number;
   omnivyraCoverageScore?: number;
+  /** When set, warn if weeklyPlans.length < expectedDuration. Omit for duration-agnostic. */
+  expectedDurationWeeks?: number;
 }): CampaignHealthReport {
   console.log('CAMPAIGN HEALTH CHECK', {
     companyId: input.companyProfile?.company_id,
@@ -360,13 +362,14 @@ export function validateCampaignHealth(input: {
     recommendations.push('Blend in aligned trends to improve relevance.');
   }
 
-  if (input.weeklyPlans.length > 0 && input.weeklyPlans.length < 12) {
+  const expectedDuration = input.expectedDurationWeeks ?? input.weeklyPlans.length;
+  if (expectedDuration > 0 && input.weeklyPlans.length > 0 && input.weeklyPlans.length < expectedDuration) {
     issues.push({
       level: 'warning',
       field: 'weeklyPlans',
-      message: 'Weekly plan has fewer than 12 weeks',
+      message: `Weekly plan has fewer than ${expectedDuration} weeks`,
     });
-    recommendations.push('Extend weekly plan to 12 weeks for full coverage.');
+    recommendations.push(`Extend weekly plan to ${expectedDuration} weeks for full coverage.`);
   }
 
   const confidence = Math.round(

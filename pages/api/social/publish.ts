@@ -1,33 +1,27 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { isSuperAdmin } from '../../../backend/services/rbacService';
 import {
   getScheduledPostById,
   updatePostPublishStatus,
 } from '../../../backend/db/scheduledPostsStore';
 import { publishScheduledPost } from '../../../backend/services/socialPlatformPublisher';
 
-const ensureSuperAdmin = async (req: NextApiRequest, res: NextApiResponse): Promise<boolean> => {
-  const userId = 'current-user-id';
-  const { data: isSuperAdmin, error } = await supabase.rpc('is_super_admin', {
-    check_user_id: userId,
-  });
-  if (error || !isSuperAdmin) {
-    res.status(403).json({
-      error: 'Access denied. Only super admins can publish scheduled posts.',
-      code: 'INSUFFICIENT_PRIVILEGES',
-    });
-    return false;
-  }
-  return true;
-};
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const isAdmin = await ensureSuperAdmin(req, res);
-  if (!isAdmin) return;
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const superAdmin = await isSuperAdmin(user.id);
+  if (!superAdmin) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
   const { post_id, dry_run } = req.body || {};
   if (!post_id) {

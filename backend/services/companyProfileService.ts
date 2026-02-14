@@ -63,7 +63,15 @@ export type CompanyProfile = {
   brand_positioning?: string | null;
   competitive_advantages?: string | null;
   growth_priorities?: string | null;
-};
+  // Campaign Purpose & Strategic Intent (from Define Target Customer / Define Strategic Purpose)
+  campaign_purpose_intent?: {
+    primary_objective?: string | null;
+    campaign_intent?: string | null;
+    monetization_intent?: string | null;
+    dominant_problem_domains?: string[];
+    brand_positioning_angle?: string | null;
+  } | null;
+}
 
 /** Commercial strategy fields; when saved by user they are added to user_locked_fields. */
 export const COMMERCIAL_FIELD_NAMES = [
@@ -857,8 +865,8 @@ const extractSocialLinksFromHtml = (
     }
   };
 
-  const anchors = html.match(anchorRegex) || [];
-  anchors.forEach((anchor) => {
+  const anchors: string[] = html.match(anchorRegex) || [];
+  anchors.forEach((anchor: string) => {
     const href = anchor.match(hrefRegex)?.[1] || '';
     const dataHref = anchor.match(dataHrefRegex)?.[1] || '';
     const ariaLabel = anchor.match(ariaRegex)?.[1] || '';
@@ -991,7 +999,7 @@ const crawlWebsiteSources = async (
 }> => {
   const normalizedWebsite = normalizeUrl(websiteUrl);
   if (!normalizedWebsite) {
-    return { urls: [], summaries: [] };
+    return { urls: [], summaries: [], social_links: {} };
   }
 
   const controller = new AbortController();
@@ -1628,6 +1636,7 @@ export async function saveProfile(input: Partial<CompanyProfile>): Promise<Compa
     brand_positioning: input.brand_positioning ?? existing?.brand_positioning ?? null,
     competitive_advantages: input.competitive_advantages ?? existing?.competitive_advantages ?? null,
     growth_priorities: input.growth_priorities ?? existing?.growth_priorities ?? null,
+    campaign_purpose_intent: input.campaign_purpose_intent ?? existing?.campaign_purpose_intent ?? null,
   };
 
   const lockedSet = new Set<string>(Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []);

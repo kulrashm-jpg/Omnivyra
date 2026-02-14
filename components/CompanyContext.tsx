@@ -59,6 +59,7 @@ type CompanyContextValue = {
   selectedCompanyName: string;
   isLoading: boolean;
   isAuthenticated: boolean;
+  isAdmin: boolean;
   setSelectedCompanyId: (companyId: string) => void;
   refreshCompanies: () => Promise<void>;
   hasPermission: (action: PermissionAction) => boolean;
@@ -217,13 +218,13 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       }
 
-      const nextUser = {
+      const nextUser: UserContext = {
         userId: supabaseUser.id,
         role: Object.values(rolesMap).some((role) => role === 'SUPER_ADMIN' || role === 'COMPANY_ADMIN')
           ? 'admin'
           : 'user',
-        companyIds,
-        defaultCompanyId: companyIds[0] || '',
+        companyIds: companyIds as string[],
+        defaultCompanyId: (companyIds[0] || '') as string,
       };
 
       setUser(nextUser);
@@ -300,6 +301,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       selectedCompanyName,
       isLoading,
       isAuthenticated,
+      isAdmin: userRole === 'SUPER_ADMIN' || userRole === 'COMPANY_ADMIN',
       setSelectedCompanyId,
       refreshCompanies,
       hasPermission: (action: PermissionAction) => hasPermissionForRole(userRole, action),

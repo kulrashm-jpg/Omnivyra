@@ -93,6 +93,7 @@ export type PendingAction = TenantScoped & {
   } | null;
   safety_rules?: {
     block_urls?: boolean | null;
+    block_sensitive_topics?: boolean | null;
     prohibited_words?: string[] | null;
   } | null;
   last_event?: {
@@ -103,6 +104,7 @@ export type PendingAction = TenantScoped & {
   last_event_type?: string | null;
   rule_name?: string | null;
   rule_match?: boolean;
+  intent_classification?: { primary_intent?: string; intent?: string } | null;
 };
 
 export type ChatMessage = {

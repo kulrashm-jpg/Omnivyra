@@ -35,6 +35,7 @@ interface DayDetailViewProps {
 
 export function TwelveWeekOverview({ campaignId, onWeekSelect }: TwelveWeekOverviewProps) {
   const [weeks, setWeeks] = useState<any[]>([]);
+  const [overview, setOverview] = useState<{ totalWeeks?: number; plans?: any[] } | null>(null);
   const [campaignSummary, setCampaignSummary] = useState<any>(null);
   const [performanceData, setPerformanceData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -50,18 +51,20 @@ export function TwelveWeekOverview({ campaignId, onWeekSelect }: TwelveWeekOverv
 
   const loadCampaignData = async () => {
     try {
-      // Load all 12-week plans for this campaign
+      // Load all campaign plans for this campaign
       const plansResponse = await fetch(`/api/campaigns/12week-plans?campaignId=${campaignId}`);
       if (plansResponse.ok) {
         const plansData = await plansResponse.json();
         setAllPlans(plansData.plans || []);
       }
 
-      // Load weeks data
+      // Load weeks data and overview (includes totalWeeks from blueprint)
       const weeksResponse = await fetch(`/api/campaigns/hierarchical-navigation?action=get-overview&campaignId=${campaignId}`);
       if (weeksResponse.ok) {
         const weeksData = await weeksResponse.json();
-        setWeeks(weeksData.weeks || []);
+        const ov = weeksData.overview || {};
+        setOverview(ov);
+        setWeeks(ov.plans || weeksData.weeks || []);
       }
 
       // Load campaign summary
@@ -292,8 +295,8 @@ export function TwelveWeekOverview({ campaignId, onWeekSelect }: TwelveWeekOverv
     );
   }
 
-  // Generate default weeks if no plan exists
-  const displayWeeks = hasPlan ? weeks : Array.from({ length: 12 }, (_, i) => ({
+  const durationWeeks = weeks.length > 0 ? weeks.length : (overview?.totalWeeks ?? 12);
+  const displayWeeks = hasPlan ? weeks : Array.from({ length: durationWeeks }, (_, i) => ({
     weekNumber: i + 1,
     theme: `Week ${i + 1} - Planning`,
     contentCount: 0,
@@ -314,7 +317,7 @@ export function TwelveWeekOverview({ campaignId, onWeekSelect }: TwelveWeekOverv
               Back to Plans
             </button>
             <h2 className="text-2xl font-bold text-gray-900 mb-2">
-              {selectedPlan?.name || '12-Week Campaign Overview'}
+              {selectedPlan?.name || 'Campaign Overview'}
             </h2>
             <p className="text-gray-600">
               {hasPlan ? 'Click on any week to view detailed content planning' : 'Create your campaign plan to get started'}

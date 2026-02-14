@@ -600,7 +600,7 @@ export const getContentTypeGuidelines = (platform: string, contentType: string):
 export const validateContent = (platform: string, contentType: string, content: string, hashtags: string[]): ValidationResult => {
   const typeGuidelines = getContentTypeGuidelines(platform, contentType);
   if (!typeGuidelines) {
-    return { isValid: false, errors: ['Invalid content type'] };
+    return { isValid: false, errors: ['Invalid content type'], warnings: [], score: 0 };
   }
 
   const errors: string[] = [];

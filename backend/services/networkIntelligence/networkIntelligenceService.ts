@@ -16,6 +16,7 @@ export type NetworkIntelligenceRow = {
   total_actions_executed: number | null;
   last_action_type: string | null;
   last_action_at: string | null;
+  automation_level?: string | null;
 };
 
 export type NetworkIntelligenceFilters = {

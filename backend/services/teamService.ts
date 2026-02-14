@@ -29,7 +29,7 @@ export async function assignWeek(
   assignedToUserId: string,
   assignedByUserId: string
 ): Promise<void> {
-  // Update weekly_content_refinements with assignment
+  console.warn('DEPRECATED: weekly_content_refinements write path triggered (teamService.assignWeek)');
   const { error } = await supabase
     .from('weekly_content_refinements')
     .update({
@@ -90,7 +90,7 @@ export async function updateWeekStatus(
   if (notes) {
     updateData.notes = notes;
   }
-
+  console.warn('DEPRECATED: weekly_content_refinements write path triggered (teamService.updateWeekStatus)');
   const { error } = await supabase
     .from('weekly_content_refinements')
     .update(updateData)

@@ -4,11 +4,11 @@ import ChatPanel from './ChatPanel';
 
 type CommunityAiLayoutProps = {
   title: string;
-  context: Record<string, unknown>;
+  context?: Record<string, unknown>;
   children: React.ReactNode;
 };
 
-export default function CommunityAiLayout({ title, context, children }: CommunityAiLayoutProps) {
+export default function CommunityAiLayout({ title, context = {}, children }: CommunityAiLayoutProps) {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />

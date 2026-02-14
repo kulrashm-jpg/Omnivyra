@@ -89,16 +89,21 @@ export async function evaluateCampaignReadiness(
     };
   }
 
+  let weekNumbers: number[] = [];
   const { data: weeklyPlans, error: weeklyError } = await supabase
     .from('weekly_content_plans')
     .select('week_number')
     .eq('campaign_id', campaignId);
 
   if (weeklyError) {
-    throw new Error(`Failed to load weekly plans: ${weeklyError.message}`);
+    const { data: refinements } = await supabase
+      .from('weekly_content_refinements')
+      .select('week_number')
+      .eq('campaign_id', campaignId);
+    weekNumbers = (refinements || []).map((r: any) => r.week_number);
+  } else {
+    weekNumbers = (weeklyPlans || []).map((plan: any) => plan.week_number);
   }
-
-  const weekNumbers = (weeklyPlans || []).map((plan: any) => plan.week_number);
   const weeklyCount = weekNumbers.length;
 
   if (weeklyCount === 0) {
@@ -116,6 +121,15 @@ export async function evaluateCampaignReadiness(
     .eq('campaign_id', campaignId);
 
   if (dailyError) {
+    if (weeklyCount === 0) {
+      return {
+        campaign_id: campaignId,
+        readiness_percentage: 0,
+        readiness_state: 'not_ready',
+        blocking_issues: [{ code: 'MISSING_WEEKLY_PLANS', message: 'Build your campaign plan with AI Assistant to get started.' }],
+        last_evaluated_at: new Date().toISOString(),
+      };
+    }
     throw new Error(`Failed to load daily plans: ${dailyError.message}`);
   }
 

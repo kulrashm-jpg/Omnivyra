@@ -1,4 +1,11 @@
 -- 1) Core table for all opportunity tabs
+-- payload (jsonb) is type-specific:
+--   TREND:         { formats text[], reach_estimate number|text }
+--   LEAD:          { platform, snippet, icp_match text, urgency_score number|text }
+--   PULSE:         { spike_reason text, shelf_life_hours number }
+--   SEASONAL:      { event_date text, suggested_offer text }
+--   INFLUENCER:    { platform text, audience_overlap_score, engagement_rate number|text }
+--   DAILY_FOCUS:   { action_type 'OPEN_TAB'|'CREATE_CAMPAIGN'|'OPEN_GENERATOR', target_type text }
 create table if not exists public.opportunity_items (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null,

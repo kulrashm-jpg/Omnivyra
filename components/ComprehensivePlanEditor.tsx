@@ -100,8 +100,11 @@ export default function ComprehensivePlanEditor({
         }));
         setWeeklyPlans(plans);
       } else {
-        // Initialize empty plans for 12 weeks
-        const emptyPlans = Array.from({ length: 12 }, (_, i) => ({
+        const duration = weeklyResult.weeklyRefinements?.length || 12;
+        if (!weeklyResult.weeklyRefinements?.length) {
+          console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+        }
+        const emptyPlans = Array.from({ length: duration }, (_, i) => ({
           weekNumber: i + 1,
           theme: '',
           focusArea: '',
@@ -113,8 +116,9 @@ export default function ComprehensivePlanEditor({
       }
     } catch (error) {
       console.error('Error loading plan:', error);
-      // Initialize empty plans if loading fails
-      const emptyPlans = Array.from({ length: 12 }, (_, i) => ({
+      const duration = 12;
+      console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+      const emptyPlans = Array.from({ length: duration }, (_, i) => ({
         weekNumber: i + 1,
         theme: '',
         focusArea: '',

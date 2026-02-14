@@ -200,7 +200,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const belowGoal = goalValue > 0 && value < goalValue * 0.5;
       if (!exceeds && !belowGoal) return;
 
-      const severity =
+      const severity: 'high' | 'medium' | 'low' =
         (avg > 0 && value > avg * 3) || (goalValue > 0 && value < goalValue * 0.25)
           ? 'high'
           : 'medium';

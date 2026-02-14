@@ -365,7 +365,7 @@ export default function CampaignPlanningHierarchical() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
               <Calendar className="w-16 h-16 text-gray-300 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-gray-900 mb-2">No Weekly Plans Created</h3>
-              <p className="text-gray-600 mb-6">Start building your 12-week content strategy</p>
+              <p className="text-gray-600 mb-6">Start building your campaign content strategy</p>
               <button 
                 onClick={handleCreateNewPlan}
                 className="bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 mx-auto"
@@ -376,7 +376,7 @@ export default function CampaignPlanningHierarchical() {
             </div>
           ) : (
             <div className="space-y-4">
-              {Array.from({ length: 12 }, (_, index) => {
+              {Array.from({ length: overview?.totalWeeks ?? weeklyPlans.length || 12 }, (_, index) => {
                 const weekNumber = index + 1;
                 const plan = weeklyPlans.find(p => p.weekNumber === weekNumber);
                 const isSelected = selectedWeek?.week === weekNumber;

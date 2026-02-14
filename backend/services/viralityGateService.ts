@@ -115,6 +115,16 @@ function buildAdvisoryNotes(assessment: ViralityAssessment): string[] {
   return notes;
 }
 
+async function loadCampaignStatus(campaignId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('campaigns')
+    .select('status')
+    .eq('id', campaignId)
+    .single();
+  if (error || !data) return null;
+  return (data as { status?: string }).status ?? null;
+}
+
 async function loadCampaignReadiness(
   campaignId: string
 ): Promise<CampaignReadinessRow | null> {
@@ -164,30 +174,53 @@ async function loadViralityDiagnostics(
   };
 }
 
+const DRAFT_LIKE_STATUSES = new Set(['draft', 'planning', 'market-analysis', 'content-creation', 'schedule-review']);
+
 export async function evaluateViralityGate(
   campaignId: string
 ): Promise<ViralityGateResult> {
-  const readiness = await loadCampaignReadiness(campaignId);
-  const diagnostics = await loadViralityDiagnostics(campaignId);
+  const [readiness, diagnostics, status] = await Promise.all([
+    loadCampaignReadiness(campaignId),
+    loadViralityDiagnostics(campaignId),
+    loadCampaignStatus(campaignId),
+  ]);
 
   const reasons: string[] = [];
   const requiredActions: GateRequiredAction[] = [];
   const advisoryNotes: string[] = [];
   let gateDecision: GateDecision = 'pass';
+  const isDraftOrPlanning = status && DRAFT_LIKE_STATUSES.has(status.toLowerCase());
 
   if (!readiness) {
-    gateDecision = 'block';
-    reasons.push('Campaign readiness has not been evaluated.');
+    if (isDraftOrPlanning) {
+      gateDecision = 'warn';
+      reasons.push('Build your campaign plan with AI Assistant to evaluate readiness and virality.');
+    } else {
+      gateDecision = 'block';
+      reasons.push('Campaign readiness has not been evaluated.');
+    }
   } else if (readiness.readiness_percentage < MIN_READINESS_THRESHOLD) {
-    gateDecision = 'block';
-    reasons.push(
-      `Campaign readiness is below the required threshold (${MIN_READINESS_THRESHOLD}).`
-    );
+    if (isDraftOrPlanning) {
+      gateDecision = 'warn';
+      reasons.push(`Readiness is ${readiness.readiness_percentage}%. Complete weekly and daily plans to reach 100%.`);
+    } else {
+      gateDecision = 'block';
+      reasons.push(
+        `Campaign readiness is below the required threshold (${MIN_READINESS_THRESHOLD}).`
+      );
+    }
   }
 
   if (!diagnostics) {
-    gateDecision = 'block';
-    reasons.push('Virality diagnostics are missing for this campaign.');
+    if (isDraftOrPlanning) {
+      gateDecision = gateDecision === 'block' ? 'block' : 'warn';
+      if (!reasons.some((r) => r.includes('campaign plan'))) {
+        reasons.push('Virality diagnostics will run once you have a campaign plan.');
+      }
+    } else {
+      gateDecision = 'block';
+      reasons.push('Virality diagnostics are missing for this campaign.');
+    }
   }
 
   if (diagnostics && hasLowConfidence(diagnostics.diagnostics)) {

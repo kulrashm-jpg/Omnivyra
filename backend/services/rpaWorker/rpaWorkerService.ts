@@ -4,7 +4,7 @@ export type RpaTask = {
   tenant_id: string;
   organization_id: string;
   platform: string;
-  action_type: 'reply' | 'like' | 'share' | 'follow';
+  action_type: 'reply' | 'like' | 'share' | 'follow' | 'schedule';
   target_url: string;
   text?: string | null;
   action_id: string;

@@ -22,7 +22,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const requester = await resolveUserContext(req);
   const result = await removeUser(userId, String(companyId), requester);
   if (!result.ok) {
-    return res.status(result.status).json({ error: result.error });
+    const err = result as { status: number; error: string };
+    return res.status(err.status).json({ error: err.error });
   }
 
   return res.status(200).json({ success: true });

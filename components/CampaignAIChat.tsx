@@ -24,6 +24,7 @@ import {
   Save
 } from 'lucide-react';
 import ChatVoiceButton from './ChatVoiceButton';
+import { fetchWithAuth } from './community-ai/fetchWithAuth';
 
 interface ChatMessage {
   id: number;
@@ -49,6 +50,12 @@ interface CampaignLearning {
   improvements: string[];
 }
 
+interface RecommendationContext {
+  target_regions?: string[] | null;
+  context_payload?: Record<string, unknown> | null;
+  source_opportunity_id?: string | null;
+}
+
 interface AIChatProps {
   isOpen: boolean;
   onClose: () => void;
@@ -57,10 +64,20 @@ interface AIChatProps {
   companyId?: string;
   campaignId?: string;
   campaignData?: any;
+  recommendationContext?: RecommendationContext | null;
   onProgramGenerated?: (program: any) => void;
 }
 
 type AIProvider = 'gpt' | 'claude' | 'demo';
+
+const CAMPAIGN_AI_PROVIDER_KEY = 'virality-campaign-ai-provider';
+
+function getStoredProvider(): AIProvider {
+  if (typeof window === 'undefined') return 'claude';
+  const s = localStorage.getItem(CAMPAIGN_AI_PROVIDER_KEY);
+  if (s === 'gpt' || s === 'claude' || s === 'demo') return s;
+  return 'claude';
+}
 
 type StructuredDay = {
   day: string;
@@ -80,12 +97,21 @@ type StructuredDay = {
 
 type StructuredWeek = {
   week: number;
-  theme: string;
-  daily: StructuredDay[];
+  theme?: string;
+  daily?: StructuredDay[];
+  /** Blueprint format fields */
+  phase_label?: string;
+  primary_objective?: string;
+  platform_allocation?: Record<string, number>;
+  content_type_mix?: string[];
+  cta_type?: string;
+  total_weekly_content_count?: number;
+  weekly_kpi_focus?: string;
 };
 
 type StructuredPlan = {
   weeks: StructuredWeek[];
+  format?: 'blueprint' | 'legacy';
 };
 
 type RefinedDay = {
@@ -125,14 +151,15 @@ type AiHistoryEntry = {
   created_at: string;
 };
 
-export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, onProgramGenerated }: AIChatProps) {
+export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, recommendationContext, onProgramGenerated }: AIChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [showLearning, setShowLearning] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<AIProvider>('claude'); // Default to Claude since it's configured
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<AIProvider>(getStoredProvider);
   const [isLoading, setIsLoading] = useState(false);
   const [modeLoading, setModeLoading] = useState<Record<string, boolean>>({});
   const [uiErrorMessage, setUiErrorMessage] = useState<string | null>(null);
@@ -210,7 +237,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     if (campaignId && campaignData) {
       initializeCampaignThread(campaignId, campaignData);
     }
-  }, [campaignId, campaignData]);
+  }, [campaignId, campaignData, recommendationContext]);
 
   useEffect(() => {
     if (activeTab === 'history' && campaignId) {
@@ -267,11 +294,17 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     }
   }, [activeTab, campaignId]);
 
-  // Load campaign learnings and detect API configuration
+  // Load campaign learnings
   useEffect(() => {
     loadCampaignLearnings();
-    detectConfiguredAPI();
   }, []);
+
+  const handleProviderChange = (provider: AIProvider) => {
+    setSelectedProvider(provider);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(CAMPAIGN_AI_PROVIDER_KEY, provider);
+    }
+  };
 
   useEffect(() => {
     const loadAdminStatus = async () => {
@@ -287,14 +320,9 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     loadAdminStatus();
   }, []);
 
-  const detectConfiguredAPI = async () => {
-    // Since Claude is configured, always use Claude
-    setSelectedProvider('claude');
-  };
-
   const saveAIContentForPlan = async (aiMessage: string) => {
     try {
-      // Save AI content to database for 12-week plan
+      // Save AI content to database for campaign plan
       const response = await fetch('/api/campaigns/save-ai-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -311,7 +339,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
         const successMessage: ChatMessage = {
           id: Date.now(),
           type: 'ai',
-          message: '✅ AI content saved for 12-week plan! You can now use this content in your campaign planning.',
+          message: '✅ AI content saved for campaign plan! You can now use this content in your campaign planning.',
           timestamp: new Date().toLocaleTimeString(),
           provider: getProviderName(selectedProvider),
           campaignId
@@ -345,7 +373,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   };
 
   const generateDefaultPlan = () => {
-    return `12-Week Social Media Campaign Plan
+    return `Social Media Campaign Plan
 
 Weeks 1-3: Foundation & Brand Awareness
 - Establish brand voice and visual identity
@@ -371,7 +399,7 @@ Weeks 10-12: Optimization & Growth
 - Scale successful strategies
 - Prepare for next campaign phase
 
-This comprehensive 12-week approach ensures consistent growth and engagement across all platforms.`;
+This comprehensive approach ensures consistent growth and engagement across all platforms.`;
   };
 
   const create12WeekPlan = async (startDate: string) => {
@@ -422,7 +450,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
         const successMessage: ChatMessage = {
           id: Date.now(),
           type: 'ai',
-          message: `🎉 12-week plan created successfully! Starting from ${new Date(startDate).toLocaleDateString()}. You can now view your plan in the hierarchical navigation.`,
+          message: `🎉 Campaign plan created successfully! Starting from ${new Date(startDate).toLocaleDateString()}. You can now view your plan in the hierarchical navigation.`,
           timestamp: new Date().toLocaleTimeString(),
           provider: getProviderName(selectedProvider),
           campaignId
@@ -438,11 +466,11 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
         throw new Error(`Failed to create plan: ${errorData.error || errorData.message || 'Unknown error'}`);
       }
     } catch (error) {
-      console.error('Error creating 12-week plan:', error);
+      console.error('Error creating campaign plan:', error);
       const errorMessage: ChatMessage = {
         id: Date.now(),
         type: 'ai',
-        message: '❌ Failed to create 12-week plan. Please try again.',
+        message: '❌ Failed to create campaign plan. Please try again.',
         timestamp: new Date().toLocaleTimeString(),
         provider: getProviderName(selectedProvider),
         campaignId
@@ -453,16 +481,44 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
     }
   };
 
+  const buildRecommendationWelcome = (campaignData: any): string => {
+    const name = campaignData?.name || 'this campaign';
+    const desc = campaignData?.description || campaignData?.objective || '';
+    const regions = recommendationContext?.target_regions?.filter(Boolean);
+    const payload = recommendationContext?.context_payload as Record<string, unknown> | undefined;
+    const formats = payload?.formats as string[] | undefined;
+    const reachEst = payload?.reach_estimate;
+    const parts: string[] = [
+      `Hello! I'm here to help you turn **"${name}"** into a complete content marketing plan.`,
+    ];
+    if (desc) {
+      parts.push(`\n\nI see your theme: *${desc.slice(0, 200)}${desc.length > 200 ? '...' : ''}*`);
+    }
+    if (regions && regions.length > 0) {
+      parts.push(`\n\n**Target regions:** ${regions.join(', ')}`);
+    }
+    if (formats && formats.length > 0) {
+      parts.push(`\n**Suggested formats:** ${formats.join(', ')}`);
+    }
+    if (reachEst) {
+      parts.push(`\n**Estimated reach:** ${reachEst}`);
+    }
+    parts.push(`\n\nI'll ask you a few questions one by one to build your campaign plan. I'll keep asking until we have everything we need—then you can tell me "Create my plan" or "I'm ready" and I'll generate it.\n\n**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)`);
+    return parts.join('');
+  };
+
   const initializeCampaignThread = async (campaignId: string, campaignData: any) => {
     // Load existing conversation for this campaign
     const existingMessages = await loadCampaignMessages(campaignId);
     
     if (existingMessages.length === 0) {
-      // Start new conversation with campaign context
+      const welcomeText = recommendationContext && (recommendationContext.target_regions?.length || recommendationContext.context_payload)
+        ? buildRecommendationWelcome(campaignData)
+        : `Hello! I'm your AI assistant for "${campaignData?.name || 'this campaign'}". I'll ask you a few questions one by one to build your campaign content plan. I'll keep asking until we have everything we need—then you can tell me "Create my plan" or "I'm ready" and I'll generate it.\n\n**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)`;
       const welcomeMessage: ChatMessage = {
         id: Date.now(),
         type: 'ai',
-        message: `Hello! I'm your AI assistant for "${campaignData.name || 'this campaign'}". I have access to your campaign goals and can learn from your past campaigns to provide better suggestions. What would you like to work on?`,
+        message: welcomeText,
         timestamp: new Date().toLocaleTimeString(),
         provider: getProviderName(selectedProvider),
         campaignId
@@ -547,7 +603,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
       }
       
       return {
-        description: 'AI-generated 12-week content program',
+        description: 'AI-generated campaign content program',
         totalContent: weeks.reduce((sum, week) => sum + week.content.length, 0),
         platforms: platforms,
         weeks: weeks.length > 0 ? weeks : generateDefaultProgram()
@@ -651,6 +707,11 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
         const targetDay = extractTargetDay(newMessage);
         const platforms = extractPlatforms(newMessage);
 
+        const conversationHistory = [...messages, userMessage].map((m) => ({
+          type: m.type as 'user' | 'ai',
+          message: m.message,
+        }));
+
         const planResponse = await callCampaignPlanAPI(
           newMessage,
           mode,
@@ -658,10 +719,13 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
             durationWeeks: mode === 'generate_plan' ? 12 : undefined,
             targetDay: mode !== 'generate_plan' ? targetDay : undefined,
             platforms: mode === 'platform_customize' ? platforms : undefined,
+            conversationHistory: mode === 'generate_plan' ? conversationHistory : undefined,
           }
         );
 
-        if (planResponse.plan) {
+        if (planResponse.conversationalResponse) {
+          response = planResponse.conversationalResponse;
+        } else if (planResponse.plan) {
           structuredPlanFromResponse = planResponse.plan;
           setStructuredPlan(planResponse.plan);
           setStructuredPlanMessageId(aiResponseId);
@@ -697,14 +761,14 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
         throw new Error('Invalid provider');
       }
 
-      // Check if AI generated a 12-week program
+      // Check if AI generated a campaign program
       if (onProgramGenerated && context === 'campaign-planning') {
         const planForProgram = structuredPlanFromResponse || structuredPlan;
         if (planForProgram) {
           const programData = convertStructuredPlanToProgram(planForProgram);
           onProgramGenerated(programData);
         } else {
-          const programMatch = response.match(/12.*week.*program|12-week.*program|weekly.*program.*12/i);
+          const programMatch = response.match(/(\d+.*week.*program|week.*program|campaign.*program|weekly.*program)/i);
           if (programMatch || response.includes('Week 1') || response.includes('Week 2')) {
             const programData = extractProgramFromResponse(response);
             if (programData) {
@@ -746,13 +810,19 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const callCampaignPlanAPI = async (
     message: string,
     mode: 'generate_plan' | 'refine_day' | 'platform_customize',
-    options?: { durationWeeks?: number; targetDay?: string; platforms?: string[] }
+    options?: {
+      durationWeeks?: number;
+      targetDay?: string;
+      platforms?: string[];
+      conversationHistory?: Array<{ type: 'user' | 'ai'; message: string }>;
+    }
   ): Promise<{
     plan?: StructuredPlan;
     day?: RefinedDay;
     platform_content?: PlatformCustomization;
+    conversationalResponse?: string;
   }> => {
-    const response = await fetch('/api/campaigns/ai/plan', {
+    const response = await fetchWithAuth('/api/campaigns/ai/plan', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -764,6 +834,8 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
         durationWeeks: options?.durationWeeks,
         targetDay: options?.targetDay,
         platforms: options?.platforms,
+        messages: options?.conversationHistory,
+        recommendationContext,
       }),
     });
 
@@ -777,6 +849,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
       plan: data.plan,
       day: data.day,
       platform_content: data.platform_content,
+      conversationalResponse: data.conversationalResponse,
     };
   };
 
@@ -897,14 +970,31 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const renderStructuredPlan = (plan: StructuredPlan) => {
     return (
       <div className="space-y-4">
-        {plan.weeks.map((week) => (
+        {plan.weeks.map((week) => {
+          const isBlueprint = week.platform_allocation && Object.keys(week.platform_allocation).length > 0;
+          const themeLabel = week.phase_label || week.theme || `Week ${week.week}`;
+          return (
           <div key={week.week} className="bg-white border border-gray-200 rounded-lg p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="text-sm font-semibold text-gray-900">Week {week.week}</div>
-              <div className="text-xs text-gray-500">{week.theme}</div>
+              <div className="text-xs text-gray-500">{themeLabel}</div>
             </div>
+            {isBlueprint ? (
+              <div className="space-y-2 text-xs">
+                {week.primary_objective && <div className="text-gray-600">{week.primary_objective}</div>}
+                {week.platform_allocation && (
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(week.platform_allocation).map(([p, n]) => (
+                      <span key={p} className="bg-gray-100 px-2 py-0.5 rounded">{p}: {n}</span>
+                    ))}
+                  </div>
+                )}
+                {week.cta_type && <div>CTA: {week.cta_type}</div>}
+                {week.weekly_kpi_focus && <div>KPI: {week.weekly_kpi_focus}</div>}
+              </div>
+            ) : (
             <div className="space-y-3">
-              {week.daily.map((day) => (
+              {(week.daily || []).map((day) => (
                 <div key={`${week.week}-${day.day}`} className="border-t pt-3">
                   <div className="text-sm font-medium text-gray-800">{day.day}</div>
                   <div className="text-xs text-gray-600 mt-1">Objective: {day.objective}</div>
@@ -954,8 +1044,10 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
                 </div>
               ))}
             </div>
+            )}
           </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
@@ -1483,23 +1575,30 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   const convertStructuredPlanToProgram = (plan: StructuredPlan) => {
     const platformSet = new Set<string>();
     const weeks = plan.weeks.map((week) => {
-      const content = week.daily.flatMap((day) =>
-        Object.entries(day.platforms || {}).map(([platform, text]) => {
+      const theme = week.phase_label || week.theme || `Week ${week.week}`;
+      let content: Array<{ type: string; platform: string; description: string; day: string }> = [];
+      if (week.daily?.length) {
+        content = week.daily.flatMap((day) =>
+          Object.entries(day.platforms || {}).map(([platform, text]) => {
+            platformSet.add(platform);
+            return { type: 'post', platform, description: text, day: day.day };
+          })
+        );
+      } else if (week.platform_allocation && Object.keys(week.platform_allocation).length > 0) {
+        for (const [platform, count] of Object.entries(week.platform_allocation)) {
           platformSet.add(platform);
-          return {
-            type: 'post',
-            platform,
-            description: text,
-            day: day.day,
-          };
-        })
-      );
+          for (let i = 0; i < count; i++) {
+            content.push({
+              type: 'post',
+              platform,
+              description: `Content for ${theme} (${platform})`,
+              day: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][i % 7],
+            });
+          }
+        }
+      }
 
-      return {
-        weekNumber: week.week,
-        theme: week.theme,
-        content,
-      };
+      return { weekNumber: week.week, theme, content };
     });
 
     return {
@@ -1523,115 +1622,15 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] flex flex-col">
+    <div className={`fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex ${isFullscreen ? 'items-stretch justify-stretch p-0' : 'items-center justify-center p-4'}`}>
+      <div className={`bg-white shadow-2xl w-full flex flex-col ${isFullscreen ? 'h-full max-w-none rounded-none' : 'max-w-4xl h-[80vh] rounded-2xl'}`}>
         {/* Header */}
-        <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 rounded-t-2xl flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-white/20 rounded-lg">
-              {getProviderIcon(selectedProvider)}
-            </div>
-            <div>
-              <h3 className="text-lg font-semibold">Campaign AI Assistant</h3>
-              <p className="text-indigo-100 text-sm">
-                {getProviderName(selectedProvider)} • {campaignData?.name || 'Campaign'} • {campaignLearnings.length} past campaigns
-                {selectedProvider !== 'demo' && (
-                  <span className="ml-2 px-2 py-1 bg-green-500/20 text-green-200 rounded-full text-xs">
-                    ✓ API Active
-                  </span>
-                )}
-              </p>
-            </div>
+        <div className={`bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 flex items-center justify-between ${isFullscreen ? 'rounded-none' : 'rounded-t-2xl'}`}>
+          <div>
+            <h3 className="text-lg font-semibold">Campaign AI Assistant</h3>
+            <p className="text-indigo-100 text-sm">{campaignData?.name || 'Campaign'}</p>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center bg-white/10 rounded-lg overflow-hidden">
-              <button
-                onClick={() => setActiveTab('chat')}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  activeTab === 'chat' ? 'bg-white/20 text-white' : 'text-indigo-100'
-                }`}
-              >
-                Chat
-              </button>
-              <button
-                onClick={() => setActiveTab('history')}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  activeTab === 'history' ? 'bg-white/20 text-white' : 'text-indigo-100'
-                }`}
-              >
-                History
-              </button>
-              <button
-                onClick={() => isAdmin && setActiveTab('audit')}
-                title={isAdmin ? 'Campaign Audit Report' : 'Admin only'}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  activeTab === 'audit' ? 'bg-white/20 text-white' : 'text-indigo-100'
-                } ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={!isAdmin}
-              >
-                Audit
-              </button>
-              <button
-                onClick={() => isAdmin && setActiveTab('execution')}
-                title={isAdmin ? 'Execution Plan' : 'Admin only'}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  activeTab === 'execution' ? 'bg-white/20 text-white' : 'text-indigo-100'
-                } ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={!isAdmin}
-              >
-                Execution
-              </button>
-              <button
-                onClick={() => isAdmin && setActiveTab('content')}
-                title={isAdmin ? 'Content Studio' : 'Admin only'}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  activeTab === 'content' ? 'bg-white/20 text-white' : 'text-indigo-100'
-                } ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={!isAdmin}
-              >
-                Content
-              </button>
-              <button
-                onClick={() => isAdmin && setActiveTab('performance')}
-                title={isAdmin ? 'Performance & Learning' : 'Admin only'}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  activeTab === 'performance' ? 'bg-white/20 text-white' : 'text-indigo-100'
-                } ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={!isAdmin}
-              >
-                Performance
-              </button>
-              <button
-                onClick={() => isAdmin && setActiveTab('memory')}
-                title={isAdmin ? 'Campaign Memory' : 'Admin only'}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  activeTab === 'memory' ? 'bg-white/20 text-white' : 'text-indigo-100'
-                } ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={!isAdmin}
-              >
-                Memory
-              </button>
-              <button
-                onClick={() => isAdmin && setActiveTab('business')}
-                title={isAdmin ? 'Business Intelligence' : 'Admin only'}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  activeTab === 'business' ? 'bg-white/20 text-white' : 'text-indigo-100'
-                } ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={!isAdmin}
-              >
-                Business
-              </button>
-              <button
-                onClick={() => isAdmin && setActiveTab('platform')}
-                title={isAdmin ? 'Platform Intelligence' : 'Admin only'}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  activeTab === 'platform' ? 'bg-white/20 text-white' : 'text-indigo-100'
-                } ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={!isAdmin}
-              >
-                Platform
-              </button>
-            </div>
+          <div className="flex items-center gap-1">
             <button
               onClick={() => setShowLearning(!showLearning)}
               className="p-2 hover:bg-white/20 rounded-lg transition-colors"
@@ -1644,6 +1643,13 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
               className="p-2 hover:bg-white/20 rounded-lg transition-colors"
             >
               <Settings className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              title={isFullscreen ? 'Exit full screen' : 'Full screen'}
+            >
+              {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
             <button
               onClick={onMinimize}
@@ -1696,7 +1702,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
                     return (
                       <button
                         key={provider.id}
-                        onClick={() => setSelectedProvider(provider.id as AIProvider)}
+                        onClick={() => handleProviderChange(provider.id as AIProvider)}
                         className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
                           selectedProvider === provider.id
                             ? `bg-gradient-to-r ${provider.color} text-white shadow-lg`
@@ -2319,7 +2325,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
                   )}
                   
                   {/* Commit Plan Button */}
-                  {message.type === 'ai' && (message.message.includes('Content Calendar Template') || message.message.includes('12-week') || message.message.includes('weekly content') || message.message.includes('campaign plan') || message.message.includes('weekly social media') || message.message.includes('LinkedIn') || message.message.includes('Facebook') || message.message.includes('Instagram') || message.message.includes('Twitter') || message.message.includes('TikTok') || message.message.includes('social media plan') || message.message.includes('content plan')) && (
+                  {message.type === 'ai' && (message.message.includes('Content Calendar Template') || message.message.includes('campaign plan') || message.message.includes('weekly content') || message.message.includes('campaign plan') || message.message.includes('weekly social media') || message.message.includes('LinkedIn') || message.message.includes('Facebook') || message.message.includes('Instagram') || message.message.includes('Twitter') || message.message.includes('TikTok') || message.message.includes('social media plan') || message.message.includes('content plan')) && (
                     <div className="mt-3 pt-3 border-t border-gray-200 space-y-2">
                       <div className="grid grid-cols-2 gap-2">
                         <button
@@ -2347,7 +2353,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
                       
                       <button
                         onClick={() => {
-                          // Save AI content for 12-week plan
+                          // Save AI content for campaign plan
                           saveAIContentForPlan(message.message);
                         }}
                         className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all duration-200 text-sm font-medium shadow-md hover:shadow-lg transform hover:scale-105"
@@ -2357,7 +2363,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
                       </button>
                       
                       <p className="text-xs text-gray-500 mt-1 text-center">
-                        View plan first, then commit to create 12-week structure
+                        View plan first, then commit to create campaign structure
                       </p>
                     </div>
                   )}
@@ -2419,7 +2425,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] mx-4 flex flex-col">
               <div className="bg-gradient-to-r from-purple-500 to-violet-600 text-white p-4 rounded-t-2xl flex items-center justify-between">
                 <div>
-                  <h3 className="text-xl font-bold">12-Week Content Plan Preview</h3>
+                  <h3 className="text-xl font-bold">Content Plan Preview</h3>
                   <p className="text-purple-100 text-sm">Review your campaign plan before committing</p>
                 </div>
                 <button
@@ -2478,7 +2484,7 @@ This comprehensive 12-week approach ensures consistent growth and engagement acr
             <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4">
               <div className="text-center mb-6">
                 <h3 className="text-xl font-bold text-gray-900 mb-2">Select Start Date</h3>
-                <p className="text-gray-600">Choose when your 12-week campaign should begin</p>
+                <p className="text-gray-600">Choose when your campaign should begin</p>
               </div>
               
               <div className="space-y-4">

@@ -2,8 +2,11 @@ import React, { useState } from 'react';
 import { useOpportunities } from './useOpportunities';
 import type { OpportunityTabProps, OpportunityWithPayload } from './types';
 import { payloadHelpers } from './types';
+import EngineContextPanel from '../EngineContextPanel';
+import EngineOverridePanel from '../EngineOverridePanel';
 
 const TYPE = 'SEASONAL';
+const ENGINE_LABEL = 'Seasonal & Regional';
 
 function EventCard({
   opportunity,
@@ -32,11 +35,25 @@ function EventCard({
       setBusy(false);
     }
   };
-  const eventName = payloadHelpers.eventName(opportunity.payload) || opportunity.title || 'Event';
-  const region = payloadHelpers.region(opportunity.payload) || (opportunity.region_tags?.[0]) || '—';
-  const suggestedAngle = payloadHelpers.suggestedAngle(opportunity.payload) || opportunity.summary || '—';
-  const offerIdea = payloadHelpers.offerIdea(opportunity.payload);
+  const eventName = opportunity.title || 'Event';
+  const region = opportunity.region_tags?.[0] || '—';
+  const suggestedAngle = opportunity.summary || '—';
+  const suggestedOffer = payloadHelpers.suggestedOffer(opportunity.payload);
   const eventDate = payloadHelpers.eventDate(opportunity.payload);
+
+  // scheduled_for must be ISO string for /api/opportunities/[id]/action
+  const toScheduledFor = (dateStr: string) => {
+    if (/^\d{4}-\d{2}-\d{2}T/.test(dateStr)) return dateStr;
+    return new Date(dateStr + 'T12:00:00').toISOString();
+  };
+
+  const onScheduleClick = () => {
+    if (eventDate) {
+      run(() => onScheduleForEvent(opportunity.id, toScheduledFor(eventDate)));
+    } else {
+      setScheduleOpen(true);
+    }
+  };
 
   return (
     <div className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
@@ -45,8 +62,8 @@ function EventCard({
         {eventDate ? `Date: ${eventDate} • ` : ''}Region: {region}
       </div>
       <p className="text-sm text-gray-600 mt-2">Suggested angle: {suggestedAngle}</p>
-      {offerIdea && (
-        <p className="text-xs text-indigo-600 mt-1">Offer idea: {offerIdea}</p>
+      {suggestedOffer && (
+        <p className="text-xs text-indigo-600 mt-1">Suggested offer: {suggestedOffer}</p>
       )}
       <div className="mt-3 flex flex-wrap gap-2">
         {scheduleOpen ? (
@@ -61,8 +78,7 @@ function EventCard({
               type="button"
               onClick={() => {
                 if (!scheduleDate) return;
-                const iso = new Date(scheduleDate + 'T12:00:00').toISOString();
-                run(() => onScheduleForEvent(opportunity.id, iso));
+                run(() => onScheduleForEvent(opportunity.id, toScheduledFor(scheduleDate)));
               }}
               disabled={busy || !scheduleDate}
               className="px-2 py-1 text-xs rounded bg-indigo-600 text-white disabled:opacity-50"
@@ -81,7 +97,7 @@ function EventCard({
           <>
             <button
               type="button"
-              onClick={() => setScheduleOpen(true)}
+              onClick={onScheduleClick}
               disabled={busy}
               className="px-3 py-1.5 text-xs font-medium rounded border border-gray-300 text-gray-700 disabled:opacity-50"
             >
@@ -111,8 +127,8 @@ function EventCard({
 }
 
 export default function SeasonalRegionalTab(props: OpportunityTabProps) {
-  const { companyId, regions, onPromote, onAction, fetchWithAuth } = props;
-  const { opportunities, activeCount, loading, error, refetch } = useOpportunities(
+  const { companyId, regions, onPromote, onAction, fetchWithAuth, overrideText = '', onOverrideChange } = props;
+  const { opportunities, loading, error, runEngine, hasRun, refetch } = useOpportunities(
     companyId,
     TYPE,
     fetchWithAuth,
@@ -131,38 +147,45 @@ export default function SeasonalRegionalTab(props: OpportunityTabProps) {
       <div className="text-sm text-gray-500 py-4">Select a company to view seasonal opportunities.</div>
     );
   }
-  if (loading) {
-    return (
-      <div className="text-sm text-gray-500 py-4">Loading seasonal & regional opportunities...</div>
-    );
-  }
-  if (error) {
-    return <div className="text-sm text-red-600 py-2">{error}</div>;
-  }
 
   return (
-    <div>
-      <p className="text-sm text-gray-600 mb-3">
-        Upcoming events (next 30/60/90 days). Schedule a campaign for an event or create one now.
-      </p>
-      <div className="text-sm font-medium text-gray-700 mb-3">
-        {activeCount} / 10 Active Opportunities
+    <div className="space-y-4">
+      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      <EngineOverridePanel value={overrideText} onChange={onOverrideChange ?? (() => {})} />
+      <div>
+        <button
+          type="button"
+          onClick={() => runEngine()}
+          disabled={loading}
+          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+        >
+          {loading ? 'Running…' : `Run ${ENGINE_LABEL}`}
+        </button>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {opportunities.map((opp) => (
-          <EventCard
-            key={opp.id}
-            opportunity={opp}
-            onScheduleForEvent={handleScheduleForEvent}
-            onCreateNow={onPromote}
-            onDismiss={handleDismiss}
-            onActionComplete={refetch}
-          />
-        ))}
-      </div>
-      {opportunities.length === 0 && (
-        <div className="text-sm text-gray-500 py-4">No seasonal events.</div>
+      {error && <div className="text-sm text-red-600">{error}</div>}
+      {!hasRun && !loading && (
+        <div className="text-sm text-gray-500 py-6">Run the engine to see opportunities.</div>
       )}
+      {hasRun && !loading && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {opportunities.map((opp) => (
+              <EventCard
+                key={opp.id}
+                opportunity={opp}
+                onScheduleForEvent={handleScheduleForEvent}
+                onCreateNow={onPromote}
+                onDismiss={handleDismiss}
+                onActionComplete={refetch}
+              />
+            ))}
+          </div>
+          {opportunities.length === 0 && (
+            <div className="text-sm text-gray-500 py-4">No seasonal events.</div>
+          )}
+        </>
+      )}
+      {loading && <div className="text-sm text-gray-500 py-4">Loading seasonal & regional opportunities…</div>}
     </div>
   );
 }

@@ -128,6 +128,42 @@ Rules:
 - Equal priority campaigns cannot preempt each other.
 - Preemption is **advisory only**.
 
+### Controlled Preemption Execution
+
+When the system suggests **PREEMPT_LOWER_PRIORITY_CAMPAIGN**, controlled execution is allowed via an additive layer. Rules:
+
+- **Must be explicit API call** — `POST /api/campaigns/execute-preemption`. No auto-apply.
+- **Must be audited** — Every preemption is recorded in `campaign_preemption_log`.
+- **Must invalidate blueprint** — Preempted campaign: `blueprint_status = INVALIDATED`.
+- **Must not auto-delete data** — No deletion of campaigns or content.
+- **Must not cascade** — One preemption per call. No chain reactions.
+
+Execution flow:
+
+1. Mark conflicting campaign as `execution_status = PREEMPTED`.
+2. Set `blueprint_status = INVALIDATED` on preempted campaign.
+3. Insert audit row into `campaign_preemption_log`.
+4. Re-run constraint evaluation for initiator campaign (no blueprint regeneration).
+5. Preempted campaigns are excluded from PortfolioConstraintEvaluator overlap calculations.
+
+Allowed `execution_status` values: ACTIVE | PREEMPTED | PAUSED
+
+### Preemption Governance (Stage 9B)
+
+Preemption may require approval if:
+
+- Target campaign has `is_protected = TRUE`
+- Target campaign `priority_level` is CRITICAL
+
+Flow: **REQUEST → APPROVE → EXECUTE**. No auto-execution for protected/CRITICAL targets.
+
+- **Approval must be explicit** — `POST /api/campaigns/approve-preemption` with `requestId`.
+- **Rejection** — `POST /api/campaigns/reject-preemption` sets `status = REJECTED`, no campaign change.
+- **Must be auditable** — `campaign_preemption_requests` records PENDING → APPROVED/REJECTED/EXECUTED.
+- **Must be reversible** — Future stage may add un-preempt/resume flows.
+
+PortfolioConstraintEvaluator excludes campaigns where `execution_status === PREEMPTED` or `execution_status === PAUSED` from overlap calculations. PENDING requests do not affect capacity until EXECUTED.
+
 ## 8. Blueprint Lifecycle Rules
 
 - **Blueprint is atomic.**
@@ -169,6 +205,8 @@ The following test suites **must** pass:
 - `campaign_tradeoff_engine.test.ts`
 - `campaign_start_date_shift.test.ts`
 - `campaign_priority_preemption.test.ts`
+- `campaign_preemption_execution.test.ts`
+- `campaign_preemption_approval_flow.test.ts`
 
 ## 11. Future Extension Protocol
 

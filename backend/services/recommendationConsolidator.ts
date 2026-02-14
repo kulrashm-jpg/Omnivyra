@@ -3,10 +3,14 @@
  * Placeholder implementation: no external API calls from LLM.
  * Input: structured summary of normalized trends per region + optional company profile + goal.
  * Output: unified recommendation, region-wise differences, divergence_score, confidence_score, disclaimer.
+ *
+ * V2: consolidateRegionalResults for Trend Strategic Theme multi-region jobs (hybrid rule + LLM).
  */
 
 import { supabase } from '../db/supabaseClient';
 import { getProfile } from './companyProfileService';
+import type { TrendRegionRecommendation } from './opportunityGenerators';
+import { runDiagnosticPrompt } from './llm/openaiAdapter';
 
 const DIVERGENCE_DISCLAIMER_THRESHOLD = 0.35;
 
@@ -194,4 +198,117 @@ export async function consolidateMultiRegionSignals(jobId: string): Promise<void
     .from('recommendation_jobs')
     .update({ status: 'COMPLETED', updated_at: new Date().toISOString() })
     .eq('id', jobId);
+}
+
+// --- V2: Trend multi-region consolidation ---
+
+export type ConsolidatedV2Result = {
+  global_opportunities: { title: string; summary?: string; rationale?: string; regions?: string[] }[];
+  region_specific_insights: Record<string, { cultural_considerations: string; competitive_pressure: string }>;
+  execution_priority_order: string[];
+  consolidated_risks: string[];
+  strategic_summary: string;
+  confidence_index: number;
+};
+
+/**
+ * Hybrid consolidation: rule-based merge (common opportunities, rank regions, merge risks) + LLM refinement for strategic_summary.
+ */
+export async function consolidateRegionalResults(
+  regionResults: Record<string, TrendRegionRecommendation>
+): Promise<ConsolidatedV2Result> {
+  const regions = Object.keys(regionResults).filter(Boolean);
+
+  // Rule-based: collect all opportunities with normalized title for dedup
+  const opportunityByTitle = new Map<string, { title: string; summary?: string; rationale?: string; regions: string[] }>();
+  const allRisks = new Set<string>();
+  const regionInsights: Record<string, { cultural_considerations: string; competitive_pressure: string }> = {};
+
+  for (const region of regions) {
+    const r = regionResults[region];
+    if (!r) continue;
+    regionInsights[region] = {
+      cultural_considerations: r.cultural_considerations || '',
+      competitive_pressure: r.competitive_pressure || '',
+    };
+    for (const risk of r.risks ?? []) {
+      if (risk && typeof risk === 'string') allRisks.add(risk.trim());
+    }
+    for (const opp of r.opportunities ?? []) {
+      const title = (opp?.title ?? '').trim();
+      if (!title) continue;
+      const existing = opportunityByTitle.get(title);
+      if (existing) {
+        if (!existing.regions.includes(region)) existing.regions.push(region);
+      } else {
+        opportunityByTitle.set(title, {
+          title,
+          summary: opp.summary,
+          rationale: opp.rationale,
+          regions: [region],
+        });
+      }
+    }
+  }
+
+  // Execution order: regions sorted by descending priority_score
+  const execution_priority_order = [...regions].sort((a, b) => {
+    const scoreA = regionResults[a]?.priority_score ?? 0;
+    const scoreB = regionResults[b]?.priority_score ?? 0;
+    return scoreB - scoreA;
+  });
+
+  const global_opportunities = Array.from(opportunityByTitle.values()).map((o) => ({
+    title: o.title,
+    summary: o.summary,
+    rationale: o.rationale,
+    regions: o.regions.length > 0 ? o.regions : undefined,
+  }));
+
+  const consolidated_risks = Array.from(allRisks);
+
+  let confidence = 0;
+  if (global_opportunities.length > 0) confidence += 30;
+  const scores = regions.map(
+    (r) => (regionResults[r] as TrendRegionRecommendation)?.priority_score ?? 0
+  );
+  const scoreRange =
+    scores.length >= 2 ? Math.max(...scores) - Math.min(...scores) : 0;
+  const variancePct = scoreRange * 100;
+  if (variancePct < 30) confidence += 30;
+  if (consolidated_risks.length < 5) confidence += 40;
+  confidence = Math.min(confidence, 100);
+
+  // LLM refinement: produce strategic_summary from merged data
+  let strategic_summary = '';
+  try {
+    const { data } = await runDiagnosticPrompt<{ strategic_summary: string }>(
+      'You are a global campaign strategist. Given consolidated regional opportunities, risks, and region-specific insights, write a single executive strategic summary (2-4 sentences). Focus on cross-region alignment and execution priority. Output valid JSON only: { "strategic_summary": string }',
+      JSON.stringify(
+        {
+          global_opportunities: global_opportunities.slice(0, 10),
+          consolidated_risks: consolidated_risks.slice(0, 10),
+          region_specific_insights: regionInsights,
+          execution_priority_order,
+        },
+        null,
+        2
+      )
+    );
+    strategic_summary = typeof data?.strategic_summary === 'string' ? data.strategic_summary : '';
+  } catch {
+    strategic_summary =
+      global_opportunities.length > 0
+        ? `Prioritize ${global_opportunities.slice(0, 3).map((o) => o.title).join(', ')} across ${execution_priority_order.join(', ')}.`
+        : 'No unified opportunities identified; review region-specific insights.';
+  }
+
+  return {
+    global_opportunities,
+    region_specific_insights: regionInsights,
+    execution_priority_order,
+    consolidated_risks,
+    strategic_summary: strategic_summary || 'Review regional results and prioritize by execution order.',
+    confidence_index: confidence,
+  };
 }

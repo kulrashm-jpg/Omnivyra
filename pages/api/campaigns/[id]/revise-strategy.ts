@@ -64,6 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     version: (latestVersion.version ?? 0) + 1,
   });
 
+  console.warn('DEPRECATED: weekly_content_refinements write path triggered (revise-strategy)');
   const { error: refinementError } = await supabase
     .from('weekly_content_refinements')
     .update({

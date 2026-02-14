@@ -170,6 +170,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               topic: manualTopic,
               source: manualContext?.type === 'detected_opportunity' ? 'detected_opportunity' : 'opportunity',
               sources: ['manual'],
+              frequency: 1,
               platform_tag: Array.isArray(manualContext.platform_preferences)
                 ? manualContext.platform_preferences[0]
                 : undefined,

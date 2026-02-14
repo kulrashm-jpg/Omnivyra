@@ -351,7 +351,7 @@ export default function WeeklyRefinementInterface({
 
       {/* Weekly Cards */}
       <div className="grid gap-4">
-        {Array.from({ length: 12 }, (_, index) => {
+        {Array.from({ length: weeklyRefinements.length || 12 }, (_, index) => {
           const weekNumber = index + 1;
           const weekData = weeklyRefinements.find(w => w.week_number === weekNumber);
           const isExpanded = expandedWeeks.has(weekNumber);

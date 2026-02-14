@@ -54,7 +54,7 @@ const findExistingUserByEmail = async (email: string) => {
   if (error) {
     throw new Error(error.message);
   }
-  return existingUsers?.users?.find((user) => user.email?.toLowerCase() === email.toLowerCase()) || null;
+  return existingUsers?.users?.find((user: { email?: string }) => user.email?.toLowerCase() === email.toLowerCase()) || null;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

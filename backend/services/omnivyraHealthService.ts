@@ -2,6 +2,7 @@ type OmniVyraErrorType =
   | 'timeout'
   | 'schema_invalid'
   | 'http_error'
+  | 'omnivyra_unavailable'
   | 'version_mismatch'
   | 'unknown';
 

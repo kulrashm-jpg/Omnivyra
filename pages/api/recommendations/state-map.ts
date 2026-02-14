@@ -25,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (roleError === 'COMPANY_ACCESS_DENIED') {
     return res.status(403).json({ error: 'COMPANY_ACCESS_DENIED' });
   }
-  if (!role || !allowedRoles.has(role)) {
+  if (!role || !(allowedRoles as Set<string>).has(role)) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
 
@@ -57,6 +57,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       active_count: number;
       last_admin_decision?: { state: string; actor_user_id: string | null; created_at: string | null };
       last_discarded?: { actor_user_id: string | null; created_at: string | null };
+      priority_score?: number;
+      priority_bucket?: string;
     }
   > = {};
   const detailsBySnapshot: Record<

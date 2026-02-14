@@ -8,9 +8,56 @@ export type OpportunityTabProps = {
     opts?: { scheduled_for?: string }
   ) => Promise<void>;
   fetchWithAuth: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  /** Strategic direction override text (local state, not persisted). */
+  overrideText?: string;
+  onOverrideChange?: (value: string) => void;
+  /** For Daily Focus "Act Now" OPEN_TAB: switch to this opportunity tab (e.g. TREND, PULSE). */
+  onSwitchTab?: (tab: string) => void;
+  /** For Daily Focus "Act Now" OPEN_GENERATOR: open quick-content generator modal with this target. */
+  onOpenGenerator?: (targetType: string) => void;
 };
 
-/** Raw opportunity from API; payload holds type-specific fields. */
+/**
+ * opportunity_items.payload schema by type.
+ * Each tab uses only its own fields; unknown keys are ignored.
+ */
+export type OpportunityPayloadTREND = {
+  formats?: string[];
+  reach_estimate?: number | string;
+};
+export type OpportunityPayloadLEAD = {
+  platform?: string;
+  snippet?: string;
+  icp_match?: string;
+  urgency_score?: number | string;
+};
+export type OpportunityPayloadPULSE = {
+  spike_reason?: string;
+  shelf_life_hours?: number;
+};
+export type OpportunityPayloadSEASONAL = {
+  event_date?: string;
+  suggested_offer?: string;
+};
+export type OpportunityPayloadINFLUENCER = {
+  platform?: string;
+  audience_overlap_score?: number | string;
+  engagement_rate?: number | string;
+};
+export type OpportunityPayloadDAILY_FOCUS = {
+  action_type?: 'OPEN_TAB' | 'CREATE_CAMPAIGN' | 'OPEN_GENERATOR';
+  target_type?: string;
+};
+
+export type OpportunityPayload =
+  | OpportunityPayloadTREND
+  | OpportunityPayloadLEAD
+  | OpportunityPayloadPULSE
+  | OpportunityPayloadSEASONAL
+  | OpportunityPayloadINFLUENCER
+  | OpportunityPayloadDAILY_FOCUS;
+
+/** Raw opportunity from API; payload holds type-specific fields per schema above. */
 export type OpportunityWithPayload = {
   id: string;
   title: string;
@@ -38,45 +85,63 @@ function getPayloadStringArray(p: Record<string, unknown> | null | undefined, ke
   return (p[key] as unknown[]).map((x) => (typeof x === 'string' ? x : String(x)));
 }
 
+/** Read payload using canonical field names only. */
 export const payloadHelpers = {
-  expectedReach: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'expected_reach') || getPayloadString(p, 'expected_reach_label') || '—',
-  suggestedFormats: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadStringArray(p, 'suggested_formats').length
-      ? getPayloadStringArray(p, 'suggested_formats')
-      : [getPayloadString(p, 'suggested_format')].filter(Boolean),
+  // TREND: formats[], reach_estimate
+  formats: (p: Record<string, unknown> | null | undefined) =>
+    getPayloadStringArray(p, 'formats'),
+  reachEstimate: (p: Record<string, unknown> | null | undefined) => {
+    const v = p?.['reach_estimate'];
+    if (typeof v === 'number') return String(v);
+    if (typeof v === 'string') return v;
+    return '—';
+  },
+  // LEAD: platform, snippet, icp_match, urgency_score
   platform: (p: Record<string, unknown> | null | undefined) =>
     getPayloadString(p, 'platform') || '—',
-  publicSnippet: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'public_snippet') || getPayloadString(p, 'snippet') || '—',
+  snippet: (p: Record<string, unknown> | null | undefined) =>
+    getPayloadString(p, 'snippet') || '—',
   icpMatch: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'icp_match') || getPayloadString(p, 'icp_match_score') || '—',
-  urgency: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'urgency') || '—',
+    getPayloadString(p, 'icp_match') || '—',
+  urgencyScore: (p: Record<string, unknown> | null | undefined) => {
+    const v = p?.['urgency_score'];
+    if (typeof v === 'number') return String(v);
+    if (typeof v === 'string') return v;
+    return '—';
+  },
+  // PULSE: spike_reason, shelf_life_hours
   spikeReason: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'spike_reason') || getPayloadString(p, 'reason') || '—',
-  shelfLife: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'shelf_life') || getPayloadString(p, 'shelf_life_days') || '—',
-  eventName: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'event_name') || getPayloadString(p, 'name') || '—',
-  region: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'region') || '—',
-  suggestedAngle: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'suggested_angle') || getPayloadString(p, 'angle') || '—',
-  offerIdea: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'offer_idea') || getPayloadString(p, 'offer') || '—',
+    getPayloadString(p, 'spike_reason') || '—',
+  shelfLifeHours: (p: Record<string, unknown> | null | undefined) => {
+    const n = getPayloadNumber(p, 'shelf_life_hours');
+    return n != null ? `${n} hours` : '—';
+  },
+  // SEASONAL: event_date, suggested_offer (title/region/angle from core fields or legacy keys)
   eventDate: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'event_date') || getPayloadString(p, 'date') || null,
-  influencerName: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'influencer_name') || getPayloadString(p, 'name') || '—',
-  audienceOverlap: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'audience_overlap') || getPayloadString(p, 'overlap') || '—',
-  engagementQuality: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'engagement_quality') || getPayloadString(p, 'engagement') || '—',
-  whyToday: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'why_today') || getPayloadString(p, 'reason') || '—',
-  expectedImpact: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'expected_impact') || getPayloadString(p, 'impact') || '—',
+    getPayloadString(p, 'event_date') || null,
+  suggestedOffer: (p: Record<string, unknown> | null | undefined) =>
+    getPayloadString(p, 'suggested_offer') || '',
+  // INFLUENCER: platform, audience_overlap_score, engagement_rate (name from title)
+  audienceOverlapScore: (p: Record<string, unknown> | null | undefined) => {
+    const v = p?.['audience_overlap_score'];
+    if (typeof v === 'number') return String(v);
+    if (typeof v === 'string') return v;
+    return '—';
+  },
+  engagementRate: (p: Record<string, unknown> | null | undefined) => {
+    const v = p?.['engagement_rate'];
+    if (typeof v === 'number') return String(v);
+    if (typeof v === 'string') return v;
+    return '—';
+  },
+  // DAILY_FOCUS: action_type, target_type
   actionType: (p: Record<string, unknown> | null | undefined) =>
-    getPayloadString(p, 'action_type') || getPayloadString(p, 'action') || null,
+    (getPayloadString(p, 'action_type') || null) as 'OPEN_TAB' | 'CREATE_CAMPAIGN' | 'OPEN_GENERATOR' | null,
+  targetType: (p: Record<string, unknown> | null | undefined) =>
+    getPayloadString(p, 'target_type') || null,
+  // Shared/fallback for display (e.g. region from region_tags, event name from title)
+  whyToday: (p: Record<string, unknown> | null | undefined) =>
+    getPayloadString(p, 'why_today') || '',
+  expectedImpact: (p: Record<string, unknown> | null | undefined) =>
+    getPayloadString(p, 'expected_impact') || '',
 };

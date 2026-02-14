@@ -89,7 +89,7 @@ export default function SchedulerPage() {
         body: (router.query.content as string) || prev.body,
         hashtags: (router.query.hashtags as string) || prev.hashtags,
         platforms: (router.query.platforms as string)?.split(',') || prev.platforms,
-        mediaType: (router.query.mediaType as string) || prev.mediaType
+        mediaType: ((router.query.mediaType as string) || prev.mediaType) as 'image' | 'video' | 'none'
       }));
     }
   }, [router.query]);

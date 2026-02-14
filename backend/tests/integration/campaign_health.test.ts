@@ -4,6 +4,12 @@ import * as campaignOptimizationService from '../../services/campaignOptimizatio
 import * as campaignVersionStore from '../../db/campaignVersionStore';
 import * as companyProfileService from '../../services/companyProfileService';
 
+jest.mock('../../db/campaignPlanStore', () => ({
+  saveCampaignBlueprintFromRecommendation: jest.fn().mockResolvedValue(undefined),
+  saveStructuredCampaignPlan: jest.fn().mockResolvedValue(undefined),
+  saveAiCampaignPlan: jest.fn().mockResolvedValue(undefined),
+  saveCampaignBlueprintFromLegacy: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../../db/campaignVersionStore', () => ({
   getLatestCampaignVersion: jest.fn(),
   saveOptimizationHistory: jest.fn(),
@@ -92,30 +98,31 @@ describe('Campaign health layer', () => {
       campaign: {},
       weeklyPlans,
       dailyPlans,
-      contentAssets: [
-        {
-          status: 'approved',
-          current_version: 1,
-        },
-      ],
+      contentAssets: [{ status: 'approved', current_version: 1 }],
+      analyticsReport: { engagementRate: 0.08 },
+      platformExecutionPlan: { days: Array.from({ length: 7 }, () => ({ placeholder: false })) },
+      forecast: { confidence: 85 },
+      roi: { roiPercent: 15 },
+      businessReport: { healthScore: 80 },
     });
     expect(report.status).toBe('warning');
     expect(report.issues.some((issue) => issue.field === 'geography')).toBe(true);
   });
 
-  it('warns when weekly plan has fewer than 12 weeks', () => {
+  it('warns when weekly plan has fewer weeks than expected duration', () => {
     const report = validateCampaignHealth({
       companyProfile: baseProfile,
       trends: [],
       campaign: {},
       weeklyPlans: weeklyPlans.slice(0, 6),
       dailyPlans,
-      contentAssets: [
-        {
-          status: 'approved',
-          current_version: 1,
-        },
-      ],
+      expectedDurationWeeks: 12,
+      contentAssets: [{ status: 'approved', current_version: 1 }],
+      analyticsReport: { engagementRate: 0.08 },
+      platformExecutionPlan: { days: Array.from({ length: 7 }, () => ({ placeholder: false })) },
+      forecast: { confidence: 85 },
+      roi: { roiPercent: 15 },
+      businessReport: { healthScore: 80 },
     });
     expect(report.status).toBe('warning');
     expect(report.issues.some((issue) => issue.field === 'weeklyPlans')).toBe(true);

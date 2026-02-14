@@ -42,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       updated_at: new Date().toISOString()
     }));
 
-    // Upsert weekly refinements
+    console.warn('DEPRECATED: weekly_content_refinements write path triggered (save-comprehensive-plan)');
     for (const weekData of weeklyRefinementUpdates) {
       const { error: weekError } = await supabase
         .from('weekly_content_refinements')
@@ -64,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // If there's existing content, incorporate it into the plan
     for (const week of weeklyPlans) {
       if (week.existingContent && week.existingContent.trim()) {
-        // Store existing content notes for AI to reference later
+        console.warn('DEPRECATED: weekly_content_refinements write path triggered (save-comprehensive-plan update)');
         await supabase
           .from('weekly_content_refinements')
           .update({
@@ -79,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({
       success: true,
-      message: '12-week plan saved successfully',
+      message: 'Campaign plan saved successfully',
       campaignSummary,
       weeklyPlans
     });

@@ -10,7 +10,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { campaignId, mode, message, durationWeeks, targetDay, platforms } = req.body || {};
+    const { campaignId, mode, message, durationWeeks, targetDay, platforms, messages: conversationHistory, recommendationContext } = req.body || {};
 
     if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'campaignId is required' });
@@ -29,6 +29,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       durationWeeks: typeof durationWeeks === 'number' ? durationWeeks : undefined,
       targetDay: typeof targetDay === 'string' ? targetDay : undefined,
       platforms: Array.isArray(platforms) ? platforms : undefined,
+      conversationHistory: Array.isArray(conversationHistory) ? conversationHistory : undefined,
+      recommendationContext: recommendationContext && typeof recommendationContext === 'object' ? recommendationContext : undefined,
     });
 
     if (typeof saveAiCampaignPlan === 'function') {
@@ -48,9 +50,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       plan: result.plan,
       day: result.day,
       platform_content: result.platform_content,
+      conversationalResponse: result.conversationalResponse,
     });
   } catch (error: any) {
     console.error('Error in campaign AI plan API:', error);
-    return res.status(500).json({ error: 'Failed to generate campaign plan' });
+    const message = error?.message && typeof error.message === 'string'
+      ? error.message
+      : 'Failed to generate campaign plan';
+    return res.status(500).json({ error: message });
   }
 }

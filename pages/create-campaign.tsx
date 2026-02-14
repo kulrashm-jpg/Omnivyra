@@ -16,6 +16,24 @@ import { v4 as uuidv4 } from 'uuid';
 import CampaignAIChat from '../components/CampaignAIChat';
 import { useCompanyContext } from '../components/CompanyContext';
 
+const BUILD_MODES = ['full_context', 'focused_context', 'no_context'] as const;
+const CAMPAIGN_TYPES = [
+  'brand_awareness',
+  'network_expansion',
+  'lead_generation',
+  'authority_positioning',
+  'engagement_growth',
+  'product_promotion',
+] as const;
+const CONTEXT_SCOPES = [
+  'commercial_strategy',
+  'marketing_intelligence',
+  'campaign_purpose',
+  'brand_positioning',
+  'competitive_advantages',
+  'growth_priorities',
+] as const;
+
 interface CampaignData {
   id: string;
   name: string;
@@ -24,6 +42,10 @@ interface CampaignData {
   endDate: string;
   description: string;
   goals: string[];
+  buildMode: typeof BUILD_MODES[number];
+  contextScope: string[];
+  campaignTypes: string[];
+  campaignWeights: Record<string, number>;
 }
 
 export default function CreateCampaign() {
@@ -39,7 +61,11 @@ export default function CreateCampaign() {
     startDate: '',
     endDate: '',
     description: '',
-    goals: []
+    goals: [],
+    buildMode: 'no_context',
+    contextScope: [],
+    campaignTypes: ['brand_awareness'],
+    campaignWeights: { brand_awareness: 100 },
   });
 
   // Calculate end date based on start date and timeframe
@@ -167,28 +193,36 @@ export default function CreateCampaign() {
       alert('Please enter a campaign name first');
       return;
     }
+    if (campaignData.campaignTypes.length > 1) {
+      const total = Object.values(campaignData.campaignWeights).reduce((a, b) => a + b, 0);
+      if (total !== 100) {
+        alert(`Campaign weights must sum to 100. Current total: ${total}%`);
+        return;
+      }
+    }
 
     setIsLoading(true);
     try {
-      // Generate proper UUID for campaign ID
       const newCampaignId = uuidv4();
       console.log('Creating new campaign with ID:', newCampaignId);
-      
-      // Create campaign data with proper name
+
       const campaignToCreate = {
         ...campaignData,
         id: newCampaignId,
-        name: campaignData.name.trim(), // Ensure name is not empty
+        name: campaignData.name.trim(),
         status: 'planning',
         current_stage: 'planning',
         companyId: selectedCompanyId,
         created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        buildMode: campaignData.buildMode,
+        context_scope: campaignData.contextScope.length > 0 ? campaignData.contextScope : null,
+        campaignTypes: campaignData.campaignTypes,
+        campaignWeights: campaignData.campaignWeights,
       };
 
       console.log('Campaign data being sent:', campaignToCreate);
 
-      // Save campaign to database
       const response = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -240,28 +274,36 @@ export default function CreateCampaign() {
       alert('Please select a start date first');
       return;
     }
+    if (campaignData.campaignTypes.length > 1) {
+      const total = Object.values(campaignData.campaignWeights).reduce((a, b) => a + b, 0);
+      if (total !== 100) {
+        alert(`Campaign weights must sum to 100. Current total: ${total}%`);
+        return;
+      }
+    }
 
     setIsLoading(true);
     try {
-      // Generate proper UUID for campaign ID
       const newCampaignId = uuidv4();
-      console.log('Creating campaign with 12-week plan:', newCampaignId);
-      
-      // Create campaign data with proper name
+      console.log('Creating campaign with plan:', newCampaignId);
+
       const campaignToCreate = {
         ...campaignData,
         id: newCampaignId,
-        name: campaignData.name.trim(), // Ensure name is not empty
+        name: campaignData.name.trim(),
         status: 'planning',
         current_stage: 'planning',
         companyId: selectedCompanyId,
         created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        buildMode: campaignData.buildMode,
+        context_scope: campaignData.contextScope.length > 0 ? campaignData.contextScope : null,
+        campaignTypes: campaignData.campaignTypes,
+        campaignWeights: campaignData.campaignWeights,
       };
 
       console.log('Campaign data being sent:', campaignToCreate);
 
-      // Save campaign to database
       const campaignResponse = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -277,7 +319,7 @@ export default function CreateCampaign() {
       const campaignResult = await campaignResponse.json();
       console.log('Campaign created successfully:', campaignResult);
 
-      // Generate 12-week plan
+      // Generate campaign plan
       const planResponse = await fetch('/api/campaigns/create-12week-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -285,14 +327,14 @@ export default function CreateCampaign() {
           campaignId: newCampaignId,
           campaignName: campaignData.name, // Pass the campaign name
           startDate: campaignData.startDate,
-          aiContent: campaignData.description || `Generate comprehensive 12-week content marketing plan for "${campaignData.name}"`,
+          aiContent: campaignData.description || `Generate comprehensive content marketing plan for "${campaignData.name}"`,
           provider: 'demo'
         })
       });
 
       if (planResponse.ok) {
         const planResult = await planResponse.json();
-        console.log('12-week plan generated successfully:', planResult);
+        console.log('Campaign plan generated successfully:', planResult);
         
         // Save AI-generated content if available
         if (aiGeneratedContent) {
@@ -300,18 +342,18 @@ export default function CreateCampaign() {
         }
         
         // Show success message
-        alert(`Campaign "${campaignData.name}" and 12-week plan created successfully! Redirecting to campaign details...`);
+        alert(`Campaign "${campaignData.name}" and campaign plan created successfully! Redirecting to campaign details...`);
         
         // Redirect to campaign details page
         router.push(`/campaign-details/${newCampaignId}`);
       } else {
         const planErrorData = await planResponse.json().catch(() => ({ error: 'Unknown error' }));
-        console.error('12-week plan generation failed:', planErrorData);
-        throw new Error(`Failed to generate 12-week plan: ${planErrorData.error || 'Unknown error'}`);
+        console.error('Campaign plan generation failed:', planErrorData);
+        throw new Error(`Failed to generate campaign plan: ${planErrorData.error || 'Unknown error'}`);
       }
       
     } catch (error) {
-      console.error('Error creating campaign with 12-week plan:', error);
+      console.error('Error creating campaign with plan:', error);
       alert(`Error creating campaign: ${error.message || 'Please try again.'}`);
     } finally {
       setIsLoading(false);
@@ -451,6 +493,114 @@ export default function CreateCampaign() {
               💡 Tip: Write your initial description here, then use AI Assistant to enhance and expand it
             </p>
           </div>
+
+          {/* Strategic Configuration */}
+          <div className="mt-8 pt-6 border-t border-gray-200">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Strategic Configuration</h3>
+
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Context Mode</label>
+              <select
+                value={campaignData.buildMode}
+                onChange={(e) => setCampaignData({ ...campaignData, buildMode: e.target.value as typeof campaignData.buildMode })}
+                className="w-full md:w-80 px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+              >
+                <option value="no_context">No Context (campaign inputs only)</option>
+                <option value="focused_context">Focused Context (selected company sections)</option>
+                <option value="full_context">Full Context (company profile + marketing intelligence)</option>
+              </select>
+            </div>
+
+            {campaignData.buildMode === 'focused_context' && (
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Context Scope (select sections)</label>
+                <div className="flex flex-wrap gap-2">
+                  {CONTEXT_SCOPES.map((scope) => (
+                    <label key={scope} className="inline-flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border cursor-pointer hover:bg-gray-100">
+                      <input
+                        type="checkbox"
+                        checked={campaignData.contextScope.includes(scope)}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? [...campaignData.contextScope, scope]
+                            : campaignData.contextScope.filter((s) => s !== scope);
+                          setCampaignData({ ...campaignData, contextScope: next });
+                        }}
+                      />
+                      <span className="text-sm">{scope.replace(/_/g, ' ')}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Campaign Types</label>
+              <div className="flex flex-wrap gap-2">
+                {CAMPAIGN_TYPES.map((type) => (
+                  <label key={type} className="inline-flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border cursor-pointer hover:bg-gray-100">
+                    <input
+                      type="checkbox"
+                      checked={campaignData.campaignTypes.includes(type)}
+                      onChange={(e) => {
+                        let next: string[];
+                        let weights = { ...campaignData.campaignWeights };
+                        if (e.target.checked) {
+                          next = [...campaignData.campaignTypes, type];
+                        } else {
+                          next = campaignData.campaignTypes.filter((t) => t !== type);
+                          delete weights[type];
+                        }
+                        if (next.length === 1) {
+                          weights = { [next[0]]: 100 };
+                        } else if (next.length > 1) {
+                          const per = Math.floor(100 / next.length);
+                          const remainder = 100 - per * next.length;
+                          weights = {};
+                          next.forEach((t, i) => {
+                            weights[t] = per + (i < remainder ? 1 : 0);
+                          });
+                        }
+                        setCampaignData({ ...campaignData, campaignTypes: next, campaignWeights: weights });
+                      }}
+                    />
+                    <span className="text-sm">{type.replace(/_/g, ' ')}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {campaignData.campaignTypes.length > 1 && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Weights (must sum to 100)
+                  <span className={`ml-2 text-xs font-normal ${Object.values(campaignData.campaignWeights).reduce((a, b) => a + b, 0) === 100 ? 'text-green-600' : 'text-red-600'}`}>
+                    Total: {Object.values(campaignData.campaignWeights).reduce((a, b) => a + b, 0)}%
+                  </span>
+                </label>
+                <div className="flex flex-wrap gap-4">
+                  {campaignData.campaignTypes.map((type) => (
+                    <div key={type} className="flex items-center gap-2">
+                      <label className="text-sm whitespace-nowrap">{type.replace(/_/g, ' ')}</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={campaignData.campaignWeights[type] ?? 0}
+                        onChange={(e) => {
+                          const v = Math.min(100, Math.max(0, parseInt(e.target.value, 10) || 0));
+                          const next = { ...campaignData.campaignWeights, [type]: v };
+                          setCampaignData({ ...campaignData, campaignWeights: next });
+                        }}
+                        className="w-16 px-2 py-1 border rounded"
+                      />
+                      <span className="text-sm text-gray-500">%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Action Buttons */}
@@ -474,14 +624,14 @@ export default function CreateCampaign() {
               className="flex-1 bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 disabled:opacity-50 text-white px-6 py-4 rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 flex items-center justify-center gap-3"
             >
               {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
-              Create + Generate 12-Week Plan
+              Create + Generate Campaign Plan
             </button>
           </div>
           
           <div className="mt-4 text-sm text-gray-500">
             <p><strong>Create Campaign:</strong> Creates the campaign and takes you to campaign details where you can plan content manually.</p>
-            <p><strong>Create + Generate 12-Week Plan:</strong> Creates the campaign and automatically generates a comprehensive 12-week content plan using AI.</p>
-            <p className="mt-2 text-orange-600"><strong>Requirements:</strong> Campaign name is mandatory. Start date is required for 12-week plan generation.</p>
+            <p><strong>Create + Generate Campaign Plan:</strong> Creates the campaign and automatically generates a comprehensive content plan using AI.</p>
+            <p className="mt-2 text-orange-600"><strong>Requirements:</strong> Campaign name is mandatory. Start date is required for campaign plan generation.</p>
           </div>
         </div>
 

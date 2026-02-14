@@ -1,6 +1,5 @@
 import { supabase } from '../db/supabaseClient';
 import { fillOpportunitySlots, reopenScheduledOpportunitiesDue } from './opportunityService';
-import { getGenerator } from './opportunityGenerators';
 
 const OPPORTUNITY_TYPES = [
   'TREND',
@@ -56,7 +55,7 @@ export async function runOpportunitySlotsScheduler(): Promise<{
   for (const companyId of companyIds) {
     for (const type of OPPORTUNITY_TYPES) {
       try {
-        await fillOpportunitySlots(companyId, type, getGenerator(companyId, type));
+        await fillOpportunitySlots(companyId, type);
         typesProcessed += 1;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

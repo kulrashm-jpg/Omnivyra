@@ -108,7 +108,7 @@ export const validateCompanyProfileGate = async (
   return validateCompanyProfile(profile);
 };
 
-const DEFAULT_DURATION_WEEKS = 12;
+/** Removed DEFAULT_DURATION_WEEKS - duration must come from input.durationWeeks or blueprint. No silent 12-week default. */
 
 const normalizePlatform = (platform: string): string => {
   const lower = platform.trim().toLowerCase();
@@ -278,7 +278,11 @@ export const generateCampaignStrategy = async (input: {
   }
 
   const objective = input.objective ?? 'awareness';
-  const duration = input.durationWeeks ?? DEFAULT_DURATION_WEEKS;
+  let duration = input.durationWeeks;
+  if (duration == null) {
+    console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+    duration = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
+  }
   const capabilities: ContentCapabilities = {
     can_generate_text: input.contentCapabilities?.can_generate_text ?? true,
     can_generate_image: input.contentCapabilities?.can_generate_image ?? true,

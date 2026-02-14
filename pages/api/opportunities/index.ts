@@ -7,7 +7,6 @@ import {
   fillOpportunitySlots,
   type OpportunityItem,
 } from '../../../backend/services/opportunityService';
-import { getGenerator } from '../../../backend/services/opportunityGenerators';
 
 export type OpportunitiesListResponse = {
   opportunities: OpportunityItem[];
@@ -42,23 +41,21 @@ async function getHandler(req: NextApiRequest, res: NextApiResponse) {
 
 /**
  * POST /api/opportunities
- * Body: { companyId, type }
- * Calls fillOpportunitySlots(companyId, type, generatorForType(type)), then returns updated ACTIVE list.
+ * Body: { companyId, type, strategicPayload? }
+ * Calls fillOpportunitySlots(companyId, type, strategicPayload), then returns updated ACTIVE list.
  */
 async function postHandler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { companyId, type, regions } = req.body || {};
+  const { companyId, type, strategicPayload } = req.body || {};
   if (!companyId || !type) {
     return res.status(400).json({ error: 'companyId and type are required' });
   }
 
-  const regionsList = Array.isArray(regions) ? regions : typeof regions === 'string' ? [regions] : undefined;
-
   try {
-    await fillOpportunitySlots(companyId, type, getGenerator(companyId, type, { regions: regionsList }));
+    await fillOpportunitySlots(companyId, type, strategicPayload);
     const [opportunities, activeCount] = await Promise.all([
       listActiveOpportunities(companyId, type),
       countActive(companyId, type),

@@ -37,7 +37,7 @@ const ensureAuthAdmin = () => {
 const allowedRoles = ALL_ROLES.filter((role) => role !== Role.SUPER_ADMIN);
 const isAllowedRole = (value?: string | null) => {
   if (!value) return false;
-  return allowedRoles.includes(value.toUpperCase() as Role);
+  return (allowedRoles as readonly string[]).includes(value.toUpperCase());
 };
 
 const getOrInviteUser = async (email: string) => {
@@ -49,7 +49,7 @@ const getOrInviteUser = async (email: string) => {
     return { user: invited.user, error: null };
   }
   if (inviteError?.message?.toLowerCase().includes('already')) {
-    const { data: existing, error: existingError } = await admin.listUsers({ email });
+    const { data: existing, error: existingError } = await (admin as any).listUsers({ email });
     if (existingError) {
       return { user: null, error: existingError.message };
     }

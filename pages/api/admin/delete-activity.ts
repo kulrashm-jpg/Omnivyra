@@ -1,9 +1,21 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { isSuperAdmin } from '../../../backend/services/rbacService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const superAdmin = await isSuperAdmin(user.id);
+  if (!superAdmin) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
 
   try {
@@ -15,26 +27,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Get current user ID (you'll need to implement proper auth)
-    const userId = 'current-user-id'; // Replace with actual user ID from auth
-
-    // Check if user is super admin
-    const { data: isSuperAdmin, error: checkError } = await supabase.rpc('is_super_admin', {
-      check_user_id: userId
-    });
-
-    if (checkError || !isSuperAdmin) {
-      return res.status(403).json({ 
-        error: 'Access denied. Only super admins can delete activities.',
-        code: 'INSUFFICIENT_PRIVILEGES'
-      });
-    }
-
     // Get user role for audit
     const { data: userRole } = await supabase
       .from('user_roles')
       .select('role')
-      .eq('user_id', userId)
+      .eq('user_id', user.id)
       .eq('is_active', true)
       .single();
 
@@ -56,7 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { error: logError } = await supabase
       .from('deletion_audit_log')
       .insert({
-        user_id: userId,
+        user_id: user.id,
         user_role: userRole?.role || 'super_admin',
         action: 'delete_activity',
         table_name: 'daily_content_plans',

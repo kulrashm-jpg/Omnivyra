@@ -1,9 +1,21 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { isSuperAdmin } from '../../../backend/services/rbacService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const superAdmin = await isSuperAdmin(user.id);
+  if (!superAdmin) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
 
   try {
@@ -14,9 +26,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         error: 'Missing required field: userId' 
       });
     }
-
-    // Get current user ID (you'll need to implement proper auth)
-    const currentUserId = 'current-user-id'; // Replace with actual user ID from auth
 
     // Revoke super admin role by setting is_active to false
     const { data, error } = await supabase

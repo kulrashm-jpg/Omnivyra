@@ -3,8 +3,11 @@ import { useRouter } from 'next/router';
 import { useOpportunities } from './useOpportunities';
 import type { OpportunityTabProps, OpportunityWithPayload } from './types';
 import { payloadHelpers } from './types';
+import EngineContextPanel from '../EngineContextPanel';
+import EngineOverridePanel from '../EngineOverridePanel';
 
 const TYPE = 'DAILY_FOCUS';
+const ENGINE_LABEL = 'Daily Focus';
 const MAX_ITEMS = 10;
 
 function DailyItem({
@@ -15,7 +18,7 @@ function DailyItem({
   onActionComplete,
 }: {
   opportunity: OpportunityWithPayload;
-  onActNow: (id: string, actionType: string | null) => Promise<void>;
+  onActNow: (id: string, actionType: 'OPEN_TAB' | 'CREATE_CAMPAIGN' | 'OPEN_GENERATOR' | null, targetType: string | null) => Promise<void>;
   onPromote: (id: string) => Promise<void>;
   onMarkReviewed: (id: string) => Promise<void>;
   onActionComplete?: () => void;
@@ -35,6 +38,7 @@ function DailyItem({
   const whyToday = payloadHelpers.whyToday(opportunity.payload) || opportunity.summary || '—';
   const expectedImpact = payloadHelpers.expectedImpact(opportunity.payload);
   const actionType = payloadHelpers.actionType(opportunity.payload);
+  const targetType = payloadHelpers.targetType(opportunity.payload);
 
   return (
     <div className="flex items-start justify-between gap-3 py-2 px-3 border-b border-gray-100 hover:bg-gray-50 rounded">
@@ -48,7 +52,7 @@ function DailyItem({
       <div className="flex flex-wrap gap-1 flex-shrink-0">
         <button
           type="button"
-          onClick={() => run(() => onActNow(opportunity.id, actionType))}
+          onClick={() => run(() => onActNow(opportunity.id, actionType, targetType))}
           disabled={busy}
           className="px-2 py-1 text-xs rounded bg-amber-500 text-white disabled:opacity-50"
         >
@@ -75,10 +79,12 @@ function DailyItem({
   );
 }
 
+const VALID_TABS = ['TREND', 'LEAD', 'PULSE', 'SEASONAL', 'INFLUENCER', 'DAILY_FOCUS'];
+
 export default function DailyFocusTab(props: OpportunityTabProps) {
   const router = useRouter();
-  const { companyId, onPromote, onAction, fetchWithAuth } = props;
-  const { opportunities, activeCount, loading, error, refetch } = useOpportunities(
+  const { companyId, onPromote, onAction, fetchWithAuth, onSwitchTab, onOpenGenerator, overrideText = '', onOverrideChange } = props;
+  const { opportunities, loading, error, runEngine, hasRun, refetch } = useOpportunities(
     companyId,
     TYPE,
     fetchWithAuth
@@ -86,32 +92,33 @@ export default function DailyFocusTab(props: OpportunityTabProps) {
 
   const displayList = opportunities.slice(0, MAX_ITEMS);
 
-  const handleActNow = async (id: string, actionType: string | null) => {
-    if (actionType === 'promote' || actionType === 'campaign') {
+  const handleActNow = async (
+    id: string,
+    actionType: 'OPEN_TAB' | 'CREATE_CAMPAIGN' | 'OPEN_GENERATOR' | null,
+    targetType: string | null
+  ) => {
+    if (actionType === 'CREATE_CAMPAIGN') {
       await onPromote(id);
       return;
     }
-    if (actionType === 'trend') {
-      router.push('/recommendations?tab=TREND');
+    if (actionType === 'OPEN_TAB' && targetType) {
+      const tab = targetType.toUpperCase();
+      if (onSwitchTab && VALID_TABS.includes(tab)) {
+        onSwitchTab(tab);
+        return;
+      }
+      router.push(`/recommendations?tab=${encodeURIComponent(tab)}`);
       return;
     }
-    if (actionType === 'lead') {
-      router.push('/recommendations?tab=LEAD');
+    if (actionType === 'OPEN_GENERATOR' && targetType) {
+      if (onOpenGenerator) {
+        onOpenGenerator(targetType);
+        return;
+      }
+      router.push(`/recommendations?generator=${encodeURIComponent(targetType)}`);
       return;
     }
-    if (actionType === 'pulse') {
-      router.push('/recommendations?tab=PULSE');
-      return;
-    }
-    if (actionType === 'seasonal') {
-      router.push('/recommendations?tab=SEASONAL');
-      return;
-    }
-    if (actionType === 'influencer') {
-      router.push('/recommendations?tab=INFLUENCER');
-      return;
-    }
-    // Default: promote to campaign
+    // Default: create campaign
     await onPromote(id);
   };
   const handleMarkReviewed = async (id: string) => {
@@ -123,41 +130,50 @@ export default function DailyFocusTab(props: OpportunityTabProps) {
       <div className="text-sm text-gray-500 py-4">Select a company to view daily focus.</div>
     );
   }
-  if (loading) {
-    return <div className="text-sm text-gray-500 py-4">Loading daily focus...</div>;
-  }
-  if (error) {
-    return <div className="text-sm text-red-600 py-2">{error}</div>;
-  }
 
   return (
-    <div>
-      <p className="text-sm text-gray-600 mb-3">
-        Compact list (max {MAX_ITEMS}). Act now routes by payload or creates a campaign.
-      </p>
-      <div className="text-sm font-medium text-gray-700 mb-3">
-        {activeCount} / 10 Active Opportunities
+    <div className="space-y-4">
+      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      <EngineOverridePanel value={overrideText} onChange={onOverrideChange ?? (() => {})} />
+      <div>
+        <button
+          type="button"
+          onClick={() => runEngine()}
+          disabled={loading}
+          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+        >
+          {loading ? 'Running…' : `Run ${ENGINE_LABEL}`}
+        </button>
       </div>
-      <div className="space-y-0 rounded-lg border border-gray-200 overflow-hidden">
-        {displayList.map((opp) => (
-          <DailyItem
-            key={opp.id}
-            opportunity={opp}
-            onActNow={handleActNow}
-            onPromote={onPromote}
-            onMarkReviewed={handleMarkReviewed}
-            onActionComplete={refetch}
-          />
-        ))}
-      </div>
-      {opportunities.length === 0 && (
-        <div className="text-sm text-gray-500 py-4">No daily focus items.</div>
+      {error && <div className="text-sm text-red-600">{error}</div>}
+      {!hasRun && !loading && (
+        <div className="text-sm text-gray-500 py-6">Run the engine to see opportunities.</div>
       )}
-      {opportunities.length > MAX_ITEMS && (
-        <div className="text-xs text-gray-500 mt-2">
-          Showing first {MAX_ITEMS} of {opportunities.length}.
-        </div>
+      {hasRun && !loading && (
+        <>
+          <div className="space-y-0 rounded-lg border border-gray-200 overflow-hidden">
+            {displayList.map((opp) => (
+              <DailyItem
+                key={opp.id}
+                opportunity={opp}
+                onActNow={handleActNow}
+                onPromote={onPromote}
+                onMarkReviewed={handleMarkReviewed}
+                onActionComplete={refetch}
+              />
+            ))}
+          </div>
+          {opportunities.length === 0 && (
+            <div className="text-sm text-gray-500 py-4">No daily focus items.</div>
+          )}
+          {opportunities.length > MAX_ITEMS && (
+            <div className="text-xs text-gray-500 mt-2">
+              Showing first {MAX_ITEMS} of {opportunities.length}.
+            </div>
+          )}
+        </>
       )}
+      {loading && <div className="text-sm text-gray-500 py-4">Loading daily focus…</div>}
     </div>
   );
 }

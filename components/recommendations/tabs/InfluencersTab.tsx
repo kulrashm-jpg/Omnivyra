@@ -2,8 +2,11 @@ import React, { useState, useMemo } from 'react';
 import { useOpportunities } from './useOpportunities';
 import type { OpportunityTabProps, OpportunityWithPayload } from './types';
 import { payloadHelpers } from './types';
+import EngineContextPanel from '../EngineContextPanel';
+import EngineOverridePanel from '../EngineOverridePanel';
 
 const TYPE = 'INFLUENCER';
+const ENGINE_LABEL = 'Influencers';
 
 function InfluencerCard({
   opportunity,
@@ -29,10 +32,10 @@ function InfluencerCard({
       setBusy(false);
     }
   };
-  const name = payloadHelpers.influencerName(opportunity.payload) || opportunity.title || 'Influencer';
-  const platform = payloadHelpers.platform(opportunity.payload) || '—';
-  const audienceOverlap = payloadHelpers.audienceOverlap(opportunity.payload);
-  const engagementQuality = payloadHelpers.engagementQuality(opportunity.payload);
+  const name = opportunity.title || 'Influencer';
+  const platform = payloadHelpers.platform(opportunity.payload);
+  const audienceOverlap = payloadHelpers.audienceOverlapScore(opportunity.payload);
+  const engagementRate = payloadHelpers.engagementRate(opportunity.payload);
 
   return (
     <div className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
@@ -43,7 +46,7 @@ function InfluencerCard({
           <span className="text-gray-500">Audience overlap:</span> {audienceOverlap}
         </div>
         <div>
-          <span className="text-gray-500">Engagement quality:</span> {engagementQuality}
+          <span className="text-gray-500">Engagement rate:</span> {engagementRate}
         </div>
       </dl>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -77,8 +80,8 @@ function InfluencerCard({
 }
 
 export default function InfluencersTab(props: OpportunityTabProps) {
-  const { companyId, onPromote, onAction, fetchWithAuth } = props;
-  const { opportunities, activeCount, loading, error, refetch } = useOpportunities(
+  const { companyId, onPromote, onAction, fetchWithAuth, overrideText = '', onOverrideChange } = props;
+  const { opportunities, loading, error, runEngine, hasRun, refetch } = useOpportunities(
     companyId,
     TYPE,
     fetchWithAuth
@@ -108,43 +111,52 @@ export default function InfluencersTab(props: OpportunityTabProps) {
       <div className="text-sm text-gray-500 py-4">Select a company to view influencer opportunities.</div>
     );
   }
-  if (loading) {
-    return <div className="text-sm text-gray-500 py-4">Loading influencer opportunities...</div>;
-  }
-  if (error) {
-    return <div className="text-sm text-red-600 py-2">{error}</div>;
-  }
 
   return (
-    <div>
-      <p className="text-sm text-gray-600 mb-3">
-        Influencer opportunities grouped by platform. Create a collaboration plan or promote to campaign.
-      </p>
-      <div className="text-sm font-medium text-gray-700 mb-3">
-        {activeCount} / 10 Active Opportunities
+    <div className="space-y-4">
+      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      <EngineOverridePanel value={overrideText} onChange={onOverrideChange ?? (() => {})} />
+      <div>
+        <button
+          type="button"
+          onClick={() => runEngine()}
+          disabled={loading}
+          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+        >
+          {loading ? 'Running…' : `Run ${ENGINE_LABEL}`}
+        </button>
       </div>
-      <div className="space-y-6">
-        {byPlatform.map(([platform, list]) => (
-          <div key={platform}>
-            <h4 className="text-sm font-semibold text-gray-700 mb-2">{platform}</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {list.map((opp) => (
-                <InfluencerCard
-                  key={opp.id}
-                  opportunity={opp}
-                  onCollaborationPlan={handleCollaborationPlan}
-                  onPromote={onPromote}
-                  onDismiss={handleDismiss}
-                  onActionComplete={refetch}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-      {opportunities.length === 0 && (
-        <div className="text-sm text-gray-500 py-4">No influencer opportunities.</div>
+      {error && <div className="text-sm text-red-600">{error}</div>}
+      {!hasRun && !loading && (
+        <div className="text-sm text-gray-500 py-6">Run the engine to see opportunities.</div>
       )}
+      {hasRun && !loading && (
+        <>
+          <div className="space-y-6">
+            {byPlatform.map(([platform, list]) => (
+              <div key={platform}>
+                <h4 className="text-sm font-semibold text-gray-700 mb-2">{platform}</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {list.map((opp) => (
+                    <InfluencerCard
+                      key={opp.id}
+                      opportunity={opp}
+                      onCollaborationPlan={handleCollaborationPlan}
+                      onPromote={onPromote}
+                      onDismiss={handleDismiss}
+                      onActionComplete={refetch}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          {opportunities.length === 0 && (
+            <div className="text-sm text-gray-500 py-4">No influencer opportunities.</div>
+          )}
+        </>
+      )}
+      {loading && <div className="text-sm text-gray-500 py-4">Loading influencer opportunities…</div>}
     </div>
   );
 }

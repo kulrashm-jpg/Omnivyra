@@ -22,13 +22,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
   }
 
-  const { data, error } = await supabase
+  const { data, error: dbError } = await supabase
     .from('super_admin_audit_logs')
     .select('*')
     .order('created_at', { ascending: false })
     .limit(100);
 
-  if (error) {
+  if (dbError) {
     return res.status(500).json({ error: 'Failed to load audit logs' });
   }
 

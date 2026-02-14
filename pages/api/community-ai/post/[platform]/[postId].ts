@@ -27,6 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     engagement_activity: [],
     suggested_actions: [],
     action_history: [],
+    goals: null as Record<string, unknown> | null,
   };
 
   const omnivyra = await evaluateEngagement({
@@ -35,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     platform,
     post_data: response.post_details,
     engagement_metrics: response.engagement_activity,
-    goals: response.goals ?? null,
+    goals: response.goals,
     brand_voice: brandVoice,
     context: response,
   });

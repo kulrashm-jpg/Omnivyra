@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { fetchTrendsFromApis } from '../../../backend/services/externalApiService';
 import { optimizeCampaignWeek } from '../../../backend/services/campaignOptimizationService';
+import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { validateCampaignHealth } from '../../../backend/services/campaignHealthService';
 import { getLatestCampaignVersion, saveCampaignHealthReport } from '../../../backend/db/campaignVersionStore';
@@ -69,7 +70,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const learningInsights = await getLatestLearningInsights(companyId, campaignId);
     const analyticsReport = await getLatestAnalyticsReport(companyId, campaignId);
-    const latestVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
+    const resolved = await getResolvedCampaignPlanContext(companyId, campaignId);
+    if (!resolved) {
+      return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
+    }
+    const latestVersion = resolved.campaign_version;
     if (!latestVersion?.campaign_snapshot) {
       return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
     }
@@ -82,6 +87,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const campaignObjective =
       latestVersion.campaign_snapshot?.campaign?.objective ??
       latestVersion.campaign_snapshot?.objective ??
+      resolved.campaign?.objective ??
       'engagement';
     const optimization = await optimizeCampaignWeek({
       companyId,
@@ -91,6 +97,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       campaignObjective,
       trendData,
       analyticsInsights: learningInsights?.insights_json ?? null,
+      resolvedWeeklyPlan: resolved.weekly_plan,
     });
 
     const updatedVersion = await getLatestCampaignVersion(companyId, campaignId);
@@ -103,6 +110,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       campaign: updatedVersion?.campaign_snapshot?.campaign ?? {},
       weeklyPlans,
       dailyPlans,
+      expectedDurationWeeks: resolved.duration_weeks,
       contentAssets,
       analyticsReport: analyticsReport?.report_json ?? null,
       learningInsights: learningInsights?.insights_json ?? null,

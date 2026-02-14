@@ -73,7 +73,8 @@ export default function OpportunityCard({
       const data = await postAction('PROMOTED');
       const campaignId = data?.campaignId;
       if (campaignId) {
-        window.location.href = `/campaigns/${campaignId}`;
+        const params = new URLSearchParams({ companyId });
+        window.location.href = `/campaign-details/${campaignId}?${params.toString()}`;
       }
     });
 

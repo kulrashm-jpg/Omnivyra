@@ -90,7 +90,7 @@ const findExistingUserByEmail = async (email: string) => {
   if (error) {
     throw new Error(error.message);
   }
-  return users?.users?.find((user) => user.email?.toLowerCase() === email.toLowerCase()) || null;
+  return users?.users?.find((user: { email?: string }) => user.email?.toLowerCase() === email.toLowerCase()) || null;
 };
 
 const normalizeInviteRole = (role: string) => {
@@ -272,7 +272,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } else {
         const { data: userList, error: listError } = await admin.listUsers();
         if (!listError && userList?.users?.length) {
-          userList.users.forEach((user) => {
+          userList.users.forEach((user: { id?: string; email?: string }) => {
             if (user?.id && user.email) {
               emailById.set(user.id, user.email);
             }
@@ -316,7 +316,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       Role.CONTENT_PUBLISHER,
       Role.VIEW_ONLY,
     ];
-    if (!allowedRoles.includes(desiredRole as Role)) {
+    if (!(allowedRoles as readonly string[]).includes(desiredRole)) {
       return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
     }
 
@@ -474,7 +474,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       Role.CONTENT_PUBLISHER,
       Role.VIEW_ONLY,
     ];
-    if (!allowedRoles.includes(desiredRole as Role)) {
+    if (!(allowedRoles as readonly string[]).includes(desiredRole)) {
       return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
     }
 

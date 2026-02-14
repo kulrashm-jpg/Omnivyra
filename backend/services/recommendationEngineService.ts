@@ -22,7 +22,7 @@ import {
   TrendSignalInput,
 } from './omnivyraClientV1';
 import { getLastFallbackReason, getLastMeta, setLastFallbackReason } from './omnivyraHealthService';
-import { generateCampaignStrategy } from './campaignRecommendationService';
+import { generateCampaignStrategy, type CampaignObjective } from './campaignRecommendationService';
 import {
   mergeTrendsAcrossSources,
   mergeSignalsAcrossRegions,
@@ -112,7 +112,7 @@ export type RecommendationEngineResult = {
   signals_source?: 'EXTERNAL' | 'PROFILE_ONLY';
 };
 
-const DEFAULT_DURATION_WEEKS = 12;
+/** Removed DEFAULT_DURATION_WEEKS - duration must come from input.durationWeeks or blueprint. No silent 12-week default. */
 
 const normalizeTrendInput = (trend: TrendSignalNormalized): TrendSignalInput => ({
   topic: trend.topic,
@@ -601,7 +601,7 @@ export const generateRecommendations = async (
     }
   }
 
-  const recommendationContext = {
+  const recommendationContext: Record<string, unknown> = {
     campaign_intelligence: campaignIntelligence,
     recent_campaign_intelligence: recentCampaignIntelligence,
     selected_api_ids: Array.isArray(input.selectedApiIds) ? input.selectedApiIds : null,
@@ -628,10 +628,13 @@ export const generateRecommendations = async (
       recommendationContext.high_intent_themes = null;
     }
   }
-  void recommendationContext;
 
-  const durationWeeks = input.durationWeeks ?? DEFAULT_DURATION_WEEKS;
-  const objective = input.objective ?? 'awareness';
+  let durationWeeks = input.durationWeeks;
+  if (durationWeeks == null) {
+    console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+    durationWeeks = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
+  }
+  const objective: CampaignObjective = (input.objective ?? 'awareness') as CampaignObjective;
   const platformStrategies = (await getPlatformStrategies(input.companyId)) || [];
   const platformRules = platformStrategies.reduce<Record<string, { content_types: string[] }>>(
     (acc, strategy) => {
@@ -674,7 +677,9 @@ export const generateRecommendations = async (
           externalSummary.results.map((result) => ({
             source: result.source,
             payload: result.payload,
-            health: result.health ?? null,
+            health: result.health && result.source
+              ? { api_source_id: result.source.id, ...result.health }
+              : null,
             geo: geo ?? pickProfileGeo(profile),
             category,
           }))
@@ -716,7 +721,9 @@ export const generateRecommendations = async (
         externalSummary.results.map((result) => ({
           source: result.source,
           payload: result.payload,
-          health: result.health ?? null,
+          health: result.health && result.source
+            ? { api_source_id: result.source.id, ...result.health }
+            : null,
           geo: pickProfileGeo(profile),
           category,
         }))

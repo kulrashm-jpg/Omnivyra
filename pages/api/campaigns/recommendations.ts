@@ -5,6 +5,11 @@ import {
   saveTrendSnapshot,
   saveWeekVersions,
 } from '../../../backend/db/campaignVersionStore';
+import { saveCampaignBlueprintFromRecommendation } from '../../../backend/db/campaignPlanStore';
+import {
+  fromRecommendationPlan,
+  blueprintWeekToLegacyWeekPlan,
+} from '../../../backend/services/campaignBlueprintAdapter';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -32,12 +37,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (result.status === 'ready' && result.campaign && companyId) {
+      const rawWeeklyPlan = result.weekly_plan ?? [];
+      const blueprint = fromRecommendationPlan(rawWeeklyPlan, campaignId ?? '');
+      const derivedWeeklyPlan = blueprint.weeks.map((w) => blueprintWeekToLegacyWeekPlan(w));
+
+      if (blueprint.weeks.length > 0) {
+        await saveCampaignBlueprintFromRecommendation({
+          campaignId: campaignId ?? '',
+          companyId,
+          blueprint,
+        });
+      }
+
       await saveCampaignVersion({
         companyId,
         campaignId,
         campaignSnapshot: {
           campaign: result.campaign,
-          weekly_plan: result.weekly_plan,
+          weekly_plan: derivedWeeklyPlan,
           daily_plan: result.daily_plan,
           trend_alerts: result.trend_alerts,
           schedule_hints: result.schedule_hints,
@@ -46,10 +63,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: 'proposed',
         version: 1,
       });
-      console.debug('Campaign strategy version created with status=proposed');
+      console.debug('Campaign strategy version created with status=proposed (blueprint-first)');
 
-      if (result.weekly_plan) {
-        await saveWeekVersions({ companyId, campaignId, weeks: result.weekly_plan });
+      if (derivedWeeklyPlan.length > 0) {
+        await saveWeekVersions({ companyId, campaignId, weeks: derivedWeeklyPlan });
       }
 
       if (result.trend_alerts) {

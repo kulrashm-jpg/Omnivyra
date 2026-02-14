@@ -13,34 +13,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
-    // Get weekly plans
-    const { data: weeklyPlans, error: weeklyError } = await supabase
+    let weeklyPlans: any[] | null = null;
+    let weeklyError: any = null;
+
+    const { data: plans, error } = await supabase
       .from('weekly_content_plans')
       .select('*')
       .eq('campaign_id', campaignId)
       .order('week_number');
 
-    if (weeklyError) {
+    if (error) {
+      weeklyError = error;
+      const { data: refinements, error: refError } = await supabase
+        .from('weekly_content_refinements')
+        .select('*')
+        .eq('campaign_id', campaignId)
+        .order('week_number');
+      weeklyPlans = refError ? [] : (refinements || []);
+    } else {
+      weeklyPlans = plans || [];
+    }
+
+    if (weeklyError && !weeklyPlans) {
       console.error('Error fetching weekly plans:', weeklyError);
       return res.status(500).json({ error: 'Failed to fetch weekly plans' });
     }
 
-    // Format response
-    const response = weeklyPlans?.map(plan => ({
+    const source = weeklyPlans || [];
+
+    // Format response (supports both weekly_content_plans and weekly_content_refinements schemas)
+    const response = source.map(plan => ({
       weekNumber: plan.week_number,
-      phase: plan.phase,
-      theme: plan.theme,
-      focusArea: plan.focus_area,
-      keyMessaging: plan.key_messaging,
-      contentTypes: plan.content_types,
-      platformStrategy: plan.platform_strategy,
-      callToAction: plan.call_to_action,
-      targetMetrics: plan.target_metrics,
-      contentGuidelines: plan.content_guidelines,
-      hashtagSuggestions: plan.hashtag_suggestions,
-      status: plan.status,
-      completionPercentage: plan.completion_percentage
-    })) || [];
+      phase: plan.phase ?? null,
+      theme: plan.theme ?? plan.focus_area ?? null,
+      focusArea: plan.focus_area ?? plan.theme ?? null,
+      keyMessaging: plan.key_messaging ?? null,
+      contentTypes: plan.content_types ?? [],
+      platformStrategy: plan.platform_strategy ?? null,
+      callToAction: plan.call_to_action ?? null,
+      targetMetrics: plan.target_metrics ?? null,
+      contentGuidelines: plan.content_guidelines ?? null,
+      hashtagSuggestions: plan.hashtag_suggestions ?? [],
+      status: plan.status ?? plan.refinement_status ?? 'planned',
+      completionPercentage: plan.completion_percentage ?? 0,
+    }));
 
     res.status(200).json(response);
 

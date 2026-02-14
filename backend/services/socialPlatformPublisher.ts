@@ -5,7 +5,7 @@ import {
 } from './externalApiService';
 import { recordPerformance } from './performanceFeedbackService';
 
-export type PublishPlatform = 'youtube' | 'linkedin' | 'instagram' | 'reddit' | 'x';
+export type PublishPlatform = 'youtube' | 'linkedin' | 'instagram' | 'reddit' | 'x' | 'facebook';
 
 export type PublishScheduledPostInput = {
   post_id: string;
@@ -142,7 +142,7 @@ const publishToYouTube = async (payload: any, apiConfig: any) => {
   return { status: 'PUBLISHED', external_post_id: body?.id };
 };
 
-const publishToTwitter = async (payload: any) => {
+const publishToTwitter = async (payload: any, _apiConfig?: any) => {
   return {
     status: 'PUBLISHED',
     external_post_id: `stub_twitter_${Date.now()}`,
@@ -154,7 +154,7 @@ const publishToPlatform = async (platform: PublishPlatform, payload: any, apiCon
     if (platform === 'facebook') return await publishToFacebook(payload, apiConfig);
     if (platform === 'linkedin') return await publishToLinkedIn(payload, apiConfig);
     if (platform === 'youtube') return await publishToYouTube(payload, apiConfig);
-    if (platform === 'x') return await publishToTwitter(payload);
+    if (platform === 'x') return await publishToTwitter(payload, apiConfig);
 
     const raw = JSON.stringify({ platform, payload });
     const external_post_id = `stub_${platform}_${createHash('sha256').update(raw).digest('hex').slice(0, 12)}`;
@@ -168,7 +168,7 @@ export async function publishScheduledPost(
   post: PublishScheduledPostInput,
   options: PublishOptions
 ): Promise<PublishResult> {
-  const apiConfig = await getApiConfigByPlatform(post.platform);
+  const apiConfig = await getApiConfigByPlatform(null, post.platform);
   if (!apiConfig) {
     return {
       status: 'SKIPPED',
@@ -187,7 +187,7 @@ export async function publishScheduledPost(
     };
   }
 
-  const health = await getApiHealthByPlatform(post.platform);
+  const health = await getApiHealthByPlatform(null, post.platform);
   const reliability = health?.reliability_score ?? 1;
   if (reliability < 0.3) {
     return {
@@ -267,7 +267,7 @@ export async function publishScheduledPost(
       status: 'FAILED',
       platform: post.platform,
       timestamp: new Date().toISOString(),
-      message: publishResult.error_message || 'Publish failed',
+      message: ('error_message' in publishResult ? publishResult.error_message : null) || 'Publish failed',
     };
   }
 

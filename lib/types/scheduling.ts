@@ -78,7 +78,7 @@ export interface QueueConfig {
 export interface PostingService {
   platform: string;
   post(content: ScheduledPost): Promise<PostingResult>;
-  validate(content: ScheduledPost): ValidationResult;
+  validate(content: ScheduledPost): ValidationResult | Promise<ValidationResult>;
   getAccountInfo(): Promise<AccountInfo>;
 }
 

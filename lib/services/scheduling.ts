@@ -1,5 +1,5 @@
 // Core Scheduling Service
-import { ScheduledPost, PostingJob, PlatformConfig, PostingService, PostingResult, ValidationResult, AccountInfo } from './types/scheduling';
+import { ScheduledPost, PostingJob, PlatformConfig, PostingService, PostingResult, ValidationResult, AccountInfo } from '../types/scheduling';
 import { queue } from './queue';
 import { PostingServiceFactory } from './posting';
 

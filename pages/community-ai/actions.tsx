@@ -181,7 +181,7 @@ export default function CommunityAiActions() {
     const toneStyle = action.tone_used || action.tone || action.tone_limits?.style || 'professional';
     const tone = action.tone_limits
       ? {
-          style: action.tone_limits.style || toneStyle,
+          style: (action.tone_limits.style || toneStyle) as 'professional' | 'friendly' | 'empathetic',
           emoji_allowed: action.tone_limits.emoji_allowed ?? true,
           max_length: action.tone_limits.max_length ?? 280,
         }
@@ -197,7 +197,7 @@ export default function CommunityAiActions() {
       tone,
       safety,
       execution_modes: action.execution_modes_config || undefined,
-    };
+    } as PlaybookValidationInput;
   };
 
   const validatePlaybookReply = (action: PendingAction, text: string) => {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { DecisionResult } from '../omnivyreClient';
 
-const decisionResultSchema: z.ZodType<DecisionResult> = z.object({
+const decisionResultSchema = z.object({
   status: z.enum(['ok', 'error']),
   decision_id: z.string().optional(),
   recommendation: z.string().optional(),
@@ -12,7 +12,7 @@ const decisionResultSchema: z.ZodType<DecisionResult> = z.object({
       status: z.number().optional(),
     })
     .optional(),
-});
+}) as z.ZodType<DecisionResult>;
 
 const dailyPlanSchema = z.object({
   day: z.string(),

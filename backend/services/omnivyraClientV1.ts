@@ -326,16 +326,17 @@ const requestOmniVyra = async <T>(
         },
       };
     } catch (error: any) {
+      const errType = (error?.name === 'AbortError' ? 'timeout' : 'unknown') as 'timeout' | 'unknown';
       lastError = {
         message: error?.name === 'AbortError' ? 'OmniVyra request timed out' : error?.message,
-        error_type: error?.name === 'AbortError' ? 'timeout' : 'unknown',
+        error_type: errType,
       };
-      recordFailure(path, (lastError.error_type || 'unknown') as any, lastError.message);
+      recordFailure(path, errType, lastError.message);
       setLastMeta({
         endpoint: path,
         latency_ms: timeoutMs,
         contract_valid: false,
-        error_type: lastError.error_type,
+        error_type: (lastError.error_type ?? 'unknown') as 'timeout' | 'schema_invalid' | 'http_error' | 'omnivyra_unavailable' | 'version_mismatch' | 'unknown',
       });
     } finally {
       clearTimeout(timeoutId);
@@ -352,7 +353,7 @@ const requestOmniVyra = async <T>(
     _omnivyra_meta: {
       latency_ms: timeoutMs,
       contract_valid: false,
-      error_type: lastError?.error_type ?? 'unknown',
+      error_type: (lastError?.error_type ?? 'unknown') as 'timeout' | 'schema_invalid' | 'http_error' | 'omnivyra_unavailable' | 'version_mismatch' | 'unknown',
       endpoint: path,
     },
   };

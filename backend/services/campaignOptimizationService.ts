@@ -6,7 +6,9 @@ import {
   saveOptimizationHistory,
   saveWeekVersions,
 } from '../db/campaignVersionStore';
+import { saveCampaignBlueprintFromRecommendation } from '../db/campaignPlanStore';
 import { getLatestApprovedCampaignVersion } from '../db/campaignApprovedVersionStore';
+import { fromRecommendationPlan, blueprintWeekToLegacyWeekPlan } from './campaignBlueprintAdapter';
 
 type WeekPlanItem = WeeklyPlan[number];
 
@@ -128,6 +130,8 @@ export async function optimizeCampaignWeek(input: {
       boostContentTypes?: string[];
     };
   };
+  /** When campaign_snapshot.weekly_plan is missing, use this (e.g. from unified blueprint) */
+  resolvedWeeklyPlan?: any[];
 }): Promise<{
   updated_week: WeekPlanItem;
   change_summary: string;
@@ -139,11 +143,17 @@ export async function optimizeCampaignWeek(input: {
   }
 
   const campaignVersion = await getLatestApprovedCampaignVersion(input.companyId, input.campaignId);
-  if (!campaignVersion?.campaign_snapshot?.weekly_plan) {
-    throw new Error('Weekly plan not found');
+  if (!campaignVersion?.campaign_snapshot) {
+    throw new Error('Campaign not found');
   }
 
-  const weeklyPlan: WeeklyPlan = campaignVersion.campaign_snapshot.weekly_plan;
+  const snapshotWeeklyPlan = campaignVersion.campaign_snapshot.weekly_plan;
+  const weeklyPlan: WeeklyPlan = Array.isArray(snapshotWeeklyPlan) && snapshotWeeklyPlan.length > 0
+    ? snapshotWeeklyPlan
+    : (input.resolvedWeeklyPlan ?? []);
+  if (!weeklyPlan.length) {
+    throw new Error('Weekly plan not found');
+  }
   const targetWeek = weeklyPlan.find((week) => week.week_number === input.weekNumber);
   if (!targetWeek) {
     throw new Error('Week plan not found');
@@ -165,6 +175,17 @@ export async function optimizeCampaignWeek(input: {
   const updatedWeeklyPlan = weeklyPlan.map((week) =>
     week.week_number === input.weekNumber ? updatedWeek : week
   );
+
+  const blueprint = fromRecommendationPlan(updatedWeeklyPlan, input.campaignId ?? '');
+  const derivedWeeklyPlan = blueprint.weeks.map((w) => blueprintWeekToLegacyWeekPlan(w));
+
+  if (blueprint.weeks.length > 0) {
+    await saveCampaignBlueprintFromRecommendation({
+      campaignId: input.campaignId ?? '',
+      companyId: input.companyId,
+      blueprint,
+    });
+  }
 
   console.log('OPTIMIZATION APPLIED', {
     companyId: input.companyId,
@@ -195,12 +216,12 @@ export async function optimizeCampaignWeek(input: {
     campaignId: input.campaignId,
     campaignSnapshot: {
       ...campaignVersion.campaign_snapshot,
-      weekly_plan: updatedWeeklyPlan,
+      weekly_plan: derivedWeeklyPlan,
     },
     status: 'proposed',
     version: (campaignVersion.version ?? 1) + 1,
   });
-  console.debug('Campaign strategy version created with status=proposed');
+  console.debug('Campaign strategy version created with status=proposed (blueprint-derived)');
 
   return {
     updated_week: updatedWeek,

@@ -37,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     organization_id: scope.organizationId,
     platform: null,
     post_data: null,
-    metrics: null,
+    engagement_metrics: null,
     goals: null,
     brand_voice: brandVoice,
     context: response,

@@ -218,6 +218,7 @@ export default function RecommendationsPage() {
   );
   const [detectedPlaybookOpen, setDetectedPlaybookOpen] = useState<Set<string>>(new Set());
   const [detectedReasoningOpen, setDetectedReasoningOpen] = useState<Set<string>>(new Set());
+  const [generatorModalTarget, setGeneratorModalTarget] = useState<string | null>(null);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -238,22 +239,6 @@ export default function RecommendationsPage() {
   const [groupAssignments, setGroupAssignments] = useState<Record<string, string>>({});
   const [groupNames, setGroupNames] = useState<Record<string, string>>({});
   const [isCreatingGroupedCampaign, setIsCreatingGroupedCampaign] = useState(false);
-  const [multiRegionRegions, setMultiRegionRegions] = useState('GLOBAL');
-  const [useCompanyProfile, setUseCompanyProfile] = useState(true);
-  const [multiRegionGoal, setMultiRegionGoal] = useState('');
-  const [multiRegionJobId, setMultiRegionJobId] = useState<string | null>(null);
-  const [multiRegionStatus, setMultiRegionStatus] = useState<{
-    status: string;
-    signals_count?: number;
-    signals_by_region?: Record<string, { success: number; failed: number }>;
-  } | null>(null);
-  const [multiRegionResult, setMultiRegionResult] = useState<{
-    consolidated_recommendation: any;
-    disclaimer_text: string | null;
-    divergence_score: number | null;
-    confidence_score: number | null;
-  } | null>(null);
-  const [multiRegionLoading, setMultiRegionLoading] = useState(false);
   const [groupSortMode, setGroupSortMode] = useState<
     | 'reach'
     | 'complexity'
@@ -267,6 +252,7 @@ export default function RecommendationsPage() {
   >('reach');
   const [activeOpportunityTab, setActiveOpportunityTab] = useState<string>('TREND');
   const [opportunityRegions, setOpportunityRegions] = useState<string>('');
+  const [engineOverrides, setEngineOverrides] = useState<Record<string, string>>({});
   const isAdmin = useMemo(() => user?.role === 'admin', [user]);
   const canManageRecommendationState = useMemo(() => {
     const role = (userRole || '').toUpperCase();
@@ -325,6 +311,13 @@ export default function RecommendationsPage() {
     });
     return map;
   }, [engineResult?.chat_meta?.trend_explanations]);
+
+  useEffect(() => {
+    const queryTab = typeof router.query.tab === 'string' ? router.query.tab.toUpperCase() : '';
+    if (queryTab && ['TREND', 'LEAD', 'PULSE', 'SEASONAL', 'INFLUENCER', 'DAILY_FOCUS'].includes(queryTab)) {
+      setActiveOpportunityTab(queryTab);
+    }
+  }, [router.query.tab]);
 
   useEffect(() => {
     const queryCampaignId =
@@ -415,19 +408,20 @@ export default function RecommendationsPage() {
 
   const handleOpportunityPromote = async (opportunityId: string) => {
     if (!selectedCompanyId) return;
-    const res = await fetchWithAuth(`/api/opportunities/${opportunityId}/promote`, {
+    const res = await fetchWithAuth(`/api/opportunities/${opportunityId}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ companyId: selectedCompanyId }),
+      body: JSON.stringify({ action: 'PROMOTED', companyId: selectedCompanyId }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err?.error || 'Failed to promote');
     }
     const data = await res.json();
-    const campaignId = data?.campaign_id;
+    const campaignId = data?.campaignId ?? data?.campaign_id;
     if (campaignId) {
-      window.location.href = `/campaign-planning?mode=edit&campaignId=${campaignId}`;
+      const params = new URLSearchParams({ companyId: selectedCompanyId });
+      window.location.href = `/campaign-details/${campaignId}?${params.toString()}`;
     }
   };
 
@@ -478,7 +472,7 @@ export default function RecommendationsPage() {
   }, [selectedCompanyId]);
 
   // User-initiated only: no automatic recommendation generation when campaign is selected.
-  // Recommendations are generated only via explicit "Generate" or multi-region "Run multi-region".
+  // Recommendations are generated only via explicit "Generate".
 
   useEffect(() => {
     if (!selectedCampaignId) return;
@@ -544,87 +538,6 @@ export default function RecommendationsPage() {
       setIsLoading(false);
     }
   };
-
-  const runMultiRegionRecommendation = async () => {
-    if (!selectedCompanyId) {
-      setErrorMessage('Please select a company first.');
-      return;
-    }
-    if (!hasPermission('GENERATE_RECOMMENDATIONS')) {
-      setErrorMessage('You do not have permission to run multi-region recommendations.');
-      return;
-    }
-    try {
-      setMultiRegionLoading(true);
-      setErrorMessage(null);
-      setMultiRegionStatus(null);
-      setMultiRegionResult(null);
-      const response = await fetchWithAuth('/api/recommendations/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          companyId: selectedCompanyId,
-          selected_api_ids: selectedApiIds.length > 0 ? selectedApiIds : undefined,
-          regions: multiRegionRegions.trim() || 'GLOBAL',
-          keyword: multiRegionGoal.trim() || undefined,
-          goal: multiRegionGoal.trim() || undefined,
-          use_company_profile: useCompanyProfile,
-        }),
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data?.error || 'Failed to start multi-region job');
-      }
-      const data = await response.json();
-      setMultiRegionJobId(data.jobId);
-      setMultiRegionStatus({ status: data.status || 'QUEUED' });
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to run multi-region recommendation.');
-      setMultiRegionJobId(null);
-    } finally {
-      setMultiRegionLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!multiRegionJobId) return;
-    let cancelled = false;
-    const poll = async () => {
-      if (cancelled) return;
-      try {
-        const response = await fetchWithAuth(`/api/recommendations/${multiRegionJobId}/status`);
-        if (!response.ok || cancelled) return;
-        const data = await response.json();
-        setMultiRegionStatus({
-          status: data.status,
-          signals_count: data.signals_count,
-          signals_by_region: data.signals_by_region,
-        });
-        if (data.status === 'COMPLETED') {
-          const resResponse = await fetchWithAuth(`/api/recommendations/${multiRegionJobId}/result`);
-          if (resResponse.ok && !cancelled) {
-            const resData = await resResponse.json();
-            setMultiRegionResult({
-              consolidated_recommendation: resData.consolidated_recommendation ?? resData.result?.consolidated_recommendation_json,
-              disclaimer_text: resData.disclaimer_text ?? resData.result?.disclaimer_text ?? null,
-              divergence_score: resData.divergence_score ?? resData.result?.divergence_score ?? null,
-              confidence_score: resData.confidence_score ?? resData.result?.confidence_score ?? null,
-            });
-          }
-          return;
-        }
-        if (data.status === 'FAILED') return;
-      } catch {
-        // ignore
-      }
-      if (!cancelled) setTimeout(poll, 2000);
-    };
-    const t = setTimeout(poll, 1500);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [multiRegionJobId]);
 
   const refreshRecommendations = async () => {
     if (!selectedCompanyId) {
@@ -692,7 +605,7 @@ export default function RecommendationsPage() {
     if (!selectedCompanyId) return;
     try {
       const snapshotHashes =
-        engineResult?.trends_used?.map((trend) => trend.snapshot_hash).filter(Boolean) || [];
+        engineResult?.trends_used?.map((t) => (t as { snapshot_hash?: string }).snapshot_hash).filter(Boolean) || [];
       const params = new URLSearchParams({ companyId: selectedCompanyId });
       if (snapshotHashes.length > 0) {
         params.set('snapshot_hashes', snapshotHashes.join(','));
@@ -758,7 +671,7 @@ export default function RecommendationsPage() {
     const match = (data.trends_used || []).find(
       (trend: any) => String(trend.topic || '').toLowerCase() === opportunity.topic.toLowerCase()
     );
-    const snapshotHash = match?.snapshot_hash;
+    const snapshotHash = (match as { snapshot_hash?: string } | undefined)?.snapshot_hash;
     if (snapshotHash && options?.state) {
       const recommendationId = await resolveRecommendationIdBySnapshot(String(snapshotHash));
       if (recommendationId) {
@@ -847,7 +760,7 @@ export default function RecommendationsPage() {
       const match = (engineResult?.trends_used || []).find(
         (trend: any) => String(trend.topic || '').toLowerCase() === opportunity.topic.toLowerCase()
       );
-      const snapshotHash = match?.snapshot_hash;
+      const snapshotHash = (match as { snapshot_hash?: string } | undefined)?.snapshot_hash;
       const recommendationId = snapshotHash ? recommendationBySnapshot[snapshotHash] : null;
       if (recommendationId) {
         previewResponse = await fetch(
@@ -1367,13 +1280,17 @@ export default function RecommendationsPage() {
     );
   }
 
+  const setEngineOverride = (engineType: string, value: string) => {
+    setEngineOverrides((prev) => ({ ...prev, [engineType]: value }));
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <Header />
-      <div className="max-w-5xl mx-auto space-y-6">
-        {/* Entry point: Opportunities first; promotion leads into campaign lifecycle. */}
-        <div className="bg-white rounded-lg shadow p-4">
-          <h2 className="text-lg font-semibold text-gray-900 mb-3">Opportunities</h2>
+      <div className="max-w-6xl mx-auto space-y-8">
+        {/* Marketing Intelligence Hub: engine-based workspace. */}
+        <section>
+          <h2 className="text-xl font-semibold text-gray-900 mb-3">Marketing Intelligence Hub</h2>
           <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-3 mb-3">
             {OPPORTUNITY_TAB_TYPES.map(({ type, label }) => (
               <button
@@ -1390,46 +1307,20 @@ export default function RecommendationsPage() {
               </button>
             ))}
           </div>
-          {/* Shared filters: company, region (used by Seasonal & Regional tab) */}
-          <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Company</label>
-              <select
-                value={selectedCompanyId || ''}
-                onChange={(e) => {
-                  setSelectedCompanyId(e.target.value);
-                }}
-                disabled={!isAdmin || isCompanyLoading}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
-              >
-                <option value="">Select company</option>
-                {companies.map((company) => (
-                  <option key={company.company_id} value={company.company_id}>
-                    {company.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">
-                Regions (optional, comma-separated — used for Seasonal & Regional)
-              </label>
-              <input
-                type="text"
-                value={opportunityRegions}
-                onChange={(e) => setOpportunityRegions(e.target.value)}
-                placeholder="e.g. US, GB, IN"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-          </div>
-          <div className="min-h-[120px]">
+          <div className="min-h-[120px] pt-2">
             {activeOpportunityTab === 'TREND' && (
               <TrendCampaignsTab
                 companyId={selectedCompanyId}
+                regions={
+                  opportunityRegions.trim()
+                    ? opportunityRegions.split(',').map((r) => r.trim()).filter(Boolean)
+                    : undefined
+                }
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
                 fetchWithAuth={fetchWithAuth}
+                overrideText={engineOverrides['TREND'] ?? ''}
+                onOverrideChange={(v) => setEngineOverride('TREND', v)}
               />
             )}
             {activeOpportunityTab === 'LEAD' && (
@@ -1438,14 +1329,25 @@ export default function RecommendationsPage() {
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
                 fetchWithAuth={fetchWithAuth}
+                onSwitchTab={setActiveOpportunityTab}
+                overrideText={engineOverrides['LEAD'] ?? ''}
+                onOverrideChange={(v) => setEngineOverride('LEAD', v)}
               />
             )}
             {activeOpportunityTab === 'PULSE' && (
               <MarketPulseTab
                 companyId={selectedCompanyId}
+                regions={
+                  opportunityRegions.trim()
+                    ? opportunityRegions.split(',').map((r) => r.trim()).filter(Boolean)
+                    : undefined
+                }
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
                 fetchWithAuth={fetchWithAuth}
+                onSwitchTab={setActiveOpportunityTab}
+                overrideText={engineOverrides['PULSE'] ?? ''}
+                onOverrideChange={(v) => setEngineOverride('PULSE', v)}
               />
             )}
             {activeOpportunityTab === 'SEASONAL' && (
@@ -1459,6 +1361,8 @@ export default function RecommendationsPage() {
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
                 fetchWithAuth={fetchWithAuth}
+                overrideText={engineOverrides['SEASONAL'] ?? ''}
+                onOverrideChange={(v) => setEngineOverride('SEASONAL', v)}
               />
             )}
             {activeOpportunityTab === 'INFLUENCER' && (
@@ -1467,6 +1371,8 @@ export default function RecommendationsPage() {
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
                 fetchWithAuth={fetchWithAuth}
+                overrideText={engineOverrides['INFLUENCER'] ?? ''}
+                onOverrideChange={(v) => setEngineOverride('INFLUENCER', v)}
               />
             )}
             {activeOpportunityTab === 'DAILY_FOCUS' && (
@@ -1475,899 +1381,42 @@ export default function RecommendationsPage() {
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
                 fetchWithAuth={fetchWithAuth}
+                onSwitchTab={setActiveOpportunityTab}
+                onOpenGenerator={(target) => setGeneratorModalTarget(target)}
+                overrideText={engineOverrides['DAILY_FOCUS'] ?? ''}
+                onOverrideChange={(v) => setEngineOverride('DAILY_FOCUS', v)}
               />
             )}
           </div>
-        </div>
+        </section>
 
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">Recommendations</h1>
+        {generatorModalTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="max-w-2xl w-full rounded-xl bg-white shadow-xl border border-gray-200 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Quick content generator</h3>
+                <button
+                  onClick={() => setGeneratorModalTarget(null)}
+                  className="text-gray-500 hover:text-gray-700"
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
               <p className="text-sm text-gray-600">
-                Trend-aligned campaign recommendations based on your profile and signals.
+                Generator: <span className="font-medium text-gray-900">{generatorModalTarget}</span>
               </p>
-              {!hasPermission('GENERATE_RECOMMENDATIONS') && (
-                <div className="mt-2 text-xs text-amber-600">
-                  Read-only access: you do not have permission to generate recommendations.
-                </div>
-              )}
-              {lastRefresh && (
-                <div className="text-xs text-gray-500 mt-1">
-                  Last refreshed: {lastRefresh} • Source: {lastRefreshSource || 'manual'}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="flex items-center gap-2 text-xs text-gray-600">
-                <input
-                  type="checkbox"
-                  checked={simulateScenarios}
-                  onChange={(event) => setSimulateScenarios(event.target.checked)}
-                  disabled={isLoading}
-                />
-                Scenario simulation
-              </label>
-              <button
-                onClick={generateRecommendations}
-                disabled={
-                  isLoading ||
-                  !selectedCompanyId ||
-                  !selectedCampaignId ||
-                  !hasPermission('GENERATE_RECOMMENDATIONS')
-                }
-                title={
-                  hasPermission('GENERATE_RECOMMENDATIONS')
-                    ? ''
-                    : 'You do not have permission to generate recommendations.'
-                }
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
-              >
-                {isLoading ? 'Generating...' : 'Generate'}
-              </button>
-              <button
-                onClick={refreshRecommendations}
-                disabled={
-                  isLoading ||
-                  !selectedCompanyId ||
-                  !hasPermission('GENERATE_RECOMMENDATIONS')
-                }
-                title={
-                  hasPermission('GENERATE_RECOMMENDATIONS')
-                    ? ''
-                    : 'You do not have permission to refresh recommendations.'
-                }
-                className="px-4 py-2 bg-gray-100 text-gray-900 rounded-lg text-sm disabled:opacity-50"
-              >
-                🔄 Refresh Recommendations
-              </button>
-              {isAdmin && (
+              <p className="text-xs text-gray-500 mt-2">
+                Integrate your existing quick-content generator here.
+              </p>
+              <div className="mt-4 flex justify-end">
                 <button
-                  onClick={() => {
-                    const campaignId =
-                      typeof router.query.campaignId === 'string' ? router.query.campaignId : '';
-                    const target = campaignId
-                      ? `/recommendations/policy?campaignId=${encodeURIComponent(campaignId)}`
-                      : '/recommendations/policy';
-                    window.location.href = target;
-                  }}
-                  className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm"
+                  onClick={() => setGeneratorModalTarget(null)}
+                  className="px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
                 >
-                  Adjust Policy / Simulate
-                </button>
-              )}
-              {isAdmin && (
-                <button
-                  onClick={() => {
-                    const campaignId =
-                      typeof router.query.campaignId === 'string' ? router.query.campaignId : '';
-                    const target = campaignId
-                      ? `/recommendations/analytics?campaignId=${encodeURIComponent(campaignId)}`
-                      : '/recommendations/analytics';
-                    window.location.href = target;
-                  }}
-                  className="px-4 py-2 bg-indigo-700 text-white rounded-lg text-sm"
-                >
-                  Analytics
-                </button>
-              )}
-            </div>
-          </div>
-          {!selectedCompanyId ? (
-            <div className="mt-4 text-xs text-amber-600">
-              Please select a company.
-            </div>
-          ) : null}
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
-            <div>
-              <label className="block text-xs text-gray-500">Company</label>
-              <select
-                value={selectedCompanyId}
-                onChange={(e) => {
-                  setSelectedCompanyId(e.target.value);
-                  setSelectedCampaignId('');
-                  setSelectedCampaignName('');
-                }}
-                disabled={!isAdmin || isCompanyLoading}
-                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
-              >
-                <option value="">Select company</option>
-                {companies.map((company) => (
-                  <option key={company.company_id} value={company.company_id}>
-                    {company.name}
-                  </option>
-                ))}
-              </select>
-              {!isAdmin && selectedCompanyName && (
-                <p className="text-xs text-gray-500 mt-1">Company locked for your role.</p>
-              )}
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500">Campaign (optional)</label>
-              <div className="flex gap-2">
-                <select
-                  value={selectedCampaignId}
-                  onChange={(e) => setSelectedCampaignId(e.target.value)}
-                  disabled={!selectedCompanyId || isCampaignLoading || campaignIdLocked}
-                  className="mt-1 flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
-                >
-                  <option value="">No campaign selected</option>
-                  {campaigns.map((campaign) => (
-                    <option key={campaign.id} value={campaign.id}>
-                      {campaign.name} ({campaign.status})
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={async () => {
-                    if (!selectedCompanyId) {
-                      setErrorMessage('Please select a company first.');
-                      return;
-                    }
-                    try {
-                      const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 16);
-                      const response = await fetch('/api/campaigns', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          companyId: selectedCompanyId,
-                          name: `Campaign ${timestamp}`,
-                          status: 'planning',
-                          current_stage: 'planning',
-                          timeframe: 'quarter',
-                        }),
-                      });
-                      if (!response.ok) {
-                        throw new Error('Failed to create campaign');
-                      }
-                      const data = await response.json();
-                      const created = data.campaign;
-                      if (created?.id) {
-                        setCampaigns((prev) => [
-                          { id: created.id, name: created.name, status: created.status || 'planning' },
-                          ...prev,
-                        ]);
-                        setSelectedCampaignId(created.id);
-                        setSelectedCampaignName(created.name);
-                        console.log('CAMPAIGN_CREATED', {
-                          companyId: selectedCompanyId,
-                          campaignId: created.id,
-                          campaignName: created.name,
-                        });
-                      }
-                    } catch (error) {
-                      setErrorMessage('Failed to create campaign.');
-                    }
-                  }}
-                  className="mt-1 px-3 py-2 bg-gray-100 text-gray-900 rounded-lg text-xs"
-                  disabled={!selectedCompanyId}
-                >
-                  + Create
+                  Close
                 </button>
               </div>
-              {campaignIdLocked && (
-                <p className="text-xs text-gray-500 mt-1">Prefilled from campaign link.</p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {canSeeDetectedOpportunities && (
-          <div className="bg-white rounded-lg shadow p-6">
-            {recommendedThisWeek.length > 0 && (
-              <div className="mb-6 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 via-white to-amber-50 px-4 py-4">
-                <div className="flex items-center justify-between gap-3 mb-3">
-                  <h2 className="text-lg font-semibold text-amber-900">
-                    Recommended to Execute This Week
-                  </h2>
-                  <span className="text-[10px] px-2 py-1 rounded-full bg-amber-200 text-amber-900">
-                    Act Now
-                  </span>
-                </div>
-                <div className="flex gap-3 overflow-x-auto pb-2">
-                  {recommendedThisWeek.map((item) => {
-                    const key = `${item.topic}-${item.source || 'unknown'}`;
-                    const momentumLabel =
-                      item.trend_classification === 'Momentum'
-                        ? 'High Momentum'
-                        : item.trend_classification === 'Emerging'
-                        ? 'Building Trend'
-                        : 'Early Signal';
-                    return (
-                      <div
-                        key={key}
-                        className="min-w-[240px] rounded-lg border border-amber-200 bg-white px-4 py-3 shadow-sm"
-                      >
-                        <div className="font-semibold text-gray-900 text-sm">{item.topic}</div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          Source: {item.source || '—'}
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
-                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">
-                            Priority: {item.priority_bucket}
-                          </span>
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">
-                            {momentumLabel}
-                          </span>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {canGenerateDetectedPlaybook && (
-                            <button
-                              onClick={() => toggleDetectedPlaybook(key, item)}
-                              className="px-2 py-1 text-[10px] rounded-full border border-gray-300"
-                            >
-                              Generate Playbook
-                            </button>
-                          )}
-                          <button
-                            onClick={() => evaluateDetectedOpportunity(item)}
-                            className="px-2 py-1 text-[10px] rounded-full border border-gray-300"
-                          >
-                            Evaluate with AI
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            <h2 className="text-lg font-semibold text-gray-900">Detected Market Opportunities</h2>
-            <p className="text-xs text-gray-500 mt-1">
-              Read-only opportunities derived from external API signals.
-            </p>
-            {detectedLoading && (
-              <div className="mt-3 text-xs text-gray-500">Loading opportunities...</div>
-            )}
-            {detectedError && (
-              <div className="mt-3 text-xs text-red-600">{detectedError}</div>
-            )}
-            {!detectedLoading &&
-              !detectedError &&
-              detectedOpportunities.filter((item) => {
-                const key = `${item.topic}-${item.source || 'unknown'}`;
-                return !dismissedOpportunities.has(key);
-              }).length === 0 && (
-                <div className="mt-3 text-xs text-gray-500">No detected opportunities yet.</div>
-              )}
-            <div className="mt-4 space-y-3">
-              {detectedOpportunities
-                .filter((item) => {
-                  const key = `${item.topic}-${item.source || 'unknown'}`;
-                  return !dismissedOpportunities.has(key);
-                })
-                .map((item) => {
-                  const key = `${item.topic}-${item.source || 'unknown'}`;
-                  const confidenceLabel =
-                    typeof item.confidence === 'number' ? item.confidence.toFixed(2) : '—';
-                  const classification = item.trend_classification || 'Wildcard';
-                  const momentumLabel =
-                    classification === 'Momentum'
-                      ? 'High Momentum'
-                      : classification === 'Emerging'
-                      ? 'Building Trend'
-                      : 'Early Signal';
-                  const categoryValue = String(item.category || '').toLowerCase();
-                  const effortEstimate = categoryValue.includes('news') || categoryValue.includes('event')
-                    ? 'Low Effort'
-                    : categoryValue.includes('analysis') || categoryValue.includes('research')
-                    ? 'Medium Effort'
-                    : 'Variable';
-                  const topicKey = String(item.topic || '').toLowerCase().trim();
-                  const sourceCount = detectedTopicSources.get(topicKey)?.size ?? 0;
-                  const reusePotential = sourceCount > 1 ? 'High Reuse' : 'Single Channel';
-                  const timeSensitivity =
-                    classification === 'Momentum'
-                      ? 'Act This Week'
-                      : classification === 'Emerging'
-                      ? 'Monitor + Prepare'
-                      : 'Experiment';
-                  const trendStage =
-                    classification === 'Momentum' && (item.priority_score ?? 0) >= 0.6
-                      ? 'Rising'
-                      : classification === 'Momentum'
-                      ? 'Peaking'
-                      : classification === 'Emerging'
-                      ? 'Building'
-                      : 'Experimental';
-                  const viralityPotential =
-                    classification === 'Momentum' && (item.priority_score ?? 0) >= 0.6
-                      ? 'High'
-                      : classification === 'Emerging'
-                      ? 'Medium'
-                      : 'Experimental';
-                  const growthScore =
-                    typeof item.growth_opportunity_score === 'number'
-                      ? item.growth_opportunity_score
-                      : 0;
-                  const platformBoost = sourceCount >= 2 ? 0.1 : 0;
-                  const momentumBoost = momentumLabel === 'High Momentum' ? 0.1 : 0;
-                  const reachScore = Math.min(1, growthScore + platformBoost + momentumBoost);
-                  const estimatedReach =
-                    reachScore >= 0.65 ? 'High' : reachScore >= 0.4 ? 'Medium' : 'Low';
-                  return (
-                    <div key={key} className="border rounded-lg p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="font-semibold text-gray-900">{item.topic}</div>
-                          <div className="text-xs text-gray-500">
-                            Source: {item.source || '—'} • Confidence: {confidenceLabel} • Category:{' '}
-                            {item.category || '—'}
-                          </div>
-                          <div className="text-xs text-gray-500">Risk: {item.risk_level || '—'}</div>
-                          <div className="mt-3">
-                            <div className="hidden md:block">
-                              <div className="text-xs font-semibold text-gray-700">Virality Scorecard</div>
-                              <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
-                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                                  Momentum Level: {momentumLabel}
-                                </span>
-                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                                  Effort Estimate: {effortEstimate}
-                                </span>
-                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                                  Reuse Potential: {reusePotential}
-                                </span>
-                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                                  Time Sensitivity: {timeSensitivity}
-                                </span>
-                                <span className="rounded-full bg-indigo-100 px-2 py-1 text-indigo-700">
-                                  Virality Potential: {viralityPotential}
-                                </span>
-                                <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">
-                                  Trend Stage: {trendStage}
-                                </span>
-                                <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800">
-                                  Estimated Reach: {estimatedReach}
-                                </span>
-                              </div>
-                            </div>
-                            <details className="md:hidden mt-2">
-                              <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
-                                Virality Scorecard
-                              </summary>
-                              <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
-                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                                  Momentum Level: {momentumLabel}
-                                </span>
-                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                                  Effort Estimate: {effortEstimate}
-                                </span>
-                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                                  Reuse Potential: {reusePotential}
-                                </span>
-                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                                  Time Sensitivity: {timeSensitivity}
-                                </span>
-                                <span className="rounded-full bg-indigo-100 px-2 py-1 text-indigo-700">
-                                  Virality Potential: {viralityPotential}
-                                </span>
-                                <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">
-                                  Trend Stage: {trendStage}
-                                </span>
-                                <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800">
-                                  Estimated Reach: {estimatedReach}
-                                </span>
-                              </div>
-                            </details>
-                          </div>
-                          {item.trend_reasoning && (
-                            <div className="mt-3 text-xs text-gray-600">
-                              <div className="font-semibold text-gray-700">Why This Is Trending</div>
-                              <div className={detectedReasoningOpen.has(key) ? '' : 'line-clamp-2'}>
-                                {item.trend_reasoning}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => toggleDetectedReasoning(key)}
-                                className="mt-1 text-[10px] text-indigo-600 hover:text-indigo-700"
-                              >
-                                {detectedReasoningOpen.has(key) ? 'Show less' : 'Show more'}
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            onClick={() => evaluateDetectedOpportunity(item)}
-                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                          >
-                            Evaluate with AI
-                          </button>
-                          <button
-                            onClick={() => openPreviewForDetectedOpportunity(item)}
-                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                          >
-                            Preview Strategy
-                          </button>
-                          {canGenerateDetectedPlaybook && (
-                            <button
-                              onClick={() => toggleDetectedPlaybook(key, item)}
-                              className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                            >
-                              {detectedPlaybookLoading[key] ? 'Generating...' : 'Generate Playbook'}
-                            </button>
-                          )}
-                          <button
-                            onClick={() => evaluateDetectedOpportunity(item, { state: 'shortlisted' })}
-                            className="px-3 py-1 text-xs rounded-full bg-indigo-600 text-white"
-                          >
-                            Shortlist
-                          </button>
-                          <button
-                            onClick={() => dismissDetectedOpportunity(key)}
-                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                          >
-                            Dismiss
-                          </button>
-                        </div>
-                      </div>
-                      {detectedPlaybookOpen.has(key) && detectedPlaybooks[key] && (
-                        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                          <div className="text-xs font-semibold text-gray-700">Instant Content Playbook</div>
-                          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-gray-700">
-                            <div>
-                              <div className="text-[10px] text-gray-500">Platforms</div>
-                              <div className="font-medium">
-                                {Array.isArray(detectedPlaybooks[key]?.platform_mix)
-                                  ? detectedPlaybooks[key]?.platform_mix.join(', ')
-                                  : '—'}
-                              </div>
-                            </div>
-                            <div>
-                              <div className="text-[10px] text-gray-500">Content Types</div>
-                              <div className="font-medium">
-                                {Array.isArray(detectedPlaybooks[key]?.content_mix)
-                                  ? detectedPlaybooks[key]?.content_mix.join(', ')
-                                  : '—'}
-                              </div>
-                            </div>
-                            <div className="md:col-span-2">
-                              <div className="text-[10px] text-gray-500">Weekly Frequency</div>
-                              <div className="font-medium whitespace-pre-wrap">
-                                {detectedPlaybooks[key]?.frequency_plan
-                                  ? JSON.stringify(detectedPlaybooks[key]?.frequency_plan, null, 2)
-                                  : '—'}
-                              </div>
-                            </div>
-                            <div className="md:col-span-2">
-                              <div className="text-[10px] text-gray-500">Reuse Opportunities</div>
-                              <div className="font-medium">
-                                {Array.isArray(detectedPlaybooks[key]?.reuse_plan)
-                                  ? detectedPlaybooks[key]?.reuse_plan.join(', ')
-                                  : '—'}
-                              </div>
-                            </div>
-                            <div className="md:col-span-2">
-                              <div className="text-[10px] text-gray-500">
-                                Content Repurposing Opportunities
-                              </div>
-                              {(() => {
-                                const platforms: string[] = Array.isArray(
-                                  detectedPlaybooks[key]?.platform_mix
-                                )
-                                  ? detectedPlaybooks[key].platform_mix
-                                  : [];
-                                const contentTypes: string[] = Array.isArray(
-                                  detectedPlaybooks[key]?.content_mix
-                                )
-                                  ? detectedPlaybooks[key].content_mix
-                                  : [];
-                                const categoryValue = String(item.category || '').toLowerCase();
-                                const primaryAsset = contentTypes.some((type) =>
-                                  String(type).toLowerCase().includes('video')
-                                )
-                                  ? 'Video'
-                                  : categoryValue.includes('news') || categoryValue.includes('event')
-                                  ? 'Short Video'
-                                  : 'Blog';
-                                const repurpose = new Set<string>();
-                                if (platforms.some((platform) => String(platform).toLowerCase().includes('linkedin'))) {
-                                  repurpose.add('LinkedIn Post');
-                                  repurpose.add('Carousel');
-                                }
-                                if (
-                                  platforms.some((platform) =>
-                                    ['youtube', 'tiktok', 'reels', 'shorts'].some((label) =>
-                                      String(platform).toLowerCase().includes(label)
-                                    )
-                                  )
-                                ) {
-                                  repurpose.add('Short Video');
-                                }
-                                if (platforms.some((platform) => String(platform).toLowerCase().includes('twitter'))) {
-                                  repurpose.add('Thread');
-                                }
-                                if (repurpose.size === 0) {
-                                  repurpose.add('Email Snippet');
-                                  repurpose.add('Social Post');
-                                }
-                                return (
-                                  <div className="font-medium">
-                                    <div>Primary Asset: {primaryAsset}</div>
-                                    <div>Repurpose Into: {Array.from(repurpose).join(', ')}</div>
-                                  </div>
-                                );
-                              })()}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-            </div>
-          </div>
-        )}
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold text-gray-900">Opportunity / Market Event</h2>
-          <p className="text-xs text-gray-500 mt-1">
-            Enter an event or opportunity and let AI evaluate it against your company profile.
-          </p>
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs text-gray-500">Topic / Event Name</label>
-              <input
-                type="text"
-                value={manualTopic}
-                onChange={(event) => setManualTopic(event.target.value)}
-                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="Product launch, industry event, trend..."
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500">Business Objective</label>
-              <input
-                type="text"
-                value={manualObjective}
-                onChange={(event) => setManualObjective(event.target.value)}
-                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="Awareness, leads, conversions..."
-              />
-            </div>
-            <div className="md:col-span-2">
-              <label className="text-xs text-gray-500">Narrative / Description</label>
-              <textarea
-                value={manualNarrative}
-                onChange={(event) => setManualNarrative(event.target.value)}
-                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                rows={3}
-                placeholder="What story should we tell?"
-              />
-            </div>
-            <div className="md:col-span-2">
-              <label className="text-xs text-gray-500">Platform Preference (optional)</label>
-              <input
-                type="text"
-                value={manualPlatformPreference}
-                onChange={(event) => setManualPlatformPreference(event.target.value)}
-                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="LinkedIn, YouTube, TikTok..."
-              />
-            </div>
-          </div>
-          <div className="mt-4">
-            <VoiceNotesComponent
-              context="campaign"
-              campaignId={selectedCampaignId}
-              onTranscriptionComplete={(transcription) => {
-                const text =
-                  transcription?.text ||
-                  transcription?.transcription ||
-                  transcription?.content ||
-                  '';
-                if (text) {
-                  setManualNarrative((prev) => (prev ? `${prev}\n${text}` : text));
-                }
-              }}
-            />
-          </div>
-          <div className="mt-4 flex items-center gap-3">
-            <button
-              onClick={handleManualSubmit}
-              disabled={isSubmittingManual || isLoading}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
-            >
-              {isSubmittingManual ? 'Submitting...' : 'Evaluate Opportunity'}
-            </button>
-          </div>
-          {engineResult?.opportunity_analysis && (
-            <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
-              <div className="font-semibold">Opportunity Analysis</div>
-              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                <div>
-                  <div className="text-indigo-700">Relevance Score</div>
-                  <div className="font-medium">
-                    {engineResult.opportunity_analysis.relevance_score ?? '—'}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-indigo-700">Risk Level</div>
-                  <div className="font-medium">
-                    {engineResult.opportunity_analysis.risk_level ?? '—'}
-                  </div>
-                </div>
-                <div className="md:col-span-2">
-                  <div className="text-indigo-700">Suggested Narrative Angle</div>
-                  <div className="font-medium">
-                    {engineResult.opportunity_analysis.narrative_angle ?? '—'}
-                  </div>
-                </div>
-                <div className="md:col-span-2">
-                  <div className="text-indigo-700">Suggested Content Mix</div>
-                  <div className="font-medium">
-                    {Array.isArray(engineResult.opportunity_analysis.content_mix)
-                      ? engineResult.opportunity_analysis.content_mix.join(', ')
-                      : '—'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {canManageRecommendationState && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900">Content Manager Workspace</h2>
-            <div className="mt-4 flex flex-wrap gap-2 text-sm">
-              {['all', 'shortlisted', 'discarded'].map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveWorkspaceTab(tab as 'all' | 'shortlisted' | 'discarded')}
-                  className={`px-3 py-1 rounded-full border ${
-                    activeWorkspaceTab === tab
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-700 border-gray-300'
-                  }`}
-                >
-                  {tab === 'all'
-                    ? 'All'
-                    : tab === 'shortlisted'
-                    ? 'Shortlisted'
-                    : 'Discarded'}
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 flex items-center gap-2 text-xs text-gray-600">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={sortByPriority}
-                  onChange={(event) => setSortByPriority(event.target.checked)}
-                />
-                Sort by Priority
-              </label>
-            </div>
-            {stateError && (
-              <div className="mt-3 text-xs text-red-600">{stateError}</div>
-            )}
-            {draftError && (
-              <div className="mt-2 text-xs text-red-600">{draftError}</div>
-            )}
-            {canGroupRecommendations && selectedRecommendations.size >= 2 && (
-              <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
-                <span>{selectedRecommendations.size} selected</span>
-                <button
-                  onClick={openGroupPreview}
-                  disabled={groupPreviewLoading}
-                  className="px-2 py-1 rounded bg-indigo-600 text-white disabled:opacity-50"
-                >
-                  {groupPreviewLoading ? 'Preparing...' : 'Create Campaign from Selected'}
-                </button>
-                <button
-                  onClick={() => setSelectedRecommendations(new Set())}
-                  className="px-2 py-1 rounded border border-indigo-300"
-                >
-                  Clear
-                </button>
-              </div>
-            )}
-            <div className="mt-4 space-y-3">
-              {(engineResult?.trends_used || [])
-                .filter((trend) => {
-                  const snapshotHash = trend.snapshot_hash;
-                  const recommendationId = snapshotHash
-                    ? recommendationBySnapshot[snapshotHash]
-                    : undefined;
-                  const state = recommendationId ? recommendationStates[recommendationId] : 'active';
-                  if (activeWorkspaceTab === 'shortlisted') return state === 'shortlisted';
-                  if (activeWorkspaceTab === 'discarded') return state === 'discarded';
-                  return true;
-                })
-                .sort((a, b) => {
-                  if (!sortByPriority) return 0;
-                  const aHash = a.snapshot_hash;
-                  const bHash = b.snapshot_hash;
-                  const aId = aHash ? recommendationBySnapshot[aHash] : undefined;
-                  const bId = bHash ? recommendationBySnapshot[bHash] : undefined;
-                  const aScore = aId ? recommendationSummaries[aId]?.priority_score ?? 0 : 0;
-                  const bScore = bId ? recommendationSummaries[bId]?.priority_score ?? 0 : 0;
-                  return bScore - aScore;
-                })
-                .map((trend, index) => {
-                  const snapshotHash = trend.snapshot_hash;
-                  const recommendationId = snapshotHash
-                    ? recommendationBySnapshot[snapshotHash]
-                    : undefined;
-                  const state = recommendationId ? recommendationStates[recommendationId] : 'active';
-                  const details = recommendationId ? recommendationDetails[recommendationId] : undefined;
-                  const summary = recommendationId ? recommendationSummaries[recommendationId] : undefined;
-                  const lastAdminDecision = summary?.last_admin_decision;
-                  const finalDecision = lastAdminDecision ? lastAdminDecision.state : null;
-                  const priorityBucket = summary?.priority_bucket ?? null;
-                  const isOpportunity =
-                    trend.source === 'opportunity' ||
-                    (Array.isArray(trend.sources) && trend.sources.includes('manual'));
-                  const canDraft =
-                    priorityBucket === 'High' && state !== 'discarded' && !!snapshotHash;
-                  return (
-                    <div key={`${trend.topic}-${index}`} className="border rounded-lg p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          {canGroupRecommendations && snapshotHash && (
-                            <label className="flex items-center gap-2 text-xs text-gray-500 mb-1">
-                              <input
-                                type="checkbox"
-                                checked={selectedRecommendations.has(snapshotHash)}
-                                onChange={() => toggleRecommendationSelection(snapshotHash)}
-                              />
-                              Select
-                            </label>
-                          )}
-                          <div className="font-semibold text-gray-900">{trend.topic}</div>
-                          <div className="text-xs text-gray-500">
-                            Source: {trend.source || '—'} • State: {state || 'active'}
-                          </div>
-                          {summary && (
-                            <div className="text-xs text-gray-500 mt-1">
-                              Shortlisted by {summary.shortlisted_count} users • Discarded by{' '}
-                              {summary.discarded_count} users
-                            </div>
-                          )}
-                          {summary?.priority_bucket && (
-                            <div className="mt-2 text-[10px] inline-flex rounded-full px-2 py-0.5 bg-slate-100 text-slate-700">
-                              Priority: {summary.priority_bucket}
-                            </div>
-                          )}
-                          {lastAdminDecision && (
-                            <div className="text-xs text-gray-600 mt-1">
-                              Last decision by Company Admin: {lastAdminDecision.state}
-                            </div>
-                          )}
-                          {finalDecision && (
-                            <div className="inline-flex mt-2 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                              Final Decision: Company Admin
-                            </div>
-                          )}
-                          {state === 'discarded' && details?.created_at && (
-                            <div className="text-xs text-amber-700 mt-1">
-                              Discarded by {details.actor_user_id || 'unknown'} at{' '}
-                              {new Date(details.created_at).toLocaleString()}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            onClick={() => updateRecommendationState(recommendationId || '', 'shortlisted')}
-                            disabled={!recommendationId}
-                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                          >
-                            Keep
-                          </button>
-                          <button
-                            onClick={() => updateRecommendationState(recommendationId || '', 'discarded')}
-                            disabled={!recommendationId}
-                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                          >
-                            Discard
-                          </button>
-                          {activeWorkspaceTab === 'discarded' && (
-                            <button
-                              onClick={() => updateRecommendationState(recommendationId || '', 'active')}
-                              disabled={!recommendationId}
-                              className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                            >
-                              Restore
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleCreateCampaignFromRecommendation(recommendationId)}
-                            disabled={!recommendationId}
-                            className="px-3 py-1 text-xs rounded-full bg-indigo-600 text-white"
-                          >
-                            Create Campaign
-                          </button>
-                          <button
-                            onClick={() =>
-                              openPreviewForRecommendation(
-                                recommendationId,
-                                snapshotHash,
-                                state,
-                                priorityBucket
-                              )
-                            }
-                            disabled={!canDraft}
-                            title={
-                              snapshotHash ? undefined : 'Draft unavailable for this recommendation.'
-                            }
-                            className="px-3 py-1 text-xs rounded-full bg-emerald-600 text-white disabled:opacity-50"
-                          >
-                            Draft 12-Week Plan
-                          </button>
-                          {isOpportunity && (
-                            <button
-                              onClick={() =>
-                                openPreviewForRecommendation(
-                                  recommendationId,
-                                  snapshotHash,
-                                  state,
-                                  priorityBucket
-                                )
-                              }
-                              disabled={!snapshotHash || !recommendationId}
-                              className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                            >
-                              Preview Strategy
-                            </button>
-                          )}
-                          {state === 'shortlisted' && (
-                            <button
-                              onClick={() =>
-                                handlePreparePlanFromRecommendation(recommendationId, snapshotHash)
-                              }
-                              disabled={!recommendationId || !snapshotHash}
-                              className="px-3 py-1 text-xs rounded-full bg-emerald-600 text-white"
-                            >
-                              Generate 12-Week Plan
-                            </button>
-                          )}
-                          <button
-                            onClick={() => console.log('Schedule stub', trend.topic)}
-                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                          >
-                            Schedule
-                          </button>
-                          <button
-                            onClick={() => console.log('Share stub', trend.topic)}
-                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                          >
-                            Share
-                          </button>
-                          <button
-                            onClick={() => console.log('Dismiss stub', trend.topic)}
-                            className="px-3 py-1 text-xs rounded-full border border-gray-300"
-                          >
-                            Dismiss
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              {(engineResult?.trends_used || []).length === 0 && (
-                <div className="text-xs text-gray-500">No recommendations available.</div>
-              )}
             </div>
           </div>
         )}
@@ -2902,153 +1951,6 @@ export default function RecommendationsPage() {
                   </span>
                 </label>
               ))}
-            </div>
-          )}
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold text-gray-900">Multi-Region Recommendation</h2>
-          <p className="text-xs text-gray-500 mt-1">
-            Run selected APIs across regions and get a consolidated, campaign-ready recommendation.
-          </p>
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
-            <div>
-              <label className="block text-xs text-gray-500">Regions (comma-separated, max 5)</label>
-              <input
-                type="text"
-                value={multiRegionRegions}
-                onChange={(e) => setMultiRegionRegions(e.target.value)}
-                placeholder="e.g. IN, US, GB or GLOBAL"
-                disabled={!selectedCompanyId || multiRegionLoading}
-                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500">Goal / keyword (optional)</label>
-              <input
-                type="text"
-                value={multiRegionGoal}
-                onChange={(e) => setMultiRegionGoal(e.target.value)}
-                placeholder="e.g. brand awareness, product launch"
-                disabled={!selectedCompanyId || multiRegionLoading}
-                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
-              />
-            </div>
-          </div>
-          <div className="mt-3 flex items-center gap-4">
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={useCompanyProfile}
-                onChange={(e) => setUseCompanyProfile(e.target.checked)}
-                disabled={multiRegionLoading}
-              />
-              Use company profile
-            </label>
-            <button
-              onClick={runMultiRegionRecommendation}
-              disabled={
-                multiRegionLoading ||
-                !selectedCompanyId ||
-                !hasPermission('GENERATE_RECOMMENDATIONS') ||
-                availableApis.length === 0
-              }
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
-            >
-              {multiRegionLoading ? 'Starting…' : 'Run multi-region'}
-            </button>
-          </div>
-          {multiRegionStatus && (
-            <div className="mt-4 p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm">
-              <div className="font-medium text-gray-900">Status: {multiRegionStatus.status}</div>
-              {multiRegionStatus.signals_count != null && (
-                <div className="text-xs text-gray-600 mt-1">
-                  Signals: {multiRegionStatus.signals_count}
-                  {multiRegionStatus.signals_by_region &&
-                    Object.entries(multiRegionStatus.signals_by_region).map(([region, counts]) => (
-                      <span key={region} className="ml-2">
-                        {region}: {counts.success} ok, {counts.failed} failed
-                      </span>
-                    ))}
-                </div>
-              )}
-            </div>
-          )}
-          {multiRegionResult && (
-            <div className="mt-4 space-y-3">
-              <div className="p-4 rounded-lg border border-indigo-200 bg-indigo-50/50 text-sm text-gray-800">
-                <div className="font-semibold text-gray-900 mb-2">Consolidated recommendation</div>
-                <div className="whitespace-pre-wrap">
-                  {typeof multiRegionResult.consolidated_recommendation === 'object' &&
-                  multiRegionResult.consolidated_recommendation?.unified_recommendation
-                    ? multiRegionResult.consolidated_recommendation.unified_recommendation
-                    : typeof multiRegionResult.consolidated_recommendation === 'string'
-                    ? multiRegionResult.consolidated_recommendation
-                    : JSON.stringify(multiRegionResult.consolidated_recommendation, null, 2)}
-                </div>
-                {(multiRegionResult.consolidated_recommendation?.region_wise_differences &&
-                  Object.keys(multiRegionResult.consolidated_recommendation.region_wise_differences).length > 0) && (
-                  <div className="mt-3 pt-3 border-t border-indigo-200">
-                    <div className="font-medium text-gray-900 mb-1">By region</div>
-                    <ul className="text-xs text-gray-700 list-disc list-inside">
-                      {Object.entries(multiRegionResult.consolidated_recommendation.region_wise_differences).map(
-                        ([region, text]) => (
-                          <li key={region}>
-                            <strong>{region}:</strong> {text}
-                          </li>
-                        )
-                      )}
-                    </ul>
-                  </div>
-                )}
-              </div>
-              {multiRegionResult.disclaimer_text && (
-                <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-900">
-                  {multiRegionResult.disclaimer_text}
-                </div>
-              )}
-              <div className="flex flex-wrap gap-3 text-xs text-gray-600">
-                {multiRegionResult.divergence_score != null && (
-                  <span>Divergence: {(multiRegionResult.divergence_score * 100).toFixed(0)}%</span>
-                )}
-                {multiRegionResult.confidence_score != null && (
-                  <span>Confidence: {(multiRegionResult.confidence_score * 100).toFixed(0)}%</span>
-                )}
-              </div>
-              <button
-                onClick={async () => {
-                  if (!selectedCompanyId) return;
-                  try {
-                    const response = await fetch('/api/campaigns', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        companyId: selectedCompanyId,
-                        name: `Campaign ${new Date().toISOString().slice(0, 10)} Multi-region`,
-                        status: 'planning',
-                        current_stage: 'planning',
-                        timeframe: 'quarter',
-                      }),
-                    });
-                    if (!response.ok) throw new Error('Failed to create campaign');
-                    const data = await response.json();
-                    const created = data.campaign;
-                    if (created?.id) {
-                      setCampaigns((prev) => [
-                        { id: created.id, name: created.name, status: created.status || 'planning' },
-                        ...prev,
-                      ]);
-                      setSelectedCampaignId(created.id);
-                      setSelectedCampaignName(created.name);
-                    }
-                  } catch (e) {
-                    setErrorMessage('Failed to create campaign.');
-                  }
-                }}
-                className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"
-              >
-                Create campaign from recommendation
-              </button>
             </div>
           )}
         </div>

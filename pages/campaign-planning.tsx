@@ -352,7 +352,7 @@ export default function CampaignPlanning() {
 
     setIsLoading(true);
     try {
-      console.log('Generating 12-week plan for campaign:', campaignId);
+      console.log('Generating campaign plan for campaign:', campaignId);
       
       const response = await fetch('/api/campaigns/create-12week-plan', {
         method: 'POST',
@@ -360,14 +360,14 @@ export default function CampaignPlanning() {
         body: JSON.stringify({
           campaignId,
           startDate: campaignData.startDate || new Date().toISOString().split('T')[0],
-          aiContent: campaignData.description || 'Generate comprehensive 12-week content marketing plan',
+          aiContent: campaignData.description || 'Generate comprehensive content marketing plan',
           provider: 'demo'
         })
       });
 
       if (response.ok) {
         const result = await response.json();
-        console.log('12-week plan generated:', result);
+        console.log('Campaign plan generated:', result);
         
         // Check for existing plan after generation
         await checkExistingPlan(campaignId);
@@ -375,17 +375,17 @@ export default function CampaignPlanning() {
         // Redirect to campaign details to view the generated plan
         window.location.href = `/campaign-details/${campaignId}`;
       } else {
-        throw new Error('Failed to generate 12-week plan');
+        throw new Error('Failed to generate campaign plan');
       }
     } catch (error) {
-      console.error('Error generating 12-week plan:', error);
-      alert('Error generating 12-week plan. Please try again.');
+      console.error('Error generating campaign plan:', error);
+      alert('Error generating campaign plan. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Check if 12-week plan exists and load description
+  // Check if campaign plan exists and load description
   const checkExistingPlan = async (campaignId: string) => {
     try {
       const response = await fetch(`/api/campaigns/get-weekly-plans?campaignId=${campaignId}`);
@@ -829,7 +829,7 @@ export default function CampaignPlanning() {
     }, { impressions: 0, engagements: 0, conversions: 0, ugcSubmissions: 0 });
     
     if (totalMetrics.impressions > 0) {
-      description += `\n**Target Metrics (12-week total):**\n`;
+      description += `\n**Target Metrics (campaign total):**\n`;
       description += `• Impressions: ${totalMetrics.impressions.toLocaleString()}\n`;
       description += `• Engagements: ${totalMetrics.engagements.toLocaleString()}\n`;
       description += `• Conversions: ${totalMetrics.conversions.toLocaleString()}\n`;
@@ -913,7 +913,7 @@ export default function CampaignPlanning() {
           endDate: result.campaign.end_date
         });
         
-        // Check if 12-week plan exists
+        // Check if campaign plan exists
         await checkExistingPlan(id);
 
         // Load goals
@@ -1114,7 +1114,7 @@ export default function CampaignPlanning() {
     // Convert AI program into structured goals
     const goals = [];
     
-    // Parse 12-week program structure
+    // Parse campaign program structure
     if (aiProgram.weeks) {
       aiProgram.weeks.forEach((week: any, index: number) => {
         if (week.content) {
@@ -1289,7 +1289,7 @@ export default function CampaignPlanning() {
                             className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Calendar className="h-4 w-4" />
-                            Generate 12-Week Plan
+                            Generate Campaign Plan
                           </button>
                           
                           <button 
@@ -1320,7 +1320,7 @@ export default function CampaignPlanning() {
                         className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-md flex items-center gap-2"
                       >
                         <Calendar className="h-4 w-4" />
-                        View 12-Week Plan
+                        View Campaign Plan
                       </button>
                       
                       <button 
@@ -1466,7 +1466,7 @@ export default function CampaignPlanning() {
                 onClick={regenerateAlignedPreview}
                 className="px-3 py-2 text-xs rounded-lg bg-emerald-600 text-white"
               >
-                Regenerate 12-week plan using updated inputs
+                Regenerate campaign plan using updated inputs
               </button>
             </div>
             {alignedPreviewError && (
@@ -1727,14 +1727,17 @@ export default function CampaignPlanning() {
                   <div>
                     <div className="text-xs font-semibold text-gray-600 mb-2">Platform insights</div>
                     <div className="flex flex-wrap gap-2 text-xs">
-                      {platformAccuracyEntries.map(([platform, stats]) => (
-                        <span
-                          key={platform}
-                          className="rounded-full bg-indigo-50 px-3 py-1 text-indigo-700"
-                        >
-                          {platform}: {stats?.share_pct ?? 0}% ({stats?.clicks ?? 0} clicks)
-                        </span>
-                      ))}
+                      {platformAccuracyEntries.map(([platform, stats]) => {
+                        const s = stats as { share_pct?: number; clicks?: number } | undefined;
+                        return (
+                          <span
+                            key={platform}
+                            className="rounded-full bg-indigo-50 px-3 py-1 text-indigo-700"
+                          >
+                            {platform}: {s?.share_pct ?? 0}% ({s?.clicks ?? 0} clicks)
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -1826,14 +1829,17 @@ export default function CampaignPlanning() {
                       Platform click distribution
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs">
-                      {platformAdviceEntries.map(([platform, stats]) => (
-                        <span
-                          key={`opt-${platform}`}
-                          className="rounded-full bg-gray-100 px-3 py-1 text-gray-700"
-                        >
-                          {platform}: {stats?.share_pct ?? 0}%
-                        </span>
-                      ))}
+                      {platformAdviceEntries.map(([platform, stats]) => {
+                        const s = stats as { share_pct?: number } | undefined;
+                        return (
+                          <span
+                            key={`opt-${platform}`}
+                            className="rounded-full bg-gray-100 px-3 py-1 text-gray-700"
+                          >
+                            {platform}: {s?.share_pct ?? 0}%
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -2317,7 +2323,7 @@ export default function CampaignPlanning() {
                       <div className="p-2 bg-gradient-to-r from-purple-500 to-indigo-600 rounded-lg">
                         <Target className="h-6 w-6 text-white" />
                       </div>
-                      AI-Generated 12-Week Program
+                      AI-Generated Campaign Program
                     </h2>
                     
                     <div className="bg-white/70 backdrop-blur-sm rounded-xl p-6 border border-gray-200/50 mb-6">
@@ -2341,7 +2347,7 @@ export default function CampaignPlanning() {
                         <div>
                           <label className="text-sm font-medium text-gray-600">Program Description</label>
                           <div className="text-gray-800 mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap">
-                            {aiProgram.description || 'AI-generated 12-week content program'}
+                            {aiProgram.description || 'AI-generated campaign content program'}
                           </div>
                         </div>
                         <div>
@@ -2428,13 +2434,13 @@ export default function CampaignPlanning() {
                   </div>
                 )}
 
-                {/* View 12-Week Plan Button */}
+                {/* View Campaign Plan Button */}
                 <div className="bg-gradient-to-br from-blue-100/80 via-indigo-100/80 to-purple-100/80 backdrop-blur-sm rounded-2xl shadow-lg border border-blue-300/50 p-6 mb-6">
                   <h2 className="text-2xl font-bold text-gray-900 mb-4 flex items-center gap-3">
                     <div className="p-2 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-lg">
                       <Calendar className="h-6 w-6 text-white" />
                     </div>
-                    12-Week Plan Management
+                    Campaign Plan Management
                   </h2>
                   
                   {/* Plan Description */}
@@ -2470,15 +2476,15 @@ export default function CampaignPlanning() {
                   ) : (
                     <div className="bg-yellow-50/80 backdrop-blur-sm rounded-xl p-4 mb-6 border border-yellow-200/50">
                       <p className="text-yellow-800 text-sm">
-                        <strong>No 12-week plan created yet.</strong> Generate a comprehensive content plan to get started.
+                        <strong>No campaign plan created yet.</strong> Generate a comprehensive content plan to get started.
                       </p>
                     </div>
                   )}
                   
                   <p className="text-gray-700 mb-6">
                     {hasExistingPlan 
-                      ? 'Manage your existing 12-week content plan with AI-powered refinements and amendments.'
-                      : 'Create a comprehensive 12-week content plan with AI-powered suggestions and optimizations.'
+                      ? 'Manage your existing campaign content plan with AI-powered refinements and amendments.'
+                      : 'Create a comprehensive campaign content plan with AI-powered suggestions and optimizations.'
                     }
                   </p>
                   
@@ -2500,7 +2506,7 @@ export default function CampaignPlanning() {
                           className="bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white px-8 py-4 rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 flex items-center gap-3"
                         >
                           <Calendar className="h-6 w-6" />
-                          View 12-Week Plan
+                          View Campaign Plan
                         </button>
                     
                     <button
@@ -2508,7 +2514,7 @@ export default function CampaignPlanning() {
                       className="bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-8 py-4 rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 flex items-center gap-3"
                     >
                       <Sparkles className="h-6 w-6" />
-                      {hasExistingPlan ? 'Edit 12 Week Plan' : 'Generate New Plan'}
+                      {hasExistingPlan ? 'Edit Campaign Plan' : 'Generate New Plan'}
                       </button>
                   </div>
                 </div>
@@ -2741,7 +2747,7 @@ export default function CampaignPlanning() {
                           className="bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:scale-105"
                         >
                           <Calendar className="h-5 w-5" />
-                          View 12-Week Plan
+                          View Campaign Plan
                         </button>
                         
                         <button
@@ -2756,7 +2762,7 @@ export default function CampaignPlanning() {
                       {/* Feature Cards */}
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-lg p-4 text-white">
-                          <h4 className="font-semibold mb-2">12-Week Plan</h4>
+                          <h4 className="font-semibold mb-2">Campaign Plan</h4>
                           <p className="text-sm text-blue-100">AI-generated strategic roadmap</p>
                         </div>
                         <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-lg p-4 text-white">

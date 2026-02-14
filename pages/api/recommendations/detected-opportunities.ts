@@ -483,7 +483,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const rows = await listActiveOpportunities(companyId, 'PULSE');
     const payload = (row: OpportunityItem) => (row.payload && typeof row.payload === 'object' ? row.payload as Record<string, unknown> : {});
 
-    const opportunities = rows.map((row) => ({
+    const opportunitiesFromRows = rows.map((row) => ({
       id: row.id,
       topic: row.title,
       category: payload(row).category ?? null,
@@ -497,7 +497,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       growth_bucket: payload(row).growth_bucket ?? null,
     }));
 
-    return res.status(200).json({ opportunities });
+    return res.status(200).json({ opportunities: opportunitiesFromRows });
   } catch (error) {
     console.error('Error loading detected opportunities:', error);
     return res.status(500).json({ error: 'Failed to load detected opportunities' });

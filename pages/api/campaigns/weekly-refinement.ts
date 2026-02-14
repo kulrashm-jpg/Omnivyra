@@ -223,12 +223,12 @@ async function manualEdit(body: any, res: NextApiResponse) {
           content: item.content,
           topic: item.topic,
           hashtags: item.hashtags,
-          manual_edits: jsonb_build_object(
-            'edited_at', NOW(),
-            'edited_by', userId,
-            'edit_notes', item.editNotes || editNotes,
-            'changes', item.changes || []
-          ),
+          manual_edits: {
+            edited_at: new Date().toISOString(),
+            edited_by: userId,
+            edit_notes: item.editNotes || editNotes,
+            changes: item.changes || [],
+          },
           updated_at: new Date().toISOString()
         })
         .eq('id', item.id);
@@ -236,7 +236,7 @@ async function manualEdit(body: any, res: NextApiResponse) {
       if (error) throw error;
     }
 
-    // Update refinement record
+    console.warn('DEPRECATED: weekly_content_refinements write path triggered (weekly-refinement upsert)');
     const { error: refinementError } = await supabase
       .from('weekly_content_refinements')
       .upsert({
@@ -323,7 +323,7 @@ async function populateDailyPlans(body: any, res: NextApiResponse) {
 async function updateRefinement(body: any, res: NextApiResponse) {
   try {
     const { refinementId, updates } = body;
-
+    console.warn('DEPRECATED: weekly_content_refinements write path triggered (weekly-refinement update)');
     const { error } = await supabase
       .from('weekly_content_refinements')
       .update({

@@ -36,11 +36,15 @@ const ensureAuthAdmin = () => {
   return admin;
 };
 
-const getOrCreateUserByEmail = async (email: string) => {
+type AuthUser = { id: string; email?: string };
+const getOrCreateUserByEmail = async (email: string): Promise<AuthUser> => {
   const admin = ensureAuthAdmin();
-  const { data: existing, error: existingError } = await admin.getUserByEmail(email);
-  if (existingError) {
-    throw new Error(existingError.message);
+  let existing: { user?: AuthUser } | null = null;
+  try {
+    const res = await (admin as any).getUserByEmail?.(email);
+    if (res?.data?.user) existing = { user: res.data.user };
+  } catch {
+    existing = null;
   }
   if (existing?.user) {
     return existing.user;
@@ -52,7 +56,7 @@ const getOrCreateUserByEmail = async (email: string) => {
   if (createError || !created?.user) {
     throw new Error(createError?.message || 'Failed to create user');
   }
-  return created.user;
+  return created.user as AuthUser;
 };
 
 export const inviteUser = async (
@@ -67,8 +71,8 @@ export const inviteUser = async (
   const user = await getOrCreateUserByEmail(email);
   const normalizedRole = role.toUpperCase();
 
-  const { data: existing } = await supabase
-    .from('user_company_roles')
+  const { data: existing } = await (supabase
+    .from('user_company_roles') as any)
     .select('id, role')
     .eq('user_id', user.id)
     .eq('company_id', companyId)
@@ -105,25 +109,25 @@ export const listUsers = async (companyId: string, requester: UserContext) => {
   const access = await requireUserAdminAccess(requester, companyId);
   if (!access.ok) return access;
 
-  const { data: roles, error } = await supabase
-    .from('user_company_roles')
+  const { data: roles, error } = await (supabase
+    .from('user_company_roles') as any)
     .select('user_id, company_id, role')
     .eq('company_id', companyId);
   if (error) {
     return { ok: false, status: 500, error: 'FAILED_TO_LIST_USERS' };
   }
-  const ids = Array.from(new Set((roles || []).map((row) => row.user_id)));
+  const ids = Array.from(new Set((roles || []).map((row: { user_id: string }) => row.user_id)));
   const admin = ensureAuthAdmin();
   const users = await Promise.all(
-    ids.map(async (userId) => {
+    ids.map(async (userId: string) => {
       const { data } = await admin.getUserById(userId);
       return { user_id: userId, email: data?.user?.email || null };
     })
   );
-  const roleMap = (roles || []).reduce<Record<string, string>>((acc, row) => {
+  const roleMap = (roles || []).reduce((acc: Record<string, string>, row: { user_id: string; role: string }) => {
     acc[row.user_id] = row.role;
     return acc;
-  }, {});
+  }, {} as Record<string, string>);
   return {
     ok: true,
     users: users.map((user) => ({
@@ -143,11 +147,11 @@ export const updateUserRole = async (
   const access = await requireUserAdminAccess(requester, companyId);
   if (!access.ok) return access;
 
-  const { data, error } = await supabase
-    .from('user_company_roles')
+  const { data, error } = await (supabase
+    .from('user_company_roles') as any)
+    .update({ role: role.toUpperCase() })
     .eq('user_id', userId)
     .eq('company_id', companyId)
-    .update({ role: role.toUpperCase() })
     .select('*')
     .limit(1);
   if (error || !data || data.length === 0) {
@@ -172,11 +176,11 @@ export const removeUser = async (
   const access = await requireUserAdminAccess(requester, companyId);
   if (!access.ok) return access;
 
-  const { error } = await supabase
-    .from('user_company_roles')
+  const { error } = await (supabase
+    .from('user_company_roles') as any)
+    .delete()
     .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .delete();
+    .eq('company_id', companyId);
   if (error) {
     return { ok: false, status: 500, error: 'FAILED_TO_REMOVE_USER' };
   }

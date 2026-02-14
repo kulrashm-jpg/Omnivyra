@@ -76,7 +76,7 @@ async function transcribeWithWhisper(audioFile: any) {
     throw new Error('Audio data is empty');
   }
 
-  const file = new File([audioBuffer], filename, { type: contentType });
+  const file = new File([new Uint8Array(audioBuffer)], filename, { type: contentType });
   const webFormData = new (globalThis as any).FormData();
   webFormData.append('file', file);
   webFormData.append('model', 'whisper-1');

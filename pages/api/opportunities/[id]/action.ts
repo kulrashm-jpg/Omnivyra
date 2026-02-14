@@ -9,7 +9,6 @@ import {
   fillOpportunitySlots,
   type TakeActionType,
 } from '../../../../backend/services/opportunityService';
-import { getGenerator } from '../../../../backend/services/opportunityGenerators';
 
 const CLOSING_ACTIONS: TakeActionType[] = ['SCHEDULED', 'ARCHIVED', 'DISMISSED'];
 
@@ -104,7 +103,7 @@ async function actionHandler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     await takeAction(id, action as TakeActionType, { scheduled_for });
-    await fillOpportunitySlots(resolvedCompanyId, opportunity.type, getGenerator(resolvedCompanyId, opportunity.type));
+    await fillOpportunitySlots(resolvedCompanyId, opportunity.type);
     const updated = await getOpportunity(id);
     return res.status(200).json({ opportunity: updated ?? opportunity });
   } catch (e) {

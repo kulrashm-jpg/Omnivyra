@@ -7,20 +7,20 @@
 
 /*
 CURRENT FLOW (BROKEN):
-Dashboard → Campaign Planning → 12-Week Plan
-Campaigns List → Campaign Planning → 12-Week Plan
+Dashboard → Campaign Planning → Campaign Plan
+Campaigns List → Campaign Planning → Campaign Plan
 
 CORRECTED FLOW (LOGICAL):
 1. Dashboard/Campaigns List → Shows all campaigns
 2. "Create Campaign" → Opens NEW campaign creation
 3. "View Campaign" → Opens existing campaign details
-4. Campaign Details → Shows 12-week plan summary
+4. Campaign Details → Shows campaign plan summary
 5. Each Week → Expandable with AI enhancement [+]
 
 FLOW STRUCTURE:
 - /campaigns (Campaign List) - Shows all campaigns
 - /campaign-planning (Campaign Creation/Editing) - Create or edit campaigns
-- /campaign-details/[id] (Campaign Overview) - View campaign with 12-week plan
+- /campaign-details/[id] (Campaign Overview) - View campaign with campaign plan
 - /campaign-week/[id]/[week] (Week Details) - Individual week planning
 */
 
@@ -62,7 +62,7 @@ const CampaignPlanningButtons = {
       style: "secondary-gray"
     },
     generate12Week: {
-      text: "Generate 12-Week Plan",
+      text: "Generate Campaign Plan",
       action: "generate12WeekPlan", 
       style: "primary-orange"
     },
@@ -81,7 +81,7 @@ const CampaignPlanningButtons = {
       style: "secondary-gray"
     },
     view12Week: {
-      text: "View 12-Week Plan", 
+      text: "View Campaign Plan", 
       action: "view12WeekPlan",
       style: "primary-orange"
     },
@@ -102,7 +102,7 @@ const CampaignDetailsButtons = {
     style: "secondary-blue"
   },
   
-  // 12-week plan actions
+  // Campaign plan actions
   generateWeek: (weekNumber) => ({
     text: `Generate Week ${weekNumber}`,
     action: `generateWeek${weekNumber}`,
@@ -135,16 +135,16 @@ STEP 1: Fix Campaign List Page (/campaigns)
 - "Edit Campaign" → Opens /campaign-planning?mode=edit&campaignId=[id]
 
 STEP 2: Fix Campaign Planning Page (/campaign-planning)
-- Mode=create: Show creation buttons (Save Draft, Generate 12-Week, View Details)
-- Mode=edit: Show editing buttons (Save Changes, View 12-Week, Back to Campaigns)
-- Generate 12-Week Plan → Creates 12-week structure and links to campaign
+- Mode=create: Show creation buttons (Save Draft, Generate Campaign Plan, View Details)
+- Mode=edit: Show editing buttons (Save Changes, View Campaign Plan, Back to Campaigns)
+- Generate Campaign Plan → Creates campaign structure and links to campaign
 
 STEP 3: Create Campaign Details Page (/campaign-details/[id])
 - Shows campaign overview
-- Shows 12-week plan summary
+- Shows campaign plan summary
 - Each week expandable with AI enhancement [+]
 
-STEP 4: Enhance 12-Week Plan Integration
+STEP 4: Enhance Campaign Plan Integration
 - Link AI chat to specific campaign
 - Generate content for specific weeks
 - Save improvements back to campaign
@@ -211,8 +211,8 @@ const ButtonLogic = {
         break;
         
       case 'generate12Week':
-        // Generate 12-week plan and link to campaign
-        generate12WeekPlan(params.campaignId);
+        // Generate campaign plan and link to campaign
+        AIIntegration.generate12WeekPlan(params.campaignId);
         break;
         
       case 'enhanceWeek':
@@ -237,7 +237,7 @@ const AIIntegration = {
     window.open(aiUrl, '_blank', 'width=800,height=600');
   },
   
-  // Generate 12-week plan for campaign
+  // Generate campaign plan for campaign
   generate12WeekPlan: async (campaignId) => {
     try {
       const response = await fetch('/api/campaigns/create-12week-plan', {
@@ -246,7 +246,7 @@ const AIIntegration = {
         body: JSON.stringify({
           campaignId,
           startDate: new Date().toISOString().split('T')[0],
-          aiContent: 'Generate comprehensive 12-week content marketing plan',
+          aiContent: 'Generate comprehensive content marketing plan',
           provider: 'demo'
         })
       });
@@ -256,7 +256,7 @@ const AIIntegration = {
         window.location.href = Routes.viewCampaign(campaignId);
       }
     } catch (error) {
-      console.error('Error generating 12-week plan:', error);
+      console.error('Error generating campaign plan:', error);
     }
   },
   

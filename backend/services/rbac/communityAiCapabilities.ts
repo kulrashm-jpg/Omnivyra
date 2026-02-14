@@ -29,7 +29,7 @@ export const hasCommunityAiCapability = (
   capability: keyof typeof COMMUNITY_AI_CAPABILITIES
 ): boolean => {
   if (!role) return false;
-  const allowedRoles = COMMUNITY_AI_CAPABILITIES[capability] || [];
-  const normalizedRole = normalizePermissionRole(role);
-  return allowedRoles.includes(normalizedRole as Role);
+  const allowedRoles: Role[] = (COMMUNITY_AI_CAPABILITIES[capability] || []) as Role[];
+  const normalizedRole = normalizePermissionRole(role) as Role;
+  return allowedRoles.includes(normalizedRole);
 };

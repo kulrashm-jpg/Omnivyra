@@ -1,6 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
 import { v4 as uuidv4 } from 'uuid';
+import { fromLegacyRefinements, blueprintWeeksToLegacyRefinements } from '../../../backend/services/campaignBlueprintAdapter';
+import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -89,11 +91,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.log('Campaign updated successfully:', campaign?.id);
     }
 
-    // Generate 12-week themes and content
     const weeklyThemes = generateWeeklyThemes(aiContent);
-    const weeklyPlans = generateWeeklyPlans(startDateObj, aiContent);
+    const durationFromThemes = weeklyThemes.length || 12;
+    const weeklyPlans = generateWeeklyPlans(startDateObj, aiContent, durationFromThemes);
 
-    // Update campaign with weekly themes
     await supabase
       .from('campaigns')
       .update({
@@ -102,44 +103,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
       .eq('id', campaignId);
 
-    // Create weekly content refinements (if table exists)
-    const weeklyRefinements = [];
-    try {
-      for (let week = 1; week <= 12; week++) {
-        const weekStartDate = new Date(startDateObj);
-        weekStartDate.setDate(startDateObj.getDate() + (week - 1) * 7);
-        
-        const weekEndDate = new Date(weekStartDate);
-        weekEndDate.setDate(weekStartDate.getDate() + 6);
+    const syntheticRefinements = weeklyThemes.map((t, i) => ({
+      week_number: i + 1,
+      theme: t.theme,
+      focus_area: t.focusArea,
+      ai_suggestions: t.suggestions || [],
+      content_plan: null,
+    }));
+    const blueprint = fromLegacyRefinements(syntheticRefinements, campaignId);
 
+    await saveCampaignBlueprintFromLegacy({
+      campaignId,
+      blueprint,
+      source: 'create-12week-plan',
+    });
+    console.warn('DEPRECATED: create-12week-plan now writes blueprint first; legacy weekly_content_refinements derived from blueprint');
+
+    const derivedRefinements = blueprintWeeksToLegacyRefinements(blueprint.weeks, campaignId, {
+      suggestions: (_, idx) => weeklyThemes[idx]?.suggestions ?? [],
+    });
+
+    let weeklyRefinements: any[] = [];
+    try {
+      console.warn('DEPRECATED: weekly_content_refinements write path triggered (create-12week-plan)');
+      for (const row of derivedRefinements) {
         const { data: refinement, error: refinementError } = await supabase
           .from('weekly_content_refinements')
           .insert({
-            campaign_id: campaignId,
-            week_number: week,
-            theme: weeklyThemes[week - 1]?.theme || `Week ${week} Theme`,
-            focus_area: weeklyThemes[week - 1]?.focusArea || `Week ${week} Focus`,
-            ai_suggestions: weeklyThemes[week - 1]?.suggestions || [],
-            refinement_status: 'ai_enhanced',
+            campaign_id: row.campaign_id,
+            week_number: row.week_number,
+            theme: row.theme,
+            focus_area: row.focus_area,
+            ai_suggestions: row.ai_suggestions ?? [],
+            refinement_status: row.refinement_status ?? 'ai_enhanced',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           })
           .select()
           .single();
-
-        if (!refinementError && refinement) {
-          weeklyRefinements.push(refinement);
-        } else if (refinementError) {
-          console.log(`Week ${week} refinement error:`, refinementError);
-        }
+        if (!refinementError && refinement) weeklyRefinements.push(refinement);
+        else if (refinementError) console.log(`Week ${row.week_number} refinement error:`, refinementError);
       }
     } catch (error) {
       console.log('Weekly refinements table might not exist yet:', error);
     }
 
-    // Create campaign performance records for each week (if table exists)
+    const durationWeeks = blueprint.duration_weeks || blueprint.weeks.length || 12;
     try {
-      for (let week = 1; week <= 12; week++) {
+      for (let week = 1; week <= durationWeeks; week++) {
         const weekStartDate = new Date(startDateObj);
         weekStartDate.setDate(startDateObj.getDate() + (week - 1) * 7);
         
@@ -172,7 +183,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     res.status(200).json({ 
       success: true, 
-      message: '12-week plan created successfully',
+      message: 'Campaign plan created successfully',
       data: {
         campaignId,
         startDate,
@@ -211,10 +222,9 @@ function generateWeeklyThemes(aiContent: string) {
   return themes;
 }
 
-function generateWeeklyPlans(startDate: Date, aiContent: string) {
+function generateWeeklyPlans(startDate: Date, aiContent: string, durationWeeks: number) {
   const plans = [];
-  
-  for (let week = 1; week <= 12; week++) {
+  for (let week = 1; week <= durationWeeks; week++) {
     const weekStartDate = new Date(startDate);
     weekStartDate.setDate(startDate.getDate() + (week - 1) * 7);
     

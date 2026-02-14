@@ -1,6 +1,9 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
 
+const CTA_TYPES = ['None', 'Soft CTA', 'Engagement CTA', 'Authority CTA', 'Direct Conversion CTA'] as const;
+const KPI_FOCUS_OPTIONS = ['Reach growth', 'Engagement rate', 'Follower growth', 'Leads generated', 'Bookings'] as const;
+
 const dailyPlanSchema = z.object({
   day: z.string(),
   objective: z.string(),
@@ -17,14 +20,43 @@ const dailyPlanSchema = z.object({
   success_projection: z.number().optional(),
 });
 
-const weeklyPlanSchema = z.object({
+/** New weekly blueprint schema - allocation-driven, no daily[] required */
+const weeklyBlueprintSchema = z
+  .object({
+    week: z.number(),
+    phase_label: z.string(),
+    primary_objective: z.string(),
+    platform_allocation: z.record(z.string(), z.number()),
+    content_type_mix: z.array(z.string()),
+    cta_type: z.enum(CTA_TYPES),
+    total_weekly_content_count: z.number(),
+    weekly_kpi_focus: z.enum(KPI_FOCUS_OPTIONS),
+    theme: z.string().optional(),
+    daily: z.array(dailyPlanSchema).optional(),
+  })
+  .refine(
+    (w) => {
+      const sum = Object.values(w.platform_allocation || {}).reduce((a, b) => a + b, 0);
+      return sum === w.total_weekly_content_count;
+    },
+    (w) => ({
+      message: `Week ${w.week}: platform_allocation sum must equal total_weekly_content_count (${w.total_weekly_content_count})`,
+    })
+  );
+
+/** Legacy weekly schema - requires daily[] */
+const legacyWeeklyPlanSchema = z.object({
   week: z.number(),
   theme: z.string(),
   daily: z.array(dailyPlanSchema),
 });
 
-const planSchema = z.object({
-  weeks: z.array(weeklyPlanSchema),
+const blueprintPlanSchema = z.object({
+  weeks: z.array(weeklyBlueprintSchema),
+});
+
+const legacyPlanSchema = z.object({
+  weeks: z.array(legacyWeeklyPlanSchema),
 });
 
 const refinedDaySchema = z.object({
@@ -57,35 +89,69 @@ function getOpenAiClient(): OpenAI {
   return new OpenAI({ apiKey });
 }
 
-export async function parseAiPlanToWeeks(planText: string): Promise<{
-  weeks: Array<{
-    week: number;
-    theme: string;
-    daily: Array<{
-      day: string;
-      objective: string;
-      content: string;
-      platforms: Record<string, string>;
-      hashtags?: string[];
-      seo_keywords?: string[];
-      meta_title?: string;
-      meta_description?: string;
-      hook?: string;
-      cta?: string;
-      best_time?: string;
-      effort_score?: number;
-      success_projection?: number;
-    }>;
+const BLUEPRINT_SCHEMA_DESC = `
+{ weeks: Array<{
+  week: number,
+  phase_label: string,
+  primary_objective: string,
+  platform_allocation: Record<string, number>,
+  content_type_mix: string[],
+  cta_type: "None" | "Soft CTA" | "Engagement CTA" | "Authority CTA" | "Direct Conversion CTA",
+  total_weekly_content_count: number,
+  weekly_kpi_focus: "Reach growth" | "Engagement rate" | "Follower growth" | "Leads generated" | "Bookings"
+}> }
+
+Rules:
+- platform_allocation keys: use lowercase (e.g. linkedin, facebook, instagram, youtube, blog).
+- platform_allocation values: numeric post/video/article counts per platform.
+- total_weekly_content_count MUST equal the sum of all platform_allocation values.
+- Extract phase_label from "Phase Label" (e.g. "Audience Activation", "Conversion Acceleration").
+- Extract cta_type exactly as one of the 5 options.
+- Extract weekly_kpi_focus exactly as one of the 5 options.
+- content_type_mix: array of strings (e.g. ["1 authority post", "1 educational post"]).
+`;
+
+export type WeeklyBlueprintWeek = {
+  week: number;
+  phase_label: string;
+  primary_objective: string;
+  platform_allocation: Record<string, number>;
+  content_type_mix: string[];
+  cta_type: (typeof CTA_TYPES)[number];
+  total_weekly_content_count: number;
+  weekly_kpi_focus: (typeof KPI_FOCUS_OPTIONS)[number];
+  theme?: string;
+  daily?: Array<{
+    day: string;
+    objective: string;
+    content: string;
+    platforms: Record<string, string>;
+    hashtags?: string[];
+    seo_keywords?: string[];
+    meta_title?: string;
+    meta_description?: string;
+    hook?: string;
+    cta?: string;
+    best_time?: string;
+    effort_score?: number;
+    success_projection?: number;
   }>;
-}> {
+};
+
+export type ParsedPlan = {
+  weeks: WeeklyBlueprintWeek[];
+  format: 'blueprint' | 'legacy';
+};
+
+export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> {
   const client = getOpenAiClient();
 
   const system =
-    'You are a campaign plan parser. Convert free-form campaign plans into structured JSON only.';
+    'You are a campaign plan parser. Convert free-form weekly blueprint plans into structured JSON only. Extract platform allocation numbers and map to lowercase platform keys.';
   const user =
     'Convert the following campaign plan into JSON with this schema:\n' +
-    '{ weeks: Array<{ week: number, theme: string, daily: Array<{ day: string, objective: string, content: string, platforms: Record<string, string>, hashtags?: string[], seo_keywords?: string[], meta_title?: string, meta_description?: string, hook?: string, cta?: string, best_time?: string, effort_score?: number, success_projection?: number }> }> }\n' +
-    'Return JSON only. No prose.\n' +
+    BLUEPRINT_SCHEMA_DESC +
+    '\nReturn JSON only. No prose.\n' +
     `Plan Text:\n${planText}`;
 
   const completion = await client.chat.completions.create({
@@ -100,15 +166,32 @@ export async function parseAiPlanToWeeks(planText: string): Promise<{
 
   const raw = completion.choices[0]?.message?.content?.trim() || '';
   const parsed = JSON.parse(raw);
-  const validation = planSchema.safeParse(parsed);
-  if (!validation.success) {
-    console.error('Structured plan schema validation failed', {
-      issues: validation.error.issues,
-    });
-    throw new Error('Invalid structured plan schema');
+
+  const blueprintValidation = blueprintPlanSchema.safeParse(parsed);
+  if (blueprintValidation.success) {
+    return { weeks: blueprintValidation.data.weeks, format: 'blueprint' };
   }
 
-  return validation.data;
+  const legacyValidation = legacyPlanSchema.safeParse(parsed);
+  if (legacyValidation.success) {
+    const weeks = legacyValidation.data.weeks.map((w) => ({
+      ...w,
+      phase_label: w.theme,
+      primary_objective: '',
+      platform_allocation: {} as Record<string, number>,
+      content_type_mix: [] as string[],
+      cta_type: 'None' as const,
+      total_weekly_content_count: 0,
+      weekly_kpi_focus: 'Reach growth' as const,
+    }));
+    return { weeks, format: 'legacy' };
+  }
+
+  console.error('Structured plan schema validation failed', {
+    blueprintIssues: blueprintValidation.error?.issues,
+    legacyIssues: legacyValidation.error?.issues,
+  });
+  throw new Error('Invalid structured plan schema');
 }
 
 export async function parseAiRefinedDay(planText: string): Promise<{
@@ -157,7 +240,22 @@ export async function parseAiRefinedDay(planText: string): Promise<{
     throw new Error('Invalid refined day schema');
   }
 
-  return validation.data;
+  return validation.data as {
+    week: number;
+    day: string;
+    objective: string;
+    content: string;
+    platforms: Record<string, string>;
+    hashtags?: string[];
+    seo_keywords?: string[];
+    meta_title?: string;
+    meta_description?: string;
+    hook?: string;
+    cta?: string;
+    best_time?: string;
+    effort_score?: number;
+    success_projection?: number;
+  };
 }
 
 export async function parseAiPlatformCustomization(planText: string): Promise<{
@@ -194,5 +292,5 @@ export async function parseAiPlatformCustomization(planText: string): Promise<{
     throw new Error('Invalid platform customization schema');
   }
 
-  return validation.data;
+  return validation.data as { day: string; platforms: Record<string, string> };
 }

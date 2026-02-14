@@ -1,62 +1,46 @@
-/**
- * Queue Worker Entry Point
- * 
- * Starts the BullMQ worker that processes 'publish' jobs from the queue.
- * Worker reads jobs from Redis, processes them via publishProcessor, and updates DB.
- * 
- * Run: npm run start:worker
- * Or: node -r ts-node/register backend/queue/worker.ts
- * 
- * Environment Variables:
- * - REDIS_URL (required)
- * - SUPABASE_URL (required)
- * - SUPABASE_SERVICE_ROLE_KEY (required for backend)
- * - USE_MOCK_PLATFORMS=true (optional, for testing without real API keys)
- */
+import 'dotenv/config';
+import { Worker } from 'bullmq';
+import { supabase } from '../db/supabaseClient';
 
-import { Job } from 'bullmq';
-import { getWorker, closeConnections } from './bullmqClient';
-import { processPublishJob } from './jobProcessors/publishProcessor';
+console.log('ENV CHECK:', process.env.SUPABASE_URL);
 
-let workerInstance: ReturnType<typeof getWorker> | null = null;
+console.info('🚀 Engine Worker started...');
 
-/**
- * Start the queue worker
- */
-async function startWorker() {
-  console.log('🚀 Starting queue worker...');
+const worker = new Worker(
+  'engine-jobs',
+  async job => {
+    const { type, jobId } = job.data;
 
-  workerInstance = getWorker('publish', async (job: Job) => {
-    await processPublishJob(job);
-  });
+    console.info('Processing job', type, jobId);
 
-  console.log('✅ Queue worker started. Listening for jobs...');
-
-  // Graceful shutdown handlers
-  const shutdown = async (signal: string) => {
-    console.log(`\n🛑 Received ${signal}. Shutting down worker...`);
-    if (workerInstance) {
-      await workerInstance.close();
-      workerInstance = null;
+    if (type === 'LEAD') {
+      const { processLeadJobV1 } = await import('../services/leadJobProcessor');
+      await processLeadJobV1(jobId);
     }
-    await closeConnections();
-    process.exit(0);
-  };
 
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  });
-}
+    if (type === 'MARKET_PULSE') {
+      const { processMarketPulseJobV1 } = await import('../services/marketPulseJobProcessor');
+      await processMarketPulseJobV1(jobId);
+    }
 
-// Start worker if this file is run directly
-if (require.main === module) {
-  startWorker().catch((err) => {
-    console.error('Failed to start worker:', err);
-    process.exit(1);
-  });
-}
+    console.info('Finished job', type, jobId);
+  },
+  {
+    connection: {
+      host: '127.0.0.1',
+      port: 6379,
+    },
+  }
+);
 
-export { startWorker };
+worker.on('completed', job => {
+  console.info('BULLMQ COMPLETED EVENT', job.id);
+});
 
+worker.on('failed', (job, err) => {
+  console.error('BULLMQ FAILED EVENT', job?.id, err);
+});
+
+worker.on('error', err => {
+  console.error('Worker error:', err);
+});

@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { enforceCompanyAccess } from '../../backend/services/userContextService';
-import { supabase } from '../../backend/db/supabaseClient';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { supabase } from '../../../backend/db/supabaseClient';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {

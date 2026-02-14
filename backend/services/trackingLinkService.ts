@@ -31,7 +31,7 @@ export async function generateTrackingLink(
 ): Promise<TrackingLinkResult> {
   const profile = await getProfile(input.companyId, { autoRefine: false });
   const baseUrl = normalizeBaseUrl(
-    profile?.website_url || profile?.domain || profile?.website || ''
+    profile?.website_url || ''
   );
   if (!baseUrl) {
     throw new Error('Company website_url is required to generate tracking link');

@@ -203,11 +203,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     {};
   const themeEntries = Array.isArray(themePerformance)
     ? themePerformance
-    : Object.entries(themePerformance).map(([theme, value]) => ({
-        theme_name: theme,
-        performance_trend: value?.trend || value?.performance_trend || 'stable',
-        recommendation: value?.recommendation || null,
-      }));
+    : Object.entries(themePerformance).map(([theme, val]) => {
+        const value = val as { trend?: string; performance_trend?: string; recommendation?: string | null } | undefined;
+        return {
+          theme_name: theme,
+          performance_trend: value?.trend || value?.performance_trend || 'stable',
+          recommendation: value?.recommendation ?? null,
+        };
+      });
 
   const topic_cluster_boost = (themeEntries || [])
     .map((entry: any) => ({

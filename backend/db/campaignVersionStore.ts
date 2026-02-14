@@ -27,6 +27,7 @@ export async function saveWeekVersions(input: {
   weeks: Array<{ week_number: number; version?: number; [key: string]: any }>;
 }): Promise<void> {
   if (!input.weeks || input.weeks.length === 0) return;
+  console.warn('DEPRECATED: week_versions write path triggered');
   const payload = input.weeks.map((week) => ({
     company_id: input.companyId,
     campaign_id: input.campaignId ?? null,
@@ -95,6 +96,66 @@ export async function getLatestCampaignVersion(
     return null;
   }
   return data;
+}
+
+/** Get latest campaign_versions row by campaign_id (resolves company_id from mapping). */
+export async function getLatestCampaignVersionByCampaignId(
+  campaignId: string
+): Promise<{
+  company_id: string;
+  build_mode: string | null;
+  context_scope: string[] | null;
+  campaign_types: string[];
+  campaign_weights: Record<string, number>;
+  campaign_snapshot?: any;
+  company_stage?: string | null;
+  market_scope?: string | null;
+  baseline_override?: Record<string, unknown> | null;
+} | null> {
+  const { data, error } = await supabase
+    .from('campaign_versions')
+    .select('company_id, build_mode, context_scope, campaign_types, campaign_weights, campaign_snapshot, company_stage, market_scope, baseline_override')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data?.company_id) return null;
+
+  const {
+    build_mode,
+    context_scope,
+    campaign_types,
+    campaign_weights,
+    campaign_snapshot,
+    company_stage,
+    market_scope,
+    baseline_override,
+  } = data;
+
+  const types = Array.isArray(campaign_types)
+    ? campaign_types.filter((t) => typeof t === 'string')
+    : [];
+  const weights =
+    campaign_weights && typeof campaign_weights === 'object'
+      ? (campaign_weights as Record<string, number>)
+      : {};
+  const scope = Array.isArray(context_scope)
+    ? context_scope.filter((s) => typeof s === 'string')
+    : null;
+
+  return {
+    company_id: String(data.company_id),
+    build_mode: build_mode ?? null,
+    context_scope: scope && scope.length > 0 ? scope : null,
+    campaign_types: types.length > 0 ? types : ['brand_awareness'],
+    campaign_weights:
+      Object.keys(weights).length > 0 ? weights : { brand_awareness: 100 },
+    campaign_snapshot,
+    company_stage: company_stage ?? null,
+    market_scope: market_scope ?? null,
+    baseline_override: baseline_override && typeof baseline_override === 'object' ? baseline_override : null,
+  };
 }
 
 export async function getWeekVersions(companyId: string, campaignId?: string): Promise<any[]> {

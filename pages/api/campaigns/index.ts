@@ -3,6 +3,13 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
+  DEFAULT_BUILD_MODE_SCRATCH,
+  BUILD_MODES,
+  normalizeCampaignTypes,
+  normalizeCampaignWeights,
+  validateCampaignWeights,
+} from '../../../backend/services/campaignContextConfig';
+import {
   Role,
   getUserRole,
   hasPermission,
@@ -85,7 +92,8 @@ const validatePlaybookReference = async (playbookId: string, companyId: string) 
   if (error || !data) {
     return { ok: false, error: 'INVALID_PLAYBOOK_REFERENCE' };
   }
-  if (data.company_id !== companyId) {
+  const playbook = data as { id: string; company_id: string; status: string };
+  if (playbook.company_id !== companyId) {
     return { ok: false, error: 'INVALID_PLAYBOOK_REFERENCE' };
   }
   return { ok: true, error: null };
@@ -124,23 +132,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (authError || !requester) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
-    const { data: roleRow, error: roleRowError } = await supabase
+    const { data: roleData, error: roleRowError } = await supabase
       .from('user_company_roles')
       .select('role, status')
       .eq('user_id', requester.id)
       .eq('company_id', companyId)
       .maybeSingle();
+    const roleRow = roleData as { role: string; status: string } | null;
     console.log('RBAC_CHECK', {
       userId: requester.id,
       companyId,
-      role: roleRow?.role || null,
-      status: roleRow?.status || null,
+      role: roleRow?.role ?? null,
+      status: roleRow?.status ?? null,
     });
-    if (roleRowError || !roleRow || roleRow.status !== 'active') {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    }
+    if (roleRowError) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    if (!roleRow) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    if (roleRow.status !== 'active') return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    const role = roleRow;
     const action = req.method === 'POST' ? 'CREATE_CAMPAIGN' : 'VIEW_CAMPAIGNS';
-    if (!(await hasPermission(roleRow.role, action))) {
+    if (!(await hasPermission(role.role, action))) {
       return res.status(403).json({ error: 'NOT_ALLOWED' });
     }
 
@@ -195,6 +205,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const campaignData = req.body;
       console.log('Received campaign data:', campaignData);
+
+      // Hybrid context mode + campaign types (scratch default: no_context)
+      const buildModeRaw =
+        campaignData.build_mode ?? campaignData.buildMode ?? DEFAULT_BUILD_MODE_SCRATCH;
+      const build_mode = BUILD_MODES.includes(buildModeRaw)
+        ? buildModeRaw
+        : DEFAULT_BUILD_MODE_SCRATCH;
+      const context_scope = Array.isArray(campaignData.context_scope ?? campaignData.contextScope)
+        ? (campaignData.context_scope ?? campaignData.contextScope).filter((s: unknown) => typeof s === 'string')
+        : null;
+      const campaign_types = normalizeCampaignTypes(campaignData.campaign_types ?? campaignData.campaignTypes);
+      const campaign_weights = normalizeCampaignWeights(
+        campaign_types,
+        campaignData.campaign_weights ?? campaignData.campaignWeights
+      );
+      const weightValidation = validateCampaignWeights(campaign_types, campaign_weights);
+      if (!weightValidation.valid) {
+        return res.status(400).json({ error: weightValidation.error });
+      }
+      const MARKET_SCOPES = ['niche', 'regional', 'national', 'global'] as const;
+      const market_scope_raw = campaignData.market_scope ?? campaignData.marketScope ?? 'niche';
+      const market_scope = MARKET_SCOPES.includes(market_scope_raw) ? market_scope_raw : 'niche';
+      const COMPANY_STAGES = ['early_stage', 'growth_stage', 'established'] as const;
+      const company_stage_raw = campaignData.company_stage ?? campaignData.companyStage ?? 'early_stage';
+      const company_stage = COMPANY_STAGES.includes(company_stage_raw) ? company_stage_raw : 'early_stage';
+      const baseline_override = campaignData.baseline_override ?? campaignData.baselineOverride ?? null;
       
       // Add required user_id field for development and map field names
       const {
@@ -205,6 +241,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         viralityPlaybookId,
         playbook,
         api_inputs,
+        buildMode,
+        campaignTypes,
+        campaignWeights,
         ...campaignDataWithoutCamelCase
       } = campaignData;
       // Ensure playbook is reference-only: ignore any playbook payload fields.
@@ -229,7 +268,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       console.log('Processed campaign data for database:', campaignDataWithUser);
 
       // Insert campaign into database
-      const { data: campaign, error } = await supabase
+      const { data: campaign, error } = await (supabase as any)
         .from('campaigns')
         .insert([campaignDataWithUser])
         .select()
@@ -250,15 +289,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
 
-      const { error: versionError } = await supabase
+      if (!campaign) {
+        return res.status(500).json({ error: 'Campaign creation did not return data' });
+      }
+      const { error: versionError } = await (supabase as any)
         .from('campaign_versions')
         .insert({
           company_id: companyId,
-          campaign_id: campaign.id,
+          campaign_id: (campaign as { id: string }).id,
           campaign_snapshot: { campaign },
-          status: campaign.status ?? 'draft',
+          status: (campaign as { status?: string }).status ?? 'draft',
           version: 1,
           created_at: new Date().toISOString(),
+          build_mode,
+          context_scope: context_scope && context_scope.length > 0 ? context_scope : null,
+          campaign_types,
+          campaign_weights: campaign_weights,
+          company_stage,
+          market_scope,
+          baseline_override: baseline_override && typeof baseline_override === 'object' ? baseline_override : null,
         });
 
       if (versionError) {
@@ -304,20 +353,65 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
 
-      const { data: campaign, error } = await supabase
+      let campaign: any = null;
+      const { data: campaignRow, error } = await supabase
         .from('campaigns')
         .select(
           `*,
            virality_playbooks(id, name, objective, platforms, content_types, company_id)`
         )
         .eq('id', campaignId)
-        .or(`virality_playbook_id.is.null,virality_playbooks.company_id.eq.${companyId}`)
-        .single();
+        .maybeSingle();
 
       if (error) {
+        console.warn('Campaigns table fetch failed, trying campaign_versions fallback:', error.message);
+      } else if (campaignRow) {
+        campaign = campaignRow;
+      }
+
+      // Always fetch campaign_versions for recommendation context (target_regions, context_payload, source_opportunity_id)
+      let recommendationContext: { target_regions?: string[] | null; context_payload?: Record<string, unknown> | null; source_opportunity_id?: string | null } | null = null;
+      const { data: versionRow } = await supabase
+        .from('campaign_versions')
+        .select('campaign_snapshot')
+        .eq('company_id', companyId)
+        .eq('campaign_id', campaignId)
+        .order('version', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const snapshot = (versionRow ? (versionRow as { campaign_snapshot?: unknown }).campaign_snapshot : null) as {
+        campaign?: Record<string, unknown>;
+        target_regions?: string[] | null;
+        context_payload?: Record<string, unknown> | null;
+        metadata?: { source_opportunity_id?: string | null };
+        source_opportunity_id?: string | null;
+      } | null;
+
+      if (snapshot) {
+        recommendationContext = {
+          target_regions: snapshot.target_regions ?? null,
+          context_payload: snapshot.context_payload ?? null,
+          source_opportunity_id: snapshot.source_opportunity_id ?? snapshot.metadata?.source_opportunity_id ?? null,
+        };
+      }
+
+      // Fallback for promoted-from-opportunity campaigns: get campaign from campaign_versions.campaign_snapshot
+      if (!campaign && ownership.ok && snapshot?.campaign) {
+        campaign = {
+          ...snapshot.campaign,
+          id: campaignId,
+          weekly_themes: (snapshot.campaign as any).weekly_themes ?? [],
+        };
+      }
+
+      if (!campaign) {
         return res.status(200).json({ campaign: null });
       }
-      return res.status(200).json({ campaign: mapCampaignPlaybook(campaign) });
+      return res.status(200).json({
+        campaign: mapCampaignPlaybook(campaign),
+        recommendationContext: recommendationContext || undefined,
+      });
     } else if (type === 'goals' && campaignId) {
       // Validate Supabase configuration
       if (!supabase) {
@@ -386,7 +480,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
              virality_playbooks(id, name, objective, platforms, content_types, company_id)`
           )
           .in('id', ids)
-          .or(`virality_playbook_id.is.null,virality_playbooks.company_id.eq.${companyId}`)
           .order('created_at', { ascending: false });
         campaigns = result.data;
         error = result.error;

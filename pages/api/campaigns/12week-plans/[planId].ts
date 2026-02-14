@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../../utils/supabaseClient';
+import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -47,8 +48,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('Error fetching performance:', performanceError);
     }
 
-    // Build weeks data
-    const weeks = Array.from({ length: 12 }, (_, i) => {
+    const blueprint = await getUnifiedCampaignBlueprint(campaignId as string);
+    const durationWeeks = blueprint?.duration_weeks ?? refinements?.length ?? 12;
+    if (!blueprint?.duration_weeks && !refinements?.length) {
+      console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+    }
+
+    const weeks = Array.from({ length: durationWeeks }, (_, i) => {
       const weekNumber = i + 1;
       const refinement = refinements?.find(r => r.week_number === weekNumber);
       const weekPerformance = performance?.filter(p => p.week_number === weekNumber);

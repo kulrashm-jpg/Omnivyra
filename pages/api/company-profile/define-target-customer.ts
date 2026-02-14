@@ -4,6 +4,7 @@ import { getProfile } from '../../../backend/services/companyProfileService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getUserRole, isSuperAdmin } from '../../../backend/services/rbacService';
 
+// Commercial fields collected in Phase 1. Field naming matches company_profiles DB columns.
 const FIELDS_DESCRIPTION = [
   'target_customer_segment: who they sell to (e.g. SMB, enterprise, vertical)',
   'ideal_customer_profile: 1–2 sentence description of the ideal buyer',
@@ -13,6 +14,14 @@ const FIELDS_DESCRIPTION = [
   'sales_cycle: e.g. days, weeks, months',
   'key_metrics: 2–4 metrics they care about (e.g. MRR, CAC, LTV)',
 ].join('\n');
+
+// Phase 2: Campaign purpose questions. Parsed into campaign_purpose_intent JSONB.
+const CAMPAIGN_PURPOSE_QUESTIONS = [
+  'Why are you using social media for this business?',
+  'What do you ultimately want to achieve through campaigns?',
+  'What kind of problems do you want to be known for solving?',
+  'What type of campaigns do you intend to run consistently?',
+];
 
 function getOpenAiClient(): OpenAI {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -56,13 +65,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       'You are a commercial strategy assistant. Your goal is to capture structured commercial and target-customer information through a short guided conversation.\n\n' +
       'Rules:\n' +
       '- Ask ONE short, clear question at a time.\n' +
-      '- Cover these fields (you may combine related questions): ' +
+      '- Phase 1: Cover these fields (you may combine related questions): ' +
       FIELDS_DESCRIPTION +
       '\n\n' +
-      'Response format (JSON only, no markdown):\n' +
+      '- Phase 2: After the 7 commercial fields, ask these campaign purpose questions (one at a time):\n' +
+      CAMPAIGN_PURPOSE_QUESTIONS.map((q) => `  • ${q}`).join('\n') +
+      '\n\n' +
+      'Response format (JSON only, no markdown, no explanation):\n' +
       '- If you need more information: { "nextQuestion": "your question here" }\n' +
-      '- When you have enough to fill all 7 fields: { "done": true, "structuredFields": { "target_customer_segment": "...", "ideal_customer_profile": "...", "pricing_model": "...", "sales_motion": "...", "avg_deal_size": "...", "sales_cycle": "...", "key_metrics": "..." } }\n' +
-      'Use empty string for any field you could not infer. Keep values concise (1–2 sentences max for ideal_customer_profile).';
+      '- When you have enough to fill all 7 commercial fields AND campaign purpose: { "done": true, "structuredFields": { "target_customer_segment": "...", "ideal_customer_profile": "...", "pricing_model": "...", "sales_motion": "...", "avg_deal_size": "...", "sales_cycle": "...", "key_metrics": "..." }, "campaign_purpose_intent": { "primary_objective": "...", "campaign_intent": "...", "monetization_intent": "...", "dominant_problem_domains": ["...", "..."], "brand_positioning_angle": "..." } }\n' +
+      'Use empty string for any commercial field you could not infer. Keep values concise (1–2 sentences max for ideal_customer_profile).\n' +
+      'In campaign_purpose_intent: primary_objective = why social media for this business; campaign_intent = what they want to achieve; monetization_intent = how campaigns support revenue; dominant_problem_domains = array of problems they want to solve; brand_positioning_angle = how they want to be perceived. Always return valid JSON.';
 
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },
@@ -88,7 +101,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const raw = completion.choices[0]?.message?.content?.trim() || '{}';
-    let parsed: { nextQuestion?: string; done?: boolean; structuredFields?: Record<string, string> };
+    let parsed: {
+      nextQuestion?: string;
+      done?: boolean;
+      structuredFields?: Record<string, string>;
+      campaign_purpose_intent?: {
+        primary_objective?: string;
+        campaign_intent?: string;
+        monetization_intent?: string;
+        dominant_problem_domains?: string[];
+        brand_positioning_angle?: string;
+      };
+    };
     try {
       parsed = JSON.parse(raw);
     } catch {
@@ -96,9 +120,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (parsed.done && parsed.structuredFields) {
+      const cpi = parsed.campaign_purpose_intent;
+      const campaignPurposeIntent =
+        cpi && typeof cpi === 'object'
+          ? {
+              primary_objective: String(cpi.primary_objective ?? '').trim() || null,
+              campaign_intent: String(cpi.campaign_intent ?? '').trim() || null,
+              monetization_intent: String(cpi.monetization_intent ?? '').trim() || null,
+              dominant_problem_domains: Array.isArray(cpi.dominant_problem_domains)
+                ? cpi.dominant_problem_domains.filter((d): d is string => typeof d === 'string').slice(0, 10)
+                : [],
+              brand_positioning_angle: String(cpi.brand_positioning_angle ?? '').trim() || null,
+            }
+          : null;
       return res.status(200).json({
         done: true,
         structuredFields: parsed.structuredFields,
+        campaign_purpose_intent: campaignPurposeIntent,
       });
     }
     return res.status(200).json({

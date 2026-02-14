@@ -137,7 +137,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         virality_playbooks(id, name, objective, platforms, content_types, company_id)
       `)
       .in('id', campaignIds)
-      .or(`virality_playbook_id.is.null,virality_playbooks.company_id.eq.${companyId}`)
       .order('created_at', { ascending: false });
 
     if (error) {

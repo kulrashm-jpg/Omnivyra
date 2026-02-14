@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
+import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
 import { getLatestPlatformExecutionPlan } from '../../../backend/db/platformExecutionStore';
 import { generateContentForDay } from '../../../backend/services/contentGenerationService';
 import { getCampaignMemory } from '../../../backend/services/campaignMemoryService';
@@ -35,12 +35,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Company profile not found' });
     }
 
-    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
-    if (!campaignVersion?.campaign_snapshot?.weekly_plan) {
+    const resolved = await getResolvedCampaignPlanContext(companyId, campaignId);
+    if (!resolved) {
       return res.status(404).json({ error: 'Campaign plan not found' });
     }
-
-    const weekPlan = campaignVersion.campaign_snapshot.weekly_plan.find(
+    const weekPlan = resolved.weekly_plan.find(
       (week: any) => week.week_number === Number(weekNumber)
     );
     if (!weekPlan) {
@@ -59,7 +58,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const content = await generateContentForDay({
       companyProfile: profile,
-      campaign: campaignVersion.campaign_snapshot.campaign ?? campaignVersion.campaign_snapshot,
+      campaign: resolved.campaign,
       weekPlan,
       dayPlan,
       trend: dayPlan.trendUsed ?? null,

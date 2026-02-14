@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
+import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -48,6 +49,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .eq('campaign_id', campaignId);
 
         const completedWeeks = weeklyRefinements?.length || 0;
+        const blueprint = await getUnifiedCampaignBlueprint(campaignId as string);
+        const durationWeeks = blueprint?.duration_weeks ?? weeklyRefinements?.length ?? 12;
+        if (!blueprint?.duration_weeks && !weeklyRefinements?.length) {
+          console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+        }
 
         // Create week plans from weekly refinements data
         const weekPlans = weeklyRefinements?.map((refinement: any) => {
@@ -82,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         // If no weekly refinements exist, create placeholder weeks
         if (weekPlans.length === 0) {
-          const placeholderWeeks = Array.from({ length: 12 }, (_, index) => ({
+          const placeholderWeeks = Array.from({ length: durationWeeks }, (_, index) => ({
             id: `week-${index + 1}`,
             week: index + 1,
             status: 'pending',
@@ -110,7 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         return res.status(200).json({
           overview: {
-            totalWeeks: 12,
+            totalWeeks: durationWeeks,
             completedWeeks: completedWeeks,
             campaigns: [
               {
@@ -118,7 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 name: campaign.name || 'Campaign ' + campaignId,
                 userId: 'user-123',
                 status: campaign.status || 'planning',
-                progress: Math.round((completedWeeks / 12) * 100),
+                progress: durationWeeks > 0 ? Math.round((completedWeeks / durationWeeks) * 100) : 0,
                 createdAt: campaign.created_at || new Date().toISOString(),
                 description: campaign.description
               }

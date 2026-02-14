@@ -3,6 +3,11 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { runCampaignAiPlan } from '../../../../backend/services/campaignAiOrchestrator';
 import { Role } from '../../../../backend/services/rbacService';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import {
+  DEFAULT_BUILD_MODE_RECOMMENDATION,
+  normalizeCampaignTypes,
+  normalizeCampaignWeights,
+} from '../../../../backend/services/campaignContextConfig';
 
 type RecommendationSnapshot = {
   id: string;
@@ -144,6 +149,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (campaignError || !campaign) {
       return res.status(500).json({ error: 'Failed to create campaign' });
+    }
+
+    const companyId = String(recommendation.company_id);
+    const campaign_types = normalizeCampaignTypes(req.body?.campaign_types ?? req.body?.campaignTypes);
+    const campaign_weights = normalizeCampaignWeights(
+      campaign_types,
+      req.body?.campaign_weights ?? req.body?.campaignWeights
+    );
+
+    const market_scope = req.body?.market_scope ?? req.body?.marketScope ?? 'niche';
+    const company_stage = req.body?.company_stage ?? req.body?.companyStage ?? 'early_stage';
+
+    const { error: versionError } = await supabase.from('campaign_versions').insert({
+      company_id: companyId,
+      campaign_id: campaign.id,
+      campaign_snapshot: {
+        campaign,
+        source_recommendation_id: recommendation.id,
+      },
+      status: 'draft',
+      version: 1,
+      created_at: new Date().toISOString(),
+      build_mode: req.body?.build_mode ?? req.body?.buildMode ?? DEFAULT_BUILD_MODE_RECOMMENDATION,
+      context_scope: Array.isArray(req.body?.context_scope) ? req.body.context_scope : null,
+      campaign_types,
+      campaign_weights,
+      company_stage,
+      market_scope,
+    });
+
+    if (versionError) {
+      console.warn('Failed to create campaign_versions mapping:', versionError.message);
     }
 
     const message =
