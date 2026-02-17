@@ -25,6 +25,20 @@ const CAMPAIGN_TYPES = [
   'engagement_growth',
   'product_promotion',
 ] as const;
+
+const CONTENT_FORMATS = [
+  { id: 'blog', label: 'Blog posts / long-form articles' },
+  { id: 'video', label: 'Videos (short-form, reels, etc.)' },
+  { id: 'carousel', label: 'Carousels / multi-slide posts' },
+  { id: 'post', label: 'Single posts (images + text)' },
+  { id: 'story', label: 'Stories / ephemeral content' },
+] as const;
+
+const CREATION_METHODS = [
+  { id: 'manual', label: 'Manual', desc: 'Create entirely yourself' },
+  { id: 'ai_assisted', label: 'AI-assisted', desc: 'Draft + AI refinement' },
+  { id: 'full_ai', label: 'Full AI', desc: 'AI generates, you review' },
+] as const;
 const CONTEXT_SCOPES = [
   'commercial_strategy',
   'marketing_intelligence',
@@ -33,6 +47,11 @@ const CONTEXT_SCOPES = [
   'competitive_advantages',
   'growth_priorities',
 ] as const;
+
+interface ContentFormatCapacity {
+  perWeek: number;
+  creationMethod: typeof CREATION_METHODS[number]['id'];
+}
 
 interface CampaignData {
   id: string;
@@ -46,6 +65,7 @@ interface CampaignData {
   contextScope: string[];
   campaignTypes: string[];
   campaignWeights: Record<string, number>;
+  contentCapacity?: Record<string, ContentFormatCapacity>;
 }
 
 export default function CreateCampaign() {
@@ -66,6 +86,13 @@ export default function CreateCampaign() {
     contextScope: [],
     campaignTypes: ['brand_awareness'],
     campaignWeights: { brand_awareness: 100 },
+    contentCapacity: {
+      blog: { perWeek: 0, creationMethod: 'ai_assisted' },
+      video: { perWeek: 0, creationMethod: 'ai_assisted' },
+      carousel: { perWeek: 0, creationMethod: 'ai_assisted' },
+      post: { perWeek: 0, creationMethod: 'ai_assisted' },
+      story: { perWeek: 0, creationMethod: 'ai_assisted' },
+    },
   });
 
   // Calculate end date based on start date and timeframe
@@ -219,6 +246,9 @@ export default function CreateCampaign() {
         context_scope: campaignData.contextScope.length > 0 ? campaignData.contextScope : null,
         campaignTypes: campaignData.campaignTypes,
         campaignWeights: campaignData.campaignWeights,
+        planning_context: campaignData.contentCapacity ? {
+          content_capacity: campaignData.contentCapacity,
+        } : undefined,
       };
 
       console.log('Campaign data being sent:', campaignToCreate);
@@ -245,7 +275,8 @@ export default function CreateCampaign() {
         alert(`Campaign "${campaignData.name}" created successfully! Redirecting to campaign details...`);
         
         // Redirect to campaign details page
-        router.push(`/campaign-details/${newCampaignId}`);
+        const params = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : '';
+        router.push(`/campaign-details/${newCampaignId}${params}`);
       } else {
         const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
         console.error('API Error Response:', errorData);
@@ -300,6 +331,9 @@ export default function CreateCampaign() {
         context_scope: campaignData.contextScope.length > 0 ? campaignData.contextScope : null,
         campaignTypes: campaignData.campaignTypes,
         campaignWeights: campaignData.campaignWeights,
+        planning_context: campaignData.contentCapacity ? {
+          content_capacity: campaignData.contentCapacity,
+        } : undefined,
       };
 
       console.log('Campaign data being sent:', campaignToCreate);
@@ -345,7 +379,8 @@ export default function CreateCampaign() {
         alert(`Campaign "${campaignData.name}" and campaign plan created successfully! Redirecting to campaign details...`);
         
         // Redirect to campaign details page
-        router.push(`/campaign-details/${newCampaignId}`);
+        const params = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : '';
+        router.push(`/campaign-details/${newCampaignId}${params}`);
       } else {
         const planErrorData = await planResponse.json().catch(() => ({ error: 'Unknown error' }));
         console.error('Campaign plan generation failed:', planErrorData);
@@ -600,6 +635,57 @@ export default function CreateCampaign() {
                 </div>
               </div>
             )}
+
+            {/* Content & Production Planning */}
+            <div className="col-span-full mt-6 pt-6 border-t border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                Content & Production Planning
+              </h3>
+              <p className="text-sm text-gray-600 mb-4">
+                How much content can you realistically produce per week, and how will you create it?
+              </p>
+              <div className="space-y-4">
+                {CONTENT_FORMATS.map(({ id, label }) => {
+                  const cap = campaignData.contentCapacity?.[id] ?? { perWeek: 0, creationMethod: 'ai_assisted' };
+                  return (
+                    <div key={id} className="flex flex-wrap items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                      <span className="w-48 text-sm font-medium text-gray-700">{label}</span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={0}
+                          max={20}
+                          value={cap.perWeek}
+                          onChange={(e) => {
+                            const v = Math.min(20, Math.max(0, parseInt(e.target.value, 10) || 0));
+                            const next = { ...campaignData.contentCapacity, [id]: { ...cap, perWeek: v } };
+                            setCampaignData({ ...campaignData, contentCapacity: next });
+                          }}
+                          className="w-16 px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                        />
+                        <span className="text-sm text-gray-500">/ week</span>
+                      </div>
+                      <select
+                        value={cap.creationMethod}
+                        onChange={(e) => {
+                          const method = e.target.value as ContentFormatCapacity['creationMethod'];
+                          const next = { ...campaignData.contentCapacity, [id]: { ...cap, creationMethod: method } };
+                          setCampaignData({ ...campaignData, contentCapacity: next });
+                        }}
+                        className="px-3 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 text-sm"
+                      >
+                        {CREATION_METHODS.map((m) => (
+                          <option key={m.id} value={m.id}>{m.label} — {m.desc}</option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                This helps AI suggest realistic content mixes and durations. You can adjust later in campaign details.
+              </p>
+            </div>
           </div>
         </div>
 

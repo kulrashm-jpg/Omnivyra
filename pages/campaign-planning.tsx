@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import { v4 as uuidv4 } from 'uuid';
 import { 
   ArrowLeft, 
@@ -29,6 +30,7 @@ import VoiceNotesComponent from '../components/VoiceNotesComponent';
 import WeeklyRefinementInterface from '../components/WeeklyRefinementInterface';
 
 export default function CampaignPlanning() {
+  const router = useRouter();
   const [campaignData, setCampaignData] = useState({
     id: '',
     name: '',
@@ -1242,23 +1244,7 @@ export default function CampaignPlanning() {
             </div>
             <div className="flex items-center gap-3">
               {(() => {
-                // Check if we're on the client side before accessing window
-                if (typeof window === 'undefined') {
-                  // Server-side rendering - show create button by default
-                  return (
-                    <button 
-                      onClick={createNewCampaign}
-                      disabled={isLoading}
-                      className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 flex items-center gap-2"
-                    >
-                      {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Plus className="h-5 w-5" />}
-                      Create New Campaign
-                    </button>
-                  );
-                }
-
-                const urlParams = new URLSearchParams(window.location.search);
-                const mode = urlParams.get('mode');
+                const mode = (router.query?.mode as string) || null;
                 
                 if (mode === 'create') {
                   // Create mode buttons

@@ -22,10 +22,16 @@
 
 import { findDuePostsAndEnqueue } from './schedulerService';
 import { runOpportunitySlotsScheduler } from '../services/opportunitySlotsScheduler';
+import { runAllCompanyAudits } from '../jobs/governanceAuditJob';
+import { runAutoOptimizationForEligibleCampaigns } from '../jobs/autoOptimizationJob';
 
 const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_SECONDS || '60') * 1000;
 const OPPORTUNITY_SLOTS_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+const GOVERNANCE_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+const AUTO_OPTIMIZATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 let lastOpportunitySlotsRun = 0;
+let lastGovernanceAuditRun = 0;
+let lastAutoOptimizationRun = 0;
 
 let cronInterval: NodeJS.Timeout | null = null;
 
@@ -93,6 +99,27 @@ async function runSchedulerCycle() {
       }
     } catch (error: any) {
       console.error('❌ Opportunity slots scheduler error:', error.message);
+    }
+  }
+
+  // Run governance audit once per day (Stage 28)
+  if (Date.now() - lastGovernanceAuditRun >= GOVERNANCE_AUDIT_INTERVAL_MS) {
+    lastGovernanceAuditRun = Date.now();
+    try {
+      await runAllCompanyAudits();
+      console.log('✅ Governance audit completed');
+    } catch (error: any) {
+      console.error('❌ Governance audit error:', error.message);
+    }
+  }
+
+  // Run auto-optimization once per day (Stage 37)
+  if (Date.now() - lastAutoOptimizationRun >= AUTO_OPTIMIZATION_INTERVAL_MS) {
+    lastAutoOptimizationRun = Date.now();
+    try {
+      await runAutoOptimizationForEligibleCampaigns();
+    } catch (error: any) {
+      console.error('❌ Auto-optimization error:', error.message);
     }
   }
 }

@@ -128,12 +128,22 @@ function EventCard({
 
 export default function SeasonalRegionalTab(props: OpportunityTabProps) {
   const { companyId, regions, onPromote, onAction, fetchWithAuth, overrideText = '', onOverrideChange } = props;
-  const { opportunities, loading, error, runEngine, hasRun, refetch } = useOpportunities(
+  const { opportunities, loading, error, runEngine, hasRun, refetch, refetchGetOnly } = useOpportunities(
     companyId,
     TYPE,
     fetchWithAuth,
     { getRegions: () => regions ?? null }
   );
+
+  const wrappedOnPromote = async (id: string) => {
+    try {
+      await onPromote(id);
+    } catch (e: unknown) {
+      const err = e as Error & { status?: number };
+      if (err?.status === 404) await refetchGetOnly();
+      throw e;
+    }
+  };
 
   const handleScheduleForEvent = async (id: string, scheduledFor: string) => {
     await onAction(id, 'SCHEDULED', { scheduled_for: scheduledFor });
@@ -174,7 +184,7 @@ export default function SeasonalRegionalTab(props: OpportunityTabProps) {
                 key={opp.id}
                 opportunity={opp}
                 onScheduleForEvent={handleScheduleForEvent}
-                onCreateNow={onPromote}
+                onCreateNow={wrappedOnPromote}
                 onDismiss={handleDismiss}
                 onActionComplete={refetch}
               />

@@ -1,6 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
+import {
+  getResolvedCampaignPlanContext,
+  PrePlanningRequiredError,
+} from '../../../backend/services/campaignBlueprintService';
 import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
 import {
   buildPlatformExecutionPlan,
@@ -88,6 +91,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ plan, healthReport });
   } catch (error: any) {
+    if (error instanceof PrePlanningRequiredError || error?.code === 'PRE_PLANNING_REQUIRED') {
+      return res.status(412).json({ code: 'PRE_PLANNING_REQUIRED', message: error?.message });
+    }
     return res.status(500).json({ error: error?.message || 'Failed to build platform plan' });
   }
 }

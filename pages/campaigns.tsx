@@ -81,8 +81,9 @@ export default function CampaignsList() {
   };
 
   const handleCampaignClick = (campaignId: string) => {
-    // Navigate to campaign details view (12-week plan overview)
-    window.location.href = `/campaign-details/${campaignId}`;
+    const params = new URLSearchParams();
+    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
+    window.location.href = `/campaign-details/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
   };
 
   const handleEditCampaign = (campaignId: string, e: React.MouseEvent) => {
@@ -238,7 +239,7 @@ export default function CampaignsList() {
             <h3 className="text-xl font-semibold text-gray-900 mb-2">No Campaigns Yet</h3>
             <p className="text-gray-600 mb-6">Create your first campaign to get started with content planning</p>
             <button 
-              onClick={() => window.location.href = '/campaign-planning'}
+              onClick={() => window.location.href = '/create-campaign'}
               className="bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 mx-auto"
             >
               <Plus className="w-5 h-5" />

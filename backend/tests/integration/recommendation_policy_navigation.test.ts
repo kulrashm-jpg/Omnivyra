@@ -1,10 +1,10 @@
 import simulateHandler from '../../../pages/api/recommendations/simulate';
 import { supabase } from '../../db/supabaseClient';
 import { simulateRecommendations } from '../../services/recommendationSimulationService';
-import type { NextApiRequest, NextApiResponse } from 'next';
+import { createApiRequestMock, createMockRes } from '../utils';
 
 jest.mock('../../db/supabaseClient', () => ({
-  supabase: { rpc: jest.fn() },
+  supabase: { from: jest.fn(), rpc: jest.fn() },
 }));
 jest.mock('../../services/recommendationSimulationService', () => ({
   simulateRecommendations: jest.fn(),
@@ -12,25 +12,32 @@ jest.mock('../../services/recommendationSimulationService', () => ({
 jest.mock('../../services/recommendationPolicyService', () => ({
   validatePolicy: jest.fn().mockReturnValue({ ok: true }),
 }));
-
-const createMockRes = () => {
-  const res: Partial<NextApiResponse> & { json: jest.Mock } = {
-    status: jest.fn().mockReturnThis(),
-    json: jest.fn(),
-  };
-  return res as NextApiResponse;
-};
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn().mockResolvedValue({ user: { id: 'user-1' }, error: null }),
+}));
+jest.mock('../../services/rbacService', () =>
+  require('../utils/setupApiTest').getRbacMockImplementations()
+);
 
 describe('Recommendation policy navigation', () => {
+  beforeEach(() => {
+    (supabase.rpc as jest.Mock).mockResolvedValue({ data: true, error: null });
+  });
+
   it('blocks simulate for non-admin', async () => {
-    (supabase.rpc as jest.Mock).mockResolvedValue({ data: false, error: null });
-    const req = {
+    const rbac = require('../../services/rbacService');
+    (rbac.enforceRole as jest.Mock).mockImplementationOnce(async ({ res }: { res: any }) => {
+      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      return null;
+    });
+    const req = createApiRequestMock({
       method: 'POST',
+      companyId: 'default',
       body: { draftPolicyWeights: { trend_score: 1 } },
-    } as unknown as NextApiRequest;
+    });
     const res = createMockRes();
     await simulateHandler(req, res);
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.statusCode).toBe(403);
   });
 
   it('passes campaignId to simulation', async () => {
@@ -40,21 +47,20 @@ describe('Recommendation policy navigation', () => {
       baseline_recommendations: [],
       compared_with: 'policy-1',
     });
-    const req = {
+    const req = createApiRequestMock({
       method: 'POST',
+      companyId: 'default',
       body: {
         companyId: 'default',
         campaignId: 'camp-123',
         draftPolicyWeights: { trend_score: 1 },
       },
-    } as unknown as NextApiRequest;
+    });
     const res = createMockRes();
     await simulateHandler(req, res);
     expect(simulateRecommendations).toHaveBeenCalledWith(
-      expect.objectContaining({
-        campaignId: 'camp-123',
-      })
+      expect.objectContaining({ campaignId: 'camp-123' })
     );
-    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.statusCode).toBe(200);
   });
 });

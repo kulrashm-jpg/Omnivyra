@@ -5,6 +5,7 @@
 
 import type { ConstraintResult, TradeOffOption } from '../types/CampaignDuration';
 import { supabase } from '../db/supabaseClient';
+import { recordGovernanceEvent } from './GovernanceEventService';
 import { calculateEarliestViableStartDate } from './PortfolioTimelineProjection';
 
 export interface PortfolioConstraintOutput {
@@ -143,12 +144,16 @@ export async function evaluatePortfolioConstraints(
       reasoning: `Team capacity fully reserved by overlapping campaigns. ${overlappingReserved} posts/week reserved, ${maxPostsPerWeek} max.`,
     };
     results.push(r);
-    console.log('PORTFOLIO_CONSTRAINT_TRIGGERED', {
+    console.log('GOV_EVENT: PORTFOLIO_CONSTRAINT_TRIGGERED', JSON.stringify({
+      event: 'PORTFOLIO_CONSTRAINT_TRIGGERED',
+      constraint: 'team_overlap',
       team_id: teamId,
+      campaign_id: campaignId,
       overlapping_campaign_ids: overlappingCampaignIds,
       available_capacity: 0,
       requestedPostsPerWeek,
-    });
+      status: 'BLOCKING',
+    }));
     const newStartDate = await calculateEarliestViableStartDate({
       teamId,
       requestedPostsPerWeek,
@@ -156,10 +161,18 @@ export async function evaluatePortfolioConstraints(
       teamCapacityPerWeek: maxPostsPerWeek,
     });
     if (newStartDate) {
+      const newStartDateStr = newStartDate.toISOString().slice(0, 10);
       suggestedTradeOffs.push({
         type: 'SHIFT_START_DATE',
-        newStartDate: newStartDate.toISOString().slice(0, 10),
+        newStartDate: newStartDateStr,
         reasoning: 'Start campaign after overlapping campaigns conclude to free required capacity.',
+      });
+      recordGovernanceEvent({
+        companyId: params.companyId,
+        campaignId: params.campaignId,
+        eventType: 'SHIFT_START_DATE_SUGGESTED',
+        eventStatus: 'SUGGESTED',
+        metadata: { newStartDate: newStartDateStr, requestedPostsPerWeek },
       });
     }
     await addPreemptionSuggestions();
@@ -178,12 +191,16 @@ export async function evaluatePortfolioConstraints(
       reasoning: `Team capacity limited: ${availableCapacity} posts/week available, ${requestedPostsPerWeek} requested. Overlapping campaigns reserve ${overlappingReserved}.`,
     };
     results.push(r);
-    console.log('PORTFOLIO_CONSTRAINT_TRIGGERED', {
+    console.log('GOV_EVENT: PORTFOLIO_CONSTRAINT_TRIGGERED', JSON.stringify({
+      event: 'PORTFOLIO_CONSTRAINT_TRIGGERED',
+      constraint: 'team_overlap',
       team_id: teamId,
+      campaign_id: campaignId,
       overlapping_campaign_ids: overlappingCampaignIds,
       available_capacity: availableCapacity,
       requestedPostsPerWeek,
-    });
+      status: 'LIMITING',
+    }));
     const newStartDate = await calculateEarliestViableStartDate({
       teamId,
       requestedPostsPerWeek,
@@ -191,10 +208,18 @@ export async function evaluatePortfolioConstraints(
       teamCapacityPerWeek: maxPostsPerWeek,
     });
     if (newStartDate) {
+      const newStartDateStr = newStartDate.toISOString().slice(0, 10);
       suggestedTradeOffs.push({
         type: 'SHIFT_START_DATE',
-        newStartDate: newStartDate.toISOString().slice(0, 10),
+        newStartDate: newStartDateStr,
         reasoning: 'Start campaign after overlapping campaigns conclude to free required capacity.',
+      });
+      recordGovernanceEvent({
+        companyId: params.companyId,
+        campaignId: params.campaignId,
+        eventType: 'SHIFT_START_DATE_SUGGESTED',
+        eventStatus: 'SUGGESTED',
+        metadata: { newStartDate: newStartDateStr, requestedPostsPerWeek },
       });
     }
     await addPreemptionSuggestions();
@@ -207,6 +232,15 @@ export async function evaluatePortfolioConstraints(
       max_weeks_allowed: 0,
       reasoning: `Team at parallel campaign limit: ${overlappingAssignments.length} overlapping, max ${maxParallelCampaigns}.`,
     });
+    console.log('GOV_EVENT: PORTFOLIO_CONSTRAINT_TRIGGERED', JSON.stringify({
+      event: 'PORTFOLIO_CONSTRAINT_TRIGGERED',
+      constraint: 'parallel_campaigns',
+      team_id: teamId,
+      campaign_id: campaignId,
+      overlapping_count: overlappingAssignments.length,
+      max_parallel_campaigns: maxParallelCampaigns,
+      status: 'BLOCKING',
+    }));
   } else if (overlappingAssignments.length >= maxParallelCampaigns) {
     results.push({
       name: 'parallel_campaigns',
@@ -214,6 +248,15 @@ export async function evaluatePortfolioConstraints(
       max_weeks_allowed: 999,
       reasoning: `Team near parallel campaign limit: ${overlappingAssignments.length} overlapping, max ${maxParallelCampaigns}.`,
     });
+    console.log('GOV_EVENT: PORTFOLIO_CONSTRAINT_TRIGGERED', JSON.stringify({
+      event: 'PORTFOLIO_CONSTRAINT_TRIGGERED',
+      constraint: 'parallel_campaigns',
+      team_id: teamId,
+      campaign_id: campaignId,
+      overlapping_count: overlappingAssignments.length,
+      max_parallel_campaigns: maxParallelCampaigns,
+      status: 'LIMITING',
+    }));
   }
 
   return {

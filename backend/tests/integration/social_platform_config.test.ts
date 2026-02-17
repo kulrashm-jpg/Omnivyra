@@ -2,10 +2,35 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import externalApisHandler from '../../../pages/api/external-apis/index';
 import { publishScheduledPost } from '../../services/socialPlatformPublisher';
 import { supabase } from '../../db/supabaseClient';
+import { createApiRequestMock } from '../utils';
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn(), rpc: jest.fn() },
 }));
+jest.mock('../../services/externalApiService', () => ({
+  ...jest.requireActual('../../services/externalApiService'),
+  getExternalApiRuntimeSnapshot: jest.fn().mockResolvedValue({
+    health_snapshot: [],
+    cache_stats: { hits: 0, misses: 0, per_api_hits: {}, per_api_misses: {} },
+    rate_limited_sources: [],
+    signal_confidence_summary: null,
+  }),
+}));
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn(),
+}));
+jest.mock('../../services/rbacService', () => ({
+  ...jest.requireActual('../../services/rbacService'),
+  getUserRole: jest.fn(),
+  hasPermission: jest.fn(),
+  isPlatformSuperAdmin: jest.fn(),
+  isSuperAdmin: jest.fn(),
+}));
+
+const { getSupabaseUserFromRequest } = jest.requireMock('../../services/supabaseAuthService');
+const { getUserRole, hasPermission, isPlatformSuperAdmin, isSuperAdmin } = jest.requireMock(
+  '../../services/rbacService'
+);
 
 const sourcesStore = new Map<string, any>();
 const healthStore = new Map<string, any>();
@@ -30,6 +55,14 @@ const buildQuery = (table: string) => {
     }),
     in: jest.fn((field: string, values: any[]) => {
       state.filters[field] = values;
+      return query;
+    }),
+    gte: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
+      return query;
+    }),
+    is: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
       return query;
     }),
     order: jest.fn().mockReturnThis(),
@@ -90,6 +123,14 @@ const resolveQuery = (table: string, state: any) => {
       return { data: row, error: null };
     }
     if (state.orFilter) {
+      if (state.orFilter.includes('company_id')) {
+        const companyMatch = state.orFilter.match(/company_id\.eq\.([^,]+)/);
+        const companyId = companyMatch?.[1] || null;
+        const rows = Array.from(sourcesStore.values()).filter(
+          (row) => row.company_id === companyId || row.company_id == null
+        );
+        return { data: rows, error: null };
+      }
       const platform = state.orFilter.split('.')[2]?.replace('%', '') || '';
       const match = Array.from(sourcesStore.values()).find((row) => {
         const category = (row.category || '').toLowerCase();
@@ -139,14 +180,21 @@ describe('Social platform config', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
     (supabase.rpc as jest.Mock).mockResolvedValue({ data: true, error: null });
+    (getSupabaseUserFromRequest as jest.Mock).mockResolvedValue({ user: { id: 'user-1' }, error: null });
+    (isPlatformSuperAdmin as jest.Mock).mockResolvedValue(false);
+    (isSuperAdmin as jest.Mock).mockResolvedValue(false);
+    (getUserRole as jest.Mock).mockResolvedValue({ role: 'COMPANY_ADMIN', error: null });
+    (hasPermission as jest.Mock).mockResolvedValue(true);
     sourcesStore.clear();
     healthStore.clear();
   });
 
   it('creates and fetches platform config', async () => {
-    const req = {
+    const req = createApiRequestMock({
       method: 'POST',
+      companyId: 'company-1',
       body: {
+        companyId: 'company-1',
         name: 'Facebook',
         base_url: 'page-123',
         purpose: 'posting',
@@ -158,13 +206,18 @@ describe('Social platform config', () => {
         is_active: true,
         requires_admin: true,
       },
-    } as NextApiRequest;
+      headers: { authorization: 'Bearer test-token' },
+    });
     const res = createMockRes();
 
     await externalApisHandler(req, res);
     expect(res.statusCode).toBe(201);
 
-    const listReq = { method: 'GET' } as NextApiRequest;
+    const listReq = createApiRequestMock({
+      method: 'GET',
+      companyId: 'company-1',
+      headers: { authorization: 'Bearer test-token' },
+    });
     const listRes = createMockRes();
     await externalApisHandler(listReq, listRes);
     expect(listRes.statusCode).toBe(200);

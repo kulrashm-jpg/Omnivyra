@@ -99,9 +99,24 @@ jest.mock('../../db/platformPromotionStore', () => ({
   getPlatformVariant: jest.fn().mockResolvedValue(null),
   getPromotionMetadata: jest.fn().mockResolvedValue(null),
 }));
-jest.mock('../../db/supabaseClient', () => ({
-  supabase: { from: jest.fn() },
-}));
+jest.mock('../../db/supabaseClient', () => {
+  const chain = (data: any) => ({
+    select: jest.fn().mockReturnThis(),
+    eq: jest.fn().mockReturnThis(),
+    gte: jest.fn().mockReturnThis(),
+    order: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    filter: jest.fn().mockReturnThis(),
+    single: jest.fn().mockResolvedValue({ data, error: null }),
+    maybeSingle: jest.fn().mockResolvedValue({ data, error: null }),
+    then: (fn: (v: any) => any) => Promise.resolve({ data: Array.isArray(data) ? data : [data], error: null }).then(fn),
+  });
+  const from = jest.fn((table: string) => {
+    if (table === 'campaign_versions') return chain([{ id: 'v1', company_id: 'comp-1', campaign_id: 'camp-1' }]);
+    return chain([]);
+  });
+  return { supabase: { from, rpc: jest.fn().mockResolvedValue({ data: null, error: null }) } };
+});
 jest.mock('../../services/contentOverlapService', () => ({
   detectContentOverlap: jest.fn().mockResolvedValue({
     overlapDetected: false,
@@ -213,7 +228,7 @@ describe('OmniVyra learning bridge', () => {
   });
 
   afterEach(() => {
-    jest.resetAllMocks();
+    jest.clearAllMocks();
     delete process.env.OMNIVYRA_BASE_URL;
     delete process.env.USE_OMNIVYRA;
   });

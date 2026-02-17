@@ -84,11 +84,21 @@ const VALID_TABS = ['TREND', 'LEAD', 'PULSE', 'SEASONAL', 'INFLUENCER', 'DAILY_F
 export default function DailyFocusTab(props: OpportunityTabProps) {
   const router = useRouter();
   const { companyId, onPromote, onAction, fetchWithAuth, onSwitchTab, onOpenGenerator, overrideText = '', onOverrideChange } = props;
-  const { opportunities, loading, error, runEngine, hasRun, refetch } = useOpportunities(
+  const { opportunities, loading, error, runEngine, hasRun, refetch, refetchGetOnly } = useOpportunities(
     companyId,
     TYPE,
     fetchWithAuth
   );
+
+  const wrappedOnPromote = async (id: string) => {
+    try {
+      await onPromote(id);
+    } catch (e: unknown) {
+      const err = e as Error & { status?: number };
+      if (err?.status === 404) await refetchGetOnly();
+      throw e;
+    }
+  };
 
   const displayList = opportunities.slice(0, MAX_ITEMS);
 
@@ -98,7 +108,7 @@ export default function DailyFocusTab(props: OpportunityTabProps) {
     targetType: string | null
   ) => {
     if (actionType === 'CREATE_CAMPAIGN') {
-      await onPromote(id);
+      await wrappedOnPromote(id);
       return;
     }
     if (actionType === 'OPEN_TAB' && targetType) {
@@ -119,7 +129,7 @@ export default function DailyFocusTab(props: OpportunityTabProps) {
       return;
     }
     // Default: create campaign
-    await onPromote(id);
+    await wrappedOnPromote(id);
   };
   const handleMarkReviewed = async (id: string) => {
     await onAction(id, 'REVIEWED');
@@ -157,7 +167,7 @@ export default function DailyFocusTab(props: OpportunityTabProps) {
                 key={opp.id}
                 opportunity={opp}
                 onActNow={handleActNow}
-                onPromote={onPromote}
+                onPromote={wrappedOnPromote}
                 onMarkReviewed={handleMarkReviewed}
                 onActionComplete={refetch}
               />

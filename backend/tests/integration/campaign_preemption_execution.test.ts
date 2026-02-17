@@ -82,6 +82,7 @@ describe('Campaign Preemption Execution', () => {
         initiatorCampaignId: initiatorId,
         preemptedCampaignId: preemptedId,
         reason: 'Higher priority campaign requires capacity',
+        justification: 'Revenue-critical board commitment for Q4 launch.',
       });
 
       expect(result.success).toBe(true);
@@ -122,6 +123,7 @@ describe('Campaign Preemption Execution', () => {
         executeCampaignPreemption({
           initiatorCampaignId: initiatorId,
           preemptedCampaignId: preemptedId,
+          justification: 'Revenue-critical board commitment for Q4 launch.',
         })
       ).rejects.toThrow(PreemptionValidationError);
 
@@ -129,6 +131,7 @@ describe('Campaign Preemption Execution', () => {
         executeCampaignPreemption({
           initiatorCampaignId: initiatorId,
           preemptedCampaignId: preemptedId,
+          justification: 'Revenue-critical board commitment for Q4 launch.',
         })
       ).rejects.toThrow(PreemptionValidationError);
 
@@ -160,6 +163,7 @@ describe('Campaign Preemption Execution', () => {
         executeCampaignPreemption({
           initiatorCampaignId: initiatorId,
           preemptedCampaignId: preemptedId,
+          justification: 'Revenue-critical board commitment for Q4 launch.',
         })
       ).rejects.toThrow(PreemptionValidationError);
 
@@ -167,6 +171,7 @@ describe('Campaign Preemption Execution', () => {
         executeCampaignPreemption({
           initiatorCampaignId: initiatorId,
           preemptedCampaignId: preemptedId,
+          justification: 'Revenue-critical board commitment for Q4 launch.',
         })
       ).rejects.toThrow('already preempted');
     });

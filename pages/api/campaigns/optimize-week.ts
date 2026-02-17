@@ -2,7 +2,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { fetchTrendsFromApis } from '../../../backend/services/externalApiService';
 import { optimizeCampaignWeek } from '../../../backend/services/campaignOptimizationService';
-import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
+import {
+  getResolvedCampaignPlanContext,
+  PrePlanningRequiredError,
+} from '../../../backend/services/campaignBlueprintService';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { validateCampaignHealth } from '../../../backend/services/campaignHealthService';
 import { getLatestCampaignVersion, saveCampaignHealthReport } from '../../../backend/db/campaignVersionStore';
@@ -156,6 +159,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       health_report: healthReport,
     });
   } catch (error: any) {
+    if (error instanceof PrePlanningRequiredError || error?.code === 'PRE_PLANNING_REQUIRED') {
+      return res.status(412).json({ code: 'PRE_PLANNING_REQUIRED', message: error?.message });
+    }
     return res.status(500).json({ error: error?.message || 'Failed to optimize week' });
   }
 }

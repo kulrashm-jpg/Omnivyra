@@ -21,7 +21,7 @@ const dailyPlanSchema = z.object({
 });
 
 /** New weekly blueprint schema - allocation-driven, no daily[] required */
-const weeklyBlueprintSchema = z
+const weeklyBlueprintSchemaBase = z
   .object({
     week: z.number(),
     phase_label: z.string(),
@@ -34,25 +34,20 @@ const weeklyBlueprintSchema = z
     theme: z.string().optional(),
     daily: z.array(dailyPlanSchema).optional(),
   })
-  .refine(
-    (w) => {
-      const sum = Object.values(w.platform_allocation || {}).reduce((a, b) => a + b, 0);
-      return sum === w.total_weekly_content_count;
-    },
-    (w) => ({
-      message: `Week ${w.week}: platform_allocation sum must equal total_weekly_content_count (${w.total_weekly_content_count})`,
-    })
-  );
+  .strict();
+
+/** Blueprint schema (no refine) — refinement done manually to preserve strict output type */
+const blueprintPlanSchema = z
+  .object({
+    weeks: z.array(weeklyBlueprintSchemaBase),
+  })
+  .strict();
 
 /** Legacy weekly schema - requires daily[] */
 const legacyWeeklyPlanSchema = z.object({
   week: z.number(),
   theme: z.string(),
   daily: z.array(dailyPlanSchema),
-});
-
-const blueprintPlanSchema = z.object({
-  weeks: z.array(weeklyBlueprintSchema),
 });
 
 const legacyPlanSchema = z.object({
@@ -98,7 +93,8 @@ const BLUEPRINT_SCHEMA_DESC = `
   content_type_mix: string[],
   cta_type: "None" | "Soft CTA" | "Engagement CTA" | "Authority CTA" | "Direct Conversion CTA",
   total_weekly_content_count: number,
-  weekly_kpi_focus: "Reach growth" | "Engagement rate" | "Follower growth" | "Leads generated" | "Bookings"
+  weekly_kpi_focus: "Reach growth" | "Engagement rate" | "Follower growth" | "Leads generated" | "Bookings",
+  theme: string
 }> }
 
 Rules:
@@ -109,6 +105,7 @@ Rules:
 - Extract cta_type exactly as one of the 5 options.
 - Extract weekly_kpi_focus exactly as one of the 5 options.
 - content_type_mix: array of strings (e.g. ["1 authority post", "1 educational post"]).
+- theme: REQUIRED. Concrete weekly theme—what we're doing that week given the topic (e.g. "Introduce the stress-reduction framework", "Share customer success story"). Not the phase label.
 `;
 
 export type WeeklyBlueprintWeek = {
@@ -169,13 +166,27 @@ export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> 
 
   const blueprintValidation = blueprintPlanSchema.safeParse(parsed);
   if (blueprintValidation.success) {
-    return { weeks: blueprintValidation.data.weeks, format: 'blueprint' };
+    const weeks = blueprintValidation.data.weeks;
+    const bad = weeks.find(
+      (w) =>
+        Object.values(w.platform_allocation).reduce((a, b) => a + b, 0) !== w.total_weekly_content_count
+    );
+    if (!bad) {
+      // Schema output matches WeeklyBlueprintWeek at runtime; Zod's inference widens optionality
+      return {
+        weeks: weeks as WeeklyBlueprintWeek[],
+        format: 'blueprint' as const,
+      };
+    }
+    console.error(
+      `Week ${bad.week}: platform_allocation sum must equal total_weekly_content_count (${bad.total_weekly_content_count})`
+    );
   }
 
   const legacyValidation = legacyPlanSchema.safeParse(parsed);
   if (legacyValidation.success) {
     const weeks = legacyValidation.data.weeks.map((w) => ({
-      ...w,
+      week: w.week,
       phase_label: w.theme,
       primary_objective: '',
       platform_allocation: {} as Record<string, number>,
@@ -183,8 +194,10 @@ export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> 
       cta_type: 'None' as const,
       total_weekly_content_count: 0,
       weekly_kpi_focus: 'Reach growth' as const,
+      theme: w.theme,
+      daily: w.daily,
     }));
-    return { weeks, format: 'legacy' };
+    return { weeks: weeks as WeeklyBlueprintWeek[], format: 'legacy' };
   }
 
   console.error('Structured plan schema validation failed', {

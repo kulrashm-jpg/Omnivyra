@@ -239,6 +239,9 @@ export async function promoteToCampaign(
     user_id: userId,
     created_at: now,
     updated_at: now,
+    duration_weeks: null,
+    duration_locked: false,
+    blueprint_status: null,
   };
 
   const { data: campaign, error: campaignError } = await supabase

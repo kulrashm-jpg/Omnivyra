@@ -8,10 +8,9 @@ module.exports = {
   // Test environment
   testEnvironment: 'node',
   
-  // File patterns to test
+  // File patterns to test (exclude setupEnv.ts and other non-test files)
   testMatch: [
-    '**/backend/**/*.test.ts',
-    '**/backend/tests/**/*.ts'
+    '**/*.test.ts'
   ],
   
   // Module file extensions

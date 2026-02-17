@@ -4,10 +4,9 @@ import {
   getLatestProfile,
   getProfile,
   saveProfile,
-  refineProfileWithAI,
   refineProfileWithAIWithDetails,
 } from '../../services/companyProfileService';
-import type { NextApiRequest, NextApiResponse } from 'next';
+import { createApiRequestMock, createMockRes } from '../utils';
 
 jest.mock('../../services/companyProfileService', () => ({
   getLatestProfile: jest.fn(),
@@ -16,14 +15,14 @@ jest.mock('../../services/companyProfileService', () => ({
   refineProfileWithAI: jest.fn(),
   refineProfileWithAIWithDetails: jest.fn(),
 }));
-
-const createMockRes = () => {
-  const res: Partial<NextApiResponse> & { json: jest.Mock } = {
-    status: jest.fn().mockReturnThis(),
-    json: jest.fn(),
-  };
-  return res as NextApiResponse;
-};
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn().mockResolvedValue({ user: { id: 'user-1' }, error: null }),
+}));
+jest.mock('../../services/rbacService', () => ({
+  ...jest.requireActual('../../services/rbacService'),
+  isSuperAdmin: jest.fn().mockResolvedValue(true),
+  getUserRole: jest.fn().mockResolvedValue({ role: 'SUPER_ADMIN', error: null }),
+}));
 
 describe('Company profile API', () => {
   beforeEach(() => {
@@ -35,40 +34,32 @@ describe('Company profile API', () => {
       company_id: 'acme',
       name: 'Acme',
     });
-
-    const req = {
+    const req = createApiRequestMock({
       method: 'POST',
-      query: {},
+      companyId: 'acme',
       body: { name: 'Acme' },
-    } as unknown as NextApiRequest;
-
+    });
     const res = createMockRes();
     await companyProfileHandler(req, res);
-
     expect(saveProfile).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
-    const payload = (res.json as jest.Mock).mock.calls[0][0];
-    expect(payload.profile.name).toBe('Acme');
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.profile?.name).toBe('Acme');
   });
 
   it('fetches profile', async () => {
-    (getLatestProfile as jest.Mock).mockResolvedValue({
+    (getProfile as jest.Mock).mockResolvedValue({
       company_id: 'latest',
       name: 'Acme',
     });
-
-    const req = {
+    const req = createApiRequestMock({
       method: 'GET',
-      query: {},
-    } as unknown as NextApiRequest;
-
+      companyId: 'latest',
+    });
     const res = createMockRes();
     await companyProfileHandler(req, res);
-
-    expect(getLatestProfile).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
-    const payload = (res.json as jest.Mock).mock.calls[0][0];
-    expect(payload.profile.name).toBe('Acme');
+    expect(getProfile).toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.profile?.name).toBe('Acme');
   });
 
   it('refines profile', async () => {
@@ -93,19 +84,15 @@ describe('Company profile API', () => {
         created_at: new Date().toISOString(),
       },
     });
-
-    const req = {
+    const req = createApiRequestMock({
       method: 'POST',
-      query: {},
-      body: {},
-    } as unknown as NextApiRequest;
-
+      companyId: 'acme',
+      body: { companyId: 'acme' },
+    });
     const res = createMockRes();
     await refineHandler(req, res);
-
     expect(refineProfileWithAIWithDetails).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
-    const payload = (res.json as jest.Mock).mock.calls[0][0];
-    expect(payload.profile.name).toBe('Acme Refined');
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.profile?.name).toBe('Acme Refined');
   });
 });

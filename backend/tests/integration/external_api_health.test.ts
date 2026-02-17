@@ -43,6 +43,7 @@ const buildQuery = (table: string) => {
       state.inFilter = { field, values };
       return query;
     }),
+    or: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     single: jest.fn().mockReturnThis(),
     upsert: jest.fn(async (payload: any) => {
@@ -86,7 +87,7 @@ describe('External API health + cache + rate limit', () => {
 
   afterEach(() => {
     jest.useRealTimers();
-    jest.resetAllMocks();
+    jest.clearAllMocks();
   });
 
   it('records cache hit and miss', async () => {
@@ -98,8 +99,8 @@ describe('External API health + cache + rate limit', () => {
     });
     (global as any).fetch = fetchMock;
 
-    await fetchTrendsFromApis('US', 'marketing');
-    await fetchTrendsFromApis('US', 'marketing');
+    await fetchTrendsFromApis('company-1', 'US', 'marketing');
+    await fetchTrendsFromApis('company-1', 'US', 'marketing');
 
     const stats = getCacheStats();
     expect(stats.misses).toBeGreaterThan(0);
@@ -117,7 +118,7 @@ describe('External API health + cache + rate limit', () => {
     });
     (global as any).fetch = fetchMock;
 
-    await fetchTrendsFromApis();
+    await fetchTrendsFromApis('company-1');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     jest.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
@@ -130,8 +131,8 @@ describe('External API health + cache + rate limit', () => {
     (global as any).fetch = fetchMock;
 
     sources[0].rate_limit_per_min = 1;
-    await fetchTrendsFromApis();
-    await fetchTrendsFromApis();
+    await fetchTrendsFromApis('company-1');
+    await fetchTrendsFromApis('company-1');
     sources[0].rate_limit_per_min = 60;
 
     const snapshot = await getExternalApiRuntimeSnapshot(['api-1']);
@@ -145,8 +146,9 @@ describe('External API health + cache + rate limit', () => {
     });
     (global as any).fetch = fetchMock;
 
-    await fetchTrendsFromApis();
+    await fetchTrendsFromApis('company-1');
     const record = healthStore.get('api-1');
+    expect(record).toBeDefined();
     expect(record.success_count).toBe(1);
     expect(record.failure_count).toBe(0);
   });
@@ -160,7 +162,8 @@ describe('External API health + cache + rate limit', () => {
     });
     (global as any).fetch = fetchMock;
 
-    const trends = await fetchTrendsFromApis();
+    const trends = await fetchTrendsFromApis('company-1');
+    expect(trends).toHaveLength(1);
     expect(trends[0].signal_confidence).toBeDefined();
     expect(trends[0].signal_confidence).toBeGreaterThanOrEqual(0);
   });

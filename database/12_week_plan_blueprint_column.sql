@@ -1,3 +1,3 @@
--- Add blueprint JSONB column to 12_week_plan for canonical CampaignBlueprint storage.
--- Run in Supabase SQL Editor. Idempotent.
-ALTER TABLE 12_week_plan ADD COLUMN IF NOT EXISTS blueprint JSONB;
+-- DEPRECATED: Table 12_week_plan never existed. Use twelve_week_plan.sql instead.
+-- (Kept for historical reference only.)
+-- ALTER TABLE 12_week_plan ADD COLUMN IF NOT EXISTS blueprint JSONB;

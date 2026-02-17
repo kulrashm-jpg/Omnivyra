@@ -415,7 +415,10 @@ export default function RecommendationsPage() {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error || 'Failed to promote');
+      const message = err?.error || 'Failed to promote';
+      const e = new Error(message) as Error & { status?: number };
+      e.status = res.status;
+      throw e;
     }
     const data = await res.json();
     const campaignId = data?.campaignId ?? data?.campaign_id;
@@ -836,7 +839,8 @@ export default function RecommendationsPage() {
       }
       const data = await response.json();
       if (data?.campaign_id) {
-        window.location.href = `/campaign-planning?mode=edit&campaignId=${data.campaign_id}`;
+        const params = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : '';
+        window.location.href = `/campaign-details/${data.campaign_id}${params}`;
       }
     } catch (error) {
       console.error('Error creating campaign:', error);
@@ -848,40 +852,35 @@ export default function RecommendationsPage() {
 
   const handlePreparePlanFromRecommendation = async (
     recommendationId?: string,
-    snapshotHash?: string | null,
+    _snapshotHash?: string | null,
     options?: { draft?: boolean; priorityBucket?: string }
   ) => {
-    if (!recommendationId || !snapshotHash) {
+    if (!recommendationId) {
       setErrorMessage('Recommendation context not available.');
       return;
     }
     try {
       setDraftError(null);
       setIsLoading(true);
-      const response = await fetch(`/api/recommendations/${recommendationId}/prepare-plan`, {
+      const response = await fetch(`/api/recommendations/${recommendationId}/create-campaign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          draft: Boolean(options?.draft),
+          durationWeeks: options?.draft ? 6 : 12,
           priority_bucket: options?.priorityBucket ?? null,
         }),
       });
       if (!response.ok) {
-        throw new Error('Failed to prepare planning context');
+        throw new Error('Failed to create campaign from recommendation');
       }
       const data = await response.json();
-      if (typeof window !== 'undefined') {
-        window.sessionStorage.setItem(
-          `recommendation_plan_context_${snapshotHash}`,
-          JSON.stringify(data)
-        );
+      if (data?.campaign_id) {
+        const params = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : '';
+        window.location.href = `/campaign-details/${data.campaign_id}${params}`;
       }
-      window.location.href = `/campaign-planning?context=recommendation&hash=${encodeURIComponent(
-        snapshotHash
-      )}${options?.draft ? '&mode=draft' : ''}`;
     } catch (error) {
-      console.error('Error preparing planning context:', error);
-      setDraftError('Failed to prepare planning context.');
+      console.error('Error creating plan from recommendation:', error);
+      setDraftError('Failed to create plan from recommendation.');
     } finally {
       setIsLoading(false);
     }
@@ -1195,7 +1194,8 @@ export default function RecommendationsPage() {
       setSelectedRecommendations(new Set());
       setGroupPreviewOpen(false);
       if (data?.campaign_id) {
-        window.location.href = `/campaign-planning?mode=edit&campaignId=${data.campaign_id}&grouped=1`;
+        const params = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}&grouped=1` : '?grouped=1';
+        window.location.href = `/campaign-details/${data.campaign_id}${params}`;
       }
     } catch (error) {
       console.error('Grouped campaign failed', error);

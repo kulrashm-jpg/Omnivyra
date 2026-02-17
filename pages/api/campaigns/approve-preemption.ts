@@ -6,11 +6,15 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import {
   executePreemptionFromRequest,
   PreemptionValidationError,
 } from '../../../backend/services/CampaignPreemptionService';
+import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../backend/services/CampaignFinalizationGuard';
+import { InvalidExecutionTransitionError, normalizeExecutionState } from '../../../backend/governance/ExecutionStateMachine';
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
+import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -19,12 +23,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  if (await isGovernanceLocked()) {
+    return res.status(423).json({
+      code: 'GOVERNANCE_LOCKED',
+      message: 'Governance lockdown active. Mutations disabled.',
+    });
+  }
+
   try {
-    const { requestId, companyId } = req.body || {};
+    const { requestId, companyId, justification } = req.body || {};
 
     if (!requestId || !companyId) {
       return res.status(400).json({
         error: 'requestId and companyId are required',
+      });
+    }
+
+    const justificationTrimmed = typeof justification === 'string' ? justification.trim() : '';
+    if (!justificationTrimmed || justificationTrimmed.length < 15) {
+      return res.status(400).json({
+        success: false,
+        error: 'Preemption justification is required (minimum 15 characters).',
+        rejected: true,
       });
     }
 
@@ -38,6 +58,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: 'Preemption request not found' });
     }
 
+    const { data: initiatorCampaign, error: initErr } = await supabase
+      .from('campaigns')
+      .select('id, execution_status')
+      .eq('id', request.initiator_campaign_id)
+      .maybeSingle();
+
+    if (initErr || !initiatorCampaign) {
+      return res.status(404).json({ error: 'Initiator campaign not found' });
+    }
+
+    const initiatorExecutionStatus = normalizeExecutionState((initiatorCampaign as any).execution_status);
+    try {
+      assertCampaignNotFinalized(initiatorExecutionStatus);
+    } catch (err: unknown) {
+      if (err instanceof CampaignFinalizedError) {
+        await recordGovernanceEvent({
+          companyId,
+          campaignId: request.initiator_campaign_id,
+          eventType: 'CAMPAIGN_MUTATION_BLOCKED_FINALIZED',
+          eventStatus: 'BLOCKED',
+          metadata: { campaignId: request.initiator_campaign_id, execution_status: initiatorExecutionStatus },
+        });
+        return res.status(409).json({
+          code: 'CAMPAIGN_FINALIZED',
+          message: 'Campaign is finalized and cannot be modified',
+        });
+      }
+      throw err;
+    }
+
     const access = await enforceCompanyAccess({
       req,
       res,
@@ -47,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!access) return;
 
-    const result = await executePreemptionFromRequest(requestId);
+    const result = await executePreemptionFromRequest(requestId, justificationTrimmed, companyId);
 
     const { data: initiator } = await supabase
       .from('campaigns')
@@ -73,10 +123,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         preemptedExecutionStatus: result.preemptedExecutionStatus,
         preemptedBlueprintStatus: result.preemptedBlueprintStatus,
         logId: result.logId,
+        justification: result.justification,
       },
       initiatorEvaluation: evaluation,
     });
   } catch (err: unknown) {
+    if (err instanceof InvalidExecutionTransitionError) {
+      return res.status(409).json({
+        code: 'INVALID_EXECUTION_TRANSITION',
+        message: 'Illegal execution state transition',
+      });
+    }
     if (err instanceof PreemptionValidationError) {
       return res.status(400).json({
         success: false,

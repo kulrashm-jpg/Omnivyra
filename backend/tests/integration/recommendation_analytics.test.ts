@@ -1,92 +1,53 @@
 import handler from '../../../pages/api/recommendations/analytics';
 import { supabase } from '../../db/supabaseClient';
-import type { NextApiRequest, NextApiResponse } from 'next';
+import {
+  createApiRequestMock,
+  createMockRes,
+  createSupabaseMock,
+  getRbacMockImplementations,
+} from '../utils';
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn(), rpc: jest.fn() },
 }));
 
-const createMockRes = () => {
-  const res: Partial<NextApiResponse> & { json: jest.Mock } = {
-    status: jest.fn().mockReturnThis(),
-    json: jest.fn(),
-  };
-  return res as NextApiResponse;
-};
-
-const buildQuery = (result: { data: any; error: any }) => {
-  const query: any = {
-    select: jest.fn().mockReturnThis(),
-    eq: jest.fn().mockReturnThis(),
-    gte: jest.fn().mockReturnThis(),
-    lte: jest.fn().mockReturnThis(),
-    order: jest.fn().mockReturnThis(),
-    limit: jest.fn().mockReturnThis(),
-    then: (resolve: any, reject: any) => Promise.resolve(result).then(resolve, reject),
-  };
-  return query;
-};
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn().mockResolvedValue({ user: { id: 'user-1' }, error: null }),
+}));
+jest.mock('../../services/rbacService', () => require('../utils/setupApiTest').getRbacMockImplementations());
 
 describe('Recommendation analytics', () => {
+  const mockResponses = (table: string) => {
+    if (table === 'recommendation_snapshots') {
+      return { data: [{ id: 'rec-1', campaign_id: 'camp-1', confidence: 80, platforms: ['linkedin'], created_at: '2026-01-01T00:00:00Z' }], error: null };
+    }
+    if (table === 'recommendation_audit_logs') {
+      return { data: [{ policy_id: 'policy-1', confidence: 80, final_score: 1.2, trend_sources_used: [{ source: 'YouTube Trends' }], created_at: '2026-01-01T00:00:00Z' }], error: null };
+    }
+    if (table === 'performance_feedback') {
+      return { data: [{ campaign_id: 'camp-1', engagement_rate: 0.1, collected_at: '2026-01-01T00:00:00Z' }], error: null };
+    }
+    if (table === 'recommendation_policies') {
+      return { data: [{ id: 'policy-1', name: 'Default Policy' }], error: null };
+    }
+    if (table === 'campaign_versions') {
+      return { data: [{ campaign_id: 'camp-1', company_id: 'default' }], error: null };
+    }
+    return { data: [], error: null };
+  };
+
   beforeEach(() => {
-    (supabase.rpc as jest.Mock).mockResolvedValue({ data: true, error: null });
-    (supabase.from as jest.Mock).mockImplementation((table: string) => {
-      if (table === 'recommendation_snapshots') {
-        return buildQuery({
-          data: [
-            {
-              id: 'rec-1',
-              campaign_id: 'camp-1',
-              confidence: 80,
-              platforms: ['linkedin'],
-              created_at: '2026-01-01T00:00:00Z',
-            },
-          ],
-          error: null,
-        });
-      }
-      if (table === 'recommendation_audit_logs') {
-        return buildQuery({
-          data: [
-            {
-              policy_id: 'policy-1',
-              confidence: 80,
-              final_score: 1.2,
-              trend_sources_used: [{ source: 'YouTube Trends' }],
-              created_at: '2026-01-01T00:00:00Z',
-            },
-          ],
-          error: null,
-        });
-      }
-      if (table === 'performance_feedback') {
-        return buildQuery({
-          data: [
-            { campaign_id: 'camp-1', engagement_rate: 0.1, collected_at: '2026-01-01T00:00:00Z' },
-          ],
-          error: null,
-        });
-      }
-      if (table === 'recommendation_policies') {
-        return buildQuery({
-          data: [{ id: 'policy-1', name: 'Default Policy' }],
-          error: null,
-        });
-      }
-      return buildQuery({ data: [], error: null });
-    });
+    const { from, rpc } = createSupabaseMock(mockResponses);
+    (supabase as any).from.mockImplementation(from);
+    (supabase as any).rpc.mockImplementation(rpc);
   });
 
   it('computes analytics and enforces admin gating', async () => {
-    const req = {
-      method: 'GET',
-      query: {},
-    } as unknown as NextApiRequest;
+    const req = createApiRequestMock({ method: 'GET', companyId: 'default' });
     const res = createMockRes();
     await handler(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    const payload = (res.json as jest.Mock).mock.calls[0][0];
+    expect(res.statusCode).toBe(200);
+    const payload = res.body;
     expect(payload.totals.recommendations_count).toBe(1);
     expect(payload.by_platform[0].platform).toBe('linkedin');
     expect(payload.timeline[0].count).toBe(1);
@@ -94,13 +55,14 @@ describe('Recommendation analytics', () => {
   });
 
   it('blocks non-admin access', async () => {
-    (supabase.rpc as jest.Mock).mockResolvedValueOnce({ data: false, error: null });
-    const req = {
-      method: 'GET',
-      query: {},
-    } as unknown as NextApiRequest;
+    const rbac = require('../../services/rbacService');
+    (rbac.enforceRole as jest.Mock).mockImplementationOnce(async ({ res }: { res: any }) => {
+      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      return null;
+    });
+    const req = createApiRequestMock({ method: 'GET', companyId: 'default' });
     const res = createMockRes();
     await handler(req, res);
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.statusCode).toBe(403);
   });
 });

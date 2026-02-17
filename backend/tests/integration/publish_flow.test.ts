@@ -1,27 +1,145 @@
 /**
  * Integration Test: Publish Flow
- * 
- * Tests the complete flow from scheduled post to published post:
- * 1. Seed demo scheduled_post and social_account
- * 2. Start cron once (finds due post, creates queue_job)
- * 3. Start worker in test mode (processes job, calls adapter)
- * 4. Assert scheduled_posts.status === 'published'
- * 5. Assert queue_jobs.status === 'completed'
- * 
- * Run: npm test or npx jest backend/tests/integration/publish_flow.test.ts
- * 
- * Prerequisites:
- * - Redis running (docker run -p 6379:6379 redis:7)
- * - Supabase database with schema applied
- * - USE_MOCK_PLATFORMS=true for testing without real API keys
+ *
+ * Tests the complete flow from scheduled post to published post.
+ * Uses mocked Supabase + BullMQ so tests pass without real Redis/DB.
  */
 
-// Integration Test: Publish Flow
-// Run with: npm test or jest backend/tests/integration/publish_flow.test.ts
-// 
-// Note: Jest setup required. For now, this is a template showing test structure.
-
 import type { Job } from 'bullmq';
+
+// In-memory store for deterministic testing
+const store: Record<string, any[]> = {
+  social_accounts: [],
+  scheduled_posts: [],
+  queue_jobs: [],
+  queue_job_logs: [],
+  campaigns: [],
+};
+
+function applyFilters(
+  rows: any[],
+  filters: Record<string, any>,
+  inFilters: Record<string, any[]>,
+  lteFilters?: Record<string, any>
+) {
+  let result = rows;
+  for (const [k, v] of Object.entries(filters)) {
+    if (k.includes('->>')) {
+      const [table, col] = k.split('->>');
+      result = result.filter((r: any) => (r[table] as any)?.[col] === v);
+    } else result = result.filter((r: any) => r[k] === v);
+  }
+  for (const [k, vals] of Object.entries(inFilters)) {
+    result = result.filter((r: any) => vals.includes(r[k]));
+  }
+  if (lteFilters) {
+    for (const [k, v] of Object.entries(lteFilters)) {
+      result = result.filter((r: any) => r[k] != null && r[k] <= v);
+    }
+  }
+  return result;
+}
+
+function buildChain(table: string) {
+  const state: any = { filters: {}, inFilters: {}, lteFilters: {}, updateData: null };
+  const self: any = {
+    select: jest.fn().mockReturnThis(),
+    insert: jest.fn().mockImplementation((row: any) => {
+      const id = row.id || `gen-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      if (!store[table]) store[table] = [];
+      const record = { ...row, id, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      store[table].push(record);
+      self._inserted = record;
+      return self;
+    }),
+    update: jest.fn().mockImplementation((data: any) => {
+      state.updateData = data;
+      return self;
+    }),
+    delete: jest.fn().mockImplementation(() => {
+      state._isDelete = true;
+      return self;
+    }),
+    eq: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
+      return self;
+    }),
+    in: jest.fn((field: string, values: any[]) => {
+      state.inFilters[field] = values;
+      return self;
+    }),
+    lte: jest.fn((field: string, value: any) => {
+      state.lteFilters[field] = value;
+      return self;
+    }),
+    order: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    single: jest.fn().mockImplementation(() => {
+      const rows = store[table] || [];
+      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters);
+      let data = filtered[0] || null;
+      if (self._inserted) data = self._inserted;
+      if (state.updateData && data) {
+        Object.assign(data, state.updateData);
+      }
+      return Promise.resolve({ data, error: null });
+    }),
+    maybeSingle: jest.fn().mockImplementation(() => {
+      const rows = store[table] || [];
+      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters);
+      const data = filtered[0] || null;
+      return Promise.resolve({ data, error: null });
+    }),
+  };
+  self.then = jest.fn().mockImplementation((resolve: any) => {
+    const rows = store[table] || [];
+    const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters);
+    if (state._isDelete) {
+      const ids = new Set(filtered.map((r: any) => r.id));
+      store[table] = (store[table] || []).filter((r: any) => !ids.has(r.id));
+      return Promise.resolve({ data: null, error: null }).then(resolve);
+    }
+    if (state.updateData && filtered.length > 0) {
+      filtered.forEach((r: any) => Object.assign(r, state.updateData));
+    }
+    const data = self._inserted ? [self._inserted] : filtered;
+    return Promise.resolve({ data, count: data.length, error: null }).then(resolve);
+  });
+  return self;
+}
+
+jest.mock('../../db/supabaseClient', () => ({
+  supabase: {
+    from: jest.fn((table: string) => buildChain(table)),
+  },
+}));
+
+jest.mock('../../queue/bullmqClient', () => ({
+  getQueue: jest.fn().mockReturnValue({
+    add: jest.fn().mockResolvedValue({ id: 'mock-job-id' }),
+  }),
+}));
+
+jest.mock('../../adapters/platformAdapter', () => ({
+  publishToPlatform: jest.fn().mockResolvedValue({
+    success: true,
+    platform_post_id: 'mock_platform_post_123',
+    post_url: 'https://example.com/post/123',
+    published_at: new Date(),
+  }),
+}));
+
+jest.mock('../../services/campaignReadinessService', () => ({
+  getCampaignReadiness: jest.fn().mockResolvedValue({ ready: true }),
+}));
+
+jest.mock('../../services/analyticsService', () => ({
+  recordPostAnalytics: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../../services/activityLogger', () => ({
+  logActivity: jest.fn().mockResolvedValue(undefined),
+}));
 import { supabase } from '../../db/supabaseClient';
 import { findDuePostsAndEnqueue } from '../../scheduler/schedulerService';
 import { processPublishJob } from '../../queue/jobProcessors/publishProcessor';
@@ -38,6 +156,13 @@ const TEST_SCHEDULED_POST_ID = '00000000-0000-0000-0000-000000000003';
 
 async function runIntegrationTest() {
   console.log('🧪 Running Publish Flow Integration Test...');
+
+  // Clear in-memory store before each run
+  store.social_accounts = [];
+  store.scheduled_posts = [];
+  store.queue_jobs = [];
+  store.queue_job_logs = [];
+  store.campaigns = [];
 
   // Ensure USE_MOCK_PLATFORMS is enabled for testing
   process.env.USE_MOCK_PLATFORMS = 'true';
@@ -140,10 +265,7 @@ if (require.main === module) {
 export { runIntegrationTest };
 
 describe('Publish Flow Integration', () => {
-  const shouldRun = process.env.RUN_PUBLISH_FLOW_TEST === 'true';
-  const runner = shouldRun ? test : test.skip;
-
-  runner('runs the full publish flow', async () => {
+  test('runs the full publish flow', async () => {
     await runIntegrationTest();
   });
 });

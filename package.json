@@ -10,7 +10,7 @@
     "worker": "ts-node backend/queue/worker.ts",
     "worker:leads": "node -r ts-node/register backend/workers/leadWorker.ts",
     "start:cron": "node -r ts-node/register backend/scheduler/cron.ts",
-    "test": "jest backend/tests/integration/publish_flow.test.ts",
+    "test": "jest backend/tests --runInBand",
     "setup:env": "node scripts/setup-helpers/setup-env.js",
     "setup:key": "node scripts/setup-helpers/generate-encryption-key.js",
     "setup:verify": "node scripts/setup-helpers/verify-setup.js",

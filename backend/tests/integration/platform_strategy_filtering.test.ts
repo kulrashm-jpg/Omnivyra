@@ -8,6 +8,25 @@ jest.mock('../../services/externalApiService', () => ({
 jest.mock('../../services/performanceFeedbackService', () => ({
   getHistoricalAccuracyScore: jest.fn().mockResolvedValue(0.5),
 }));
+jest.mock('../../services/recommendationPolicyService', () => ({
+  getActivePolicy: jest.fn().mockResolvedValue({
+    id: 'policy-1',
+    name: 'default',
+    is_active: true,
+    weights: {
+      trend_score: 1.5,
+      geo_fit: 1.2,
+      audience_fit: 1.0,
+      category_fit: 1.0,
+      platform_fit: 1.0,
+      health_multiplier: 1.0,
+      historical_accuracy: 1.0,
+      effort_penalty: 0.5,
+    },
+  }),
+  validatePolicy: jest.fn().mockReturnValue({ ok: true }),
+  updatePolicy: jest.fn(),
+}));
 
 describe('Platform strategy filtering', () => {
   beforeEach(() => {

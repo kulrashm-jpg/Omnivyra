@@ -4,6 +4,16 @@ import listHandler from '../../../pages/api/users/index';
 import roleHandler from '../../../pages/api/users/[userId]/role';
 import removeHandler from '../../../pages/api/users/[userId]/index';
 import { logUserManagementAudit } from '../../services/campaignAuditService';
+import { Role } from '../../services/rbacService';
+
+jest.mock('../../services/rbacService', () => ({
+  ...jest.requireActual('../../services/rbacService'),
+  enforceRole: jest.fn(),
+  getUserRole: jest.fn(),
+  isSuperAdmin: jest.fn(),
+}));
+
+const { enforceRole, getUserRole, isSuperAdmin } = jest.requireMock('../../services/rbacService');
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
@@ -51,7 +61,7 @@ const roleRows: RoleRow[] = [];
 const authUsers: Record<string, { id: string; email: string }> = {};
 
 const buildQuery = (table: string) => {
-  const state: { filters: Record<string, any> } = { filters: {} };
+  const state: { filters: Record<string, any>; op?: string; updatePayload?: any } = { filters: {} };
   const query: any = {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn((field: string, value: any) => {
@@ -65,34 +75,47 @@ const buildQuery = (table: string) => {
       return query;
     }),
     update: jest.fn((payload: any) => {
-      roleRows.forEach((row) => {
-        if (
-          row.user_id === state.filters.user_id &&
-          row.company_id === state.filters.company_id
-        ) {
-          Object.assign(row, payload);
-        }
-      });
+      state.op = 'update';
+      state.updatePayload = payload;
       return query;
     }),
     delete: jest.fn(() => {
-      for (let i = roleRows.length - 1; i >= 0; i -= 1) {
-        const row = roleRows[i];
-        if (
-          row.user_id === state.filters.user_id &&
-          row.company_id === state.filters.company_id
-        ) {
-          roleRows.splice(i, 1);
-        }
-      }
+      state.op = 'delete';
       return query;
     }),
     then: (resolve: any) => {
       if (table === 'user_company_roles') {
+        if (state.op === 'update' && state.updatePayload) {
+          roleRows.forEach((row) => {
+            if (
+              row.user_id === state.filters.user_id &&
+              row.company_id === state.filters.company_id
+            ) {
+              Object.assign(row, state.updatePayload);
+            }
+          });
+          const updated = roleRows.filter(
+            (r) => r.user_id === state.filters.user_id && r.company_id === state.filters.company_id
+          );
+          return resolve({ data: updated, error: null });
+        }
+        if (state.op === 'delete') {
+          for (let i = roleRows.length - 1; i >= 0; i -= 1) {
+            const row = roleRows[i];
+            if (
+              row.user_id === state.filters.user_id &&
+              row.company_id === state.filters.company_id
+            ) {
+              roleRows.splice(i, 1);
+            }
+          }
+          return resolve({ data: null, error: null });
+        }
         const filtered = roleRows.filter((row) => {
           if (state.filters.user_id && row.user_id !== state.filters.user_id) return false;
           if (state.filters.company_id && row.company_id !== state.filters.company_id) return false;
           if (state.filters.role && row.role !== state.filters.role) return false;
+          if (state.filters.status && (row.status ?? 'active') !== state.filters.status) return false;
           return true;
         });
         return resolve({ data: filtered, error: null });
@@ -107,6 +130,48 @@ describe('User lifecycle management', () => {
   beforeEach(() => {
     roleRows.splice(0, roleRows.length);
     Object.keys(authUsers).forEach((key) => delete authUsers[key]);
+    (isSuperAdmin as jest.Mock).mockImplementation(async (userId: string) => {
+      return roleRows.some((r) => r.user_id === userId && r.role === 'SUPER_ADMIN');
+    });
+    (getUserRole as jest.Mock).mockImplementation(async (userId: string, companyId: string) => {
+      const row = roleRows.find(
+        (r) => r.user_id === userId && r.company_id === companyId && (r.status ?? 'active') === 'active'
+      );
+      if (!row) {
+        const hasAnyRole = roleRows.some((r) => r.user_id === userId);
+        return { role: null, error: hasAnyRole ? 'COMPANY_ACCESS_DENIED' : null };
+      }
+      return { role: row.role === 'ADMIN' ? Role.ADMIN : (row.role as any), error: null };
+    });
+    (enforceRole as jest.Mock).mockImplementation(async ({ req, res, companyId, allowedRoles }: any) => {
+      const user = await resolveUserContext(req);
+      if (!companyId) {
+        res.status(400).json({ error: 'companyId required' });
+        return null;
+      }
+      const superAdminRow = roleRows.find((r) => r.user_id === user.userId && r.role === 'SUPER_ADMIN');
+      if (superAdminRow && allowedRoles.includes(Role.SUPER_ADMIN)) {
+        return { userId: user.userId, role: Role.SUPER_ADMIN };
+      }
+      const row = roleRows.find(
+        (r) => r.user_id === user.userId && r.company_id === companyId && (r.status ?? 'active') === 'active'
+      );
+      const role = row?.role ?? null;
+      if (!role) {
+        if (roleRows.some((r) => r.user_id === user.userId)) {
+          res.status(403).json({ error: 'COMPANY_SCOPE_VIOLATION' });
+          return null;
+        }
+        res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+        return null;
+      }
+      const roleToUse = role === 'ADMIN' ? Role.ADMIN : role;
+      if (!allowedRoles.includes(roleToUse) && !allowedRoles.includes(role)) {
+        res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+        return null;
+      }
+      return { userId: user.userId, role: roleToUse };
+    });
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
     (supabase.auth.admin.getUserByEmail as jest.Mock).mockImplementation(async (email: string) => {
       const user = Object.values(authUsers).find((u) => u.email === email);

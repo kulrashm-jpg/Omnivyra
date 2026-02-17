@@ -8,6 +8,21 @@ jest.mock('../../services/externalApiService', () => ({
   fetchTrendsFromApis: jest.fn().mockResolvedValue([
     { topic: 'AI marketing', source: 'YouTube Trends', signal_confidence: 0.9 },
   ]),
+  fetchExternalApis: jest.fn().mockResolvedValue({
+    results: [
+      {
+        source: { name: 'YouTube Trends', id: 'yt' },
+        payload: { items: [{ title: 'AI marketing', snippet: { title: 'AI marketing' } }] },
+        health: null,
+        cache_hit: false,
+        missing_env: [],
+      },
+    ],
+    missing_env_placeholders: [],
+    cache_stats: { hits: 0, misses: 0, per_api_hits: {}, per_api_misses: {} },
+    rate_limited_sources: [],
+    signal_confidence_summary: { average: 0.9, min: 0.8, max: 1 },
+  }),
   getPlatformStrategies: jest.fn().mockResolvedValue([]),
   getEnabledApis: jest.fn().mockResolvedValue([]),
   getExternalApiRuntimeSnapshot: jest.fn().mockResolvedValue({
@@ -39,6 +54,31 @@ jest.mock('../../services/campaignRecommendationService', () => ({
     daily_plan: [{ date: 'Week 1 Day 1', platform: 'linkedin', content_type: 'text', topic: 'AI' }],
   }),
 }));
+jest.mock('../../db/supabaseClient', () => {
+  const chain = (data: any) => ({
+    select: jest.fn().mockReturnThis(),
+    eq: jest.fn().mockReturnThis(),
+    gte: jest.fn().mockReturnThis(),
+    order: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    single: jest.fn().mockResolvedValue({
+      data: Array.isArray(data) ? data?.[0] ?? null : data,
+      error: null,
+    }),
+    maybeSingle: jest.fn().mockResolvedValue({
+      data: Array.isArray(data) ? data?.[0] ?? null : data,
+      error: null,
+    }),
+    then: (fn: (v: any) => any) =>
+      Promise.resolve({ data: Array.isArray(data) ? data : data ? [data] : [], error: null }).then(fn),
+  });
+  const from = jest.fn((table: string) => {
+    if (table === 'campaign_versions') return chain([{ id: 'v1', company_id: 'comp-1', campaign_id: 'camp-1' }]);
+    if (table === 'platform_rules') return chain(null); // getPlatformRule returns null when no rule
+    return chain([]);
+  });
+  return { supabase: { from, rpc: jest.fn().mockResolvedValue({ data: null, error: null }) } };
+});
 jest.mock('../../services/omnivyraClientV1', () => ({
   isOmniVyraEnabled: jest.fn().mockReturnValue(true),
   getTrendRelevance: jest.fn().mockResolvedValue({

@@ -641,6 +641,18 @@ Generate strategic campaign pillars to capture this demand.`;
     await onAction(id, 'REVIEWED');
   };
 
+  const wrappedOnPromote = async (id: string) => {
+    try {
+      await onPromote(id);
+    } catch (e: unknown) {
+      const err = e as Error & { status?: number };
+      if (err?.status === 404) {
+        await refetchGetOnly(); // clear stale opportunity from list
+      }
+      throw e;
+    }
+  };
+
   if (!companyId) {
     return (
       <div className="text-sm text-gray-500 py-4">Select a company to view strategic themes.</div>
@@ -856,7 +868,7 @@ Generate strategic campaign pillars to capture this demand.`;
                   <ThemeCard
                     key={opp.id}
                     opportunity={opp}
-                    onPromote={onPromote}
+                    onPromote={wrappedOnPromote}
                     onArchive={handleArchive}
                     onMarkPossibility={handleMarkPossibility}
                     onActionComplete={refetchGetOnly}
@@ -878,7 +890,7 @@ Generate strategic campaign pillars to capture this demand.`;
                 <ThemeCard
                   key={opp.id}
                   opportunity={opp}
-                  onPromote={onPromote}
+                  onPromote={wrappedOnPromote}
                   onArchive={handleArchive}
                   onMarkPossibility={handleMarkPossibility}
                   onActionComplete={refetchGetOnly}

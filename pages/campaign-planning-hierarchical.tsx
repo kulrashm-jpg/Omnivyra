@@ -376,7 +376,7 @@ export default function CampaignPlanningHierarchical() {
             </div>
           ) : (
             <div className="space-y-4">
-              {Array.from({ length: overview?.totalWeeks ?? weeklyPlans.length || 12 }, (_, index) => {
+              {Array.from({ length: (overview?.totalWeeks ?? weeklyPlans.length) || 12 }, (_, index) => {
                 const weekNumber = index + 1;
                 const plan = weeklyPlans.find(p => p.weekNumber === weekNumber);
                 const isSelected = selectedWeek?.week === weekNumber;

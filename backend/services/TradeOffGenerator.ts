@@ -73,6 +73,22 @@ export function generateTradeOffOptions(params: TradeOffGeneratorParams): TradeO
     });
   }
 
+  // Option D — ADJUST_CONTENT_MIX (when content-type capacity limits)
+  if (limitingConstraints.some((c) => c.name === 'content_type_capacity')) {
+    options.push({
+      type: 'ADJUST_CONTENT_MIX',
+      reasoning: 'Adjust weekly content mix to match available asset types.',
+    });
+  }
+
+  // Option E — ADJUST_CONTENT_SELECTION (when content collision limits)
+  if (limitingConstraints.some((c) => c.name === 'content_collision')) {
+    options.push({
+      type: 'ADJUST_CONTENT_SELECTION',
+      reasoning: 'Select different content assets for this campaign.',
+    });
+  }
+
   return options;
 }
 
@@ -82,6 +98,8 @@ const TRADE_OFF_ORDER_NORMAL = [
   'REDUCE_FREQUENCY',
   'EXTEND_DURATION',
   'INCREASE_CAPACITY',
+  'ADJUST_CONTENT_MIX',
+  'ADJUST_CONTENT_SELECTION',
 ] as const;
 
 const TRADE_OFF_ORDER_HIGH_CRITICAL = [
@@ -90,6 +108,8 @@ const TRADE_OFF_ORDER_HIGH_CRITICAL = [
   'REDUCE_FREQUENCY',
   'EXTEND_DURATION',
   'INCREASE_CAPACITY',
+  'ADJUST_CONTENT_MIX',
+  'ADJUST_CONTENT_SELECTION',
 ] as const;
 
 /**

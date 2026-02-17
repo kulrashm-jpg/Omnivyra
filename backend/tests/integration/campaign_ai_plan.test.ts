@@ -41,6 +41,13 @@ jest.mock('openai', () => {
   };
 });
 
+jest.mock('../../db/campaignPlanStore', () => ({
+  saveAiCampaignPlan: jest.fn().mockResolvedValue(undefined),
+  saveStructuredCampaignPlan: jest.fn().mockResolvedValue(undefined),
+  saveStructuredCampaignPlanDayUpdate: jest.fn().mockResolvedValue(undefined),
+  saveStructuredCampaignPlanPlatformCustomize: jest.fn().mockResolvedValue(undefined),
+}));
+
 const createMockRes = () => {
   const res: Partial<NextApiResponse> & { json: jest.Mock } = {
     status: jest.fn().mockReturnThis(),
@@ -93,7 +100,7 @@ describe('Campaign AI Plan API', () => {
     const payload = (res.json as jest.Mock).mock.calls[0][0];
     expect(payload.mode).toBe('generate_plan');
     expect(payload.snapshot_hash).toBe('hash123');
-    expect(payload.response).toBe('Test campaign plan output');
+    expect(payload.conversationalResponse).toBe('Test campaign plan output');
     expect(payload.omnivyre_decision.recommendation).toBe('HOLD');
   });
 });

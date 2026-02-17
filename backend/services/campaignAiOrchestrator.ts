@@ -25,6 +25,11 @@ export interface ConversationMessage {
   message: string;
 }
 
+export interface OptimizationContext {
+  roiScore: number;
+  headlines: string[];
+}
+
 export interface CampaignAiPlanInput {
   campaignId: string;
   mode: CampaignAiMode;
@@ -34,6 +39,8 @@ export interface CampaignAiPlanInput {
   platforms?: string[];
   conversationHistory?: ConversationMessage[];
   recommendationContext?: RecommendationContext | null;
+  /** Stage 35: ROI + optimization headlines for AI context injection */
+  optimizationContext?: OptimizationContext | null;
 }
 
 export interface CampaignAiPlanResult {
@@ -87,6 +94,12 @@ export interface CampaignAiPlanResult {
 
 const GATHER_ORDER = [
   { key: 'target_audience', question: 'Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)' },
+  { key: 'available_content', question: 'Do you have any existing content for this campaign? (e.g., how many videos, blog posts, or carousel posts you already have that fit the topic)' },
+  { key: 'available_content_allocation', question: 'CONTINGENT: Only ask if they said they have content. For each piece (e.g., "I have this video and this blog")—which category/objective should it serve: brand awareness, network expansion, lead generation, authority positioning, engagement growth, or product promotion? And which specific week(s) in your plan should it fill? This assigns each piece to a placeholder for that week.' },
+  { key: 'tentative_start', question: 'When do you want to start the campaign? Please provide a date in YY-MM-DD format (e.g., 25-03-01).' },
+  { key: 'campaign_types', question: 'Which campaign types matter most for you? Pick one or more: brand awareness, network expansion, lead generation, authority positioning, engagement growth, product promotion. Which is primary?' },
+  { key: 'content_capacity', question: 'How much content can you produce per week, and how will you create it? For each format—blogs, videos, carousels, single posts, stories—how many per week? And is creation manual, AI-assisted, or full AI?' },
+  { key: 'campaign_duration', question: 'How many weeks should the campaign run? (e.g., 6, 12, or 24 weeks)' },
   { key: 'platforms', question: 'Which platforms will you focus on? (e.g., LinkedIn, Instagram, Twitter, YouTube, Facebook, TikTok)' },
   { key: 'key_messages', question: 'What are your key messages or pain points to address in this campaign?' },
   { key: 'success_metrics', question: 'What success metrics do you want to track? (e.g., engagement rate, reach, conversions, leads)' },
@@ -262,6 +275,8 @@ function buildPromptContext(input: {
     primary_type: string;
   } | null;
   baselineContext?: BaselineContextResult;
+  optimizationContext?: { roiScore: number; headlines: string[] } | null;
+  prefilledPlanning?: Record<string, unknown> | null;
 }): { system: string; user: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> } {
   const diagnosticsWithBaseline = { ...input.diagnostics };
   if (input.baselineContext && !('unavailable' in input.baselineContext)) {
@@ -294,6 +309,26 @@ function buildPromptContext(input: {
   if (input.campaignIntentSummary) {
     userPayload.campaign_intent_summary = input.campaignIntentSummary;
   }
+  if (input.optimizationContext && input.optimizationContext.headlines?.length) {
+    userPayload.optimization_signals =
+      `Campaign ROI Score: ${input.optimizationContext.roiScore} | Optimization Signals: ${input.optimizationContext.headlines.join('; ')}`;
+  } else if (input.optimizationContext) {
+    userPayload.optimization_signals = `Campaign ROI Score: ${input.optimizationContext.roiScore}`;
+  }
+  if (input.prefilledPlanning && Object.keys(input.prefilledPlanning).length > 0) {
+    userPayload.prefilled_planning = input.prefilledPlanning;
+  }
+
+  const prefilledBlock =
+    input.prefilledPlanning && Object.keys(input.prefilledPlanning).length > 0
+      ? `
+ALREADY KNOWN (from campaign setup — do NOT re-ask these):
+${Object.entries(input.prefilledPlanning)
+  .map(([k, v]) => `- ${k}: ${v}`)
+  .join('\n')}
+
+Start from the first required question that is NOT listed above. If most are filled, ask only the missing ones.`
+      : '';
 
   const modeHint =
     input.mode === 'platform_customize'
@@ -303,21 +338,30 @@ function buildPromptContext(input: {
 ONE-BY-ONE QUESTIONING MODE (generate_plan with conversation):
 
 You are building a ${durationWeeks}-week campaign plan through conversation. You MUST gather details first, then generate the plan ONLY when the user explicitly asks for it or when you have all required info.
+${prefilledBlock}
 
-REQUIRED INFO TO GATHER (in order, one question at a time):
+REQUIRED INFO TO GATHER (in order, one question at a time — skip any already in ALREADY KNOWN above):
 1. target_audience — Who is your primary target audience?
-2. platforms — Which platforms will you focus on?
-3. key_messages — What are your key messages or pain points to address?
-4. success_metrics — What success metrics do you want to track?
+2. available_content — Do they have existing content (videos, posts, blogs) for this campaign?
+3. available_content_allocation — ONLY IF they have content: For each piece (e.g., "I have this video and this blog"), ask: Which category/objective should it serve (brand awareness, network expansion, lead gen, authority, engagement, product promotion)? And which specific week(s) should it fill? This assigns the content to the right placeholder for that week.
+4. tentative_start — When do they want to start? They must provide a date in YY-MM-DD format (e.g., 25-03-01). If they say "first of March" or similar, ask them to give the exact date in YY-MM-DD.
+5. campaign_types — Which matter most: brand awareness, network expansion, lead generation, authority positioning, engagement growth, product promotion?
+6. content_capacity — Per format (blogs, videos, carousels, posts, stories): how many/week? Creation method: manual, AI-assisted, or full AI?
+7. campaign_duration — How many weeks (e.g., 6, 12, 24)?
+8. platforms — Which platforms will they focus on?
+9. key_messages — Key messages or pain points?
+10. success_metrics — What metrics to track?
 
 CRITICAL RULES:
-- After EACH user answer, reply with ONLY the next question. Be conversational and warm. Do NOT generate the plan yet.
+- VALIDATE each answer against the question asked. If the answer does NOT fit (e.g., a date like "26-03-01" when you asked for target audience, or "professionals" when you asked for a date), politely re-ask the SAME question and explain what format you need. Do NOT move to the next question until you receive a valid answer.
+- After EACH valid user answer, reply with ONLY the next question. Be conversational and warm. Do NOT generate the plan yet.
 - ONLY output BEGIN_12WEEK_PLAN ... END_12WEEK_PLAN when BOTH are true:
-  (a) The user has answered ALL 4 questions above, AND
-  (b) The user explicitly says to create/generate the plan (e.g. "create my plan", "generate plan", "I'm ready", "that's all", "go ahead", "create campaign", "build the plan").
-- If the user has not answered all 4 questions, NEVER generate the plan — ask the next question instead.
-- If the user answered all 4 but has NOT said to create the plan, ask: "I have everything I need. Would you like me to create your ${durationWeeks}-week plan now?"
+  (a) The user has answered ALL required questions (skip available_content_allocation if they have no existing content), AND
+  (b) The user explicitly says to create/generate the plan. Valid confirmations include: "create my plan", "generate plan", "I'm ready", "that's all", "go ahead", "create campaign", "build the plan", and when you have just asked "Would you like me to create your plan now?", any affirmative reply such as "yes", "sure", "please", "ok", "okay", "yeah", "yep", "create it", "do it", "go for it".
+- If the user has not answered all questions, NEVER generate the plan — ask the next question instead.
+- If the user answered all questions but has NOT said to create the plan, ask: "I have everything I need. Would you like me to create your ${durationWeeks}-week plan now?" When they reply "yes", "sure", "ok", or similar, GENERATE the plan immediately. NEVER restart from question 1.
 - Use the recommendation context (target_regions, context_payload) and all previous answers to inform the plan when you eventually generate it.
+- Each week MUST have a concrete theme (topic for that week) decided by AI—what we are doing from the campaign objective standpoint that week, given the topic. This theme is required before scheduling.
 `
       : '\n';
 
@@ -459,6 +503,11 @@ For each week, provide:
 
    Must reflect dominant campaign type and baseline context.
 
+9. Weekly Theme (REQUIRED — must be decided before scheduling)
+   A concrete, topic-specific theme for the week. NOT the phase label.
+   Example: "Introduce the 3-pillar stress-reduction framework" or "Share customer success: overcoming anxiety" or "Launch the community discussion on decision fatigue".
+   Must state what we are specifically doing from the campaign objective standpoint that week, given the campaign topic. This is the thematic angle for the week—not "brand awareness" but "what we're doing for brand awareness this week, considering our topic".
+
 BEHAVIORAL ENFORCEMENT RULES
 
 Baseline Enforcement:
@@ -481,9 +530,10 @@ Weighted Doctrine Enforcement:
 
 Format Enforcement:
 - No narrative paragraphs.
-- No theme-only weeks.
-- All 8 sections required per week.
+- No theme-only weeks (but weekly theme is required).
+- All 9 sections required per week.
 - All weeks must follow identical structure.
+- Weekly theme must be explicit and topic-specific—do not leave blank.
 `;
 
   const BASELINE_REALITY_CONTEXT_UNAVAILABLE = `
@@ -572,11 +622,11 @@ Do NOT override weighted doctrine. Baseline conditioning only modulates pacing, 
       (m) => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.message })
     );
     return {
-      system: 'You are a campaign planning assistant. Ask one question at a time. Do NOT generate the plan until the user has answered all 4 questions (target audience, platforms, key messages, success metrics) AND the user explicitly asks you to create the plan.',
+      system: 'You are a campaign planning assistant. Ask one question at a time. When the user has answered all planning questions AND confirms ("yes", "sure", "create my plan", etc.), GENERATE the plan immediately. Never restart from question 1.',
       user: baseUser,
       messages: [
-        { role: 'system', content: `Ask one question at a time. Only generate the ${durationWeeks}-week plan when: (1) user has answered all 4 questions, AND (2) user says to create/generate the plan. For questions, reply naturally. For the plan, wrap with BEGIN_12WEEK_PLAN and END_12WEEK_PLAN.` },
-        ...conversationMessages.slice(-14),
+        { role: 'system', content: `Ask one question at a time. Only generate the ${durationWeeks}-week plan when: (1) user has answered all planning questions, AND (2) user confirms (e.g. "yes", "sure", "create my plan", "go ahead"). When they say "yes" or "sure" in reply to "Would you like me to create your plan now?", GENERATE the plan immediately. NEVER restart from question 1—if they have answered and confirmed, output BEGIN_12WEEK_PLAN. For the plan, wrap with BEGIN_12WEEK_PLAN and END_12WEEK_PLAN.` },
+        ...conversationMessages.slice(-50),
         { role: 'user', content: baseUser },
       ],
     };
@@ -590,6 +640,43 @@ Do NOT override weighted doctrine. Baseline conditioning only modulates pacing, 
       { role: 'user', content: baseUser },
     ],
   };
+}
+
+function buildPrefilledPlanning(input: {
+  campaign: { start_date?: string | null; duration_weeks?: number | null; description?: string | null; name?: string } | null;
+  versionRow: {
+    campaign_types?: string[];
+    campaign_weights?: Record<string, number>;
+    campaign_snapshot?: { planning_context?: { content_capacity?: Record<string, { perWeek?: number; creationMethod?: string }> }; target_regions?: string[]; context_payload?: { formats?: string[]; platforms?: string[] } };
+  } | null;
+}): Record<string, unknown> {
+  const prefilled: Record<string, unknown> = {};
+  const c = input.campaign;
+  const v = input.versionRow;
+  if (c?.start_date) prefilled.tentative_start = c.start_date;
+  if (c?.duration_weeks != null) prefilled.campaign_duration = c.duration_weeks;
+  if (v?.campaign_types?.length) {
+    prefilled.campaign_types = v.campaign_types.map((t) => t.replace(/_/g, ' ')).join(', ');
+  }
+  if (v?.campaign_snapshot?.planning_context?.content_capacity) {
+    const cap = v.campaign_snapshot.planning_context.content_capacity;
+    const parts: string[] = [];
+    for (const [fmt, val] of Object.entries(cap)) {
+      if (val && typeof val === 'object' && 'perWeek' in val) {
+        const p = val as { perWeek?: number; creationMethod?: string };
+        parts.push(`${fmt}: ${p.perWeek ?? 0}/week (${p.creationMethod ?? 'manual'})`);
+      }
+    }
+    if (parts.length) prefilled.content_capacity = parts.join('; ');
+  }
+  const payload = v?.campaign_snapshot?.context_payload;
+  if (payload?.formats?.length) prefilled.suggested_formats = payload.formats.join(', ');
+  if (payload?.platforms?.length) prefilled.platforms = payload.platforms.join(', ');
+  if (v?.campaign_snapshot?.target_regions?.length) {
+    prefilled.target_regions = v.campaign_snapshot.target_regions.join(', ');
+  }
+  if (c?.description) prefilled.theme_or_description = c.description.slice(0, 300);
+  return prefilled;
 }
 
 const DEFAULT_PLATFORM_STRATEGIES = [
@@ -616,6 +703,7 @@ async function runWithContext(
       primary_type: string;
     } | null;
     baselineContext?: BaselineContextResult;
+    prefilledPlanning?: Record<string, unknown>;
   }
 ): Promise<CampaignAiPlanResult> {
   const prompt = buildPromptContext({
@@ -634,6 +722,8 @@ async function runWithContext(
     companyContext: ctx.companyContext ?? null,
     campaignIntentSummary: ctx.campaignIntentSummary ?? null,
     baselineContext: ctx.baselineContext,
+    optimizationContext: input.optimizationContext ?? null,
+    prefilledPlanning: ctx.prefilledPlanning ?? null,
   });
 
   const completion = await generateCampaignPlan({
@@ -772,13 +862,13 @@ export async function runCampaignAiPlan(
   const isConversational = input.mode === 'generate_plan' && (input.conversationHistory?.length ?? 0) > 0;
 
   let resolvedDurationWeeks = input.durationWeeks;
+  const { data: campaignRow } = await supabase
+    .from('campaigns')
+    .select('duration_weeks, start_date, description, name')
+    .eq('id', input.campaignId)
+    .maybeSingle();
   if (resolvedDurationWeeks == null) {
-    const { data: campaign } = await supabase
-      .from('campaigns')
-      .select('duration_weeks')
-      .eq('id', input.campaignId)
-      .maybeSingle();
-    resolvedDurationWeeks = campaign?.duration_weeks ?? 12;
+    resolvedDurationWeeks = campaignRow?.duration_weeks ?? 12;
   }
 
   const inputWithDuration = { ...input, durationWeeks: resolvedDurationWeeks };
@@ -890,7 +980,12 @@ export async function runCampaignAiPlan(
   }
   ctx.baselineContext = baselineContext;
 
-  const result = await runWithContext(inputWithDuration, ctx);
+  const prefilledPlanning = buildPrefilledPlanning({
+    campaign: campaignRow,
+    versionRow,
+  });
+
+  const result = await runWithContext(inputWithDuration, { ...ctx, prefilledPlanning });
 
   if (result.omnivyre_decision && baselineContext && !('unavailable' in baselineContext)) {
     result.omnivyre_decision = {

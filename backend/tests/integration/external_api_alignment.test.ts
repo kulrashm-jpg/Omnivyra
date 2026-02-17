@@ -31,6 +31,7 @@ const buildQuery = (table: string) => {
       state.filters[field] = value;
       return query;
     }),
+    or: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     single: jest.fn().mockReturnThis(),
     then: (resolve: any, reject: any) => {
@@ -49,6 +50,12 @@ const resolveQuery = (table: string, state: any) => {
     return { data: Array.from(sourcesStore.values()), error: null };
   }
   if (table === 'external_api_user_access') {
+    return { data: [], error: null };
+  }
+  if (table === 'campaign_versions') {
+    if (state.filters.company_id && state.filters.campaign_id) {
+      return { data: [{ id: 'v1', company_id: state.filters.company_id, campaign_id: state.filters.campaign_id }], error: null };
+    }
     return { data: [], error: null };
   }
   return { data: [], error: null };
@@ -204,6 +211,6 @@ describe('External API alignment', () => {
       });
     });
     expect(result.omnivyra_metadata?.placeholders).toContain('no_external_signals');
-    expect(result.confidence_score).toBe(30);
+    expect(result.confidence_score).toBe(35);
   });
 });

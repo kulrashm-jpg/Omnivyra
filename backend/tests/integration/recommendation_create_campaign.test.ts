@@ -10,6 +10,19 @@ jest.mock('../../services/campaignAiOrchestrator', () => ({
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
 }));
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn(),
+}));
+jest.mock('../../services/userContextService', () => ({
+  resolveUserContext: jest.fn().mockResolvedValue({ userId: 'user-1' }),
+}));
+jest.mock('../../services/rbacService', () => ({
+  ...jest.requireActual('../../services/rbacService'),
+  isSuperAdmin: jest.fn().mockResolvedValue(true),
+  getUserRole: jest.fn().mockResolvedValue({ role: 'SUPER_ADMIN', error: null }),
+}));
+jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (handler: any) => handler }));
+const { getSupabaseUserFromRequest } = jest.requireMock('../../services/supabaseAuthService');
 
 const createMockRes = () => {
   const res: Partial<NextApiResponse> & { json: jest.Mock } = {
@@ -21,6 +34,7 @@ const createMockRes = () => {
 
 describe('Recommendation create campaign API', () => {
   beforeEach(() => {
+    (getSupabaseUserFromRequest as jest.Mock).mockResolvedValue({ user: { id: 'user-1' }, error: null });
     const recommendationRecord = {
       id: 'rec-1',
       company_id: 'default',
@@ -35,6 +49,18 @@ describe('Recommendation create campaign API', () => {
 
     const updateMock = jest.fn().mockReturnValue({
       eq: jest.fn().mockResolvedValue({ error: null }),
+    });
+
+    const chain = (data: any, error: any = null) => ({
+      select: jest.fn().mockReturnThis(),
+      insert: jest.fn().mockResolvedValue({ error: null }),
+      update: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      order: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      single: jest.fn().mockResolvedValue({ data, error }),
+      maybeSingle: jest.fn().mockResolvedValue({ data: data?.[0] ?? null, error }),
+      then: (resolve: any) => Promise.resolve({ data: Array.isArray(data) ? data : [data], error }).then(resolve),
     });
 
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
@@ -57,7 +83,13 @@ describe('Recommendation create campaign API', () => {
           }),
         };
       }
-      return {};
+      if (table === 'audit_logs') {
+        return chain([], null);
+      }
+      if (table === 'campaign_versions') {
+        return chain(null, null);
+      }
+      return chain([]);
     });
 
     (runCampaignAiPlan as jest.Mock).mockResolvedValue({
@@ -69,8 +101,9 @@ describe('Recommendation create campaign API', () => {
   it('creates campaign, links recommendation, and returns response', async () => {
     const req = {
       method: 'POST',
-      query: { id: 'rec-1' },
-      body: { durationWeeks: 12 },
+      headers: { authorization: 'Bearer test' },
+      query: { id: 'rec-1', companyId: 'default' },
+      body: { durationWeeks: 12, companyId: 'default' },
     } as unknown as NextApiRequest;
 
     const res = createMockRes();

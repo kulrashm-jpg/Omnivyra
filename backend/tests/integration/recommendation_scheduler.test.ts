@@ -9,6 +9,7 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 jest.mock('../../services/externalApiService', () => ({
   fetchTrendsFromApis: jest.fn(),
+  getCompanyDefaultApiIds: jest.fn().mockResolvedValue([]),
 }));
 jest.mock('../../services/recommendationEngine', () => ({
   generateRecommendations: jest.fn(),
@@ -43,7 +44,7 @@ describe('Recommendation scheduler', () => {
     (fetchTrendsFromApis as jest.Mock).mockResolvedValue([
       { topic: 'AI marketing', source: 'YouTube Trends' },
     ]);
-    (generateRecommendations as jest.Mock).mockReturnValue([
+    (generateRecommendations as jest.Mock).mockResolvedValue([
       {
         trend: 'AI marketing',
         category: 'AI marketing',

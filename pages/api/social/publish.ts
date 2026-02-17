@@ -7,6 +7,7 @@ import {
   updatePostPublishStatus,
 } from '../../../backend/db/scheduledPostsStore';
 import { publishScheduledPost } from '../../../backend/services/socialPlatformPublisher';
+import { checkAndCompleteCampaignIfEligible } from '../../../backend/services/CampaignCompletionService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -59,6 +60,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       external_post_id: result.external_post_id,
       last_error: result.status === 'PUBLISHED' ? undefined : result.message,
     });
+
+    if (result.status === 'PUBLISHED' && post.campaign_id) {
+      void checkAndCompleteCampaignIfEligible(post.campaign_id).catch(() => {});
+    }
 
     return res.status(200).json(result);
   } catch (error: any) {

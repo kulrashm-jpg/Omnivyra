@@ -89,6 +89,7 @@ describe('Campaign Preemption Approval Flow', () => {
       const result = await executeCampaignPreemption({
         initiatorCampaignId: initiatorId,
         preemptedCampaignId: targetId,
+        justification: 'Revenue-critical board commitment for Q4 launch.',
       });
 
       expect(result).toHaveProperty('status', 'APPROVAL_REQUIRED');
@@ -125,6 +126,7 @@ describe('Campaign Preemption Approval Flow', () => {
       const result = await executeCampaignPreemption({
         initiatorCampaignId: initiatorId,
         preemptedCampaignId: targetId,
+        justification: 'Revenue-critical board commitment for Q4 launch.',
       });
 
       expect(result).toHaveProperty('status', 'APPROVAL_REQUIRED');
@@ -155,6 +157,7 @@ describe('Campaign Preemption Approval Flow', () => {
       const result = await executeCampaignPreemption({
         initiatorCampaignId: initiatorId,
         preemptedCampaignId: targetId,
+        justification: 'Revenue-critical board commitment for Q4 launch.',
       });
 
       expect(result).toHaveProperty('status', 'APPROVAL_REQUIRED');
@@ -203,7 +206,10 @@ describe('Campaign Preemption Approval Flow', () => {
         return chain({ data: null, error: null });
       });
 
-      const result = await executePreemptionFromRequest(requestId);
+      const result = await executePreemptionFromRequest(
+        requestId,
+        'Approved: revenue-critical board commitment for Q4 launch.'
+      );
 
       expect(result.success).toBe(true);
       expect(result.preemptedCampaignId).toBe(targetId);

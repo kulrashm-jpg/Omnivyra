@@ -23,6 +23,7 @@ jest.mock('../../services/companyProfileService', () => ({
 jest.mock('../../services/externalApiService', () => ({
   fetchTrendsFromApis: jest.fn(),
   getPlatformStrategies: jest.fn().mockResolvedValue([]),
+  getCompanyDefaultApiIds: jest.fn().mockResolvedValue([]),
 }));
 jest.mock('../../services/recommendationPolicyService', () => ({
   getActivePolicy: jest.fn(),
@@ -33,6 +34,14 @@ jest.mock('../../services/performanceFeedbackService', () => ({
 }));
 jest.mock('../../services/recommendationAuditService', () => ({
   logRecommendationAudit: jest.fn(),
+}));
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn().mockResolvedValue({ user: { id: 'user-1' }, error: null }),
+}));
+jest.mock('../../services/rbacService', () => ({
+  ...jest.requireActual('../../services/rbacService'),
+  isSuperAdmin: jest.fn().mockResolvedValue(true),
+  getUserRole: jest.fn().mockResolvedValue({ role: 'SUPER_ADMIN', error: null }),
 }));
 
 const createMockRes = () => {
@@ -121,6 +130,8 @@ describe('Recommendation simulation', () => {
 
     const req = {
       method: 'POST',
+      headers: { authorization: 'Bearer test' },
+      query: {},
       body: {
         companyId: 'default',
         draftPolicyWeights: {

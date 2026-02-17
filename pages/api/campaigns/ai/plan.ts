@@ -10,7 +10,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { campaignId, mode, message, durationWeeks, targetDay, platforms, messages: conversationHistory, recommendationContext } = req.body || {};
+    const { campaignId, mode, message, durationWeeks, targetDay, platforms, messages: conversationHistory, recommendationContext, optimizationContext } = req.body || {};
 
     if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'campaignId is required' });
@@ -31,6 +31,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       platforms: Array.isArray(platforms) ? platforms : undefined,
       conversationHistory: Array.isArray(conversationHistory) ? conversationHistory : undefined,
       recommendationContext: recommendationContext && typeof recommendationContext === 'object' ? recommendationContext : undefined,
+      optimizationContext:
+        optimizationContext && typeof optimizationContext === 'object' && Array.isArray(optimizationContext.headlines)
+          ? { roiScore: Number(optimizationContext.roiScore) || 50, headlines: optimizationContext.headlines }
+          : undefined,
     });
 
     if (typeof saveAiCampaignPlan === 'function') {

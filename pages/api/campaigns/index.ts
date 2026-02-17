@@ -263,6 +263,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // Playbook reference only. It does NOT affect scheduling, publishing,
         // approvals, or content generation. Campaign behavior remains unchanged.
         virality_playbook_id: resolvedPlaybookId,
+        // Stage 11: Pre-planning gate — new campaigns require pre-planning before blueprint
+        duration_weeks: null,
+        duration_locked: false,
+        blueprint_status: null,
       };
 
       console.log('Processed campaign data for database:', campaignDataWithUser);
@@ -292,12 +296,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!campaign) {
         return res.status(500).json({ error: 'Campaign creation did not return data' });
       }
+      const planning_context = campaignData.planning_context ?? campaignData.planningContext ?? null;
+      const snapshotPayload: Record<string, unknown> = { campaign };
+      if (planning_context && typeof planning_context === 'object') {
+        snapshotPayload.planning_context = planning_context;
+      }
       const { error: versionError } = await (supabase as any)
         .from('campaign_versions')
         .insert({
           company_id: companyId,
           campaign_id: (campaign as { id: string }).id,
-          campaign_snapshot: { campaign },
+          campaign_snapshot: snapshotPayload,
           status: (campaign as { status?: string }).status ?? 'draft',
           version: 1,
           created_at: new Date().toISOString(),
@@ -369,16 +378,42 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         campaign = campaignRow;
       }
 
-      // Always fetch campaign_versions for recommendation context (target_regions, context_payload, source_opportunity_id)
+      // Always fetch campaign_versions for recommendation context and prefilled planning
       let recommendationContext: { target_regions?: string[] | null; context_payload?: Record<string, unknown> | null; source_opportunity_id?: string | null } | null = null;
+      let prefilledPlanning: Record<string, unknown> | null = null;
       const { data: versionRow } = await supabase
         .from('campaign_versions')
-        .select('campaign_snapshot')
+        .select('campaign_snapshot, campaign_types, campaign_weights')
         .eq('company_id', companyId)
         .eq('campaign_id', campaignId)
         .order('version', { ascending: false })
         .limit(1)
         .maybeSingle();
+
+      const vRow = versionRow as { campaign_snapshot?: unknown; campaign_types?: string[]; campaign_weights?: Record<string, number> } | null;
+      if (campaign && vRow) {
+        const snap = (vRow.campaign_snapshot ?? {}) as { planning_context?: { content_capacity?: Record<string, { perWeek?: number; creationMethod?: string }> }; target_regions?: string[]; context_payload?: { formats?: string[]; platforms?: string[] } };
+        const pre: Record<string, unknown> = {};
+        if (campaign.start_date) pre.tentative_start = campaign.start_date;
+        if (campaign.duration_weeks != null) pre.campaign_duration = campaign.duration_weeks;
+        if (vRow.campaign_types?.length) pre.campaign_types = vRow.campaign_types.map((t) => t.replace(/_/g, ' ')).join(', ');
+        if (snap.planning_context?.content_capacity) {
+          const cap = snap.planning_context.content_capacity;
+          const parts: string[] = [];
+          for (const [fmt, val] of Object.entries(cap)) {
+            if (val && typeof val === 'object' && 'perWeek' in val) {
+              const p = val as { perWeek?: number; creationMethod?: string };
+              parts.push(`${fmt}: ${p.perWeek ?? 0}/week`);
+            }
+          }
+          if (parts.length) pre.content_capacity = parts.join('; ');
+        }
+        const payload = snap.context_payload;
+        if (payload?.platforms?.length) pre.platforms = payload.platforms.join(', ');
+        if (snap.target_regions?.length) pre.target_regions = snap.target_regions.join(', ');
+        if (campaign.description) pre.theme_or_description = String(campaign.description).slice(0, 300);
+        if (Object.keys(pre).length > 0) prefilledPlanning = pre;
+      }
 
       const snapshot = (versionRow ? (versionRow as { campaign_snapshot?: unknown }).campaign_snapshot : null) as {
         campaign?: Record<string, unknown>;
@@ -411,6 +446,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(200).json({
         campaign: mapCampaignPlaybook(campaign),
         recommendationContext: recommendationContext || undefined,
+        prefilledPlanning: prefilledPlanning || undefined,
       });
     } else if (type === 'goals' && campaignId) {
       // Validate Supabase configuration

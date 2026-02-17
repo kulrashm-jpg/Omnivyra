@@ -8,6 +8,24 @@ jest.mock('../../services/externalApiService', () => ({
 jest.mock('../../services/performanceFeedbackService', () => ({
   getHistoricalAccuracyScore: jest.fn().mockResolvedValue(0.5),
 }));
+jest.mock('../../services/recommendationPolicyService', () => ({
+  ...jest.requireActual('../../services/recommendationPolicyService'),
+  getActivePolicy: jest.fn().mockResolvedValue({
+    id: 'policy-1',
+    name: 'Default',
+    is_active: true,
+    weights: {
+      trend_score: 1,
+      geo_fit: 1,
+      audience_fit: 1,
+      category_fit: 1,
+      platform_fit: 1,
+      health_multiplier: 1,
+      historical_accuracy: 1,
+      effort_penalty: 1,
+    },
+  }),
+}));
 
 describe('Recommendation fusion scoring', () => {
   beforeEach(() => {

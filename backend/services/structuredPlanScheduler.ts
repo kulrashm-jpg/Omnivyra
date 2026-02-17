@@ -165,7 +165,7 @@ function scheduleFromAllocation(
 
     const contentTypeMix = week.content_type_mix || ['post'];
     const ctaType = week.cta_type || 'None';
-    const phaseLabel = week.phase_label || week.theme || `Week ${week.week}`;
+    const topicLabel = week.theme || week.phase_label || `Week ${week.week}`;
     const kpiFocus = week.weekly_kpi_focus || 'Reach growth';
 
     const schedule = buildAllocationSchedule(allocation, contentTypeMix);
@@ -178,7 +178,7 @@ function scheduleFromAllocation(
         continue;
       }
 
-      const content = buildContentPlaceholder(phaseLabel, ctaType, contentType);
+      const content = buildContentPlaceholder(topicLabel, ctaType, contentType);
       const scheduledFor = buildScheduledFor(campaign.start_date, week.week, dayIndex, slotInDay);
 
       scheduledPosts.push({

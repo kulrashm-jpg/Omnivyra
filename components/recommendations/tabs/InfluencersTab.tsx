@@ -81,11 +81,21 @@ function InfluencerCard({
 
 export default function InfluencersTab(props: OpportunityTabProps) {
   const { companyId, onPromote, onAction, fetchWithAuth, overrideText = '', onOverrideChange } = props;
-  const { opportunities, loading, error, runEngine, hasRun, refetch } = useOpportunities(
+  const { opportunities, loading, error, runEngine, hasRun, refetch, refetchGetOnly } = useOpportunities(
     companyId,
     TYPE,
     fetchWithAuth
   );
+
+  const wrappedOnPromote = async (id: string) => {
+    try {
+      await onPromote(id);
+    } catch (e: unknown) {
+      const err = e as Error & { status?: number };
+      if (err?.status === 404) await refetchGetOnly();
+      throw e;
+    }
+  };
 
   const byPlatform = useMemo(() => {
     const map = new Map<string, OpportunityWithPayload[]>();
@@ -142,7 +152,7 @@ export default function InfluencersTab(props: OpportunityTabProps) {
                       key={opp.id}
                       opportunity={opp}
                       onCollaborationPlan={handleCollaborationPlan}
-                      onPromote={onPromote}
+                      onPromote={wrappedOnPromote}
                       onDismiss={handleDismiss}
                       onActionComplete={refetch}
                     />

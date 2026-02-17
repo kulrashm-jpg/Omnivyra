@@ -1,6 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
+import {
+  getResolvedCampaignPlanContext,
+  PrePlanningRequiredError,
+} from '../../../backend/services/campaignBlueprintService';
 import { getLatestPlatformExecutionPlan } from '../../../backend/db/platformExecutionStore';
 import { generateContentForDay } from '../../../backend/services/contentGenerationService';
 import { getCampaignMemory } from '../../../backend/services/campaignMemoryService';
@@ -94,6 +97,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json(asset);
   } catch (error: any) {
+    if (error instanceof PrePlanningRequiredError || error?.code === 'PRE_PLANNING_REQUIRED') {
+      return res.status(412).json({ code: 'PRE_PLANNING_REQUIRED', message: error?.message });
+    }
     return res.status(500).json({ error: error?.message || 'Failed to generate content' });
   }
 }

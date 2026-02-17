@@ -28,6 +28,7 @@ import { categorizeError } from '../../services/errorRecoveryService';
 import { recordPostAnalytics } from '../../services/analyticsService';
 import { logActivity } from '../../services/activityLogger';
 import { getCampaignReadiness } from '../../services/campaignReadinessService';
+import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
 
 interface PublishJobData {
   scheduled_post_id: string;
@@ -176,6 +177,11 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
         });
       } catch (activityError: any) {
         console.warn('Failed to log activity:', activityError.message);
+      }
+
+      // Auto-completion: check if campaign is eligible when all posts published
+      if (scheduledPost.campaign_id) {
+        void checkAndCompleteCampaignIfEligible(scheduledPost.campaign_id).catch(() => {});
       }
     } else {
       // Step 8: Failure - categorize error and update scheduled_posts status

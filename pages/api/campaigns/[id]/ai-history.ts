@@ -21,7 +21,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { data: plans, error: plansError } = await supabase
-      .from('12_week_plan')
+      .from('twelve_week_plan')
       .select('snapshot_hash, omnivyre_decision, weeks, created_at')
       .eq('campaign_id', id)
       .order('created_at', { ascending: false });

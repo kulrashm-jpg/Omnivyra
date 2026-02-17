@@ -7,7 +7,12 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
+import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../backend/services/campaignBlueprintService';
+import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../backend/services/CampaignFinalizationGuard';
+import { normalizeExecutionState } from '../../../backend/governance/ExecutionStateMachine';
+import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -16,8 +21,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  if (await isGovernanceLocked()) {
+    return res.status(423).json({
+      code: 'GOVERNANCE_LOCKED',
+      message: 'Governance lockdown active. Mutations disabled.',
+    });
+  }
+
   try {
-    const { campaignId, companyId, requested_weeks, override_lock } = req.body || {};
+    const { campaignId, companyId, requested_weeks, start_date, override_lock } = req.body || {};
 
     if (!campaignId || !companyId || requested_weeks == null) {
       return res.status(400).json({
@@ -43,7 +55,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const { data: campaign, error: campError } = await supabase
       .from('campaigns')
-      .select('id, duration_locked, duration_weeks, blueprint_status')
+      .select('id, duration_locked, duration_weeks, blueprint_status, execution_status')
       .eq('id', campaignId)
       .maybeSingle();
 
@@ -56,6 +68,64 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         error: 'DURATION_LOCKED',
         message: 'Duration is locked. Pass override_lock: true to force change.',
       });
+    }
+
+    const executionStatus = normalizeExecutionState((campaign as any).execution_status);
+    try {
+      assertCampaignNotFinalized(executionStatus);
+    } catch (err: any) {
+      if (err instanceof CampaignFinalizedError) {
+        await recordGovernanceEvent({
+          companyId,
+          campaignId,
+          eventType: 'CAMPAIGN_MUTATION_BLOCKED_FINALIZED',
+          eventStatus: 'BLOCKED',
+          metadata: { campaignId, execution_status: executionStatus },
+        });
+        return res.status(409).json({
+          code: 'CAMPAIGN_FINALIZED',
+          message: 'Campaign is finalized and cannot be modified',
+        });
+      }
+      throw err;
+    }
+
+    try {
+      await assertBlueprintMutable(campaignId);
+    } catch (err: any) {
+      if (err instanceof BlueprintExecutionFreezeError) {
+        await recordGovernanceEvent({
+          companyId,
+          campaignId,
+          eventType: 'BLUEPRINT_FREEZE_BLOCKED',
+          eventStatus: 'BLOCKED',
+          metadata: {
+            campaignId,
+            hoursUntilExecution: err.hoursUntilExecution,
+            freezeWindowHours: err.freezeWindowHours,
+          },
+        });
+        return res.status(409).json({
+          code: 'EXECUTION_WINDOW_FROZEN',
+          message: 'Blueprint modifications are locked within 24 hours of execution.',
+        });
+      }
+      if (err instanceof BlueprintImmutableError) {
+        const execStatus = (campaign as any).execution_status ?? 'ACTIVE';
+        const bpStatus = (campaign as any).blueprint_status ?? 'ACTIVE';
+        await recordGovernanceEvent({
+          companyId,
+          campaignId,
+          eventType: 'BLUEPRINT_MUTATION_BLOCKED',
+          eventStatus: 'BLOCKED',
+          metadata: { campaignId, execution_status: execStatus, blueprint_status: bpStatus },
+        });
+        return res.status(409).json({
+          code: 'BLUEPRINT_IMMUTABLE',
+          message: 'Blueprint cannot be modified while campaign is in execution.',
+        });
+      }
+      throw err;
     }
 
     const evaluation = await runPrePlanning({
@@ -95,14 +165,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // APPROVED
+    const updatePayload: Record<string, unknown> = {
+      duration_weeks: weeks,
+      blueprint_status: 'INVALIDATED',
+      duration_locked: true,
+      updated_at: new Date().toISOString(),
+    };
+    if (start_date && typeof start_date === 'string') {
+      const parsed = new Date(start_date);
+      if (!isNaN(parsed.getTime())) {
+        updatePayload.start_date = parsed.toISOString().split('T')[0];
+        updatePayload.end_date = null; // Recalculated when blueprint regenerates
+      }
+    }
     const { error: updateError } = await supabase
       .from('campaigns')
-      .update({
-        duration_weeks: weeks,
-        blueprint_status: 'INVALIDATED',
-        duration_locked: true,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq('id', campaignId);
 
     if (updateError) {

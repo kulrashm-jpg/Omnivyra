@@ -26,6 +26,69 @@ import {
 import ChatVoiceButton from './ChatVoiceButton';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
 
+/** Renders AI message with proper structure: greeting, objective, theme, formats, reach, question */
+function FormattedAIMessage({ message, className = '' }: { message: string; className?: string }) {
+  const renderInline = (text: string): React.ReactNode => {
+    const segments: React.ReactNode[] = [];
+    let s = text;
+    while (s) {
+      const bi = s.indexOf('**');
+      const ii = s.indexOf('*');
+      const nextBi = bi >= 0 ? bi : s.length;
+      const nextIi = (ii >= 0 && (ii !== 0 || s[1] !== '*')) ? ii : s.length;
+      const next = Math.min(nextBi, nextIi);
+      if (next < s.length) {
+        if (next > 0) segments.push(s.slice(0, next));
+        if (s[next] === '*') {
+          if (s[next + 1] === '*') {
+            const end = s.indexOf('**', next + 2);
+            if (end >= 0) {
+              segments.push(<strong key={segments.length}>{s.slice(next + 2, end)}</strong>);
+              s = s.slice(end + 2);
+              continue;
+            }
+          } else {
+            const end = s.indexOf('*', next + 1);
+            if (end >= 0 && end !== next + 1) {
+              segments.push(<em key={segments.length}>{s.slice(next + 1, end)}</em>);
+              s = s.slice(end + 1);
+              continue;
+            }
+          }
+        }
+      }
+      segments.push(s);
+      break;
+    }
+    return <>{segments}</>;
+  };
+  const paragraphs = message.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
+  return (
+    <div className={`text-sm space-y-4 leading-relaxed ${className}`}>
+      {paragraphs.map((p, i) => {
+        const isGreeting = p.startsWith('Hello!') || (i === 0 && p.includes('help you turn'));
+        const isTheme = p.startsWith('I see your theme:');
+        const isSection = /^\*\*(Target regions|Suggested formats|Estimated reach)/.test(p);
+        const isQuestion = /^\*\*(First question|Next question|Question \d+):/i.test(p);
+        return (
+          <div
+            key={i}
+            className={
+              isGreeting ? 'font-semibold text-gray-900' :
+              isTheme ? 'italic text-gray-700 pl-1 border-l-2 border-indigo-200' :
+              isSection ? 'text-gray-800' :
+              isQuestion ? 'font-semibold text-indigo-800 mt-2 pt-2 border-t border-gray-200' :
+              'text-gray-700'
+            }
+          >
+            {renderInline(p)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 interface ChatMessage {
   id: number;
   type: 'user' | 'ai';
@@ -66,6 +129,12 @@ interface AIChatProps {
   campaignData?: any;
   recommendationContext?: RecommendationContext | null;
   onProgramGenerated?: (program: any) => void;
+  /** Stage 29: Governance lockdown — schedule button disabled */
+  governanceLocked?: boolean;
+  /** Stage 35: ROI + optimization headlines for AI context injection */
+  optimizationContext?: { roiScore: number; headlines: string[] };
+  /** Pre-filled planning context from campaign setup — AI will skip these questions */
+  prefilledPlanning?: Record<string, unknown> | null;
 }
 
 type AIProvider = 'gpt' | 'claude' | 'demo';
@@ -101,12 +170,19 @@ type StructuredWeek = {
   daily?: StructuredDay[];
   /** Blueprint format fields */
   phase_label?: string;
+  theme?: string;
   primary_objective?: string;
   platform_allocation?: Record<string, number>;
   content_type_mix?: string[];
   cta_type?: string;
   total_weekly_content_count?: number;
   weekly_kpi_focus?: string;
+  daily?: Array<{
+    day: string;
+    objective?: string;
+    content?: string;
+    platforms?: Record<string, string>;
+  }>;
 };
 
 type StructuredPlan = {
@@ -151,7 +227,7 @@ type AiHistoryEntry = {
   created_at: string;
 };
 
-export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, recommendationContext, onProgramGenerated }: AIChatProps) {
+export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, recommendationContext, onProgramGenerated, governanceLocked, optimizationContext, prefilledPlanning }: AIChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -207,7 +283,10 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [platformIntelContentType, setPlatformIntelContentType] = useState<string>('text');
   const [platformIntelData, setPlatformIntelData] = useState<any>(null);
   const [isPlatformIntelLoading, setIsPlatformIntelLoading] = useState(false);
+  const [hasViewedPlanMessageId, setHasViewedPlanMessageId] = useState<number | null>(null);
+  const [showPlanOverview, setShowPlanOverview] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resolvedCompanyId = useMemo(() => {
     if (companyId) return companyId;
@@ -321,8 +400,8 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   }, []);
 
   const saveAIContentForPlan = async (aiMessage: string) => {
+    if (!campaignId) return;
     try {
-      // Save AI content to database for campaign plan
       const response = await fetch('/api/campaigns/save-ai-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -335,11 +414,20 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       });
 
       if (response.ok) {
-        // Show success message
+        if (typeof window !== 'undefined') {
+          try {
+            window.sessionStorage.setItem(
+              `campaign_chat_draft_${campaignId}`,
+              JSON.stringify({ messages, savedAt: new Date().toISOString() })
+            );
+          } catch (e) {
+            console.warn('Could not persist chat to sessionStorage', e);
+          }
+        }
         const successMessage: ChatMessage = {
           id: Date.now(),
           type: 'ai',
-          message: '✅ AI content saved for campaign plan! You can now use this content in your campaign planning.',
+          message: '✅ Chat saved! Open Campaign planning (draft or edit) to continue with this conversation on the same page.',
           timestamp: new Date().toLocaleTimeString(),
           provider: getProviderName(selectedProvider),
           campaignId
@@ -362,14 +450,42 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     }
   };
 
-  const commitPlan = (aiMessage: string) => {
-    setSelectedPlan(aiMessage);
+  const serializeStructuredPlanToText = (plan: StructuredPlan): string => {
+    return plan.weeks.map((w) => {
+      const theme = w.theme || w.phase_label || `Week ${w.week}`;
+      const platforms = w.platform_allocation
+        ? Object.entries(w.platform_allocation).map(([p, n]) => `${p}: ${n}`).join(', ')
+        : '';
+      const content = (w.content_type_mix || []).join(', ');
+      return `Week ${w.week}: ${theme}\nPlatforms: ${platforms || '—'}\nContent: ${content || '—'}`;
+    }).join('\n\n');
+  };
+
+  const commitPlan = (aiMessage?: string) => {
+    if (structuredPlan) {
+      setSelectedPlan(serializeStructuredPlanToText(structuredPlan));
+    } else if (aiMessage) {
+      setSelectedPlan(aiMessage);
+    }
+    setShowPlanOverview(false);
+    setShowPlanPreview(false);
     setShowDateSelection(true);
   };
 
-  const viewPlan = (aiMessage: string) => {
-    setSelectedPlan(aiMessage);
-    setShowPlanPreview(true);
+  const viewPlan = (aiMessage?: string, messageId?: number) => {
+    if (aiMessage) setSelectedPlan(aiMessage);
+    if (messageId != null) setHasViewedPlanMessageId(messageId);
+    if (structuredPlan) {
+      setShowPlanOverview(true);
+    } else {
+      setShowPlanPreview(true);
+    }
+  };
+
+  const requestDailyPlanForWeek = (weekNum: number) => {
+    setNewMessage(`Generate the daily plan for Week ${weekNum} with specific content for each day (Monday–Sunday).`);
+    setShowPlanOverview(false);
+    setTimeout(() => inputRef.current?.focus(), 100);
   };
 
   const generateDefaultPlan = () => {
@@ -491,6 +607,11 @@ This comprehensive approach ensures consistent growth and engagement across all 
     const parts: string[] = [
       `Hello! I'm here to help you turn **"${name}"** into a complete content marketing plan.`,
     ];
+    if (prefilledPlanning && Object.keys(prefilledPlanning).length > 0) {
+      parts.push('\n\nI already have from your setup:\n' + Object.entries(prefilledPlanning).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n'));
+      parts.push(`\n\nI'll ask only what's still needed. Send any message to continue.`);
+      return parts.join('');
+    }
     if (desc) {
       parts.push(`\n\nI see your theme: *${desc.slice(0, 200)}${desc.length > 200 ? '...' : ''}*`);
     }
@@ -503,8 +624,32 @@ This comprehensive approach ensures consistent growth and engagement across all 
     if (reachEst) {
       parts.push(`\n**Estimated reach:** ${reachEst}`);
     }
-    parts.push(`\n\nI'll ask you a few questions one by one to build your campaign plan. I'll keep asking until we have everything we need—then you can tell me "Create my plan" or "I'm ready" and I'll generate it.\n\n**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)`);
+    parts.push(`\n\nI'll ask you one question at a time. We need: target audience, available content (if any—and if you have content, which campaign objective it should serve and which week(s) to slot it into), tentative start date (YY-MM-DD format), campaign types, content & production capacity, duration, platforms, key messages, success metrics. Then say "Create my plan" or "I'm ready".\n\n**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)`);
     return parts.join('');
+  };
+
+  const buildPrefilledWelcome = (name: string): string => {
+    const pre = prefilledPlanning;
+    if (!pre || Object.keys(pre).length === 0) return '';
+    const items = Object.entries(pre).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n');
+    return `Hello! I'm your AI assistant for "${name}".
+
+I already have these from your campaign setup:
+${items}
+
+I'll ask only what's still needed. Send any message to continue—I'll skip the questions you've already answered.\n\n`;
+  };
+
+  const GENERIC_WELCOME = (name: string) => {
+    const prefilledIntro = buildPrefilledWelcome(name);
+    const base = prefilledIntro || `Hello! I'm your AI assistant for "${name}". I'll ask you one question at a time to build your campaign plan.
+
+**Planning checklist:** target audience, available content (if any—if you have content, we'll ask which objective it serves and which week(s) to slot it into), tentative start date (YY-MM-DD format), campaign types, content & production capacity, duration, platforms, key messages, success metrics. Each week will have a concrete theme decided by AI before scheduling.
+
+When we have everything, say "Create my plan" or "I'm ready" and I'll generate it.
+
+`;
+    return base + (prefilledIntro ? '' : '**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)');
   };
 
   const initializeCampaignThread = async (campaignId: string, campaignData: any) => {
@@ -514,7 +659,7 @@ This comprehensive approach ensures consistent growth and engagement across all 
     if (existingMessages.length === 0) {
       const welcomeText = recommendationContext && (recommendationContext.target_regions?.length || recommendationContext.context_payload)
         ? buildRecommendationWelcome(campaignData)
-        : `Hello! I'm your AI assistant for "${campaignData?.name || 'this campaign'}". I'll ask you a few questions one by one to build your campaign content plan. I'll keep asking until we have everything we need—then you can tell me "Create my plan" or "I'm ready" and I'll generate it.\n\n**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)`;
+        : GENERIC_WELCOME(campaignData?.name || 'this campaign');
       const welcomeMessage: ChatMessage = {
         id: Date.now(),
         type: 'ai',
@@ -530,6 +675,19 @@ This comprehensive approach ensures consistent growth and engagement across all 
   };
 
   const loadCampaignMessages = async (campaignId: string): Promise<ChatMessage[]> => {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = window.sessionStorage.getItem(`campaign_chat_draft_${campaignId}`);
+        if (stored) {
+          const parsed = JSON.parse(stored) as { messages?: ChatMessage[] };
+          if (Array.isArray(parsed.messages) && parsed.messages.length > 0) {
+            return parsed.messages;
+          }
+        }
+      } catch (e) {
+        console.warn('Could not load saved chat draft', e);
+      }
+    }
     try {
       const response = await fetch(`/api/ai/campaign-messages?campaignId=${campaignId}`);
       if (response.ok) {
@@ -540,6 +698,13 @@ This comprehensive approach ensures consistent growth and engagement across all 
       console.error('Error loading campaign messages:', error);
     }
     return [];
+  };
+
+  const isWeeklyPlanMessage = (msg: string): boolean => {
+    if (!msg || msg.length < 100) return false;
+    const hasWeekStructure = /\bWeek\s+\d+/i.test(msg) || /\bWeeks\s+\d+\s*[-–]\s*\d+/i.test(msg);
+    const hasPlatformOrContent = /\b(LinkedIn|Facebook|Instagram|Twitter|TikTok|YouTube|Blog|Video|Post|Carousel|Reel)\b/i.test(msg);
+    return hasWeekStructure && (hasPlatformOrContent || msg.length > 500);
   };
 
   const saveCampaignMessage = async (message: ChatMessage) => {
@@ -836,6 +1001,7 @@ This comprehensive approach ensures consistent growth and engagement across all 
         platforms: options?.platforms,
         messages: options?.conversationHistory,
         recommendationContext,
+        optimizationContext,
       }),
     });
 
@@ -1063,15 +1229,16 @@ This comprehensive approach ensures consistent growth and engagement across all 
       setUiErrorMessage(null);
       setUiSuccessMessage(null);
 
-      const response = await fetch(`/api/campaigns/${campaignId}/schedule-structured-plan`, {
+      const response = await fetchWithAuth(`/api/campaigns/${campaignId}/schedule-structured-plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan: structuredPlan }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Schedule API error' }));
-        throw new Error(errorData.error || 'Schedule API error');
+        const errorData = await response.json().catch(() => ({}));
+        const msg = errorData.message || errorData.error || 'Schedule API error';
+        throw new Error(msg);
       }
 
       const data = await response.json();
@@ -1079,8 +1246,9 @@ This comprehensive approach ensures consistent growth and engagement across all 
         `Scheduled ${data.scheduled_count || 0} posts. Skipped ${data.skipped_count || 0}.`
       );
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to schedule the plan. Please try again.';
       console.error('Error scheduling structured plan:', error);
-      setUiErrorMessage('Failed to schedule the plan. Please try again.');
+      setUiErrorMessage(message);
     } finally {
       setIsSchedulingPlan(false);
       setShowScheduleConfirm(false);
@@ -1622,8 +1790,8 @@ This comprehensive approach ensures consistent growth and engagement across all 
   if (!isOpen) return null;
 
   return (
-    <div className={`fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex ${isFullscreen ? 'items-stretch justify-stretch p-0' : 'items-center justify-center p-4'}`}>
-      <div className={`bg-white shadow-2xl w-full flex flex-col ${isFullscreen ? 'h-full max-w-none rounded-none' : 'max-w-4xl h-[80vh] rounded-2xl'}`}>
+    <div className={`fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex ${isFullscreen ? 'items-stretch justify-stretch p-0' : 'items-center justify-center p-2 sm:p-4'}`}>
+      <div className={`bg-white shadow-2xl flex flex-col ${isFullscreen ? 'h-full w-full max-w-none rounded-none' : 'w-[min(95vw,90rem)] h-[min(90vh,calc(100vh-1rem))] min-w-[20rem] min-h-[20rem] rounded-2xl'}`}>
         {/* Header */}
         <div className={`bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 flex items-center justify-between ${isFullscreen ? 'rounded-none' : 'rounded-t-2xl'}`}>
           <div>
@@ -2290,11 +2458,11 @@ This comprehensive approach ensures consistent growth and engagement across all 
             </div>
           ) : (
             messages.map((message) => (
-              <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg ${
+              <div key={message.id} className={`flex w-full ${message.type === 'user' ? 'justify-end' : 'justify-start'} px-1 sm:px-2`}>
+                <div className={`px-4 py-3 rounded-lg min-w-0 ${
                   message.type === 'user' 
-                    ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white' 
-                    : 'bg-gray-100 text-gray-900'
+                    ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white max-w-[90%]'
+                    : 'bg-gray-100 text-gray-900 w-full'
                 }`}>
                   {message.type === 'ai' &&
                   structuredPlan &&
@@ -2303,15 +2471,17 @@ This comprehensive approach ensures consistent growth and engagement across all 
                       {renderStructuredPlan(structuredPlan)}
                       <button
                         onClick={() => setShowScheduleConfirm(true)}
-                        disabled={isBusy || !campaignId}
+                        disabled={isBusy || !campaignId || governanceLocked}
                         className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-lg hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 text-sm font-medium disabled:opacity-50"
                       >
                         <Calendar className="h-4 w-4" />
                         Schedule this plan
                       </button>
                     </div>
+                  ) : message.type === 'ai' ? (
+                    <FormattedAIMessage message={message.message} />
                   ) : (
-                    <p className="text-sm">{message.message}</p>
+                    <p className="text-sm whitespace-pre-wrap">{message.message}</p>
                   )}
                   {message.attachments && message.attachments.length > 0 && (
                     <div className="mt-2 space-y-1">
@@ -2321,50 +2491,6 @@ This comprehensive approach ensures consistent growth and engagement across all 
                           {attachment}
                         </div>
                       ))}
-                    </div>
-                  )}
-                  
-                  {/* Commit Plan Button */}
-                  {message.type === 'ai' && (message.message.includes('Content Calendar Template') || message.message.includes('campaign plan') || message.message.includes('weekly content') || message.message.includes('campaign plan') || message.message.includes('weekly social media') || message.message.includes('LinkedIn') || message.message.includes('Facebook') || message.message.includes('Instagram') || message.message.includes('Twitter') || message.message.includes('TikTok') || message.message.includes('social media plan') || message.message.includes('content plan')) && (
-                    <div className="mt-3 pt-3 border-t border-gray-200 space-y-2">
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          onClick={() => {
-                            // View this plan first
-                            viewPlan(message.message);
-                          }}
-                          className="flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-purple-500 to-violet-600 text-white rounded-lg hover:from-purple-600 hover:to-violet-700 transition-all duration-200 text-sm font-medium shadow-md hover:shadow-lg transform hover:scale-105"
-                        >
-                          <FileText className="h-4 w-4" />
-                          View Plan
-                        </button>
-                        
-                        <button
-                          onClick={() => {
-                            // Commit this plan and start date selection
-                            commitPlan(message.message);
-                          }}
-                          className="flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:from-blue-600 hover:to-indigo-700 transition-all duration-200 text-sm font-medium shadow-md hover:shadow-lg transform hover:scale-105"
-                        >
-                          <CheckCircle className="h-4 w-4" />
-                          Commit Plan
-                        </button>
-                      </div>
-                      
-                      <button
-                        onClick={() => {
-                          // Save AI content for campaign plan
-                          saveAIContentForPlan(message.message);
-                        }}
-                        className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all duration-200 text-sm font-medium shadow-md hover:shadow-lg transform hover:scale-105"
-                      >
-                        <Save className="h-4 w-4" />
-                        Save for Later
-                      </button>
-                      
-                      <p className="text-xs text-gray-500 mt-1 text-center">
-                        View plan first, then commit to create campaign structure
-                      </p>
                     </div>
                   )}
                   
@@ -2385,8 +2511,8 @@ This comprehensive approach ensures consistent growth and engagement across all 
           )}
           
           {isTyping && activeTab === 'chat' && (
-            <div className="flex justify-start">
-              <div className="bg-gray-100 text-gray-900 px-4 py-3 rounded-lg">
+            <div className="flex justify-start w-full px-1 sm:px-2">
+              <div className="bg-gray-100 text-gray-900 px-4 py-3 rounded-lg min-w-0">
                 <div className="flex items-center gap-2">
                   {isLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
@@ -2420,7 +2546,117 @@ This comprehensive approach ensures consistent growth and engagement across all 
         </div>
 
         {/* Plan Preview Modal */}
-        {showPlanPreview && (
+        {/* 12-Week Plan Overview — spread across weeks with platform, content type, AI button */}
+        {showPlanOverview && structuredPlan && (
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] mx-4 flex flex-col">
+              <div className="bg-gradient-to-r from-purple-500 to-violet-600 text-white p-4 rounded-t-2xl flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-bold">12-Week Plan Overview</h3>
+                  <p className="text-purple-100 text-sm">Platform, content type, and content to create per week</p>
+                </div>
+                <button
+                  onClick={() => setShowPlanOverview(false)}
+                  className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {structuredPlan.weeks.map((week) => {
+                    const themeLabel = week.theme || week.phase_label || `Week ${week.week}`;
+                    const platforms = week.platform_allocation
+                      ? Object.entries(week.platform_allocation).map(([p, n]) => ({ name: p, count: n }))
+                      : [];
+                    const contentTypes = week.content_type_mix || [];
+                    const hasDaily = week.daily && week.daily.length > 0;
+                    return (
+                      <div
+                        key={week.week}
+                        className="border border-gray-200 rounded-xl p-4 bg-white shadow-sm hover:shadow-md transition-shadow"
+                      >
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="font-semibold text-gray-900">Week {week.week}</span>
+                          <button
+                            onClick={() => requestDailyPlanForWeek(week.week)}
+                            disabled={isBusy}
+                            className="flex items-center gap-1 px-2 py-1 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 disabled:opacity-50 transition-colors"
+                            title="Generate daily plan for this week"
+                          >
+                            <Sparkles className="h-3 w-3" />
+                            AI daily
+                          </button>
+                        </div>
+                        <div className="text-xs text-gray-600 mb-2 font-medium">{themeLabel}</div>
+                        
+                        <div className="space-y-2 text-xs">
+                          <div>
+                            <div className="text-gray-500 uppercase tracking-wide mb-1">Platforms</div>
+                            <div className="flex flex-wrap gap-1">
+                              {platforms.length > 0 ? platforms.map(({ name, count }) => (
+                                <span key={name} className="bg-gray-100 px-1.5 py-0.5 rounded capitalize">{name}: {count}</span>
+                              )) : <span className="text-gray-400">—</span>}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-500 uppercase tracking-wide mb-1">Content to create</div>
+                            <ul className="list-disc list-inside text-gray-700 space-y-0.5">
+                              {contentTypes.length > 0 ? contentTypes.map((ct, i) => (
+                                <li key={i}>{ct}</li>
+                              )) : <span className="text-gray-400">—</span>}
+                            </ul>
+                          </div>
+                          <div>
+                            <div className="text-gray-500 uppercase tracking-wide mb-1">Available</div>
+                            <span className="text-gray-500 italic">(from your content allocation)</span>
+                          </div>
+                          {hasDaily && (
+                            <div className="pt-2 border-t border-gray-100">
+                              <div className="text-gray-500 uppercase tracking-wide mb-1">Daily plan</div>
+                              <span className="text-green-600">✓ {week.daily!.length} days defined</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              
+              <div className="border-t border-gray-200 p-4 bg-gray-50 rounded-b-2xl">
+                <div className="flex justify-between items-center">
+                  <button
+                    onClick={() => setShowPlanOverview(false)}
+                    className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                  >
+                    Close
+                  </button>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => commitPlan()}
+                      className="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:from-blue-600 hover:to-indigo-700 transition-all duration-200 font-medium"
+                    >
+                      Commit This Plan
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowPlanOverview(false);
+                        saveAIContentForPlan(serializeStructuredPlanToText(structuredPlan));
+                      }}
+                      className="px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all duration-200 font-medium"
+                    >
+                      Save for Later
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showPlanPreview && !showPlanOverview && (
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] mx-4 flex flex-col">
               <div className="bg-gradient-to-r from-purple-500 to-violet-600 text-white p-4 rounded-t-2xl flex items-center justify-between">
@@ -2545,7 +2781,7 @@ This comprehensive approach ensures consistent growth and engagement across all 
                 </button>
                 <button
                   onClick={scheduleStructuredPlan}
-                  disabled={isSchedulingPlan}
+                  disabled={isSchedulingPlan || governanceLocked}
                   className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
                 >
                   {isSchedulingPlan ? 'Scheduling...' : 'Confirm & Schedule'}
@@ -2577,7 +2813,11 @@ This comprehensive approach ensures consistent growth and engagement across all 
 
         {/* Input */}
         <div className="p-4 border-t border-gray-200">
-          <div className="flex items-center gap-2 mb-2">
+          {(() => {
+            const lastPlanMessage = [...messages].reverse().find((m) => m.type === 'ai' && isWeeklyPlanMessage(m.message));
+            const hasViewedPlan = lastPlanMessage && hasViewedPlanMessageId === lastPlanMessage.id;
+            return (
+          <div className="flex flex-wrap items-center gap-2 mb-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -2590,6 +2830,7 @@ This comprehensive approach ensures consistent growth and engagement across all 
               onClick={() => fileInputRef.current?.click()}
               disabled={isBusy}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              title="Attach file"
             >
               <Upload className="h-4 w-4 text-gray-600" />
             </button>
@@ -2602,10 +2843,45 @@ This comprehensive approach ensures consistent growth and engagement across all 
             <button disabled={isBusy} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
               <Link className="h-4 w-4 text-gray-600" />
             </button>
+            {(lastPlanMessage || structuredPlan) && (
+              <>
+                <span className="hidden sm:inline text-gray-300 mx-1">|</span>
+                <button
+                  onClick={() => viewPlan(lastPlanMessage?.message, lastPlanMessage?.id ?? structuredPlanMessageId ?? undefined)}
+                  disabled={isBusy}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-sm font-medium transition-colors disabled:opacity-50"
+                  title="View plan first"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  View Plan
+                </button>
+                  <button
+                    onClick={() => commitPlan(structuredPlan ? undefined : lastPlanMessage?.message)}
+                    disabled={isBusy || governanceLocked || (!structuredPlan && !hasViewedPlan)}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-sm font-medium transition-colors disabled:opacity-50"
+                  title={hasViewedPlan ? 'Commit to create campaign structure' : 'View plan first'}
+                >
+                  <CheckCircle className="h-3.5 w-3.5" />
+                  Commit Plan
+                </button>
+                <button
+                  onClick={() => saveAIContentForPlan(lastPlanMessage.message)}
+                  disabled={isBusy}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium transition-colors disabled:opacity-50"
+                  title="Save chat for campaign planning (draft/edit)"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  Save for Later
+                </button>
+              </>
+            )}
           </div>
+            );
+          })()}
           
           <div className="flex items-center gap-2">
             <input
+              ref={(el) => { inputRef.current = el; }}
               type="text"
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}

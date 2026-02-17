@@ -164,6 +164,13 @@ Flow: **REQUEST → APPROVE → EXECUTE**. No auto-execution for protected/CRITI
 
 PortfolioConstraintEvaluator excludes campaigns where `execution_status === PREEMPTED` or `execution_status === PAUSED` from overlap calculations. PENDING requests do not affect capacity until EXECUTED.
 
+### Preemption Cooldown (Stage 9C-B)
+
+After a campaign is preempted, it cannot be preempted again within **7 days** (configurable). Prevents governance thrashing.
+
+- **Cooldown tracked by** `campaigns.last_preempted_at`.
+- **CRITICAL override**: When initiator is CRITICAL and target is lower than CRITICAL, cooldown may be overridden for urgent business needs.
+
 ## 8. Blueprint Lifecycle Rules
 
 - **Blueprint is atomic.**
@@ -207,6 +214,8 @@ The following test suites **must** pass:
 - `campaign_priority_preemption.test.ts`
 - `campaign_preemption_execution.test.ts`
 - `campaign_preemption_approval_flow.test.ts`
+- `campaign_preemption_justification.test.ts`
+- `campaign_preemption_cooldown.test.ts`
 
 ## 11. Future Extension Protocol
 

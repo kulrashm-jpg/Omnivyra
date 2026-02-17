@@ -1,0 +1,4008 @@
+﻿
+> drishiq-admin-ui@1.0.0 test
+> jest backend/tests --runInBand
+
+  console.error
+    Error in campaigns API: TypeError: Cannot read properties of undefined (reading 'authorization')
+        at extractBearerToken (C:\virality\backend\services\supabaseAuthService.ts:5:30)
+        at getSupabaseUserFromRequest (C:\virality\backend\services\supabaseAuthService.ts:14:17)
+        at handler (C:\virality\pages\api\campaigns\index.ts:131:83)
+        at C:\virality\backend\tests\integration\campaign_company_scope_fix.test.ts:176:15
+
+      519 |     }
+      520 |   } catch (error) {
+    > 521 |     console.error('Error in campaigns API:', error);
+          |             ^
+      522 |     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      523 |     const errorStack = error instanceof Error ? error.stack : undefined;
+      524 |     res.status(500).json({ 
+
+      at handler (pages/api/campaigns/index.ts:521:13)
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:176:9
+
+  console.error
+    Error in campaigns API: TypeError: Cannot read properties of undefined (reading 'authorization')
+        at extractBearerToken (C:\virality\backend\services\supabaseAuthService.ts:5:30)
+        at getSupabaseUserFromRequest (C:\virality\backend\services\supabaseAuthService.ts:14:17)
+        at handler (C:\virality\pages\api\campaigns\index.ts:131:83)
+        at C:\virality\backend\tests\integration\campaign_company_scope_fix.test.ts:208:15
+
+      519 |     }
+      520 |   } catch (error) {
+    > 521 |     console.error('Error in campaigns API:', error);
+          |             ^
+      522 |     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      523 |     const errorStack = error instanceof Error ? error.stack : undefined;
+      524 |     res.status(500).json({ 
+
+      at handler (pages/api/campaigns/index.ts:521:13)
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:208:9
+
+npm : FAIL backend/tests/integration/campaign_company_scope_fix.test.ts (31.7 s)
+At C:\Users\Admin\AppData\Local\Temp\ps-script-05f78ea8-a957-4ab0-be9d-1ce711105f13.ps1:80 char:17
++ cd c:\virality; npm test 2>&1 | Out-File -FilePath c:\virality\test_o ...
++                 ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (FAIL backend/te...est.ts (31.7 s):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Campaign company scope fix
+    ├ù returns campaigns for correct company (77 ms)
+    ├ù does not reference campaigns.company_id (1 ms)
+    ├ù returns empty list for other company (1 ms)
+    ├ù dashboard only shows company campaigns (230 ms)
+    ├ù returns 403 when campaign not linked to company (7 ms)
+    ├ù returns 403 for mismatched campaignId in progress (30009 ms)
+
+  ΓùÅ Campaign company scope fix ΓÇ║ returns campaigns for correct company
+
+    TypeError: (0 , userContextService_1.resolveUserContext) is not a function
+
+      293 |     return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
+      294 |   }
+    > 295 |   const user = await resolveUserContext(input.req);
+          |                                        ^
+      296 |   const companyId = input.companyId;
+      297 |   if (!companyId) {
+      298 |     input.res.status(400).json({ error: 'companyId required' });
+
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/campaign_company_scope_fix.test.ts:113:11)
+
+  ΓùÅ Campaign company scope fix ΓÇ║ does not reference campaigns.company_id
+
+    TypeError: (0 , userContextService_1.resolveUserContext) is not a function
+
+      293 |     return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
+      294 |   }
+    > 295 |   const user = await resolveUserContext(input.req);
+          |                                        ^
+      296 |   const companyId = input.companyId;
+      297 |   if (!companyId) {
+      298 |     input.res.status(400).json({ error: 'companyId required' });
+
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/campaign_company_scope_fix.test.ts:130:11)
+
+  ΓùÅ Campaign company scope fix ΓÇ║ returns empty list for other company
+
+    TypeError: (0 , userContextService_1.resolveUserContext) is not a function
+
+      293 |     return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
+      294 |   }
+    > 295 |   const user = await resolveUserContext(input.req);
+          |                                        ^
+      296 |   const companyId = input.companyId;
+      297 |   if (!companyId) {
+      298 |     input.res.status(400).json({ error: 'companyId required' });
+
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/campaign_company_scope_fix.test.ts:145:11)
+
+  ΓùÅ Campaign company scope fix ΓÇ║ dashboard only shows company campaigns
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 500
+
+      176 |         await handler(req, res);
+      177 |         try {
+    > 178 |           expect(res.statusCode).toBe(200);
+          |                                  ^
+      179 |           expect(res.body?.campaigns.map((c: any) => c.id)).toEqual(['c1', 'c2']);
+      180 |           resolve();
+      181 |         } catch (error) {
+
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:178:34
+
+  ΓùÅ Campaign company scope fix ΓÇ║ returns 403 when campaign not linked to company
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 403
+    Received: 500
+
+      208 |         await handler(req, res);
+      209 |         try {
+    > 210 |           expect(res.statusCode).toBe(403);
+          |                                  ^
+      211 |           expect(res.body?.code).toBe('CAMPAIGN_NOT_IN_COMPANY');
+      212 |           resolve();
+      213 |         } catch (error) {
+
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:210:34
+
+  ΓùÅ Campaign company scope fix ΓÇ║ returns 403 for mismatched campaignId in progress
+
+    TypeError: (0 , userContextService_1.resolveUserContext) is not a function
+
+      293 |     return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
+      294 |   }
+    > 295 |   const user = await resolveUserContext(input.req);
+          |                                        ^
+      296 |   const companyId = input.companyId;
+      297 |   if (!companyId) {
+      298 |     input.res.status(400).json({ error: 'companyId required' });
+
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:236:15
+
+  ΓùÅ Campaign company scope fix ΓÇ║ returns 403 for mismatched campaignId in progress
+
+    thrown: "Exceeded timeout of 30000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See 
+https://jestjs.io/docs/api#testname-fn-timeout."
+
+      218 |   });
+      219 |
+    > 220 |   it('returns 403 for mismatched campaignId in progress', async () => {
+          |   ^
+      221 |     const progressSupabase = {
+      222 |       from: jest.fn((table: string) =>
+      223 |         buildQuery(table, { filters: {}, rows: [], campaignRows: [] })
+
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:220:3
+      at Object.<anonymous> (backend/tests/integration/campaign_company_scope_fix.test.ts:90:1)
+
+  console.log
+    ≡ƒº¬ Running Publish Flow Integration Test...
+
+      at runIntegrationTest (backend/tests/integration/publish_flow.test.ts:40:11)
+
+  console.log
+    ≡ƒôª Seeding test data...
+
+      at seedTestData (backend/tests/integration/publish_flow.test.ts:152:11)
+
+  console.warn
+    Failed to seed social account (may already exist): TypeError: fetch failed
+
+      167 |
+      168 |   if (accountError) {
+    > 169 |     console.warn('Failed to seed social account (may already exist):', accountError.message);
+          |             ^
+      170 |   }
+      171 |
+      172 |   // Create test scheduled post (due now)
+
+      at seedTestData (backend/tests/integration/publish_flow.test.ts:169:13)
+      at runIntegrationTest (backend/tests/integration/publish_flow.test.ts:46:3)
+      at Object.<anonymous> (backend/tests/integration/publish_flow.test.ts:144:5)
+
+  console.warn
+    Failed to seed scheduled post (may already exist): TypeError: fetch failed
+
+      186 |
+      187 |   if (postError) {
+    > 188 |     console.warn('Failed to seed scheduled post (may already exist):', postError.message);
+          |             ^
+      189 |   }
+      190 |
+      191 |   console.log('Γ£à Test data seeded');
+
+      at seedTestData (backend/tests/integration/publish_flow.test.ts:188:13)
+      at runIntegrationTest (backend/tests/integration/publish_flow.test.ts:46:3)
+      at Object.<anonymous> (backend/tests/integration/publish_flow.test.ts:144:5)
+
+  console.log
+    Γ£à Test data seeded
+
+      at seedTestData (backend/tests/integration/publish_flow.test.ts:191:11)
+
+  console.log
+    ≡ƒº╣ Cleaning up test data...
+
+      at cleanupTestData (backend/tests/integration/publish_flow.test.ts:198:11)
+
+  console.log
+    Γ£à Test data cleaned up
+
+      at cleanupTestData (backend/tests/integration/publish_flow.test.ts:209:11)
+
+FAIL backend/tests/integration/publish_flow.test.ts
+  Publish Flow Integration
+    ├ù runs the full publish flow (150 ms)
+
+  ΓùÅ Publish Flow Integration ΓÇ║ runs the full publish flow
+
+    Failed to get scheduled post: TypeError: fetch failed
+
+      194 |       return null;
+      195 |     }
+    > 196 |     throw new Error(`Failed to get scheduled post: ${error.message}`);
+          |           ^
+      197 |   }
+      198 |
+      199 |   return data;
+
+      at getScheduledPost (backend/db/queries.ts:196:11)
+      at runIntegrationTest (backend/tests/integration/publish_flow.test.ts:51:27)
+      at Object.<anonymous> (backend/tests/integration/publish_flow.test.ts:144:5)
+
+  console.warn
+    OMNIVYRA_LEARNING_FAILED { reason: 'HTTP 500' }
+
+      119 |     lastLearningStatus.set(snapshot.campaignId, result);
+      120 |   }
+    > 121 |   console.warn('OMNIVYRA_LEARNING_FAILED', { reason: result.error });
+          |           ^
+      122 |   return result;
+      123 | };
+      124 |
+
+      at sendLearningSnapshot (backend/services/omnivyraFeedbackService.ts:121:11)
+      at Object.<anonymous> (backend/tests/integration/omnivyra_learning_bridge.test.ts:259:20)
+
+FAIL backend/tests/integration/omnivyra_learning_bridge.test.ts
+  OmniVyra learning bridge
+    ΓêÜ sends learning payload when flag enabled (2 ms)
+    ΓêÜ skips when flag disabled
+    ΓêÜ marks failure when OmniVyra is unreachable (1222 ms)
+    ├ù injects learning status into recommendation engine result (4 ms)
+    ├ù exposes learning payload in audit report (5 ms)
+
+  ΓùÅ OmniVyra learning bridge ΓÇ║ injects learning status into recommendation engine result
+
+    TypeError: Cannot read properties of undefined (reading 'select')
+
+      385 |     })
+      386 |     .sort((a, b) => (b.inbound_signal_score ?? 0) - (a.inbound_signal_score ?? 0))
+    > 387 |     .slice(0, 5);
+          |         ^
+      388 |
+      389 |   return {
+      390 |     high_intent_themes: highIntent,
+
+      at ensureCampaignCompanyLink (backend/services/recommendationEngineService.ts:387:9)
+      at generateRecommendations (backend/services/recommendationEngineService.ts:577:9)
+      at Object.<anonymous> (backend/tests/integration/omnivyra_learning_bridge.test.ts:276:49)
+
+  ΓùÅ OmniVyra learning bridge ΓÇ║ exposes learning payload in audit report
+
+    TypeError: Cannot read properties of undefined (reading 'select')
+
+      79 | }): number => {
+      80 |   const base = 100;
+    > 81 |   const penalty =
+         |                 ^
+      82 |     input.missingFields.length * 20 +
+      83 |     input.placeholders * 3 +
+      84 |     input.lowConfidenceWeeks * 5;
+
+      at generateCampaignAuditReport (backend/services/campaignAuditService.ts:81:17)
+      at Object.<anonymous> (backend/tests/integration/omnivyra_learning_bridge.test.ts:298:53)
+
+FAIL backend/tests/integration/user_lifecycle_management.test.ts
+  User lifecycle management
+    ΓêÜ Super admin can invite user (3 ms)
+    ├ù Admin can invite user in own company (1 ms)
+    ΓêÜ Admin cannot invite user in other company (1 ms)
+    ΓêÜ Content role cannot invite user (403) (1 ms)
+    ├ù Role update works (2 ms)
+    ├ù Remove user works (2 ms)
+    ├ù List users scoped to company (1 ms)
+    ├ù Audit logs created (3 ms)
+
+  ΓùÅ User lifecycle management ΓÇ║ Admin can invite user in own company
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 403
+
+      158 |     const res = createMockRes();
+      159 |     await inviteHandler(req, res);
+    > 160 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      161 |   });
+      162 |
+      163 |   it('Admin cannot invite user in other company', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:160:28)
+
+  ΓùÅ User lifecycle management ΓÇ║ Role update works
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 403
+
+      215 |     const res = createMockRes();
+      216 |     await roleHandler(req, res);
+    > 217 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      218 |     expect(roleRows.find((row) => row.user_id === 'target-1')?.role).toBe('CONTENT_MANAGER');
+      219 |   });
+      220 |
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:217:28)
+
+  ΓùÅ User lifecycle management ΓÇ║ Remove user works
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 403
+
+      234 |     const res = createMockRes();
+      235 |     await removeHandler(req, res);
+    > 236 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      237 |     expect(roleRows.some((row) => row.user_id === 'target-2')).toBe(false);
+      238 |   });
+      239 |
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:236:28)
+
+  ΓùÅ User lifecycle management ΓÇ║ List users scoped to company
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 403
+
+      256 |     const res = createMockRes();
+      257 |     await listHandler(req, res);
+    > 258 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      259 |     expect(res.body?.users).toHaveLength(2);
+      260 |   });
+      261 |
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:258:28)
+
+  ΓùÅ User lifecycle management ΓÇ║ Audit logs created
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      275 |     const res = createMockRes();
+      276 |     await inviteHandler(req, res);
+    > 277 |     expect(logUserManagementAudit).toHaveBeenCalled();
+          |                                    ^
+      278 |   });
+      279 | });
+      280 |
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:277:36)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getPlatformConfigs (backend/services/externalApiService.ts:1059:13)
+
+  console.warn
+    Plan parse failed, treating as conversational: SyntaxError: Unexpected token 'T', "Test campa"... is not valid JSON
+        at JSON.parse (<anonymous>)
+        at parseAiPlanToWeeks (C:\virality\backend\services\campaignPlanParser.ts:163:23)
+        at processTicksAndRejections (node:internal/process/task_queues:95:5)
+        at runWithContext (C:\virality\backend\services\campaignAiOrchestrator.ts:702:18)
+        at runCampaignAiPlan (C:\virality\backend\services\campaignAiOrchestrator.ts:893:18)
+        at handler (C:\virality\pages\api\campaigns\ai\plan.ts:25:20)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_ai_plan.test.ts:90:5)
+
+      702 |     structured = await parseAiPlanToWeeks(planText);
+      703 |   } catch (parseError) {
+    > 704 |     console.warn('Plan parse failed, treating as conversational:', parseError);
+          |             ^
+      705 |     return {
+      706 |       mode: input.mode,
+      707 |       snapshot_hash: ctx.snapshot_hash,
+
+      at runWithContext (backend/services/campaignAiOrchestrator.ts:704:13)
+      at runCampaignAiPlan (backend/services/campaignAiOrchestrator.ts:893:18)
+      at handler (pages/api/campaigns/ai/plan.ts:25:20)
+      at Object.<anonymous> (backend/tests/integration/campaign_ai_plan.test.ts:90:5)
+
+  console.error
+    Error in campaign AI plan API: Error: Failed to save AI campaign plan: TypeError: fetch failed
+        at saveAiCampaignPlan (C:\virality\backend\db\campaignPlanStore.ts:48:11)
+        at processTicksAndRejections (node:internal/process/task_queues:95:5)
+        at handler (C:\virality\pages\api\campaigns\ai\plan.ts:37:7)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_ai_plan.test.ts:90:5)
+
+      54 |     });
+      55 |   } catch (error: any) {
+    > 56 |     console.error('Error in campaign AI plan API:', error);
+         |             ^
+      57 |     const message = error?.message && typeof error.message === 'string'
+      58 |       ? error.message
+      59 |       : 'Failed to generate campaign plan';
+
+      at handler (pages/api/campaigns/ai/plan.ts:56:13)
+      at Object.<anonymous> (backend/tests/integration/campaign_ai_plan.test.ts:90:5)
+
+FAIL backend/tests/integration/campaign_ai_plan.test.ts
+  Campaign AI Plan API
+    ├ù returns orchestrated response (172 ms)
+
+  ΓùÅ Campaign AI Plan API ΓÇ║ returns orchestrated response
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: 200
+    Received: 500
+
+    Number of calls: 1
+
+      90 |     await handler(req, res);
+      91 |
+    > 92 |     expect(res.status).toHaveBeenCalledWith(200);
+         |                        ^
+      93 |     const payload = (res.json as jest.Mock).mock.calls[0][0];
+      94 |     expect(payload.mode).toBe('generate_plan');
+      95 |     expect(payload.snapshot_hash).toBe('hash123');
+
+      at Object.<anonymous> (backend/tests/integration/campaign_ai_plan.test.ts:92:24)
+
+FAIL backend/tests/integration/platform_strategy_filtering.test.ts
+  Platform strategy filtering
+    ├ù filters platforms by content type and promotion mode (13 ms)
+    ├ù includes newly configured platform (17 ms)
+
+  ΓùÅ Platform strategy filtering ΓÇ║ filters platforms by content type and promotion mode
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/platform_strategy_filtering.test.ts:56:18)
+
+  ΓùÅ Platform strategy filtering ΓÇ║ includes newly configured platform
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/platform_strategy_filtering.test.ts:82:18)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE company-a
+
+      at getPlatformConfigs (backend/services/externalApiService.ts:1062:11)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE company-a
+
+      at fetchExternalTrends (backend/services/externalApiService.ts:1678:11)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE company-a
+
+      at getEnabledApis (backend/services/externalApiService.ts:693:11)
+
+  console.warn
+    Campaign duration not explicitly set; inferring from weeks array.
+
+      632 |   let durationWeeks = input.durationWeeks;
+      633 |   if (durationWeeks == null) {
+    > 634 |     console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+          |             ^
+      635 |     durationWeeks = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
+      636 |   }
+      637 |   const objective: CampaignObjective = (input.objective ?? 'awareness') as CampaignObjective;
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:634:13)
+
+  console.log
+    EXTERNAL_API_NORMALIZED_TRENDS { count: 0 }
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:735:15)
+
+  console.warn
+    EXTERNAL_API_NO_SIGNALS
+
+      756 |
+      757 |   if (tagged.length === 0) {
+    > 758 |     console.warn('EXTERNAL_API_NO_SIGNALS');
+          |             ^
+      759 |     const fallbackPlan = await generateCampaignStrategy({
+      760 |       companyId: input.companyId,
+      761 |       objective,
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:758:13)
+
+FAIL backend/tests/integration/external_api_company_scope.test.ts
+  External API company scope
+    ├ù returns APIs for selected company only (33 ms)
+    ΓêÜ returns 400 when companyId missing
+    ├ù fetchExternalApis uses company scope (8 ms)
+    ΓêÜ recommendation engine falls back with no_external_signals (24 ms)
+
+  ΓùÅ External API company scope ΓÇ║ returns APIs for selected company only
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 500
+
+      132 |     const res = createMockRes();
+      133 |     await externalApisHandler(req, res);
+    > 134 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      135 |     expect(res.body?.apis).toHaveLength(1);
+      136 |     expect(res.body?.apis[0].company_id).toBe('company-a');
+      137 |   });
+
+      at Object.<anonymous> (backend/tests/integration/external_api_company_scope.test.ts:134:28)
+
+  ΓùÅ External API company scope ΓÇ║ fetchExternalApis uses company scope
+
+    TypeError: createQuery(...).or is not a function
+
+      699 |       .order('created_at', { ascending: true });
+      700 |
+    > 701 |   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
+          |                                            ^
+      702 |   const applyPresetSelections = async (sources: ExternalApiSource[]) => {
+      703 |     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+      704 |     const companySpecific = companyScoped
+
+      at getEnabledApis (backend/services/externalApiService.ts:701:44)
+      at getExternalApiSourcesForUser (backend/services/externalApiService.ts:826:25)
+      at fetchExternalTrends (backend/services/externalApiService.ts:1700:25)
+      at Object.fetchExternalApis (backend/services/externalApiService.ts:1902:10)
+      at Object.<anonymous> (backend/tests/integration/external_api_company_scope.test.ts:173:46)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE US
+
+      at getEnabledApis (backend/services/externalApiService.ts:693:11)
+
+  console.error
+    Error fetching trends: TypeError: Cannot read properties of undefined (reading 'authorization')
+        at extractBearerToken (C:\virality\backend\services\supabaseAuthService.ts:5:30)
+        at getSupabaseUserFromRequest (C:\virality\backend\services\supabaseAuthService.ts:14:17)
+        at resolveUserContext (C:\virality\backend\services\userContextService.ts:12:59)
+        at handler (C:\virality\pages\api\trends\fetch.ts:13:42)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\external_api_service.test.ts:255:29)
+        at Promise.then.completed (C:\virality\node_modules\jest-circus\build\utils.js:298:28)
+        at new Promise (<anonymous>)
+        at callAsyncCircusFn (C:\virality\node_modules\jest-circus\build\utils.js:231:10)
+        at _callCircusTest (C:\virality\node_modules\jest-circus\build\run.js:316:40)
+        at _runTest (C:\virality\node_modules\jest-circus\build\run.js:252:3)
+        at _runTestsForDescribeBlock (C:\virality\node_modules\jest-circus\build\run.js:126:9)
+        at _runTestsForDescribeBlock (C:\virality\node_modules\jest-circus\build\run.js:121:9)
+        at run (C:\virality\node_modules\jest-circus\build\run.js:71:3)
+        at runAndTransformResultsToJestFormat (C:\virality\node_modules\jest-circus\build\legacy-code-todo-rewrite\jestAdapterInit.js:122:21)
+        at jestAdapter (C:\virality\node_modules\jest-circus\build\legacy-code-todo-rewrite\jestAdapter.js:79:19)
+        at runTestInternal (C:\virality\node_modules\jest-runner\build\runTest.js:367:16)
+        at runTest (C:\virality\node_modules\jest-runner\build\runTest.js:444:34)
+
+      23 |     return res.status(200).json({ trends });
+      24 |   } catch (error: any) {
+    > 25 |     console.error('Error fetching trends:', error);
+         |             ^
+      26 |     return res.status(500).json({ error: 'Failed to fetch trend signals' });
+      27 |   }
+      28 | }
+
+      at handler (pages/api/trends/fetch.ts:25:13)
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:255:5)
+
+FAIL backend/tests/integration/external_api_service.test.ts
+  External API service
+    ├ù fetches and normalizes trend signals (7 ms)
+    ├ù blocks non-admin from creating API sources (2 ms)
+    ├ù rejects missing env var when auth is required (10 ms)
+    ├ù validate endpoint updates external_api_health (1 ms)
+    ├ù skips unreliable APIs when fetching trends (15 ms)
+
+  ΓùÅ External API service ΓÇ║ fetches and normalizes trend signals
+
+    TypeError: createQuery(...).or is not a function
+
+      699 |       .order('created_at', { ascending: true });
+      700 |
+    > 701 |   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
+          |                                            ^
+      702 |   const applyPresetSelections = async (sources: ExternalApiSource[]) => {
+      703 |     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+      704 |     const companySpecific = companyScoped
+
+      at getEnabledApis (backend/services/externalApiService.ts:701:44)
+      at getExternalApiSourcesForUser (backend/services/externalApiService.ts:826:25)
+      at fetchTrendsFromApis (backend/services/externalApiService.ts:1449:25)
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:157:20)
+
+  ΓùÅ External API service ΓÇ║ blocks non-admin from creating API sources
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 403
+    Received: 400
+
+      180 |
+      181 |     await externalApisHandler(req, res);
+    > 182 |     expect(res.statusCode).toBe(403);
+          |                            ^
+      183 |   });
+      184 |
+      185 |   it('rejects missing env var when auth is required', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:182:28)
+
+  ΓùÅ External API service ΓÇ║ rejects missing env var when auth is required
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "API key not found in environment variables"
+    Received: "companyId required"
+
+      198 |     await externalApisHandler(req, res);
+      199 |     expect(res.statusCode).toBe(400);
+    > 200 |     expect(res.body?.error).toBe('API key not found in environment variables');
+          |                             ^
+      201 |   });
+      202 |
+      203 |   it('validate endpoint updates external_api_health', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:200:29)
+
+  ΓùÅ External API service ΓÇ║ validate endpoint updates external_api_health
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:220:26)
+
+  ΓùÅ External API service ΓÇ║ skips unreliable APIs when fetching trends
+
+    expect(jest.fn()).toHaveBeenCalledTimes(expected)
+
+    Expected number of calls: 1
+    Received number of calls: 0
+
+      254 |
+      255 |     await trendsFetchHandler(req, res);
+    > 256 |     expect((global as any).fetch).toHaveBeenCalledTimes(1);
+          |                                   ^
+      257 |   });
+      258 | });
+      259 |
+
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:256:35)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE US
+
+      at Object.fetchExternalTrends (backend/services/externalApiService.ts:1678:11)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE US
+
+      at getEnabledApis (backend/services/externalApiService.ts:693:11)
+
+FAIL backend/tests/integration/external_api_alignment.test.ts
+  External API alignment
+    ΓêÜ normalizes YouTube trends (3 ms)
+    ΓêÜ normalizes NewsAPI trends (2 ms)
+    ΓêÜ normalizes SerpAPI trends (1 ms)
+    ├ù handles missing env vars and cache hits (10 ms)
+    ├ù falls back with no_external_signals placeholder (5 ms)
+
+  ΓùÅ External API alignment ΓÇ║ handles missing env vars and cache hits
+
+    TypeError: createQuery(...).or is not a function
+
+      699 |       .order('created_at', { ascending: true });
+      700 |
+    > 701 |   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
+          |                                            ^
+      702 |   const applyPresetSelections = async (sources: ExternalApiSource[]) => {
+      703 |     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+      704 |     const companySpecific = companyScoped
+
+      at getEnabledApis (backend/services/externalApiService.ts:701:44)
+      at getExternalApiSourcesForUser (backend/services/externalApiService.ts:826:25)
+      at Object.fetchExternalTrends (backend/services/externalApiService.ts:1700:25)
+      at Object.<anonymous> (backend/tests/integration/external_api_alignment.test.ts:139:46)
+
+  ΓùÅ External API alignment ΓÇ║ falls back with no_external_signals placeholder
+
+    CAMPAIGN_NOT_IN_COMPANY
+
+      563 |   }
+      564 |   if (!data || data.length === 0) {
+    > 565 |     const linkError: any = new Error('CAMPAIGN_NOT_IN_COMPANY');
+          |                            ^
+      566 |     linkError.code = 'CAMPAIGN_NOT_IN_COMPANY';
+      567 |     throw linkError;
+      568 |   }
+
+      at ensureCampaignCompanyLink (backend/services/recommendationEngineService.ts:565:28)
+      at generateRecommendations (backend/services/recommendationEngineService.ts:577:3)
+
+FAIL backend/tests/integration/external_api_presets.test.ts
+  External API presets
+    ├ù returns 4 presets from GET /api/external-apis/presets (2 ms)
+    ├ù imports a preset via POST /api/external-apis (2 ms)
+    ΓêÜ builds request from preset with runtime placeholders (4 ms)
+    ├ù reports missing env vars safely (13 ms)
+
+  ΓùÅ External API presets ΓÇ║ returns 4 presets from GET /api/external-apis/presets
+
+    TypeError: Cannot read properties of undefined (reading 'companyId')
+
+      84 |   }
+      85 |
+    > 86 |   const companyId = req.query.companyId as string | undefined;
+         |                               ^
+      87 |   const platformScopeRequested = req.query?.scope === 'platform';
+      88 |   const access = platformScopeRequested && !companyId
+      89 |     ? await requirePlatformAdmin(req, res)
+
+      at handler (pages/api/external-apis/presets.ts:86:31)
+      at Object.<anonymous> (backend/tests/integration/external_api_presets.test.ts:68:25)
+
+  ΓùÅ External API presets ΓÇ║ imports a preset via POST /api/external-apis
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 400
+
+       95 |     await externalApisHandler(req, res);
+       96 |
+    >  97 |     expect(res.statusCode).toBe(201);
+          |                            ^
+       98 |     expect(res.body?.api?.name).toBe(preset.name);
+       99 |     expect(res.body?.api?.is_preset).toBe(true);
+      100 |     if (preset.api_key_env_name) {
+
+      at Object.<anonymous> (backend/tests/integration/external_api_presets.test.ts:97:28)
+
+  ΓùÅ External API presets ΓÇ║ reports missing env vars safely
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected value: "NEWS_API_KEY"
+    Received array: ["YOUTUBE_API_KEY"]
+
+      151 |     );
+      152 |
+    > 153 |     expect(request.missingEnv).toContain('NEWS_API_KEY');
+          |                                ^
+      154 |   });
+      155 | });
+      156 |
+
+      at Object.<anonymous> (backend/tests/integration/external_api_presets.test.ts:153:32)
+
+  console.warn
+    OMNIVYRA_FALLBACK_PLATFORM_RULES { reason: 'Invalid schema' }
+
+      141 |       fallbackReason = (response._omnivyra_meta?.error_type || 'omnivyra_unavailable') as string;
+      142 |       setLastFallbackReason(fallbackReason);
+    > 143 |       console.warn('OMNIVYRA_FALLBACK_PLATFORM_RULES', { reason: response.error?.message });
+          |               ^
+      144 |     }
+      145 |   } else {
+      146 |     fallbackReason = 'omnivyra_disabled';
+
+      at getRulesForPlatform (backend/services/platformRulesService.ts:143:15)
+      at Object.<anonymous> (backend/tests/integration/omnivyra_fallback_reasons.test.ts:78:18)
+
+FAIL backend/tests/integration/omnivyra_fallback_reasons.test.ts
+  OmniVyra fallback reasons
+    ├ù sets fallback reason in recommendation engine status (15 ms)
+    ΓêÜ sets fallback reason in platform rules (15 ms)
+
+  ΓùÅ OmniVyra fallback reasons ΓÇ║ sets fallback reason in recommendation engine status
+
+    Failed to verify campaign link: TypeError: fetch failed
+
+      560 |     .eq('campaign_id', campaignId);
+      561 |   if (error) {
+    > 562 |     throw new Error(`Failed to verify campaign link: ${error.message}`);
+          |           ^
+      563 |   }
+      564 |   if (!data || data.length === 0) {
+      565 |     const linkError: any = new Error('CAMPAIGN_NOT_IN_COMPANY');
+
+      at ensureCampaignCompanyLink (backend/services/recommendationEngineService.ts:562:11)
+      at generateRecommendations (backend/services/recommendationEngineService.ts:577:3)
+      at Object.<anonymous> (backend/tests/integration/omnivyra_fallback_reasons.test.ts:70:20)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE null
+
+      at getApiConfigByPlatform (backend/services/externalApiService.ts:1280:13)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE null
+
+      at getApiConfigByPlatform (backend/services/externalApiService.ts:1280:13)
+
+FAIL backend/tests/integration/social_platform_config.test.ts
+  Social platform config
+    ├ù creates and fetches platform config (2 ms)
+    ΓêÜ publisher rejects unsupported content type (11 ms)
+    ΓêÜ skips inactive platform (3 ms)
+
+  ΓùÅ Social platform config ΓÇ║ creates and fetches platform config
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 400
+
+      163 |
+      164 |     await externalApisHandler(req, res);
+    > 165 |     expect(res.statusCode).toBe(201);
+          |                            ^
+      166 |
+      167 |     const listReq = { method: 'GET' } as NextApiRequest;
+      168 |     const listRes = createMockRes();
+
+      at Object.<anonymous> (backend/tests/integration/social_platform_config.test.ts:165:28)
+
+FAIL backend/tests/integration/recommendation_audit.test.ts
+  Recommendation audit
+    ├ù logs audit row during recommendation generation (1 ms)
+    ├ù fetches audit by recommendation id (2 ms)
+    ├ù fetches audit by campaign id (1 ms)
+
+  ΓùÅ Recommendation audit ΓÇ║ logs audit row during recommendation generation
+
+    TypeError: Cannot read properties of undefined (reading 'select')
+
+      41 |     if (value < 0 || value > 5) {
+      42 |       return { ok: false, message: `${key} must be between 0 and 5` };
+    > 43 |     }
+         |      ^
+      44 |   }
+      45 |   return { ok: true };
+      46 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:43:9)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:75)
+      at Object.<anonymous> (backend/tests/integration/recommendation_audit.test.ts:41:5)
+
+  ΓùÅ Recommendation audit ΓÇ║ fetches audit by recommendation id
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_audit.test.ts:51:18)
+
+  ΓùÅ Recommendation audit ΓÇ║ fetches audit by campaign id
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_audit.test.ts:59:26)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE US
+
+      at getEnabledApis (backend/services/externalApiService.ts:693:11)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getEnabledApis (backend/services/externalApiService.ts:690:13)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getEnabledApis (backend/services/externalApiService.ts:690:13)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getEnabledApis (backend/services/externalApiService.ts:690:13)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getEnabledApis (backend/services/externalApiService.ts:690:13)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getEnabledApis (backend/services/externalApiService.ts:690:13)
+
+FAIL backend/tests/integration/external_api_health.test.ts
+  External API health + cache + rate limit
+    ├ù records cache hit and miss (7 ms)
+    ├ù retries on 5xx responses (3 ms)
+    ├ù blocks rate limited sources (7 ms)
+    ├ù updates health score on success (2 ms)
+    ├ù computes signal confidence (2 ms)
+
+  ΓùÅ External API health + cache + rate limit ΓÇ║ records cache hit and miss
+
+    TypeError: createQuery(...).or is not a function
+
+      699 |       .order('created_at', { ascending: true });
+      700 |
+    > 701 |   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
+          |                                            ^
+      702 |   const applyPresetSelections = async (sources: ExternalApiSource[]) => {
+      703 |     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+      704 |     const companySpecific = companyScoped
+
+      at getEnabledApis (backend/services/externalApiService.ts:701:44)
+      at getExternalApiSourcesForUser (backend/services/externalApiService.ts:826:25)
+      at fetchTrendsFromApis (backend/services/externalApiService.ts:1449:25)
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:101:5)
+
+  ΓùÅ External API health + cache + rate limit ΓÇ║ retries on 5xx responses
+
+    expect(jest.fn()).toHaveBeenCalledTimes(expected)
+
+    Expected number of calls: 2
+    Received number of calls: 0
+
+      119 |
+      120 |     await fetchTrendsFromApis();
+    > 121 |     expect(fetchMock).toHaveBeenCalledTimes(2);
+          |                       ^
+      122 |     jest.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      123 |   });
+      124 |
+
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:121:23)
+
+  ΓùÅ External API health + cache + rate limit ΓÇ║ blocks rate limited sources
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      136 |
+      137 |     const snapshot = await getExternalApiRuntimeSnapshot(['api-1']);
+    > 138 |     expect(snapshot.rate_limited_sources.length).toBeGreaterThan(0);
+          |                                                  ^
+      139 |   });
+      140 |
+      141 |   it('updates health score on success', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:138:50)
+
+  ΓùÅ External API health + cache + rate limit ΓÇ║ updates health score on success
+
+    TypeError: Cannot read properties of undefined (reading 'success_count')
+
+      148 |     await fetchTrendsFromApis();
+      149 |     const record = healthStore.get('api-1');
+    > 150 |     expect(record.success_count).toBe(1);
+          |                   ^
+      151 |     expect(record.failure_count).toBe(0);
+      152 |   });
+      153 |
+
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:150:19)
+
+  ΓùÅ External API health + cache + rate limit ΓÇ║ computes signal confidence
+
+    TypeError: Cannot read properties of undefined (reading 'signal_confidence')
+
+      162 |
+      163 |     const trends = await fetchTrendsFromApis();
+    > 164 |     expect(trends[0].signal_confidence).toBeDefined();
+          |                      ^
+      165 |     expect(trends[0].signal_confidence).toBeGreaterThanOrEqual(0);
+      166 |   });
+      167 | });
+
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:164:22)
+
+FAIL backend/tests/integration/recommendation_analytics.test.ts
+  Recommendation analytics
+    ├ù computes analytics and enforces admin gating (1 ms)
+    ├ù blocks non-admin access (1 ms)
+
+  ΓùÅ Recommendation analytics ΓÇ║ computes analytics and enforces admin gating
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_analytics.test.ts:86:18)
+
+  ΓùÅ Recommendation analytics ΓÇ║ blocks non-admin access
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_analytics.test.ts:103:18)
+
+FAIL backend/tests/integration/recommendation_fusion_scoring.test.ts
+  Recommendation fusion scoring
+    ├ù boosts consensus for multi-source trends (8 ms)
+    ├ù applies geo relevance scoring (9 ms)
+    ├ù applies audience fit scoring (5 ms)
+
+  ΓùÅ Recommendation fusion scoring ΓÇ║ boosts consensus for multi-source trends
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/recommendation_fusion_scoring.test.ts:19:18)
+
+  ΓùÅ Recommendation fusion scoring ΓÇ║ applies geo relevance scoring
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/recommendation_fusion_scoring.test.ts:35:18)
+
+  ΓùÅ Recommendation fusion scoring ΓÇ║ applies audience fit scoring
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/recommendation_fusion_scoring.test.ts:44:18)
+
+FAIL backend/tests/integration/recommendation_create_campaign.test.ts
+  Recommendation create campaign API
+    ├ù creates campaign, links recommendation, and returns response (1 ms)
+
+  ΓùÅ Recommendation create campaign API ΓÇ║ creates campaign, links recommendation, and returns response
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_create_campaign.test.ts:77:18)
+
+FAIL backend/tests/integration/recommendation_policy_navigation.test.ts
+  Recommendation policy navigation
+    ├ù blocks simulate for non-admin (1 ms)
+    ├ù passes campaignId to simulation (1 ms)
+
+  ΓùÅ Recommendation policy navigation ΓÇ║ blocks simulate for non-admin
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_policy_navigation.test.ts:32:26)
+
+  ΓùÅ Recommendation policy navigation ΓÇ║ passes campaignId to simulation
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_policy_navigation.test.ts:52:26)
+
+FAIL backend/tests/integration/company_profile_api.test.ts
+  Company profile API
+    ├ù creates or updates profile (2 ms)
+    ├ù fetches profile (1 ms)
+    ├ù refines profile (1 ms)
+
+  ΓùÅ Company profile API ΓÇ║ creates or updates profile
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      46 |     await companyProfileHandler(req, res);
+      47 |
+    > 48 |     expect(saveProfile).toHaveBeenCalled();
+         |                         ^
+      49 |     expect(res.status).toHaveBeenCalledWith(200);
+      50 |     const payload = (res.json as jest.Mock).mock.calls[0][0];
+      51 |     expect(payload.profile.name).toBe('Acme');
+
+      at Object.<anonymous> (backend/tests/integration/company_profile_api.test.ts:48:25)
+
+  ΓùÅ Company profile API ΓÇ║ fetches profile
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      66 |     await companyProfileHandler(req, res);
+      67 |
+    > 68 |     expect(getLatestProfile).toHaveBeenCalled();
+         |                              ^
+      69 |     expect(res.status).toHaveBeenCalledWith(200);
+      70 |     const payload = (res.json as jest.Mock).mock.calls[0][0];
+      71 |     expect(payload.profile.name).toBe('Acme');
+
+      at Object.<anonymous> (backend/tests/integration/company_profile_api.test.ts:68:30)
+
+  ΓùÅ Company profile API ΓÇ║ refines profile
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at handler (pages/api/company-profile/refine.ts:19:59)
+      at Object.<anonymous> (backend/tests/integration/company_profile_api.test.ts:104:24)
+
+  console.warn
+    Weekly recommendation refresh failed { companyId: 'default' }
+
+      72 |       });
+      73 |     } catch (error) {
+    > 74 |       console.warn('Weekly recommendation refresh failed', { companyId });
+         |               ^
+      75 |     }
+      76 |   }
+      77 | }
+
+      at runWeeklyRecommendationRefresh (backend/services/recommendationScheduler.ts:74:15)
+      at Object.<anonymous> (backend/tests/integration/recommendation_scheduler.test.ts:75:5)
+
+  console.warn
+    Profile-triggered recommendation refresh failed { companyId: 'default' }
+
+       99 |     });
+      100 |   } catch (error) {
+    > 101 |     console.warn('Profile-triggered recommendation refresh failed', { companyId });
+          |             ^
+      102 |   }
+      103 | }
+      104 |
+
+      at runCompanyProfileTriggeredRefresh (backend/services/recommendationScheduler.ts:101:13)
+      at Object.<anonymous> (backend/tests/integration/recommendation_scheduler.test.ts:81:5)
+
+FAIL backend/tests/integration/recommendation_scheduler.test.ts
+  Recommendation scheduler
+    ├ù runs weekly refresh and persists with auto_weekly source (6 ms)
+    ├ù runs profile refresh and persists with profile_update source (2 ms)
+
+  ΓùÅ Recommendation scheduler ΓÇ║ runs weekly refresh and persists with auto_weekly source
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      75 |     await runWeeklyRecommendationRefresh();
+      76 |
+    > 77 |     expect(generateRecommendations).toHaveBeenCalled();
+         |                                     ^
+      78 |   });
+      79 |
+      80 |   it('runs profile refresh and persists with profile_update source', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/recommendation_scheduler.test.ts:77:37)
+
+  ΓùÅ Recommendation scheduler ΓÇ║ runs profile refresh and persists with profile_update source
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      81 |     await runCompanyProfileTriggeredRefresh('default');
+      82 |
+    > 83 |     expect(generateRecommendations).toHaveBeenCalled();
+         |                                     ^
+      84 |   });
+      85 | });
+      86 |
+
+      at Object.<anonymous> (backend/tests/integration/recommendation_scheduler.test.ts:83:37)
+
+FAIL backend/tests/integration/recommendation_simulation.test.ts
+  Recommendation simulation
+    ├ù simulates recommendations without persistence (6 ms)
+
+  ΓùÅ Recommendation simulation ΓÇ║ simulates recommendations without persistence
+
+    expect(received).resolves.toBeDefined()
+
+    Received promise rejected instead of resolved
+    Rejected to value: [TypeError: (0 , externalApiService_1.getCompanyDefaultApiIds) is not a function]
+
+      104 |
+      105 |   it('simulates recommendations without persistence', async () => {
+    > 106 |     await expect(
+          |           ^
+      107 |       simulateRecommendations({
+      108 |         companyId: 'default',
+      109 |         draftPolicyWeights: {
+
+      at expect (node_modules/expect/build/index.js:113:15)
+      at Object.<anonymous> (backend/tests/integration/recommendation_simulation.test.ts:106:11)
+
+PASS backend/tests/integration/community_ai.test.ts
+  Community-AI APIs
+    ΓêÜ rejects requests without tenant_id (1 ms)
+    ΓêÜ rejects cross-tenant access (1 ms)
+    ΓêÜ returns structured response for dashboard (8 ms)
+    ΓêÜ uses default brand_voice when profile missing (3 ms)
+    ΓêÜ returns suggested actions array for platform (3 ms)
+    ΓêÜ returns suggested actions array for post (2 ms)
+    ΓêÜ normalizes suggested action tone to brand_voice (3 ms)
+  Community-AI Action Execution
+    ΓêÜ cannot execute without approval (2 ms)
+    ΓêÜ rejects tenant mismatch (1 ms)
+    ΓêÜ executes and updates status on approval (8 ms)
+  Community-AI Platform Tokens
+    ΓêÜ fails when no platform token (3 ms)
+    ΓêÜ passes auth token to connector (5 ms)
+    ΓêÜ rejects tenant mismatch token (6 ms)
+  Community-AI Connector Execution (API)
+    ΓêÜ executes facebook connector with valid token (7 ms)
+    ΓêÜ executes instagram connector with valid token (7 ms)
+    ΓêÜ executes twitter connector with valid token (16 ms)
+    ΓêÜ executes reddit connector with valid token (8 ms)
+    ΓêÜ blocks execution when token missing (2 ms)
+    ΓêÜ blocks execution when playbook disallows action (2 ms)
+  Community-AI RPA Execution
+    ΓêÜ blocks RPA when playbook disallows rpa_allowed (4 ms)
+    ΓêÜ executes RPA when execution_mode = rpa (2 ms)
+    ΓêÜ enqueues RPA task with expected payload (2 ms)
+    ΓêÜ blocks RPA when playbook limits exceeded (2 ms)
+    ΓêÜ scheduler triggers RPA execution path (5 ms)
+  Community-AI Webhooks
+    ΓêÜ creates webhook per tenant (17 ms)
+    ΓêÜ enforces RBAC for webhook management (4 ms)
+    ΓêÜ viewer can read webhooks (2 ms)
+    ΓêÜ calls webhook on action failure (16 ms)
+    ΓêÜ does not call cross-tenant webhooks (16 ms)
+  Community-AI Scheduling
+    ΓêÜ schedules an action and logs event (3 ms)
+    ΓêÜ scheduler executes due actions and logs execution (3 ms)
+    ΓêÜ scheduler executes RPA action without API token (3 ms)
+    ΓêÜ scheduler fails RPA action when playbook disallows rpa_allowed (2 ms)
+    ΓêÜ scheduler enforces limits for RPA actions (7 ms)
+    ΓêÜ scheduler logs RPA execution result with screenshot (4 ms)
+    ΓêÜ scheduler skips when token missing (3 ms)
+    ΓêÜ rejects scheduling for tenant mismatch (18 ms)
+  Community-AI Action History
+    ΓêÜ rejects history request without tenant/org (4 ms)
+    ΓêÜ rejects cross-tenant history access (2 ms)
+    ΓêÜ returns ordered audit log records (38 ms)
+    ΓêÜ filters history by action_id (2 ms)
+  Community-AI Metrics
+    ΓêÜ rejects metrics request without tenant/org (2 ms)
+    ΓêÜ returns correct shape and counts (2 ms)
+    ΓêÜ does not include cross-tenant actions (3 ms)
+  Community-AI Network Intelligence
+    ΓêÜ enforces RBAC (2 ms)
+    ΓêÜ returns tenant-scoped records and aggregates (2 ms)
+    ΓêÜ blocks non-GET requests
+  Community-AI Playbook Effectiveness
+    ΓêÜ enforces RBAC
+    ΓêÜ returns correct counts and rates (2 ms)
+    ΓêÜ filters by date range (1 ms)
+    ΓêÜ blocks non-GET requests (1 ms)
+  Community-AI Executive Summary
+    ΓêÜ enforces RBAC (2 ms)
+    ΓêÜ returns correct executive metrics (8 ms)
+    ΓêÜ filters by date range (2 ms)
+    ΓêÜ blocks non-GET requests
+  Community-AI Executive Narrative
+    ΓêÜ enforces RBAC (1 ms)
+    ΓêÜ returns narrative and enforces tenant isolation (4 ms)
+    ΓêÜ calls OmniVyra once (2 ms)
+  Community-AI Week-over-Week Comparison
+    ΓêÜ enforces RBAC (4 ms)
+    ΓêÜ separates windows and computes deltas (11 ms)
+    ΓêÜ blocks non-GET requests (2 ms)
+  Community-AI Month-over-Month Comparison
+    ΓêÜ enforces RBAC (3 ms)
+    ΓêÜ uses a different window than wow and computes deltas (3 ms)
+    ΓêÜ blocks non-GET requests (1 ms)
+  Community-AI Campaign Baseline
+    ΓêÜ enforces RBAC (2 ms)
+    ΓêÜ aligns baseline window and computes lift (8 ms)
+    ΓêÜ blocks non-GET requests (2 ms)
+  Community-AI Executive Alerts
+    ΓêÜ enforces RBAC (2 ms)
+    ΓêÜ returns deterministic alerts without mutations (4 ms)
+    ΓêÜ blocks non-GET requests (1 ms)
+  Community-AI Playbook Learning
+    ΓêÜ enforces RBAC (2 ms)
+    ΓêÜ returns deterministic learning states (33 ms)
+    ΓêÜ blocks non-GET requests (1 ms)
+  Community-AI Recommendations
+    ΓêÜ enforces RBAC (1 ms)
+    ΓêÜ returns deterministic recommendations and requires review (22 ms)
+    ΓêÜ blocks non-GET requests
+  Community-AI Executive Export
+    ΓêÜ enforces RBAC (1 ms)
+    ΓêÜ returns PDF headers and enforces tenant isolation (3 ms)
+    ΓêÜ does not create action logs or touch automation (2 ms)
+  Community-AI RBAC
+    ΓêÜ viewer cannot approve or execute (1 ms)
+    ΓêÜ approver cannot execute (1 ms)
+    ΓêÜ executor can execute (11 ms)
+    ΓêÜ admin can approve and execute (2 ms)
+    ΓêÜ returns capability permissions for roles (4 ms)
+    ΓêÜ role mismatch rejected with 403 (1 ms)
+  Community-AI Notifications
+    ΓêÜ creates notification on execution success (5 ms)
+    ΓêÜ creates notification on execution failure (1 ms)
+    ΓêÜ enforces tenant isolation for notifications (1 ms)
+    ΓêÜ returns unread notifications ordered by created_at desc (2 ms)
+  Community-AI Content KPIs
+    ΓêÜ rejects content-kpis request without tenant/org (1 ms)
+    ΓêÜ returns correct shape (3 ms)
+    ΓêÜ blocks cross-tenant aggregation (1 ms)
+  Community-AI Trends
+    ΓêÜ requires tenant/org (1 ms)
+    ΓêÜ detects up/down trends and anomaly (6 ms)
+    ΓêÜ blocks cross-tenant aggregation (1 ms)
+  Community-AI Insights
+    ΓêÜ requires tenant/org (2 ms)
+    ΓêÜ calls OmniVyra with KPIs + trends + anomalies (4 ms)
+    ΓêÜ returns structured insight response (1 ms)
+    ΓêÜ blocks cross-tenant access (4 ms)
+  Community-AI Forecast
+    ΓêÜ requires tenant/org (2 ms)
+    ΓêÜ returns forecast array (2 ms)
+    ΓêÜ filters by platform and content type (8 ms)
+    ΓêÜ returns data for CSV export (1 ms)
+    ΓêÜ includes risk reason in CSV export data (4 ms)
+    ΓêÜ detects risk flag on drop (1 ms)
+    ΓêÜ blocks cross-tenant access (1 ms)
+  Community-AI Forecast Insights
+    ΓêÜ requires tenant/org (1 ms)
+    ΓêÜ calls OmniVyra with forecast + trends + anomalies (3 ms)
+    ΓêÜ returns structured response (2 ms)
+    ΓêÜ blocks cross-tenant access
+  Community-AI Forecast Simulation
+    ΓêÜ requires tenant/org (1 ms)
+    ΓêÜ returns baseline + simulated forecast (6 ms)
+    ΓêÜ applies content_type_mix adjustments (3 ms)
+    ΓêÜ rejects invalid content_type_mix (1 ms)
+    ΓêÜ returns consistent results for same scenario (4 ms)
+    ΓêÜ blocks cross-tenant access (1 ms)
+  Community-AI Auto Rules
+    ΓêÜ auto-executes when rule matches (8 ms)
+    ΓêÜ keeps non-matching rule actions pending (1 ms)
+    ΓêÜ never auto-executes high-risk actions (1 ms)
+    ΓêÜ blocks cross-tenant auto rules (3 ms)
+    ΓêÜ enforces RBAC for auto-rules API (7 ms)
+  Community-AI Export
+    ΓêÜ requires tenant/org (2 ms)
+    ΓêÜ enforces RBAC (1 ms)
+    ΓêÜ blocks cross-tenant export
+    ΓêÜ returns CSV file response (15 ms)
+    ΓêÜ returns PDF with correct headers (54 ms)
+
+  console.log
+    CAMPAIGN HEALTH CHECK { companyId: 'comp-1' }
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:144:11)
+
+  console.log
+    PROFILE COMPLETENESS SCORE 80
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:181:11)
+
+  console.log
+    TREND COVERAGE SCORE 50
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:182:11)
+
+  console.log
+    PLATFORM BALANCE SCORE 70
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:183:11)
+
+  console.log
+    CAMPAIGN HEALTH CHECK { companyId: 'comp-1' }
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:144:11)
+
+  console.log
+    PROFILE COMPLETENESS SCORE 100
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:181:11)
+
+  console.log
+    TREND COVERAGE SCORE 50
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:182:11)
+
+  console.log
+    PLATFORM BALANCE SCORE 70
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:183:11)
+
+  console.log
+    CAMPAIGN HEALTH CHECK { companyId: 'comp-1' }
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:144:11)
+
+  console.log
+    PROFILE COMPLETENESS SCORE 100
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:181:11)
+
+  console.log
+    TREND COVERAGE SCORE 50
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:182:11)
+
+  console.log
+    PLATFORM BALANCE SCORE 70
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:183:11)
+
+  console.log
+    CAMPAIGN HEALTH CHECK { companyId: 'comp-1' }
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:144:11)
+
+  console.log
+    PROFILE COMPLETENESS SCORE 100
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:181:11)
+
+  console.log
+    TREND COVERAGE SCORE 0
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:182:11)
+
+  console.log
+    PLATFORM BALANCE SCORE 0
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:183:11)
+
+  console.debug
+    Approved version resolver used { companyId: 'comp-1', campaignId: 'camp-1' }
+
+      at getLatestApprovedCampaignVersion (backend/db/campaignApprovedVersionStore.ts:8:11)
+
+  console.log
+    OPTIMIZATION APPLIED {
+      companyId: 'comp-1',
+      campaignId: 'camp-1',
+      weekNumber: 1,
+      reason: 'Improve engagement'
+    }
+
+      at Object.optimizeCampaignWeek (backend/services/campaignOptimizationService.ts:190:11)
+
+  console.debug
+    Campaign strategy version created with status=proposed (blueprint-derived)
+
+      at Object.optimizeCampaignWeek (backend/services/campaignOptimizationService.ts:224:11)
+
+PASS backend/tests/integration/campaign_health.test.ts
+  Campaign health layer
+    ΓêÜ blocks when industry is missing (20 ms)
+    ΓêÜ warns when geography is missing (5 ms)
+    ΓêÜ warns when weekly plan has fewer weeks than expected duration (4 ms)
+    ΓêÜ blocks when no daily plans exist (7 ms)
+    ΓêÜ detects trend drift when new topics align (1 ms)
+    ΓêÜ does not detect drift when new topics are unrelated
+  Campaign week optimization
+    ΓêÜ optimizes a week and stores history (32 ms)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluatePortfolioConstraints (C:\virality\backend\services\PortfolioConstraintEvaluator.ts:217:28)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:230:29)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_priority_preemption.test.ts:86:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:217:28)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:230:29)
+      at Object.<anonymous> (backend/tests/integration/campaign_priority_preemption.test.ts:86:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:386:28)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_priority_preemption.test.ts:86:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:386:28)
+      at Object.<anonymous> (backend/tests/integration/campaign_priority_preemption.test.ts:86:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluatePortfolioConstraints (C:\virality\backend\services\PortfolioConstraintEvaluator.ts:217:28)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:230:29)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_priority_preemption.test.ts:140:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:217:28)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:230:29)
+      at Object.<anonymous> (backend/tests/integration/campaign_priority_preemption.test.ts:140:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:386:28)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_priority_preemption.test.ts:140:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:386:28)
+      at Object.<anonymous> (backend/tests/integration/campaign_priority_preemption.test.ts:140:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluatePortfolioConstraints (C:\virality\backend\services\PortfolioConstraintEvaluator.ts:217:28)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:230:29)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_priority_preemption.test.ts:190:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:217:28)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:230:29)
+      at Object.<anonymous> (backend/tests/integration/campaign_priority_preemption.test.ts:190:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:386:28)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_priority_preemption.test.ts:190:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:386:28)
+      at Object.<anonymous> (backend/tests/integration/campaign_priority_preemption.test.ts:190:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluatePortfolioConstraints (C:\virality\backend\services\PortfolioConstraintEvaluator.ts:217:28)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:230:29)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_priority_preemption.test.ts:238:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:217:28)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:230:29)
+      at Object.<anonymous> (backend/tests/integration/campaign_priority_preemption.test.ts:238:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:386:28)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_priority_preemption.test.ts:238:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:386:28)
+      at Object.<anonymous> (backend/tests/integration/campaign_priority_preemption.test.ts:238:22)
+
+PASS backend/tests/integration/campaign_priority_preemption.test.ts
+  Campaign Priority Preemption
+    Test 1 ΓÇö High priority preempts low
+      ΓêÜ includes PREEMPT_LOWER_PRIORITY_CAMPAIGN, sorted first for HIGH priority (63 ms)
+    Test 2 ΓÇö Same priority ΓåÆ no preemption
+      ΓêÜ no PREEMPT_LOWER_PRIORITY_CAMPAIGN when both NORMAL (6 ms)
+    Test 3 ΓÇö Critical priority
+      ΓêÜ PREEMPT first in ranking when CRITICAL (7 ms)
+    Test 4 ΓÇö Low priority campaign
+      ΓêÜ no PREEMPT suggestion when campaign is LOW (6 ms)
+
+PASS backend/tests/integration/governance_dashboard_ui_snapshot.test.ts
+  Governance Dashboard UI
+    deriveFromEvent
+      ΓêÜ returns blocked for DURATION_REJECTED (1 ms)
+      ΓêÜ returns negotiate-style for DURATION_NEGOTIATE
+      ΓêÜ returns approved for DURATION_APPROVED (1 ms)
+      ΓêÜ returns approved for unknown event type
+    API response shapes for components
+      ΓêÜ campaign-status shape matches GovernanceStatusCard (1 ms)
+      ΓêÜ campaign-status with cooldownActive true shows Cooldown Active badge
+      ΓêÜ events shape matches GovernanceTimeline and PreemptionHistory (1 ms)
+      ΓêÜ trade_off_options shape matches TradeOffSuggestionList (2 ms)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":12,"max_weeks_allowed":2,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: DURATION_REJECTED {"requested_weeks":12,"max_weeks_allowed":0}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:251:13)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":20,"max_weeks_allowed":6,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":12,"max_weeks_allowed":5,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":2,"max_weeks_allowed":10,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:327:13)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":8,"max_weeks_allowed":4,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":14,"max_weeks_allowed":7,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+PASS backend/tests/integration/campaign_duration_constraints.test.ts
+  HorizonConstraintEvaluator
+    ΓêÜ underdeveloped + low inventory ΓåÆ NEGOTIATE (7 ms)
+    ΓêÜ strong baseline + sufficient capacity ΓåÆ APPROVED (1 ms)
+    ΓêÜ zero content inventory ΓåÆ REJECTED (2 ms)
+    ΓêÜ reduce duration ΓåÆ APPROVED (1 ms)
+    ΓêÜ increase beyond constraint ΓåÆ NEGOTIATE (2 ms)
+    ΓêÜ budget constraint limits duration (2 ms)
+    ΓêÜ lead-heavy campaign requires minimum 3 weeks (3 ms)
+    ΓêÜ Scenario A: Underdeveloped + 50 content units + lead heavy (5 ms)
+    ΓêÜ Scenario B: Strong baseline + high budget + large team (3 ms)
+    ΓêÜ Scenario C: User extends from 4 ΓåÆ 14 weeks, inventory/production insufficient (15 ms)
+  CampaignPrePlanningService
+    ΓêÜ runPrePlanning returns DurationEvaluationResult (39 ms)
+
+  console.warn
+    Campaign duration not explicitly set; inferring from weeks array.
+
+      632 |   let durationWeeks = input.durationWeeks;
+      633 |   if (durationWeeks == null) {
+    > 634 |     console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+          |             ^
+      635 |     durationWeeks = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
+      636 |   }
+      637 |   const objective: CampaignObjective = (input.objective ?? 'awareness') as CampaignObjective;
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:634:13)
+      at Object.<anonymous> (backend/tests/integration/recommendation_engine.test.ts:155:20)
+
+  console.log
+    EXTERNAL_API_NORMALIZED_TRENDS { count: 2 }
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:735:15)
+
+  console.warn
+    Campaign duration not explicitly set; inferring from weeks array.
+
+      632 |   let durationWeeks = input.durationWeeks;
+      633 |   if (durationWeeks == null) {
+    > 634 |     console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+          |             ^
+      635 |     durationWeeks = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
+      636 |   }
+      637 |   const objective: CampaignObjective = (input.objective ?? 'awareness') as CampaignObjective;
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:634:13)
+      at Object.<anonymous> (backend/tests/integration/recommendation_engine.test.ts:166:20)
+
+  console.log
+    EXTERNAL_API_NORMALIZED_TRENDS { count: 2 }
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:735:15)
+
+  console.warn
+    Campaign duration not explicitly set; inferring from weeks array.
+
+      632 |   let durationWeeks = input.durationWeeks;
+      633 |   if (durationWeeks == null) {
+    > 634 |     console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+          |             ^
+      635 |     durationWeeks = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
+      636 |   }
+      637 |   const objective: CampaignObjective = (input.objective ?? 'awareness') as CampaignObjective;
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:634:13)
+      at Object.<anonymous> (backend/tests/integration/recommendation_engine.test.ts:182:5)
+
+  console.log
+    EXTERNAL_API_NORMALIZED_TRENDS { count: 2 }
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:735:15)
+
+  console.warn
+    NOVELTY_WARNING { companyId: 'c-1', campaignId: 'camp-1' }
+
+      967 |
+      968 |   if (uniqueness.similarityScore > 0.6) {
+    > 969 |     console.warn('NOVELTY_WARNING', { companyId: input.companyId, campaignId: input.campaignId });
+          |             ^
+      970 |     const retryPlan = await generateCampaignStrategy({
+      971 |       companyId: input.companyId,
+      972 |       objective,
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:969:13)
+      at Object.<anonymous> (backend/tests/integration/recommendation_engine.test.ts:182:5)
+
+  console.warn
+    Campaign duration not explicitly set; inferring from weeks array.
+
+      632 |   let durationWeeks = input.durationWeeks;
+      633 |   if (durationWeeks == null) {
+    > 634 |     console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+          |             ^
+      635 |     durationWeeks = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
+      636 |   }
+      637 |   const objective: CampaignObjective = (input.objective ?? 'awareness') as CampaignObjective;
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:634:13)
+      at Object.<anonymous> (backend/tests/integration/recommendation_engine.test.ts:192:20)
+
+  console.log
+    EXTERNAL_API_NORMALIZED_TRENDS { count: 2 }
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:735:15)
+
+  console.warn
+    Campaign duration not explicitly set; inferring from weeks array.
+
+      632 |   let durationWeeks = input.durationWeeks;
+      633 |   if (durationWeeks == null) {
+    > 634 |     console.warn('Campaign duration not explicitly set; inferring from weeks array.');
+          |             ^
+      635 |     durationWeeks = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
+      636 |   }
+      637 |   const objective: CampaignObjective = (input.objective ?? 'awareness') as CampaignObjective;
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:634:13)
+      at Object.<anonymous> (backend/tests/integration/recommendation_engine.test.ts:202:20)
+
+  console.log
+    EXTERNAL_API_NORMALIZED_TRENDS { count: 2 }
+
+      at generateRecommendations (backend/services/recommendationEngineService.ts:735:15)
+
+PASS backend/tests/integration/recommendation_engine.test.ts
+  Recommendation engine API
+    ΓêÜ blocks missing companyId (2 ms)
+  Recommendation engine service
+    ΓêÜ handles OmniVyra enabled path (14 ms)
+    ΓêÜ uses fallback when OmniVyra disabled (6 ms)
+    ΓêÜ retries on memory overlap (8 ms)
+    ΓêÜ merges duplicate trends (4 ms)
+    ΓêÜ populates confidence (6 ms)
+
+PASS backend/tests/unit/executivePdfRenderer.test.ts
+  executivePdfRenderer
+    ΓêÜ renders a PDF without throwing (200 ms)
+
+  console.log
+    PROMOTION METADATA GENERATED { assetId: 'asset-1', platform: 'linkedin' }
+
+      at generatePromotionMetadata (backend/services/promotionMetadataService.ts:120:11)
+
+  console.log
+    OMNIVYRA_RESPONSE {
+      path: '/promotion/intelligence',
+      decision_id: 'dec-10',
+      confidence: 0.8,
+      placeholders: [],
+      explanation: 'Promo intelligence',
+      contract_version: 'v1'
+    }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:145:11)
+
+  console.log
+    OMNIVYRA_CONFIDENCE { path: '/promotion/intelligence', confidence: 0.8 }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:147:13)
+
+  console.log
+    OMNIVYRA_PLACEHOLDERS { path: '/promotion/intelligence', placeholders: [] }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:159:13)
+
+  console.log
+    OMNIVYRA_EXPLANATION { path: '/promotion/intelligence', explanation: 'Promo intelligence' }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:165:13)
+
+  console.log
+    PROMOTION METADATA GENERATED { assetId: 'asset-2', platform: 'linkedin', source: 'omnivyra' }
+
+      at generatePromotionMetadata (backend/services/promotionMetadataService.ts:58:15)
+
+  console.log
+    PLATFORM VARIANTS CREATED { assetId: 'asset-1', platform: 'linkedin' }
+
+      at formatPlatformContent (backend/services/platformContentFormatter.ts:39:11)
+
+  console.log
+    COMPLIANCE REPORT { assetId: 'asset-1', platform: 'linkedin', status: 'ok' }
+
+      at validatePlatformCompliance (backend/services/platformComplianceService.ts:88:11)
+
+PASS backend/tests/integration/platform_promotion.test.ts
+  Platform promotion metadata
+    ΓêÜ generates promotion metadata (6 ms)
+    ΓêÜ uses OmniVyra metadata when enabled (13 ms)
+    ΓêÜ formats platform content (3 ms)
+    ΓêÜ validates compliance (4 ms)
+
+  console.log
+    CONTENT GENERATED { asset_id: 'asset-1', version: 1 }
+
+      at createContentAsset (backend/services/contentAssetService.ts:39:11)
+
+  console.log
+    CONTENT REGENERATED { asset_id: 'asset-1' }
+
+      at regenerateContentAsset (backend/services/contentAssetService.ts:83:11)
+
+  console.log
+    ASSET VERSION CREATED { asset_id: 'asset-1', version: 2 }
+
+      at updateContentAssetVersion (backend/services/contentAssetService.ts:64:11)
+
+  console.log
+    CONTENT GENERATED { asset_id: 'asset-2', version: 1 }
+
+      at createContentAsset (backend/services/contentAssetService.ts:39:11)
+
+  console.log
+    CONTENT APPROVED { asset_id: 'asset-2', status: 'reviewed' }
+
+      at approveContentAsset (backend/services/contentAssetService.ts:107:11)
+
+  console.log
+    CONTENT APPROVED { asset_id: 'asset-2', status: 'approved' }
+
+      at approveContentAsset (backend/services/contentAssetService.ts:107:11)
+
+  console.log
+    CAMPAIGN HEALTH CHECK { companyId: 'comp-1' }
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:144:11)
+
+  console.log
+    PROFILE COMPLETENESS SCORE 80
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:181:11)
+
+  console.log
+    TREND COVERAGE SCORE 100
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:182:11)
+
+  console.log
+    PLATFORM BALANCE SCORE 40
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:183:11)
+
+PASS backend/tests/integration/content_pipeline.test.ts
+  Content pipeline
+    ΓêÜ generates content for a day (5 ms)
+    ΓêÜ creates and regenerates content asset versions (16 ms)
+    ΓêÜ approval flow works (3 ms)
+    ΓêÜ scheduler payload includes approved content (2 ms)
+    ΓêÜ health flags unapproved assets (6 ms)
+
+  console.log
+    GOV_EVENT: PREEMPTION_APPROVAL_REQUIRED {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-protected-uuid","requestId":"request-uuid-123"}
+
+      at createApprovalRequest (backend/services/CampaignPreemptionService.ts:92:11)
+
+  console.log
+    GOV_EVENT: PREEMPTION_APPROVAL_REQUIRED {"initiatorCampaignId":"campaign-critical-1","preemptedCampaignId":"campaign-critical-2","requestId":"request-uuid-456"}
+
+      at createApprovalRequest (backend/services/CampaignPreemptionService.ts:92:11)
+
+  console.log
+    GOV_EVENT: PREEMPTION_BLOCKED_COOLDOWN {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-low-uuid","lastPreemptedAt":"2026-02-16T08:05:46.146Z"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:158:13)
+
+  console.log
+    GOV_EVENT: PREEMPTION_EXECUTED {"initiatorCampaignId":"campaign-critical-uuid","preemptedCampaignId":"campaign-low-uuid","logId":"log-id"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:242:11)
+
+PASS backend/tests/integration/governance_preemption_contract.test.ts
+  Governance Contract ΓÇö Preemption Rules
+    ΓêÜ 1. Equal priority ΓåÆ cannot preempt (37 ms)
+    ΓêÜ 2. Lower priority cannot preempt higher (3 ms)
+    ΓêÜ 3. Protected target ΓåÆ requires approval (4 ms)
+    ΓêÜ 4. CRITICAL vs CRITICAL ΓåÆ requires approval (2 ms)
+    ΓêÜ 5. Cooldown active ΓåÆ reject unless initiator CRITICAL (7 ms)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getPlatformConfigs (backend/services/externalApiService.ts:1059:13)
+
+  console.warn
+    Plan parse failed, treating as conversational: SyntaxError: Unexpected token 'T', "Test campa"... is not valid JSON
+        at JSON.parse (<anonymous>)
+        at parseAiPlanToWeeks (C:\virality\backend\services\campaignPlanParser.ts:163:23)
+        at processTicksAndRejections (node:internal/process/task_queues:95:5)
+        at runWithContext (C:\virality\backend\services\campaignAiOrchestrator.ts:702:18)
+        at runCampaignAiPlan (C:\virality\backend\services\campaignAiOrchestrator.ts:893:18)
+        at handler (C:\virality\pages\api\campaigns\ai\plan.ts:25:20)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_ai_plan_persist.test.ts:95:5)
+
+      702 |     structured = await parseAiPlanToWeeks(planText);
+      703 |   } catch (parseError) {
+    > 704 |     console.warn('Plan parse failed, treating as conversational:', parseError);
+          |             ^
+      705 |     return {
+      706 |       mode: input.mode,
+      707 |       snapshot_hash: ctx.snapshot_hash,
+
+      at runWithContext (backend/services/campaignAiOrchestrator.ts:704:13)
+      at runCampaignAiPlan (backend/services/campaignAiOrchestrator.ts:893:18)
+      at handler (pages/api/campaigns/ai/plan.ts:25:20)
+      at Object.<anonymous> (backend/tests/integration/campaign_ai_plan_persist.test.ts:95:5)
+
+PASS backend/tests/integration/campaign_ai_plan_persist.test.ts
+  Campaign AI Plan Persist
+    ΓêÜ persists raw plan output (65 ms)
+
+PASS backend/tests/integration/campaign_portfolio_constraints.test.ts
+  PortfolioConstraintEvaluator
+    ΓêÜ Test 1 ΓÇö Overlapping capacity limit: Team 10, A reserves 8, B requests 5 ΓåÆ LIMITING (2 ms)
+    ΓêÜ Test 2 ΓÇö Full block: Team 10, A reserves 10, B requests 4 ΓåÆ BLOCKING (1 ms)
+    ΓêÜ Test 3 ΓÇö Parallel campaign limit: max_parallel=2, already 2 overlapping ΓåÆ LIMITING (8 ms)
+    ΓêÜ Test 4 ΓÇö No team assigned ΓåÆ PASS (empty results) (2 ms)
+
+PASS backend/tests/integration/governance_ui_layer.test.ts
+  Governance UI Layer
+    Campaign Status API
+      ΓêÜ returns 400 when campaignId is missing (2 ms)
+      ΓêÜ returns 404 when campaign not found (1 ms)
+      ΓêÜ returns cooldownActive correctly when recently preempted (1 ms)
+      ΓêÜ returns cooldownActive false when preempted > 7 days ago (2 ms)
+      ΓêÜ returns latest governance event (3 ms)
+    Governance Events API
+      ΓêÜ returns 400 when companyId is missing (2 ms)
+      ΓêÜ returns events filtered by companyId (1 ms)
+      ΓêÜ applies campaignId and eventType filters (1 ms)
+    normalizeGovernanceDecision
+      ΓêÜ returns correct shape for APPROVED (1 ms)
+      ΓêÜ returns correct shape for NEGOTIATE (2 ms)
+      ΓêÜ returns correct shape for REJECTED (1 ms)
+
+  console.log
+    GOV_EVENT: PORTFOLIO_CONSTRAINT_TRIGGERED {"event":"PORTFOLIO_CONSTRAINT_TRIGGERED","constraint":"team_overlap","team_id":"team-1","campaign_id":"campaign-b","overlapping_campaign_ids":["campaign-a"],"available_capacity":0,"requestedPostsPerWeek":5,"status":"BLOCKING"}
+
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:147:13)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluatePortfolioConstraints (C:\virality\backend\services\PortfolioConstraintEvaluator.ts:170:28)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:230:29)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\governance_tradeoff_order.test.ts:68:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:170:28)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:230:29)
+      at Object.<anonymous> (backend/tests/integration/governance_tradeoff_order.test.ts:68:22)
+
+  console.log
+    GOV_EVENT: DURATION_REJECTED {"campaignId":"campaign-b","companyId":"company-1","requested_weeks":4,"max_weeks_allowed":0}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:251:13)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:278:28)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\governance_tradeoff_order.test.ts:68:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:278:28)
+      at Object.<anonymous> (backend/tests/integration/governance_tradeoff_order.test.ts:68:22)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":8,"max_weeks_allowed":2,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: PORTFOLIO_CONSTRAINT_TRIGGERED {"event":"PORTFOLIO_CONSTRAINT_TRIGGERED","constraint":"team_overlap","team_id":"team-1","campaign_id":"campaign-b","overlapping_campaign_ids":["campaign-a-uuid"],"available_capacity":2,"requestedPostsPerWeek":6,"status":"LIMITING"}
+
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:194:13)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluatePortfolioConstraints (C:\virality\backend\services\PortfolioConstraintEvaluator.ts:217:28)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:230:29)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\governance_tradeoff_order.test.ts:138:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:217:28)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:230:29)
+      at Object.<anonymous> (backend/tests/integration/governance_tradeoff_order.test.ts:138:22)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"campaignId":"campaign-b","companyId":"company-1","requested_weeks":12,"max_weeks_allowed":10,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:386:28)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\governance_tradeoff_order.test.ts:138:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:386:28)
+      at Object.<anonymous> (backend/tests/integration/governance_tradeoff_order.test.ts:138:22)
+
+  console.log
+    GOV_EVENT: PORTFOLIO_CONSTRAINT_TRIGGERED {"event":"PORTFOLIO_CONSTRAINT_TRIGGERED","constraint":"team_overlap","team_id":"team-1","campaign_id":"campaign-b","overlapping_campaign_ids":["campaign-a-uuid"],"available_capacity":2,"requestedPostsPerWeek":6,"status":"LIMITING"}
+
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:194:13)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluatePortfolioConstraints (C:\virality\backend\services\PortfolioConstraintEvaluator.ts:217:28)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:230:29)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\governance_tradeoff_order.test.ts:183:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:217:28)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:230:29)
+      at Object.<anonymous> (backend/tests/integration/governance_tradeoff_order.test.ts:183:22)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"campaignId":"campaign-b","companyId":"company-1","requested_weeks":12,"max_weeks_allowed":10,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:386:28)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\governance_tradeoff_order.test.ts:183:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:386:28)
+      at Object.<anonymous> (backend/tests/integration/governance_tradeoff_order.test.ts:183:22)
+
+PASS backend/tests/integration/governance_tradeoff_order.test.ts
+  Governance Contract ΓÇö Trade-Off Ordering
+    NORMAL priority
+      ΓêÜ first tradeOffOptions[0].type is SHIFT_START_DATE when present (53 ms)
+      ΓêÜ ordering matches TRADE_OFF_PRIORITY_ORDER.NORMAL (2 ms)
+    HIGH priority
+      ΓêÜ first tradeOffOptions[0].type is PREEMPT_LOWER_PRIORITY_CAMPAIGN when present (6 ms)
+      ΓêÜ ordering matches TRADE_OFF_PRIORITY_ORDER.HIGH_OR_CRITICAL (9 ms)
+
+PASS backend/tests/integration/no_campaign_company_id_usage.test.ts
+  No campaigns.company_id usage
+    ΓêÜ rejects campaigns.company_id queries (299 ms)
+
+  console.warn
+    Failed to record performance feedback TypeError: fetch failed
+
+      79 |
+      80 |     if (error) {
+    > 81 |       console.warn('Failed to record performance feedback', error.message);
+         |               ^
+      82 |       return false;
+      83 |     }
+      84 |     return true;
+
+      at recordPerformance (backend/services/performanceFeedbackService.ts:81:15)
+      at publishScheduledPost (backend/services/socialPlatformPublisher.ts:276:7)
+      at Object.<anonymous> (backend/tests/integration/social_platform_publisher.test.ts:86:20)
+
+  console.warn
+    Failed to record performance feedback TypeError: fetch failed
+
+      79 |
+      80 |     if (error) {
+    > 81 |       console.warn('Failed to record performance feedback', error.message);
+         |               ^
+      82 |       return false;
+      83 |     }
+      84 |     return true;
+
+      at recordPerformance (backend/services/performanceFeedbackService.ts:81:15)
+      at publishScheduledPost (backend/services/socialPlatformPublisher.ts:276:7)
+      at Object.<anonymous> (backend/tests/integration/social_platform_publisher.test.ts:108:20)
+
+  console.warn
+    Failed to record performance feedback TypeError: fetch failed
+
+      79 |
+      80 |     if (error) {
+    > 81 |       console.warn('Failed to record performance feedback', error.message);
+         |               ^
+      82 |       return false;
+      83 |     }
+      84 |     return true;
+
+      at recordPerformance (backend/services/performanceFeedbackService.ts:81:15)
+      at publishScheduledPost (backend/services/socialPlatformPublisher.ts:276:7)
+      at Object.<anonymous> (backend/tests/integration/social_platform_publisher.test.ts:133:20)
+
+  console.warn
+    Failed to record performance feedback TypeError: fetch failed
+
+      79 |
+      80 |     if (error) {
+    > 81 |       console.warn('Failed to record performance feedback', error.message);
+         |               ^
+      82 |       return false;
+      83 |     }
+      84 |     return true;
+
+      at recordPerformance (backend/services/performanceFeedbackService.ts:81:15)
+      at publishScheduledPost (backend/services/socialPlatformPublisher.ts:276:7)
+      at Object.<anonymous> (backend/tests/integration/social_platform_publisher.test.ts:158:20)
+
+  console.warn
+    Failed to record performance feedback TypeError: fetch failed
+
+      79 |
+      80 |     if (error) {
+    > 81 |       console.warn('Failed to record performance feedback', error.message);
+         |               ^
+      82 |       return false;
+      83 |     }
+      84 |     return true;
+
+      at recordPerformance (backend/services/performanceFeedbackService.ts:81:15)
+      at publishScheduledPost (backend/services/socialPlatformPublisher.ts:276:7)
+      at Object.<anonymous> (backend/tests/integration/social_platform_publisher.test.ts:167:20)
+
+PASS backend/tests/integration/social_platform_publisher.test.ts
+  SocialPlatformPublisher
+    ΓêÜ returns DRY_RUN for dry run publish (2 ms)
+    ΓêÜ skips unreliable API (1 ms)
+    ΓêÜ returns FORBIDDEN when admin override missing (1 ms)
+    ΓêÜ publishes successfully when enabled (17 ms)
+    ΓêÜ publishes to Facebook (8 ms)
+    ΓêÜ publishes to LinkedIn (6 ms)
+    ΓêÜ publishes to YouTube (5 ms)
+    ΓêÜ uses twitter stub (8 ms)
+    ΓêÜ returns FAILED on API error (1 ms)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"campaignId":"campaign-uuid-456","companyId":"company-uuid-123","requested_weeks":20,"max_weeks_allowed":6,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: DURATION_REJECTED {"campaignId":"campaign-uuid-456","companyId":"company-uuid-123","requested_weeks":12,"max_weeks_allowed":0}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:251:13)
+
+  console.log
+    GOV_EVENT: PREEMPTION_EXECUTED {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-low-uuid","logId":"log-uuid-123"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:242:11)
+
+  console.log
+    GOV_EVENT: PORTFOLIO_CONSTRAINT_TRIGGERED {"event":"PORTFOLIO_CONSTRAINT_TRIGGERED","constraint":"team_overlap","team_id":"team-1","campaign_id":"campaign-uuid-456","overlapping_campaign_ids":["campaign-a"],"available_capacity":0,"requestedPostsPerWeek":5,"status":"BLOCKING"}
+
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:147:13)
+
+  console.log
+    GOV_EVENT: PREEMPTION_APPROVAL_REQUIRED {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-protected-uuid","requestId":"request-uuid-123"}
+
+      at createApprovalRequest (backend/services/CampaignPreemptionService.ts:92:11)
+
+PASS backend/tests/integration/governance_event_persistence.test.ts
+  Governance Event Persistence
+    1. Duration NEGOTIATE ΓåÆ event recorded
+      ΓêÜ records DURATION_NEGOTIATE when status is NEGOTIATE (10 ms)
+    2. Duration REJECTED ΓåÆ event recorded
+      ΓêÜ records DURATION_REJECTED when status is REJECTED (3 ms)
+    3. Preemption EXECUTED ΓåÆ event recorded
+      ΓêÜ records PREEMPTION_EXECUTED when preemption succeeds (3 ms)
+    4. Preemption REJECTED ΓåÆ event recorded
+      ΓêÜ records PREEMPTION_REJECTED when equal priority (38 ms)
+    5. SHIFT_START_DATE ΓåÆ event recorded
+      ΓêÜ records SHIFT_START_DATE_SUGGESTED when portfolio suggests shift (5 ms)
+    6. Approval required ΓåÆ event recorded
+      ΓêÜ records PREEMPTION_APPROVAL_REQUIRED when target is protected (12 ms)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getPlatformConfigs (backend/services/externalApiService.ts:1059:13)
+
+PASS backend/tests/integration/campaign_ai_plan_refine_day.test.ts
+  Campaign AI Plan Refine Day
+    ΓêÜ persists and returns refined day (19 ms)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getPlatformConfigs (backend/services/externalApiService.ts:1059:13)
+
+PASS backend/tests/integration/campaign_ai_plan_platform_customize.test.ts
+  Campaign AI Plan Platform Customize
+    ΓêÜ persists and returns platform customizations (18 ms)
+
+  console.log
+    GOV_EVENT: PREEMPTION_APPROVAL_REQUIRED {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-protected-uuid","requestId":"request-uuid-123"}
+
+      at createApprovalRequest (backend/services/CampaignPreemptionService.ts:92:11)
+
+  console.log
+    GOV_EVENT: PREEMPTION_APPROVAL_REQUIRED {"initiatorCampaignId":"campaign-critical-uuid","preemptedCampaignId":"campaign-critical-target-uuid","requestId":"request-uuid-456"}
+
+      at createApprovalRequest (backend/services/CampaignPreemptionService.ts:92:11)
+
+  console.log
+    GOV_EVENT: PREEMPTION_APPROVAL_REQUIRED {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-protected-low-uuid","requestId":"request-uuid-789"}
+
+      at createApprovalRequest (backend/services/CampaignPreemptionService.ts:92:11)
+
+  console.log
+    GOV_EVENT: PREEMPTION_EXECUTED {"initiatorCampaignId":"campaign-initiator-uuid","preemptedCampaignId":"campaign-target-uuid","logId":"log-uuid-approve"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:242:11)
+
+PASS backend/tests/integration/campaign_preemption_approval_flow.test.ts
+  Campaign Preemption Approval Flow
+    Test 1 ΓÇö Protected campaign
+      ΓêÜ returns APPROVAL_REQUIRED, no execution_status change (5 ms)
+    Test 2 ΓÇö CRITICAL target
+      ΓêÜ returns APPROVAL_REQUIRED when target is CRITICAL (same-rank CRITICAL vs CRITICAL) (3 ms)
+      ΓêÜ returns APPROVAL_REQUIRED when target is protected (HIGH initiator preempts protected LOW) (2 ms)
+    Test 3 ΓÇö Approve flow
+      ΓêÜ execution_status updated, request marked EXECUTED, log entry exists (6 ms)
+    Test 4 ΓÇö Reject flow
+      ΓêÜ request marked REJECTED, no execution (1 ms)
+      ΓêÜ throws when request is not PENDING (31 ms)
+    Test 5 ΓÇö Capacity recalculation after approval (PAUSED exclusion)
+      ΓêÜ PAUSED campaigns excluded from overlap; no team_overlap constraint (1 ms)
+
+  console.log
+    EXTERNAL_API_COMPANY_SCOPE undefined
+
+      at getPlatformConfigs (backend/services/externalApiService.ts:1059:13)
+
+PASS backend/tests/integration/campaign_ai_plan_structured.test.ts
+  Campaign AI Plan Structured
+    ΓêÜ persists and returns structured plan (20 ms)
+
+PASS backend/tests/integration/campaign_schedule_structured_plan.test.ts
+  Structured plan scheduling API
+    ΓêÜ schedules posts from structured plan (15 ms)
+
+  console.log
+    PERFORMANCE DATA INGESTED { assetId: 'asset-1', platform: 'linkedin' }
+
+      at ingestPerformanceData (backend/services/performanceIngestionService.ts:34:11)
+
+  console.log
+    ANALYTICS COMPUTED { companyId: 'comp-1', campaignId: 'camp-1' }
+
+      at computeAnalytics (backend/services/analyticsService.ts:101:11)
+
+  console.log
+    LEARNING INSIGHTS GENERATED { companyId: 'comp-1', campaignId: 'camp-1' }
+
+      at generateLearningInsights (backend/services/learningEngineService.ts:81:11)
+
+PASS backend/tests/integration/analytics_learning.test.ts
+  Analytics & Learning
+    ΓêÜ ingests performance data (5 ms)
+    ΓêÜ computes analytics (6 ms)
+    ΓêÜ generates learning insights (5 ms)
+    ΓêÜ trend drift uses analytics to avoid poor trends (1 ms)
+
+PASS backend/tests/integration/recommendation_policy.test.ts
+  Recommendation policy
+    ΓêÜ loads default policy (4 ms)
+    ΓêÜ updates policy weights (3 ms)
+    ΓêÜ uses policy weights and logs audit policy snapshot (4 ms)
+
+PASS backend/tests/integration/campaign_governance_summary.test.ts
+  Campaign Governance Summary
+    Test 1 ΓÇö No activity ΓåÆ all zero
+      ΓêÜ returns zero metrics when company has no campaigns (4 ms)
+    Test 2 ΓÇö Preemption executed ΓåÆ metrics increment
+      ΓêÜ counts preemptions in metrics (2 ms)
+    Test 3 ΓÇö Approval required ΓåÆ pending count increments
+      ΓêÜ counts pending preemption requests (2 ms)
+    Test 4 ΓÇö Cooldown active ΓåÆ campaigns_under_cooldown increments
+      ΓêÜ counts campaigns under cooldown (2 ms)
+    Test 5 ΓÇö NEGOTIATE response ΓåÆ total_negotiations
+      ΓêÜ constraints metrics include negotiation proxy from preemptions (5 ms)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluatePortfolioConstraints (C:\virality\backend\services\PortfolioConstraintEvaluator.ts:170:28)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:230:29)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_start_date_shift.test.ts:84:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:170:28)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:230:29)
+      at Object.<anonymous> (backend/tests/integration/campaign_start_date_shift.test.ts:84:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:278:28)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_start_date_shift.test.ts:84:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:278:28)
+      at Object.<anonymous> (backend/tests/integration/campaign_start_date_shift.test.ts:84:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluatePortfolioConstraints (C:\virality\backend\services\PortfolioConstraintEvaluator.ts:217:28)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:230:29)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_start_date_shift.test.ts:135:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluatePortfolioConstraints (backend/services/PortfolioConstraintEvaluator.ts:217:28)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:230:29)
+      at Object.<anonymous> (backend/tests/integration/campaign_start_date_shift.test.ts:135:22)
+
+  console.error
+    GovernanceEventService: recordGovernanceEvent failed TypeError: supabaseClient_1.supabase.from(...).insert is not a function
+        at recordGovernanceEvent (C:\virality\backend\services\GovernanceEventService.ts:28:55)
+        at evaluateCampaignDuration (C:\virality\backend\services\HorizonConstraintEvaluator.ts:386:28)
+        at Object.<anonymous> (C:\virality\backend\tests\integration\campaign_start_date_shift.test.ts:135:22)
+
+      35 |     });
+      36 |   } catch (err) {
+    > 37 |     console.error('GovernanceEventService: recordGovernanceEvent failed', err);
+         |             ^
+      38 |   }
+      39 | }
+      40 |
+
+      at recordGovernanceEvent (backend/services/GovernanceEventService.ts:37:13)
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:386:28)
+      at Object.<anonymous> (backend/tests/integration/campaign_start_date_shift.test.ts:135:22)
+
+PASS backend/tests/integration/campaign_start_date_shift.test.ts
+  Portfolio Start Date Shift
+    Test 1 ΓÇö Fully blocked overlap
+      ΓêÜ returns REJECTED with SHIFT_START_DATE when capacity fully blocked (51 ms)
+    Test 2 ΓÇö Partial capacity recovery
+      ΓêÜ returns NEGOTIATE with SHIFT_START_DATE when partial overlap (9 ms)
+    Test 3 ΓÇö No overlap
+      ΓêÜ does not include SHIFT_START_DATE when no team overlap (1 ms)
+
+  console.log
+    GOV_EVENT: DURATION_REJECTED {"requested_weeks":12,"max_weeks_allowed":0}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:251:13)
+
+  console.log
+    GOV_EVENT: DURATION_REJECTED {"requested_weeks":4,"max_weeks_allowed":0,"status":"REJECTED"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":20,"max_weeks_allowed":6,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":100,"max_weeks_allowed":2,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: DURATION_REJECTED {"requested_weeks":12,"max_weeks_allowed":0}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:251:13)
+
+PASS backend/tests/integration/governance_contract_status.test.ts
+  Governance Contract ΓÇö Status Determinism
+    ΓêÜ 1. Blocking constraint ΓåÆ always REJECTED (6 ms)
+    ΓêÜ 2. max_weeks_allowed = 0 ΓåÆ REJECTED (4 ms)
+    ΓêÜ 3. Limiting but viable ΓåÆ NEGOTIATE (3 ms)
+    ΓêÜ 4. No constraints ΓåÆ APPROVED (1 ms)
+    ΓêÜ 5. Status set matches GOVERNANCE_STATUS_RULES ΓÇö no additional statuses (1 ms)
+    ΓêÜ 6. All evaluation results return exact status strings (3 ms)
+
+PASS backend/tests/integration/performance_feedback.test.ts
+  Performance feedback
+    ΓêÜ records metrics and aggregates accuracy (7 ms)
+
+PASS backend/tests/integration/forecast_roi.test.ts
+  Forecast & ROI
+    ΓêÜ generates forecast (2 ms)
+    ΓêÜ calculates ROI (3 ms)
+    ΓêÜ builds business report (2 ms)
+
+  console.log
+    GOV_EVENT: PREEMPTION_EXECUTED {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-low-uuid","logId":"log-uuid-justification"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:242:11)
+
+  console.log
+    GOV_EVENT: PREEMPTION_EXECUTED {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-low-uuid","logId":"log-uuid-stored"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:242:11)
+
+PASS backend/tests/integration/campaign_preemption_justification.test.ts
+  Campaign Preemption Justification (Stage 9C-A)
+    Test 1 ΓÇö Direct preemption without justification
+      ΓêÜ rejected when justification is missing (50 ms)
+    Test 2 ΓÇö Direct preemption with short justification (<15 chars)
+      ΓêÜ rejected when justification is too short (2 ms)
+    Test 3 ΓÇö Valid justification
+      ΓêÜ succeeds and justification is stored in result (7 ms)
+    Test 4 ΓÇö Approval flow requires justification
+      ΓêÜ executePreemptionFromRequest throws when justification is missing or too short (3 ms)
+    Test 5 ΓÇö Justification stored in campaign_preemption_log
+      ΓêÜ insert includes justification when preemption executes (2 ms)
+
+  console.log
+    ≡ƒöì Finding scheduled posts due before 2026-02-16T09:05:51.130Z...
+
+      at findDuePostsAndEnqueue (backend/scheduler/schedulerService.ts:37:11)
+
+  console.log
+    ≡ƒôï Found 1 due posts
+
+      at findDuePostsAndEnqueue (backend/scheduler/schedulerService.ts:55:11)
+
+  console.warn
+    {
+      campaign_id: 'campaign-1',
+      scheduled_post_id: 'scheduled-1',
+      reason: 'CAMPAIGN_NOT_READY'
+    }
+
+      103 |       const readiness = await getCampaignReadiness(post.campaign_id);
+      104 |       if (!readiness || readiness.readiness_state !== 'ready') {
+    > 105 |         console.warn({
+          |                 ^
+      106 |           campaign_id: post.campaign_id,
+      107 |           scheduled_post_id: post.id,
+      108 |           reason: 'CAMPAIGN_NOT_READY',
+
+      at findDuePostsAndEnqueue (backend/scheduler/schedulerService.ts:105:17)
+      at Object.<anonymous> (backend/tests/integration/campaign_readiness.test.ts:118:20)
+
+  console.log
+    ≡ƒô¥ Processing publish job job-1 for scheduled_post scheduled-1
+
+      at processPublishJob (backend/queue/jobProcessors/publishProcessor.ts:47:11)
+
+  console.error
+    Γ¥î Error processing job job-1: PUBLISH_BLOCKED_CAMPAIGN_NOT_READY
+
+      218 |     }
+      219 |   } catch (error: any) {
+    > 220 |     console.error(`Γ¥î Error processing job ${jobId}:`, error.message);
+          |             ^
+      221 |     
+      222 |     if (error?.skipQueueStatusUpdate) {
+      223 |       throw error;
+
+      at processPublishJob (backend/queue/jobProcessors/publishProcessor.ts:220:13)
+      at Object.<anonymous> (backend/tests/integration/campaign_readiness.test.ts:166:5)
+
+  console.log
+    ≡ƒöì Finding scheduled posts due before 2026-02-16T09:05:51.204Z...
+
+      at findDuePostsAndEnqueue (backend/scheduler/schedulerService.ts:37:11)
+
+  console.log
+    ≡ƒôï Found 1 due posts
+
+      at findDuePostsAndEnqueue (backend/scheduler/schedulerService.ts:55:11)
+
+  console.log
+    Γ£à Enqueued job job-2 for post scheduled-2
+
+      at findDuePostsAndEnqueue (backend/scheduler/schedulerService.ts:140:15)
+
+PASS backend/tests/integration/campaign_readiness.test.ts
+  Campaign readiness gating
+    ΓêÜ returns readiness below 100 when daily plans are missing (6 ms)
+    ΓêÜ scheduler skips enqueue when campaign is not ready (20 ms)
+    ΓêÜ publisher blocks execution when campaign readiness fails (51 ms)
+    ΓêÜ scheduler enqueues when campaign is ready (12 ms)
+
+  console.log
+    GOV_EVENT: PREEMPTION_BLOCKED_COOLDOWN {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-low-uuid","lastPreemptedAt":"2026-02-16T08:05:51.510Z"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:158:13)
+
+  console.log
+    GOV_EVENT: PREEMPTION_BLOCKED_COOLDOWN {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-low-uuid","lastPreemptedAt":"2026-02-16T08:05:51.510Z"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:158:13)
+
+  console.log
+    GOV_EVENT: PREEMPTION_EXECUTED {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-low-uuid","logId":"log-id"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:242:11)
+
+  console.log
+    GOV_EVENT: PREEMPTION_EXECUTED {"initiatorCampaignId":"campaign-critical-uuid","preemptedCampaignId":"campaign-low-uuid","logId":"log-id"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:242:11)
+
+  console.log
+    GOV_EVENT: PREEMPTION_BLOCKED_COOLDOWN {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-low-uuid","lastPreemptedAt":"2026-02-15T09:05:51.629Z"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:158:13)
+
+PASS backend/tests/integration/campaign_preemption_cooldown.test.ts
+  Campaign Preemption Cooldown (Stage 9C-B)
+    Test 1 ΓÇö Preempt campaign ΓåÆ immediate second attempt ΓåÆ rejected
+      ΓêÜ rejects when target was recently preempted (within 7 days) (114 ms)
+    Test 2 ΓÇö After cooldown window ΓåÆ allowed
+      ΓêÜ allows preemption when last_preempted_at is older than 7 days (3 ms)
+    Test 3 ΓÇö CRITICAL initiator overrides cooldown
+      ΓêÜ allows preemption when initiator is CRITICAL and target is lower (3 ms)
+    Test 4 ΓÇö Non-CRITICAL cannot override
+      ΓêÜ rejects when initiator is HIGH and target was recently preempted (4 ms)
+
+  console.log
+    GOV_EVENT: DURATION_REJECTED {"requested_weeks":4,"max_weeks_allowed":0,"status":"REJECTED"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+  console.log
+    GOV_EVENT: DURATION_NEGOTIATE {"requested_weeks":8,"max_weeks_allowed":2,"status":"NEGOTIATE"}
+
+      at evaluateCampaignDuration (backend/services/HorizonConstraintEvaluator.ts:371:13)
+
+PASS backend/tests/integration/campaign_tradeoff_engine.test.ts
+  TradeOffGenerator
+    Test 1 ΓÇö Capacity Limiting
+      ΓêÜ returns REDUCE_FREQUENCY, EXTEND_DURATION, INCREASE_CAPACITY when capacity limits (4 ms)
+    Test 2 ΓÇö Inventory Limiting Only
+      ΓêÜ returns EXTEND_DURATION only when inventory limits (2 ms)
+    Test 3 ΓÇö Approved
+      ΓêÜ evaluateCampaignDuration returns no tradeOffOptions when APPROVED (3 ms)
+    Test 4 ΓÇö Zero Viable Duration
+      ΓêÜ returns REJECTED when max_weeks_allowed=0, includes INCREASE_CAPACITY, no NEGOTIATE (33 ms)
+    NEGOTIATE with trade-off options
+      ΓêÜ evaluateCampaignDuration returns tradeOffOptions when NEGOTIATE (positive max) (18 ms)
+
+  console.log
+    GOV_EVENT: PREEMPTION_EXECUTED {"initiatorCampaignId":"campaign-high-uuid","preemptedCampaignId":"campaign-low-uuid","logId":"log-uuid-123"}
+
+      at performPreemption (backend/services/CampaignPreemptionService.ts:242:11)
+
+PASS backend/tests/integration/campaign_preemption_execution.test.ts
+  Campaign Preemption Execution
+    Test 1 ΓÇö Valid Preemption (HIGH preempts LOW)
+      ΓêÜ marks preempted campaign as PREEMPTED, blueprint INVALIDATED, creates log entry (12 ms)
+    Test 2 ΓÇö Invalid Preemption (Same Priority)
+      ΓêÜ throws PreemptionValidationError, no status change (40 ms)
+    Test 3 ΓÇö Already Preempted
+      ΓêÜ rejects execution with PreemptionValidationError (3 ms)
+    Test 4 ΓÇö Portfolio Exclusion
+      ΓêÜ PREEMPTED campaigns excluded from overlap; capacity recalculates correctly (6 ms)
+
+PASS backend/tests/integration/campaign_ai_history.test.ts
+  Campaign AI history API
+    ΓêÜ returns ai history entries for campaign (3 ms)
+
+PASS backend/tests/unit/campaignIntelligenceService.test.ts
+  campaignIntelligenceService
+    status normalization
+      ΓêÜ raw active -> active (1 ms)
+      ΓêÜ raw completed -> completed (1 ms)
+      ΓêÜ raw pending_approval + no posts -> planned
+      ΓêÜ raw missing + published posts -> active
+      ΓêÜ raw paused -> abandoned (1 ms)
+    topic normalization and de-duplication
+      ΓêÜ normalizes, trims, strips punctuation, and de-dupes (3 ms)
+      ΓêÜ collapses multiple sources into one list (3 ms)
+
+  console.log
+    CAMPAIGN HEALTH CHECK { companyId: 'comp-1' }
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:144:11)
+
+  console.log
+    PROFILE COMPLETENESS SCORE 100
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:181:11)
+
+  console.log
+    TREND COVERAGE SCORE 67
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:182:11)
+
+  console.log
+    PLATFORM BALANCE SCORE 100
+
+      at validateCampaignHealth (backend/services/campaignHealthService.ts:183:11)
+
+PASS backend/tests/integration/platform_execution.test.ts
+  Platform execution plan
+    ΓêÜ alternates platforms and suggests times (3 ms)
+    ΓêÜ creates placeholders for video or audio (1 ms)
+    ΓêÜ attaches trends when aligned (1 ms)
+    ΓêÜ builds scheduler payload (1 ms)
+    ΓêÜ downgrades health when placeholders exceed 30% (12 ms)
+
+PASS backend/tests/integration/omnivyra_contract.test.ts
+  OmniVyra contract validation
+    ΓêÜ accepts valid envelope (5 ms)
+    ΓêÜ rejects missing fields (1 ms)
+    ΓêÜ rejects invalid confidence range (1 ms)
+    ΓêÜ rejects version mismatch (1 ms)
+
+PASS backend/tests/integration/recommendation_ui_explainability.test.ts
+  Recommendation UI explainability helpers
+    ΓêÜ labels confidence thresholds correctly (3 ms)
+    ΓêÜ detects no external signals placeholder (1 ms)
+    ΓêÜ flags novelty warning when score exceeds threshold (1 ms)
+    ΓêÜ counts trend sources in legend (10 ms)
+
+PASS backend/tests/integration/omnivyra_health.test.ts
+  OmniVyra health monitor
+    ΓêÜ tracks success and failure counts (3 ms)
+    ΓêÜ computes status based on success rate (1 ms)
+    ΓêÜ returns disabled when flag off (1 ms)
+
+  console.log
+    OMNIVYRA_RESPONSE {
+      path: '/explain',
+      decision_id: 'dec-1',
+      confidence: 0.7,
+      placeholders: [],
+      explanation: 'Explain intent',
+      contract_version: 'v1'
+    }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:145:11)
+
+  console.log
+    OMNIVYRA_CONFIDENCE { path: '/explain', confidence: 0.7 }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:147:13)
+
+  console.log
+    OMNIVYRA_PLACEHOLDERS { path: '/explain', placeholders: [] }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:159:13)
+
+  console.log
+    OMNIVYRA_EXPLANATION { path: '/explain', explanation: 'Explain intent' }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:165:13)
+
+PASS backend/tests/integration/omnivyra_adapter.test.ts
+  OmniVyra adapter
+    ΓêÜ returns placeholder advisory when OmniVyra disabled (1 ms)
+    ΓêÜ returns advisory from OmniVyra when enabled (7 ms)
+
+  console.log
+    COMPLIANCE REPORT { assetId: 'asset-1', platform: 'instagram', status: 'blocked' }
+
+      at validatePlatformCompliance (backend/services/platformComplianceService.ts:88:11)
+
+  console.log
+    OMNIVYRA_RESPONSE {
+      path: '/platform/compliance/intelligence',
+      decision_id: 'dec-block',
+      confidence: 0.6,
+      placeholders: [],
+      explanation: 'Compliance blocked',
+      contract_version: 'v1'
+    }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:145:11)
+
+  console.log
+    OMNIVYRA_CONFIDENCE { path: '/platform/compliance/intelligence', confidence: 0.6 }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:147:13)
+
+  console.log
+    OMNIVYRA_PLACEHOLDERS { path: '/platform/compliance/intelligence', placeholders: [] }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:159:13)
+
+  console.log
+    OMNIVYRA_EXPLANATION {
+      path: '/platform/compliance/intelligence',
+      explanation: 'Compliance blocked'
+    }
+
+      at logOmniVyraMeta (backend/services/omnivyraClientV1.ts:165:13)
+
+  console.log
+    COMPLIANCE REPORT {
+      assetId: 'asset-1',
+      platform: 'instagram',
+      status: 'blocked',
+      source: 'omnivyra'
+    }
+
+      at validatePlatformCompliance (backend/services/platformComplianceService.ts:35:15)
+
+  console.log
+    COMPLIANCE REPORT { assetId: 'asset-1', platform: 'x', status: 'warning' }
+
+      at validatePlatformCompliance (backend/services/platformComplianceService.ts:88:11)
+
+PASS backend/tests/integration/platform_compliance.test.ts
+  Platform compliance
+    ΓêÜ flags missing required fields (6 ms)
+    ΓêÜ blocks scheduling when OmniVyra returns block (6 ms)
+    ΓêÜ warns when below min length (1 ms)
+
+  console.log
+    PAST CAMPAIGNS USED FOR CONTEXT { companyId: 'comp-1' }
+
+      at getCampaignMemory (backend/services/campaignMemoryService.ts:53:11)
+
+PASS backend/tests/integration/campaign_memory.test.ts
+  Campaign memory
+    ΓêÜ collects memory snapshot (8 ms)
+    ΓêÜ detects overlap (1 ms)
+
+PASS backend/tests/integration/rbac_access.test.ts
+  RBAC access enforcement
+    ΓêÜ SUPER_ADMIN can access all (2 ms)
+    ΓêÜ COMPANY_ADMIN blocked from OmniVyra health (3 ms)
+    ΓêÜ CONTENT_CREATOR cannot publish (2 ms)
+    ΓêÜ VIEW_ONLY allowed for dashboard view roles (1 ms)
+    ΓêÜ returns FORBIDDEN_ROLE when user has no roles (1 ms)
+    ΓêÜ returns COMPANY_SCOPE_VIOLATION when company mismatch (1 ms)
+
+PASS backend/tests/integration/governance_contract_snapshot.test.ts
+  Governance Contract ΓÇö Snapshot
+    ΓêÜ GOVERNANCE_EVALUATION_ORDER matches expected snapshot (2 ms)
+    ΓêÜ GOVERNANCE_STATUS_RULES matches expected snapshot (1 ms)
+    ΓêÜ TRADE_OFF_PRIORITY_ORDER matches expected snapshot (1 ms)
+
+PASS backend/tests/integration/recommendation_audit_policy_link.test.ts
+  Recommendation audit policy link
+    ΓêÜ builds policy simulation link with recommendation and campaign id (2 ms)
+    ΓêÜ shows banner text when recommendation id present (1 ms)
+
+Summary of all failing tests
+FAIL backend/tests/integration/campaign_company_scope_fix.test.ts (31.7 s)
+  ΓùÅ Campaign company scope fix ΓÇ║ returns campaigns for correct company
+
+    TypeError: (0 , userContextService_1.resolveUserContext) is not a function
+
+      293 |     return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
+      294 |   }
+    > 295 |   const user = await resolveUserContext(input.req);
+          |                                        ^
+      296 |   const companyId = input.companyId;
+      297 |   if (!companyId) {
+      298 |     input.res.status(400).json({ error: 'companyId required' });
+
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/campaign_company_scope_fix.test.ts:113:11)
+
+  ΓùÅ Campaign company scope fix ΓÇ║ does not reference campaigns.company_id
+
+    TypeError: (0 , userContextService_1.resolveUserContext) is not a function
+
+      293 |     return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
+      294 |   }
+    > 295 |   const user = await resolveUserContext(input.req);
+          |                                        ^
+      296 |   const companyId = input.companyId;
+      297 |   if (!companyId) {
+      298 |     input.res.status(400).json({ error: 'companyId required' });
+
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/campaign_company_scope_fix.test.ts:130:11)
+
+  ΓùÅ Campaign company scope fix ΓÇ║ returns empty list for other company
+
+    TypeError: (0 , userContextService_1.resolveUserContext) is not a function
+
+      293 |     return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
+      294 |   }
+    > 295 |   const user = await resolveUserContext(input.req);
+          |                                        ^
+      296 |   const companyId = input.companyId;
+      297 |   if (!companyId) {
+      298 |     input.res.status(400).json({ error: 'companyId required' });
+
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/campaign_company_scope_fix.test.ts:145:11)
+
+  ΓùÅ Campaign company scope fix ΓÇ║ dashboard only shows company campaigns
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 500
+
+      176 |         await handler(req, res);
+      177 |         try {
+    > 178 |           expect(res.statusCode).toBe(200);
+          |                                  ^
+      179 |           expect(res.body?.campaigns.map((c: any) => c.id)).toEqual(['c1', 'c2']);
+      180 |           resolve();
+      181 |         } catch (error) {
+
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:178:34
+
+  ΓùÅ Campaign company scope fix ΓÇ║ returns 403 when campaign not linked to company
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 403
+    Received: 500
+
+      208 |         await handler(req, res);
+      209 |         try {
+    > 210 |           expect(res.statusCode).toBe(403);
+          |                                  ^
+      211 |           expect(res.body?.code).toBe('CAMPAIGN_NOT_IN_COMPANY');
+      212 |           resolve();
+      213 |         } catch (error) {
+
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:210:34
+
+  ΓùÅ Campaign company scope fix ΓÇ║ returns 403 for mismatched campaignId in progress
+
+    TypeError: (0 , userContextService_1.resolveUserContext) is not a function
+
+      293 |     return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
+      294 |   }
+    > 295 |   const user = await resolveUserContext(input.req);
+          |                                        ^
+      296 |   const companyId = input.companyId;
+      297 |   if (!companyId) {
+      298 |     input.res.status(400).json({ error: 'companyId required' });
+
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:236:15
+
+  ΓùÅ Campaign company scope fix ΓÇ║ returns 403 for mismatched campaignId in progress
+
+    thrown: "Exceeded timeout of 30000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See 
+https://jestjs.io/docs/api#testname-fn-timeout."
+
+      218 |   });
+      219 |
+    > 220 |   it('returns 403 for mismatched campaignId in progress', async () => {
+          |   ^
+      221 |     const progressSupabase = {
+      222 |       from: jest.fn((table: string) =>
+      223 |         buildQuery(table, { filters: {}, rows: [], campaignRows: [] })
+
+      at backend/tests/integration/campaign_company_scope_fix.test.ts:220:3
+      at Object.<anonymous> (backend/tests/integration/campaign_company_scope_fix.test.ts:90:1)
+
+FAIL backend/tests/integration/publish_flow.test.ts
+  ΓùÅ Publish Flow Integration ΓÇ║ runs the full publish flow
+
+    Failed to get scheduled post: TypeError: fetch failed
+
+      194 |       return null;
+      195 |     }
+    > 196 |     throw new Error(`Failed to get scheduled post: ${error.message}`);
+          |           ^
+      197 |   }
+      198 |
+      199 |   return data;
+
+      at getScheduledPost (backend/db/queries.ts:196:11)
+      at runIntegrationTest (backend/tests/integration/publish_flow.test.ts:51:27)
+      at Object.<anonymous> (backend/tests/integration/publish_flow.test.ts:144:5)
+
+FAIL backend/tests/integration/omnivyra_learning_bridge.test.ts
+  ΓùÅ OmniVyra learning bridge ΓÇ║ injects learning status into recommendation engine result
+
+    TypeError: Cannot read properties of undefined (reading 'select')
+
+      385 |     })
+      386 |     .sort((a, b) => (b.inbound_signal_score ?? 0) - (a.inbound_signal_score ?? 0))
+    > 387 |     .slice(0, 5);
+          |         ^
+      388 |
+      389 |   return {
+      390 |     high_intent_themes: highIntent,
+
+      at ensureCampaignCompanyLink (backend/services/recommendationEngineService.ts:387:9)
+      at generateRecommendations (backend/services/recommendationEngineService.ts:577:9)
+      at Object.<anonymous> (backend/tests/integration/omnivyra_learning_bridge.test.ts:276:49)
+
+  ΓùÅ OmniVyra learning bridge ΓÇ║ exposes learning payload in audit report
+
+    TypeError: Cannot read properties of undefined (reading 'select')
+
+      79 | }): number => {
+      80 |   const base = 100;
+    > 81 |   const penalty =
+         |                 ^
+      82 |     input.missingFields.length * 20 +
+      83 |     input.placeholders * 3 +
+      84 |     input.lowConfidenceWeeks * 5;
+
+      at generateCampaignAuditReport (backend/services/campaignAuditService.ts:81:17)
+      at Object.<anonymous> (backend/tests/integration/omnivyra_learning_bridge.test.ts:298:53)
+
+FAIL backend/tests/integration/user_lifecycle_management.test.ts
+  ΓùÅ User lifecycle management ΓÇ║ Admin can invite user in own company
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 403
+
+      158 |     const res = createMockRes();
+      159 |     await inviteHandler(req, res);
+    > 160 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      161 |   });
+      162 |
+      163 |   it('Admin cannot invite user in other company', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:160:28)
+
+  ΓùÅ User lifecycle management ΓÇ║ Role update works
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 403
+
+      215 |     const res = createMockRes();
+      216 |     await roleHandler(req, res);
+    > 217 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      218 |     expect(roleRows.find((row) => row.user_id === 'target-1')?.role).toBe('CONTENT_MANAGER');
+      219 |   });
+      220 |
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:217:28)
+
+  ΓùÅ User lifecycle management ΓÇ║ Remove user works
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 403
+
+      234 |     const res = createMockRes();
+      235 |     await removeHandler(req, res);
+    > 236 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      237 |     expect(roleRows.some((row) => row.user_id === 'target-2')).toBe(false);
+      238 |   });
+      239 |
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:236:28)
+
+  ΓùÅ User lifecycle management ΓÇ║ List users scoped to company
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 403
+
+      256 |     const res = createMockRes();
+      257 |     await listHandler(req, res);
+    > 258 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      259 |     expect(res.body?.users).toHaveLength(2);
+      260 |   });
+      261 |
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:258:28)
+
+  ΓùÅ User lifecycle management ΓÇ║ Audit logs created
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      275 |     const res = createMockRes();
+      276 |     await inviteHandler(req, res);
+    > 277 |     expect(logUserManagementAudit).toHaveBeenCalled();
+          |                                    ^
+      278 |   });
+      279 | });
+      280 |
+
+      at Object.<anonymous> (backend/tests/integration/user_lifecycle_management.test.ts:277:36)
+
+FAIL backend/tests/integration/campaign_ai_plan.test.ts
+  ΓùÅ Campaign AI Plan API ΓÇ║ returns orchestrated response
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: 200
+    Received: 500
+
+    Number of calls: 1
+
+      90 |     await handler(req, res);
+      91 |
+    > 92 |     expect(res.status).toHaveBeenCalledWith(200);
+         |                        ^
+      93 |     const payload = (res.json as jest.Mock).mock.calls[0][0];
+      94 |     expect(payload.mode).toBe('generate_plan');
+      95 |     expect(payload.snapshot_hash).toBe('hash123');
+
+      at Object.<anonymous> (backend/tests/integration/campaign_ai_plan.test.ts:92:24)
+
+FAIL backend/tests/integration/platform_strategy_filtering.test.ts
+  ΓùÅ Platform strategy filtering ΓÇ║ filters platforms by content type and promotion mode
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/platform_strategy_filtering.test.ts:56:18)
+
+  ΓùÅ Platform strategy filtering ΓÇ║ includes newly configured platform
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/platform_strategy_filtering.test.ts:82:18)
+
+FAIL backend/tests/integration/external_api_company_scope.test.ts
+  ΓùÅ External API company scope ΓÇ║ returns APIs for selected company only
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 500
+
+      132 |     const res = createMockRes();
+      133 |     await externalApisHandler(req, res);
+    > 134 |     expect(res.statusCode).toBe(200);
+          |                            ^
+      135 |     expect(res.body?.apis).toHaveLength(1);
+      136 |     expect(res.body?.apis[0].company_id).toBe('company-a');
+      137 |   });
+
+      at Object.<anonymous> (backend/tests/integration/external_api_company_scope.test.ts:134:28)
+
+  ΓùÅ External API company scope ΓÇ║ fetchExternalApis uses company scope
+
+    TypeError: createQuery(...).or is not a function
+
+      699 |       .order('created_at', { ascending: true });
+      700 |
+    > 701 |   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
+          |                                            ^
+      702 |   const applyPresetSelections = async (sources: ExternalApiSource[]) => {
+      703 |     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+      704 |     const companySpecific = companyScoped
+
+      at getEnabledApis (backend/services/externalApiService.ts:701:44)
+      at getExternalApiSourcesForUser (backend/services/externalApiService.ts:826:25)
+      at fetchExternalTrends (backend/services/externalApiService.ts:1700:25)
+      at Object.fetchExternalApis (backend/services/externalApiService.ts:1902:10)
+      at Object.<anonymous> (backend/tests/integration/external_api_company_scope.test.ts:173:46)
+
+FAIL backend/tests/integration/external_api_service.test.ts
+  ΓùÅ External API service ΓÇ║ fetches and normalizes trend signals
+
+    TypeError: createQuery(...).or is not a function
+
+      699 |       .order('created_at', { ascending: true });
+      700 |
+    > 701 |   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
+          |                                            ^
+      702 |   const applyPresetSelections = async (sources: ExternalApiSource[]) => {
+      703 |     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+      704 |     const companySpecific = companyScoped
+
+      at getEnabledApis (backend/services/externalApiService.ts:701:44)
+      at getExternalApiSourcesForUser (backend/services/externalApiService.ts:826:25)
+      at fetchTrendsFromApis (backend/services/externalApiService.ts:1449:25)
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:157:20)
+
+  ΓùÅ External API service ΓÇ║ blocks non-admin from creating API sources
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 403
+    Received: 400
+
+      180 |
+      181 |     await externalApisHandler(req, res);
+    > 182 |     expect(res.statusCode).toBe(403);
+          |                            ^
+      183 |   });
+      184 |
+      185 |   it('rejects missing env var when auth is required', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:182:28)
+
+  ΓùÅ External API service ΓÇ║ rejects missing env var when auth is required
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "API key not found in environment variables"
+    Received: "companyId required"
+
+      198 |     await externalApisHandler(req, res);
+      199 |     expect(res.statusCode).toBe(400);
+    > 200 |     expect(res.body?.error).toBe('API key not found in environment variables');
+          |                             ^
+      201 |   });
+      202 |
+      203 |   it('validate endpoint updates external_api_health', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:200:29)
+
+  ΓùÅ External API service ΓÇ║ validate endpoint updates external_api_health
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:220:26)
+
+  ΓùÅ External API service ΓÇ║ skips unreliable APIs when fetching trends
+
+    expect(jest.fn()).toHaveBeenCalledTimes(expected)
+
+    Expected number of calls: 1
+    Received number of calls: 0
+
+      254 |
+      255 |     await trendsFetchHandler(req, res);
+    > 256 |     expect((global as any).fetch).toHaveBeenCalledTimes(1);
+          |                                   ^
+      257 |   });
+      258 | });
+      259 |
+
+      at Object.<anonymous> (backend/tests/integration/external_api_service.test.ts:256:35)
+
+FAIL backend/tests/integration/external_api_alignment.test.ts
+  ΓùÅ External API alignment ΓÇ║ handles missing env vars and cache hits
+
+    TypeError: createQuery(...).or is not a function
+
+      699 |       .order('created_at', { ascending: true });
+      700 |
+    > 701 |   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
+          |                                            ^
+      702 |   const applyPresetSelections = async (sources: ExternalApiSource[]) => {
+      703 |     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+      704 |     const companySpecific = companyScoped
+
+      at getEnabledApis (backend/services/externalApiService.ts:701:44)
+      at getExternalApiSourcesForUser (backend/services/externalApiService.ts:826:25)
+      at Object.fetchExternalTrends (backend/services/externalApiService.ts:1700:25)
+      at Object.<anonymous> (backend/tests/integration/external_api_alignment.test.ts:139:46)
+
+  ΓùÅ External API alignment ΓÇ║ falls back with no_external_signals placeholder
+
+    CAMPAIGN_NOT_IN_COMPANY
+
+      563 |   }
+      564 |   if (!data || data.length === 0) {
+    > 565 |     const linkError: any = new Error('CAMPAIGN_NOT_IN_COMPANY');
+          |                            ^
+      566 |     linkError.code = 'CAMPAIGN_NOT_IN_COMPANY';
+      567 |     throw linkError;
+      568 |   }
+
+      at ensureCampaignCompanyLink (backend/services/recommendationEngineService.ts:565:28)
+      at generateRecommendations (backend/services/recommendationEngineService.ts:577:3)
+
+FAIL backend/tests/integration/external_api_presets.test.ts
+  ΓùÅ External API presets ΓÇ║ returns 4 presets from GET /api/external-apis/presets
+
+    TypeError: Cannot read properties of undefined (reading 'companyId')
+
+      84 |   }
+      85 |
+    > 86 |   const companyId = req.query.companyId as string | undefined;
+         |                               ^
+      87 |   const platformScopeRequested = req.query?.scope === 'platform';
+      88 |   const access = platformScopeRequested && !companyId
+      89 |     ? await requirePlatformAdmin(req, res)
+
+      at handler (pages/api/external-apis/presets.ts:86:31)
+      at Object.<anonymous> (backend/tests/integration/external_api_presets.test.ts:68:25)
+
+  ΓùÅ External API presets ΓÇ║ imports a preset via POST /api/external-apis
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 400
+
+       95 |     await externalApisHandler(req, res);
+       96 |
+    >  97 |     expect(res.statusCode).toBe(201);
+          |                            ^
+       98 |     expect(res.body?.api?.name).toBe(preset.name);
+       99 |     expect(res.body?.api?.is_preset).toBe(true);
+      100 |     if (preset.api_key_env_name) {
+
+      at Object.<anonymous> (backend/tests/integration/external_api_presets.test.ts:97:28)
+
+  ΓùÅ External API presets ΓÇ║ reports missing env vars safely
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected value: "NEWS_API_KEY"
+    Received array: ["YOUTUBE_API_KEY"]
+
+      151 |     );
+      152 |
+    > 153 |     expect(request.missingEnv).toContain('NEWS_API_KEY');
+          |                                ^
+      154 |   });
+      155 | });
+      156 |
+
+      at Object.<anonymous> (backend/tests/integration/external_api_presets.test.ts:153:32)
+
+FAIL backend/tests/integration/omnivyra_fallback_reasons.test.ts
+  ΓùÅ OmniVyra fallback reasons ΓÇ║ sets fallback reason in recommendation engine status
+
+    Failed to verify campaign link: TypeError: fetch failed
+
+      560 |     .eq('campaign_id', campaignId);
+      561 |   if (error) {
+    > 562 |     throw new Error(`Failed to verify campaign link: ${error.message}`);
+          |           ^
+      563 |   }
+      564 |   if (!data || data.length === 0) {
+      565 |     const linkError: any = new Error('CAMPAIGN_NOT_IN_COMPANY');
+
+      at ensureCampaignCompanyLink (backend/services/recommendationEngineService.ts:562:11)
+      at generateRecommendations (backend/services/recommendationEngineService.ts:577:3)
+      at Object.<anonymous> (backend/tests/integration/omnivyra_fallback_reasons.test.ts:70:20)
+
+FAIL backend/tests/integration/social_platform_config.test.ts
+  ΓùÅ Social platform config ΓÇ║ creates and fetches platform config
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 400
+
+      163 |
+      164 |     await externalApisHandler(req, res);
+    > 165 |     expect(res.statusCode).toBe(201);
+          |                            ^
+      166 |
+      167 |     const listReq = { method: 'GET' } as NextApiRequest;
+      168 |     const listRes = createMockRes();
+
+      at Object.<anonymous> (backend/tests/integration/social_platform_config.test.ts:165:28)
+
+FAIL backend/tests/integration/recommendation_audit.test.ts
+  ΓùÅ Recommendation audit ΓÇ║ logs audit row during recommendation generation
+
+    TypeError: Cannot read properties of undefined (reading 'select')
+
+      41 |     if (value < 0 || value > 5) {
+      42 |       return { ok: false, message: `${key} must be between 0 and 5` };
+    > 43 |     }
+         |      ^
+      44 |   }
+      45 |   return { ok: true };
+      46 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:43:9)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:75)
+      at Object.<anonymous> (backend/tests/integration/recommendation_audit.test.ts:41:5)
+
+  ΓùÅ Recommendation audit ΓÇ║ fetches audit by recommendation id
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_audit.test.ts:51:18)
+
+  ΓùÅ Recommendation audit ΓÇ║ fetches audit by campaign id
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_audit.test.ts:59:26)
+
+FAIL backend/tests/integration/external_api_health.test.ts
+  ΓùÅ External API health + cache + rate limit ΓÇ║ records cache hit and miss
+
+    TypeError: createQuery(...).or is not a function
+
+      699 |       .order('created_at', { ascending: true });
+      700 |
+    > 701 |   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
+          |                                            ^
+      702 |   const applyPresetSelections = async (sources: ExternalApiSource[]) => {
+      703 |     const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+      704 |     const companySpecific = companyScoped
+
+      at getEnabledApis (backend/services/externalApiService.ts:701:44)
+      at getExternalApiSourcesForUser (backend/services/externalApiService.ts:826:25)
+      at fetchTrendsFromApis (backend/services/externalApiService.ts:1449:25)
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:101:5)
+
+  ΓùÅ External API health + cache + rate limit ΓÇ║ retries on 5xx responses
+
+    expect(jest.fn()).toHaveBeenCalledTimes(expected)
+
+    Expected number of calls: 2
+    Received number of calls: 0
+
+      119 |
+      120 |     await fetchTrendsFromApis();
+    > 121 |     expect(fetchMock).toHaveBeenCalledTimes(2);
+          |                       ^
+      122 |     jest.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      123 |   });
+      124 |
+
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:121:23)
+
+  ΓùÅ External API health + cache + rate limit ΓÇ║ blocks rate limited sources
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      136 |
+      137 |     const snapshot = await getExternalApiRuntimeSnapshot(['api-1']);
+    > 138 |     expect(snapshot.rate_limited_sources.length).toBeGreaterThan(0);
+          |                                                  ^
+      139 |   });
+      140 |
+      141 |   it('updates health score on success', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:138:50)
+
+  ΓùÅ External API health + cache + rate limit ΓÇ║ updates health score on success
+
+    TypeError: Cannot read properties of undefined (reading 'success_count')
+
+      148 |     await fetchTrendsFromApis();
+      149 |     const record = healthStore.get('api-1');
+    > 150 |     expect(record.success_count).toBe(1);
+          |                   ^
+      151 |     expect(record.failure_count).toBe(0);
+      152 |   });
+      153 |
+
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:150:19)
+
+  ΓùÅ External API health + cache + rate limit ΓÇ║ computes signal confidence
+
+    TypeError: Cannot read properties of undefined (reading 'signal_confidence')
+
+      162 |
+      163 |     const trends = await fetchTrendsFromApis();
+    > 164 |     expect(trends[0].signal_confidence).toBeDefined();
+          |                      ^
+      165 |     expect(trends[0].signal_confidence).toBeGreaterThanOrEqual(0);
+      166 |   });
+      167 | });
+
+      at Object.<anonymous> (backend/tests/integration/external_api_health.test.ts:164:22)
+
+FAIL backend/tests/integration/recommendation_analytics.test.ts
+  ΓùÅ Recommendation analytics ΓÇ║ computes analytics and enforces admin gating
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_analytics.test.ts:86:18)
+
+  ΓùÅ Recommendation analytics ΓÇ║ blocks non-admin access
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_analytics.test.ts:103:18)
+
+FAIL backend/tests/integration/recommendation_fusion_scoring.test.ts
+  ΓùÅ Recommendation fusion scoring ΓÇ║ boosts consensus for multi-source trends
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/recommendation_fusion_scoring.test.ts:19:18)
+
+  ΓùÅ Recommendation fusion scoring ΓÇ║ applies geo relevance scoring
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/recommendation_fusion_scoring.test.ts:35:18)
+
+  ΓùÅ Recommendation fusion scoring ΓÇ║ applies audience fit scoring
+
+    Failed to load recommendation policy
+
+      65 |     .limit(1);
+      66 |   if (error) {
+    > 67 |     throw new Error('Failed to load recommendation policy');
+         |           ^
+      68 |   }
+      69 |   return data?.[0] ?? null;
+      70 | };
+
+      at getActivePolicy (backend/services/recommendationPolicyService.ts:67:11)
+      at generateRecommendations (backend/services/recommendationEngine.ts:279:54)
+      at Object.<anonymous> (backend/tests/integration/recommendation_fusion_scoring.test.ts:44:18)
+
+FAIL backend/tests/integration/recommendation_create_campaign.test.ts
+  ΓùÅ Recommendation create campaign API ΓÇ║ creates campaign, links recommendation, and returns response
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_create_campaign.test.ts:77:18)
+
+FAIL backend/tests/integration/recommendation_policy_navigation.test.ts
+  ΓùÅ Recommendation policy navigation ΓÇ║ blocks simulate for non-admin
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_policy_navigation.test.ts:32:26)
+
+  ΓùÅ Recommendation policy navigation ΓÇ║ passes campaignId to simulation
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at resolveUserContext (backend/services/userContextService.ts:12:59)
+      at enforceRole (backend/services/rbacService.ts:295:40)
+      at wrapped (backend/middleware/withRBAC.ts:11:37)
+      at Object.<anonymous> (backend/tests/integration/recommendation_policy_navigation.test.ts:52:26)
+
+FAIL backend/tests/integration/company_profile_api.test.ts
+  ΓùÅ Company profile API ΓÇ║ creates or updates profile
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      46 |     await companyProfileHandler(req, res);
+      47 |
+    > 48 |     expect(saveProfile).toHaveBeenCalled();
+         |                         ^
+      49 |     expect(res.status).toHaveBeenCalledWith(200);
+      50 |     const payload = (res.json as jest.Mock).mock.calls[0][0];
+      51 |     expect(payload.profile.name).toBe('Acme');
+
+      at Object.<anonymous> (backend/tests/integration/company_profile_api.test.ts:48:25)
+
+  ΓùÅ Company profile API ΓÇ║ fetches profile
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      66 |     await companyProfileHandler(req, res);
+      67 |
+    > 68 |     expect(getLatestProfile).toHaveBeenCalled();
+         |                              ^
+      69 |     expect(res.status).toHaveBeenCalledWith(200);
+      70 |     const payload = (res.json as jest.Mock).mock.calls[0][0];
+      71 |     expect(payload.profile.name).toBe('Acme');
+
+      at Object.<anonymous> (backend/tests/integration/company_profile_api.test.ts:68:30)
+
+  ΓùÅ Company profile API ΓÇ║ refines profile
+
+    TypeError: Cannot read properties of undefined (reading 'authorization')
+
+      3 |
+      4 | const extractBearerToken = (req: NextApiRequest): string | null => {
+    > 5 |   const header = req.headers.authorization || '';
+        |                              ^
+      6 |   if (!header.startsWith('Bearer ')) return null;
+      7 |   const token = header.slice('Bearer '.length).trim();
+      8 |   return token.length > 0 ? token : null;
+
+      at extractBearerToken (backend/services/supabaseAuthService.ts:5:30)
+      at getSupabaseUserFromRequest (backend/services/supabaseAuthService.ts:14:17)
+      at handler (pages/api/company-profile/refine.ts:19:59)
+      at Object.<anonymous> (backend/tests/integration/company_profile_api.test.ts:104:24)
+
+FAIL backend/tests/integration/recommendation_scheduler.test.ts
+  ΓùÅ Recommendation scheduler ΓÇ║ runs weekly refresh and persists with auto_weekly source
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      75 |     await runWeeklyRecommendationRefresh();
+      76 |
+    > 77 |     expect(generateRecommendations).toHaveBeenCalled();
+         |                                     ^
+      78 |   });
+      79 |
+      80 |   it('runs profile refresh and persists with profile_update source', async () => {
+
+      at Object.<anonymous> (backend/tests/integration/recommendation_scheduler.test.ts:77:37)
+
+  ΓùÅ Recommendation scheduler ΓÇ║ runs profile refresh and persists with profile_update source
+
+    expect(jest.fn()).toHaveBeenCalled()
+
+    Expected number of calls: >= 1
+    Received number of calls:    0
+
+      81 |     await runCompanyProfileTriggeredRefresh('default');
+      82 |
+    > 83 |     expect(generateRecommendations).toHaveBeenCalled();
+         |                                     ^
+      84 |   });
+      85 | });
+      86 |
+
+      at Object.<anonymous> (backend/tests/integration/recommendation_scheduler.test.ts:83:37)
+
+FAIL backend/tests/integration/recommendation_simulation.test.ts
+  ΓùÅ Recommendation simulation ΓÇ║ simulates recommendations without persistence
+
+    expect(received).resolves.toBeDefined()
+
+    Received promise rejected instead of resolved
+    Rejected to value: [TypeError: (0 , externalApiService_1.getCompanyDefaultApiIds) is not a function]
+
+      104 |
+      105 |   it('simulates recommendations without persistence', async () => {
+    > 106 |     await expect(
+          |           ^
+      107 |       simulateRecommendations({
+      108 |         companyId: 'default',
+      109 |         draftPolicyWeights: {
+
+      at expect (node_modules/expect/build/index.js:113:15)
+      at Object.<anonymous> (backend/tests/integration/recommendation_simulation.test.ts:106:11)
+
+
+Test Suites: 21 failed, 46 passed, 67 total
+Tests:       53 failed, 328 passed, 381 total
+Snapshots:   0 total
+Time:        56.529 s, estimated 60 s
+Ran all test suites matching /backend\\tests/i.

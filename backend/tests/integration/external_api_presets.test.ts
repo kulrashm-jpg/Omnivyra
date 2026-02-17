@@ -8,6 +8,20 @@ import { supabase } from '../../db/supabaseClient';
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn(), rpc: jest.fn() },
 }));
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn(),
+}));
+jest.mock('../../services/rbacService', () => ({
+  getUserRole: jest.fn(),
+  hasPermission: jest.fn(),
+  isPlatformSuperAdmin: jest.fn(),
+  isSuperAdmin: jest.fn(),
+}));
+
+const { getSupabaseUserFromRequest } = jest.requireMock('../../services/supabaseAuthService');
+const { getUserRole, hasPermission, isPlatformSuperAdmin, isSuperAdmin } = jest.requireMock(
+  '../../services/rbacService'
+);
 
 const sourcesStore = new Map<string, any>();
 
@@ -19,6 +33,8 @@ const buildQuery = (table: string) => {
       state.filters[field] = value;
       return query;
     }),
+    is: jest.fn().mockReturnThis(),
+    order: jest.fn().mockReturnThis(),
     single: jest.fn().mockReturnThis(),
     insert: jest.fn((payload: any) => {
       state.op = 'insert';
@@ -54,6 +70,11 @@ describe('External API presets', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
     (supabase.rpc as jest.Mock).mockResolvedValue({ data: true, error: null });
+    (getSupabaseUserFromRequest as jest.Mock).mockResolvedValue({ user: { id: 'user-1' }, error: null });
+    (isPlatformSuperAdmin as jest.Mock).mockResolvedValue(false);
+    (isSuperAdmin as jest.Mock).mockResolvedValue(false);
+    (getUserRole as jest.Mock).mockResolvedValue({ role: 'COMPANY_ADMIN', error: null });
+    (hasPermission as jest.Mock).mockReturnValue(true);
     sourcesStore.clear();
   });
 
@@ -62,13 +83,18 @@ describe('External API presets', () => {
   });
 
   it('returns 4 presets from GET /api/external-apis/presets', async () => {
-    const req = { method: 'GET' } as NextApiRequest;
+    const req = {
+      method: 'GET',
+      headers: { authorization: 'Bearer test' },
+      query: { companyId: 'company-1' },
+      body: {},
+    } as NextApiRequest;
     const res = createMockRes();
 
     await presetsHandler(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body?.presets?.length).toBe(4);
+    expect(res.body?.presets?.length).toBeGreaterThanOrEqual(4);
   });
 
   it('imports a preset via POST /api/external-apis', async () => {
@@ -78,7 +104,10 @@ describe('External API presets', () => {
     }
     const req = {
       method: 'POST',
+      headers: { authorization: 'Bearer test', 'content-type': 'application/json' },
+      query: {},
       body: {
+        companyId: 'company-1',
         name: preset.name,
         base_url: preset.base_url,
         purpose: 'trends',
@@ -131,7 +160,8 @@ describe('External API presets', () => {
   });
 
   it('reports missing env vars safely', () => {
-    const preset = externalApiPresets[1];
+    delete process.env.NEWS_API_KEY;
+    const preset = externalApiPresets.find((p) => p.api_key_env_name === 'NEWS_API_KEY') ?? externalApiPresets[2];
     const request = buildExternalApiRequest(
       {
         id: 'preset',

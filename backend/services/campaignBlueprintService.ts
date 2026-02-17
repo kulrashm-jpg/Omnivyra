@@ -1,9 +1,148 @@
 /**
  * Unified read layer for campaign blueprints.
- * Resolves from 12_week_plan, campaign_versions.campaign_snapshot.weekly_plan, or weekly_content_refinements.
+ * Resolves from twelve_week_plan, campaign_versions.campaign_snapshot.weekly_plan, or weekly_content_refinements.
  */
 
 import { supabase } from '../db/supabaseClient';
+import { BLUEPRINT_FREEZE_WINDOW_HOURS } from '../governance/GovernanceConfig';
+
+/** Stage 11: Deterministic guard — campaign must have duration_weeks set before blueprint resolution. */
+export class PrePlanningRequiredError extends Error {
+  code = 'PRE_PLANNING_REQUIRED' as const;
+  constructor(message = 'Campaign duration not initialized. Run pre-planning first.') {
+    super(message);
+    this.name = 'PrePlanningRequiredError';
+  }
+}
+
+/** Stage 15: Blueprint Execution Integrity — campaign cannot be mutated while in execution. */
+export class BlueprintImmutableError extends Error {
+  code = 'BLUEPRINT_IMMUTABLE' as const;
+  constructor(message = 'Blueprint cannot be modified while campaign is in execution.') {
+    super(message);
+    this.name = 'BlueprintImmutableError';
+  }
+}
+
+/** Stage 16: Execution Window Freeze — blueprint locked within N hours of first scheduled post. */
+export class BlueprintExecutionFreezeError extends Error {
+  code = 'EXECUTION_WINDOW_FROZEN' as const;
+  hoursUntilExecution: number;
+  freezeWindowHours: number;
+  constructor(
+    message = 'Blueprint modifications are locked within 24 hours of execution.',
+    hoursUntilExecution: number,
+    freezeWindowHours: number
+  ) {
+    super(message);
+    this.name = 'BlueprintExecutionFreezeError';
+    this.hoursUntilExecution = hoursUntilExecution;
+    this.freezeWindowHours = freezeWindowHours;
+  }
+}
+
+/**
+ * Assert blueprint is mutable before any mutation (update-duration, regenerate, negotiate, etc).
+ * Throws BlueprintImmutableError when campaign is ACTIVE or has scheduled/published posts.
+ * Throws BlueprintExecutionFreezeError when first scheduled post is within freeze window.
+ * Allows mutation only when blueprint_status === 'INVALIDATED' or execution_status === 'PAUSED',
+ * and no scheduled post within BLUEPRINT_FREEZE_WINDOW_HOURS.
+ */
+export async function assertBlueprintMutable(campaignId: string): Promise<void> {
+  const { data: campaign, error: campError } = await supabase
+    .from('campaigns')
+    .select('execution_status, blueprint_status')
+    .eq('id', campaignId)
+    .maybeSingle();
+
+  if (campError || !campaign) return;
+
+  const executionStatus = String(campaign.execution_status ?? 'ACTIVE').toUpperCase();
+  const blueprintStatus = String(campaign.blueprint_status ?? 'ACTIVE').toUpperCase();
+
+  if (blueprintStatus === 'INVALIDATED') {
+    await assertFreezeWindowNotBreached(campaignId);
+    return;
+  }
+  if (executionStatus === 'PAUSED') {
+    await assertFreezeWindowNotBreached(campaignId);
+    return;
+  }
+
+  if (executionStatus === 'ACTIVE') {
+    throw new BlueprintImmutableError('Blueprint cannot be modified while campaign is in execution.');
+  }
+
+  const { data: scheduled, error: schedError } = await supabase
+    .from('scheduled_posts')
+    .select('id')
+    .eq('campaign_id', campaignId)
+    .limit(1)
+    .maybeSingle();
+
+  if (!schedError && scheduled) {
+    throw new BlueprintImmutableError('Blueprint cannot be modified while campaign is in execution.');
+  }
+}
+
+/**
+ * Stage 16: Check that earliest scheduled post is not within freeze window.
+ * Throws BlueprintExecutionFreezeError when within BLUEPRINT_FREEZE_WINDOW_HOURS.
+ */
+async function assertFreezeWindowNotBreached(campaignId: string): Promise<void> {
+  const { data: earliest, error } = await supabase
+    .from('scheduled_posts')
+    .select('scheduled_at')
+    .eq('campaign_id', campaignId)
+    .order('scheduled_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !earliest?.scheduled_at) return;
+
+  const scheduledAt = new Date(earliest.scheduled_at).getTime();
+  const now = Date.now();
+  const hoursUntilExecution = (scheduledAt - now) / 3600000;
+
+  if (hoursUntilExecution <= BLUEPRINT_FREEZE_WINDOW_HOURS) {
+    throw new BlueprintExecutionFreezeError(
+      `Blueprint modifications are locked within ${BLUEPRINT_FREEZE_WINDOW_HOURS} hours of execution.`,
+      hoursUntilExecution,
+      BLUEPRINT_FREEZE_WINDOW_HOURS
+    );
+  }
+}
+
+/**
+ * Check if blueprint is mutable (read-only, never throws).
+ * Used by campaign-status API for UI visibility.
+ */
+export async function isBlueprintMutable(campaignId: string): Promise<boolean> {
+  try {
+    await assertBlueprintMutable(campaignId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Stage 16: Block reason for UI differentiation (red vs orange banner). */
+export type BlueprintBlockReason = 'IMMUTABLE' | 'FROZEN' | null;
+
+/**
+ * Get why blueprint mutation is blocked. Returns null when mutable.
+ * Used by campaign-status API for UI (blueprintImmutable vs blueprintFrozen).
+ */
+export async function getBlueprintBlockReason(campaignId: string): Promise<BlueprintBlockReason> {
+  try {
+    await assertBlueprintMutable(campaignId);
+    return null;
+  } catch (err) {
+    if (err instanceof BlueprintExecutionFreezeError) return 'FROZEN';
+    if (err instanceof BlueprintImmutableError) return 'IMMUTABLE';
+    return 'IMMUTABLE';
+  }
+}
 import type { CampaignBlueprint } from '../types/CampaignBlueprint';
 import {
   fromStructuredPlan,
@@ -31,7 +170,7 @@ export async function assertBlueprintActive(campaignId: string): Promise<void> {
 
 /**
  * Get unified campaign blueprint from any available source.
- * Priority: 12_week_plan → campaign_versions → weekly_content_refinements.
+ * Priority: twelve_week_plan → campaign_versions → weekly_content_refinements.
  * Returns null if no plan exists. Does not throw.
  */
 export async function getUnifiedCampaignBlueprint(
@@ -42,9 +181,9 @@ export async function getUnifiedCampaignBlueprint(
   }
 
   try {
-    // 1. Check 12_week_plan (Flow B - Structured Blueprint)
+    // 1. Check twelve_week_plan (Flow B - Structured Blueprint)
     const { data: planRow, error: planError } = await supabase
-      .from('12_week_plan')
+      .from('twelve_week_plan')
       .select('weeks, blueprint')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })
@@ -122,7 +261,7 @@ export type ResolvedCampaignPlanContext = {
 
 /**
  * Get resolved campaign plan context for endpoints.
- * Blueprint-first: 12_week_plan.blueprint → campaign_snapshot.weekly_plan → weekly_content_refinements.
+ * Blueprint-first: twelve_week_plan.blueprint → campaign_snapshot.weekly_plan → weekly_content_refinements.
  * Never prefer campaign_snapshot over blueprint.
  * @param requireActiveBlueprint - When true, throws if blueprint_status !== ACTIVE (for execution flows)
  */
@@ -131,6 +270,17 @@ export async function getResolvedCampaignPlanContext(
   campaignId: string,
   requireActiveBlueprint = false
 ): Promise<ResolvedCampaignPlanContext | null> {
+  // Stage 11: Pre-planning gate — duration_weeks must be set before blueprint resolution
+  const { data: durationRow } = await supabase
+    .from('campaigns')
+    .select('duration_weeks')
+    .eq('id', campaignId)
+    .maybeSingle();
+  if (durationRow?.duration_weeks == null) {
+    throw new PrePlanningRequiredError('Campaign duration not initialized. Run pre-planning first.');
+  }
+  const campaignDurationWeeks = durationRow.duration_weeks;
+
   const { blueprintWeekToLegacyWeekPlan } = await import('./campaignBlueprintAdapter');
   const { getLatestApprovedCampaignVersion } = await import('../db/campaignApprovedVersionStore');
   const { getLatestCampaignVersion } = await import('../db/campaignVersionStore');
@@ -153,13 +303,6 @@ export async function getResolvedCampaignPlanContext(
       .maybeSingle();
     if (campRow) campaign = campRow;
   }
-
-  const { data: campaignRow } = await supabase
-    .from('campaigns')
-    .select('duration_weeks')
-    .eq('id', campaignId)
-    .maybeSingle();
-  const campaignDurationWeeks = campaignRow?.duration_weeks;
 
   const blueprint = await getUnifiedCampaignBlueprint(campaignId);
   if (blueprint && blueprint.weeks.length > 0) {

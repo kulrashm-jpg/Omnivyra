@@ -250,7 +250,9 @@ export default function DashboardPage() {
   };
 
   const handleViewCampaign = (campaignId: string) => {
-    window.location.href = `/campaign-planning?id=${campaignId}`;
+    const params = new URLSearchParams();
+    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
+    window.location.href = `/campaign-details/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
   };
 
 
@@ -301,10 +303,10 @@ export default function DashboardPage() {
                 </button>
               )}
               <button
-                onClick={() => window.location.href = '/campaign-planning'}
+                onClick={() => window.location.href = '/create-campaign'}
                 disabled={!canCreateCampaign}
                 title={
-                  canCreateCampaign ? '' : 'You do not have permission to create campaigns.'
+                  canCreateCampaign ? 'Start a new campaign from scratch (no recommendation)' : 'You do not have permission to create campaigns.'
                 }
                 className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 flex items-center gap-2 disabled:opacity-50"
               >
@@ -490,10 +492,10 @@ export default function DashboardPage() {
                     <h3 className="text-lg font-medium text-gray-900 mb-2">No campaigns yet</h3>
                     <p className="text-gray-600 mb-6">Create your first campaign to get started</p>
                     <button 
-                      onClick={() => window.location.href = '/campaign-planning'}
+                      onClick={() => window.location.href = '/create-campaign'}
                       disabled={!canCreateCampaign}
                       title={
-                        canCreateCampaign ? '' : 'You do not have permission to create campaigns.'
+                        canCreateCampaign ? 'Start from scratch (no recommendation)' : 'You do not have permission to create campaigns.'
                       }
                       className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 mx-auto disabled:opacity-50"
                     >
@@ -504,7 +506,14 @@ export default function DashboardPage() {
                 ) : (
                   <div className="space-y-4">
                     {campaigns.slice(0, 3).map((campaign) => (
-                      <div key={campaign.id} className="bg-gradient-to-r from-gray-50 to-white rounded-xl p-6 border border-gray-200/50 hover:shadow-md transition-all duration-200">
+                      <div
+                        key={campaign.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleViewCampaign(campaign.id)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleViewCampaign(campaign.id)}
+                        className="bg-gradient-to-r from-gray-50 to-white rounded-xl p-6 border border-gray-200/50 hover:shadow-md transition-all duration-200 cursor-pointer"
+                      >
                         <div className="flex items-center justify-between mb-4">
                           <div className="flex items-center gap-3">
                             <div className={`p-2 rounded-lg bg-gradient-to-r ${getStatusColor(campaign.status)}`}>
@@ -518,21 +527,30 @@ export default function DashboardPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <button 
-                              onClick={() => handleViewCampaign(campaign.id)}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleViewCampaign(campaign.id);
+                              }}
                               className={`px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r ${getStatusColor(campaign.status)} text-white hover:opacity-80 transition-opacity`}
                             >
                               {campaign.status.charAt(0).toUpperCase() + campaign.status.slice(1)}
                             </button>
-                            <button 
-                              onClick={() => handleEditCampaign(campaign.id)}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditCampaign(campaign.id);
+                              }}
                               className="p-2 hover:bg-blue-100 rounded-lg transition-colors"
                               title="Edit Campaign"
                             >
                               <Edit className="h-4 w-4 text-blue-600" />
                             </button>
                             <button
-                              onClick={() => handleDeleteCampaign(campaign.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteCampaign(campaign.id);
+                              }}
                               className="p-2 hover:bg-red-100 rounded-lg transition-colors"
                               title="Delete Campaign"
                             >
@@ -651,7 +669,7 @@ export default function DashboardPage() {
                 </div>
                 <p className="text-blue-100 mb-4">Create a new campaign and define your content strategy</p>
                 <button 
-                  onClick={() => window.location.href = '/campaign-planning'}
+                  onClick={() => window.location.href = '/create-campaign'}
                   className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                 >
                   Plan Campaign
@@ -731,10 +749,10 @@ export default function DashboardPage() {
                   <h3 className="text-xl font-medium text-gray-900 mb-2">No campaigns found</h3>
                   <p className="text-gray-600 mb-8">Create your first campaign to get started with content management</p>
                   <button 
-                    onClick={() => window.location.href = '/campaign-planning'}
+                    onClick={() => window.location.href = '/create-campaign'}
                     disabled={!canCreateCampaign}
                     title={
-                      canCreateCampaign ? '' : 'You do not have permission to create campaigns.'
+                      canCreateCampaign ? 'Start from scratch (no recommendation)' : 'You do not have permission to create campaigns.'
                     }
                     className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-8 py-4 rounded-xl font-medium transition-all duration-200 flex items-center gap-2 mx-auto shadow-lg hover:shadow-xl transform hover:scale-105 disabled:opacity-50"
                   >
@@ -746,7 +764,14 @@ export default function DashboardPage() {
                 <div className="p-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {campaigns.map((campaign) => (
-                      <div key={campaign.id} className="bg-gradient-to-r from-gray-50 to-white rounded-xl p-6 border border-gray-200/50 hover:shadow-lg transition-all duration-200">
+                      <div
+                        key={campaign.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleViewCampaign(campaign.id)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleViewCampaign(campaign.id)}
+                        className="bg-gradient-to-r from-gray-50 to-white rounded-xl p-6 border border-gray-200/50 hover:shadow-lg transition-all duration-200 cursor-pointer"
+                      >
                         <div className="flex items-center justify-between mb-4">
                           <div className="flex items-center gap-3">
                             <div className={`p-3 rounded-lg bg-gradient-to-r ${getStatusColor(campaign.status)}`}>
@@ -763,22 +788,31 @@ export default function DashboardPage() {
                         </div>
                         
                         <div className="flex items-center justify-between mb-4">
-                            <button 
-                              onClick={() => handleViewCampaign(campaign.id)}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleViewCampaign(campaign.id);
+                              }}
                               className={`px-4 py-2 rounded-full text-sm font-medium bg-gradient-to-r ${getStatusColor(campaign.status)} text-white hover:opacity-80 transition-opacity`}
                             >
                               {campaign.status.charAt(0).toUpperCase() + campaign.status.slice(1)}
                             </button>
                           <div className="flex items-center gap-2">
-                            <button 
-                              onClick={() => handleEditCampaign(campaign.id)}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditCampaign(campaign.id);
+                              }}
                               className="p-2 hover:bg-blue-100 rounded-lg transition-colors"
                               title="Edit Campaign"
                             >
                               <Edit className="h-4 w-4 text-blue-600" />
                             </button>
                             <button
-                              onClick={() => handleDeleteCampaign(campaign.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteCampaign(campaign.id);
+                              }}
                               className="p-2 hover:bg-red-100 rounded-lg transition-colors"
                               title="Delete Campaign"
                             >

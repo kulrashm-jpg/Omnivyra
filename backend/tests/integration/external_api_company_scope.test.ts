@@ -46,6 +46,7 @@ const buildQuery = (table: string) => {
       state.inFilter = { field, values };
       return query;
     }),
+    or: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     single: jest.fn().mockReturnThis(),

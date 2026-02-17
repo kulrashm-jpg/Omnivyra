@@ -56,7 +56,7 @@ describe('Campaign AI history API', () => {
     });
 
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
-      if (table === '12_week_plan') return planQuery;
+      if (table === 'twelve_week_plan') return planQuery;
       if (table === 'scheduled_posts') return scheduledQuery;
       return buildQuery({ data: [], error: null });
     });
