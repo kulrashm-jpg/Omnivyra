@@ -191,6 +191,34 @@ export async function getTrendSnapshots(companyId: string, campaignId?: string):
   return data;
 }
 
+/** Sync campaign_versions status when campaigns.current_stage changes. Call after updating campaigns. */
+export async function syncCampaignVersionStage(
+  campaignId: string,
+  newStage: string,
+  companyId?: string | null
+): Promise<void> {
+  try {
+    let query = supabase
+      .from('campaign_versions')
+      .select('id')
+      .eq('campaign_id', campaignId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (companyId) {
+      query = query.eq('company_id', companyId);
+    }
+    const { data: rows, error: fetchError } = await query;
+    if (fetchError || !rows?.length) return;
+    const ids = rows.map((r: { id: string }) => r.id);
+    await supabase
+      .from('campaign_versions')
+      .update({ status: newStage })
+      .in('id', ids);
+  } catch (e) {
+    console.warn('syncCampaignVersionStage failed:', e);
+  }
+}
+
 export async function saveCampaignHealthReport(input: {
   companyId: string;
   campaignId?: string;

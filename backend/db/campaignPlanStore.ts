@@ -69,9 +69,10 @@ export async function saveStructuredCampaignPlan(input: {
       raw_plan_text: input.raw_plan_text,
       omnivyre_decision: input.omnivyre_decision,
       source: 'ai',
+      status: 'draft' as PlanStatus,
       blueprint: blueprint as any,
       created_at: new Date().toISOString(),
-    });
+    } as any);
 
   if (error) {
     throw new Error(`Failed to save structured campaign plan: ${error.message}`);
@@ -135,6 +136,10 @@ export async function saveCampaignBlueprintFromRecommendation(input: {
     content_type_mix: w.content_type_mix,
     cta_type: w.cta_type,
     weekly_kpi_focus: w.weekly_kpi_focus,
+    topics_to_cover: Array.isArray(w.topics_to_cover) ? w.topics_to_cover : undefined,
+    platform_content_breakdown: w.platform_content_breakdown,
+    platform_topics: w.platform_topics,
+    week_extras: w.week_extras ?? undefined,
   }));
   const { error } = await supabase.from('twelve_week_plan').insert({
     campaign_id: input.campaignId,
@@ -143,24 +148,18 @@ export async function saveCampaignBlueprintFromRecommendation(input: {
     raw_plan_text: '',
     omnivyre_decision: { status: 'ok', recommendation: 'proceed' } as DecisionResult,
     source: 'recommendation',
+    status: 'committed' as PlanStatus,
     blueprint: input.blueprint as any,
     created_at: new Date().toISOString(),
-  });
+  } as any);
   if (error) throw new Error(`Failed to save blueprint: ${error.message}`);
   await upsertCampaignResourceProjection(input.campaignId, input.blueprint);
 }
 
-/**
- * Save blueprint from create-12week-plan (Flow C redirect).
- * Source: 'create-12week-plan'.
- */
-export async function saveCampaignBlueprintFromLegacy(input: {
-  campaignId: string;
-  blueprint: CampaignBlueprint;
-  source?: string;
-}): Promise<void> {
-  const snapshot_hash = `legacy-${input.campaignId}-${Date.now()}`;
-  const weeksForDb = input.blueprint.weeks.map((w) => ({
+export type PlanStatus = 'draft' | 'committed' | 'edited_committed';
+
+function weeksForDbFromBlueprint(blueprint: CampaignBlueprint) {
+  return blueprint.weeks.map((w) => ({
     week: w.week_number,
     phase_label: w.phase_label,
     primary_objective: w.primary_objective,
@@ -168,20 +167,152 @@ export async function saveCampaignBlueprintFromLegacy(input: {
     content_type_mix: w.content_type_mix,
     cta_type: w.cta_type,
     weekly_kpi_focus: w.weekly_kpi_focus,
+    topics_to_cover: Array.isArray(w.topics_to_cover) ? w.topics_to_cover : undefined,
+    platform_content_breakdown: w.platform_content_breakdown,
+    platform_topics: w.platform_topics,
+    week_extras: w.week_extras ?? undefined,
   }));
-  const { error } = await supabase.from('twelve_week_plan').insert({
+}
+
+/**
+ * Save draft blueprint (view/Save for Later). Same table as committed; status='draft'.
+ * Upserts: updates existing draft or inserts new.
+ */
+export async function saveDraftBlueprint(input: {
+  campaignId: string;
+  blueprint: CampaignBlueprint;
+}): Promise<void> {
+  const weeksForDb = weeksForDbFromBlueprint(input.blueprint);
+  const snapshot_hash = `draft-${input.campaignId}`;
+  const { data: existing } = await supabase
+    .from('twelve_week_plan')
+    .select('id')
+    .eq('campaign_id', input.campaignId)
+    .eq('status', 'draft')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const row = {
     campaign_id: input.campaignId,
     snapshot_hash,
     weeks: weeksForDb,
     raw_plan_text: '',
     omnivyre_decision: { status: 'ok', recommendation: 'proceed' } as DecisionResult,
-    source: input.source ?? 'create-12week-plan',
+    source: 'draft-save',
+    status: 'draft' as PlanStatus,
     blueprint: input.blueprint as any,
-    created_at: new Date().toISOString(),
-  });
-  if (error) throw new Error(`Failed to save blueprint from legacy: ${error.message}`);
+    updated_at: new Date().toISOString(),
+  };
+  if (existing?.id) {
+    const { error } = await supabase.from('twelve_week_plan').update(row).eq('id', existing.id);
+    if (error) throw new Error(`Failed to update draft blueprint: ${error.message}`);
+  } else {
+    const { error } = await supabase.from('twelve_week_plan').insert({
+      ...row,
+      created_at: new Date().toISOString(),
+    } as any);
+    if (error) throw new Error(`Failed to save draft blueprint: ${error.message}`);
+  }
+}
+
+/**
+ * Promote draft to committed (same row, status change). Or insert committed if no draft.
+ */
+export async function commitDraftBlueprint(input: {
+  campaignId: string;
+  blueprint: CampaignBlueprint;
+  source?: string;
+}): Promise<void> {
+  const weeksForDb = weeksForDbFromBlueprint(input.blueprint);
+  const { data: draft } = await supabase
+    .from('twelve_week_plan')
+    .select('id')
+    .eq('campaign_id', input.campaignId)
+    .eq('status', 'draft')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const updatePayload = {
+    weeks: weeksForDb,
+    blueprint: input.blueprint as any,
+    source: input.source ?? 'structured-commit',
+    status: 'committed' as PlanStatus,
+    snapshot_hash: `legacy-${input.campaignId}-${Date.now()}`,
+    updated_at: new Date().toISOString(),
+  };
+  if (draft?.id) {
+    const { error } = await supabase.from('twelve_week_plan').update(updatePayload).eq('id', draft.id);
+    if (error) throw new Error(`Failed to commit draft: ${error.message}`);
+  } else {
+    const snapshot_hash = `legacy-${input.campaignId}-${Date.now()}`;
+    const { error } = await supabase.from('twelve_week_plan').insert({
+      campaign_id: input.campaignId,
+      snapshot_hash,
+      weeks: weeksForDb,
+      raw_plan_text: '',
+      omnivyre_decision: { status: 'ok', recommendation: 'proceed' } as DecisionResult,
+      source: input.source ?? 'create-12week-plan',
+      status: 'committed' as PlanStatus,
+      blueprint: input.blueprint as any,
+      created_at: new Date().toISOString(),
+    } as any);
+    if (error) throw new Error(`Failed to save committed blueprint: ${error.message}`);
+  }
   await upsertCampaignResourceProjection(input.campaignId, input.blueprint);
 }
+
+/**
+ * Update committed plan to edited_committed (post-commit edits).
+ */
+export async function updateToEditedCommitted(input: {
+  campaignId: string;
+  blueprint: CampaignBlueprint;
+}): Promise<void> {
+  const weeksForDb = weeksForDbFromBlueprint(input.blueprint);
+  const { data: committed } = await supabase
+    .from('twelve_week_plan')
+    .select('id')
+    .eq('campaign_id', input.campaignId)
+    .in('status', ['committed', 'edited_committed'])
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!committed?.id) {
+    throw new Error('No committed plan found to edit');
+  }
+  const { error } = await supabase
+    .from('twelve_week_plan')
+    .update({
+      weeks: weeksForDb,
+      blueprint: input.blueprint as any,
+      source: 'edit-committed',
+      status: 'edited_committed' as PlanStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', committed.id);
+  if (error) throw new Error(`Failed to update to edited_committed: ${error.message}`);
+  await upsertCampaignResourceProjection(input.campaignId, input.blueprint);
+}
+
+/**
+ * Save blueprint from create-12week-plan (Flow C redirect).
+ * Uses unified flow: promote draft to committed if draft exists, else insert committed.
+ */
+export async function saveCampaignBlueprintFromLegacy(input: {
+  campaignId: string;
+  blueprint: CampaignBlueprint;
+  source?: string;
+}): Promise<void> {
+  await commitDraftBlueprint({
+    campaignId: input.campaignId,
+    blueprint: input.blueprint,
+    source: input.source ?? 'create-12week-plan',
+  });
+}
+
 
 export async function savePlatformCustomizedContent(input: {
   campaignId: string;

@@ -129,7 +129,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order('created_at', { ascending: false });
 
     if (error) {
-      return res.status(500).json({ error: 'FAILED_TO_LIST_USERS' });
+      console.error('[super-admin/users] user_company_roles error:', error);
+      return res.status(500).json({
+        error: 'FAILED_TO_LIST_USERS',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      });
     }
 
     const rows = data || [];

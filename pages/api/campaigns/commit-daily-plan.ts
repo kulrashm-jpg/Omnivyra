@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
+import { syncCampaignVersionStage } from '../../../backend/db/campaignVersionStore';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -20,6 +21,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const activityDate = new Date(weekStartDate);
     activityDate.setDate(weekStartDate.getDate() + dayIndex);
 
+    // Get weekly_refinement_id for FK link
+    const { data: refinement } = await supabase
+      .from('weekly_content_refinements')
+      .select('id')
+      .eq('campaign_id', campaignId)
+      .eq('week_number', weekNumber)
+      .maybeSingle();
+
     // Delete existing daily plans for this day
     await supabase
       .from('daily_content_plans')
@@ -28,7 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('week_number', weekNumber)
       .eq('day_of_week', day);
 
-    // Insert new daily plans for each activity
+    // Insert new daily plans for each activity (with weekly_refinement_id or source_refinement_id for FK link)
+    const refinementId = refinement?.id ?? null;
     const dailyPlans = activities.map((activity: any) => ({
       campaign_id: campaignId,
       week_number: weekNumber,
@@ -52,7 +62,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       expected_engagement: activity.expectedEngagement || 0,
       target_audience: activity.targetAudience || '',
       created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
+      ...(refinementId && { source_refinement_id: refinementId }),
     }));
 
     const { data: insertedPlans, error: insertError } = await supabase
@@ -74,6 +85,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
       .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber);
+
+    // Advance campaign to daily_plan stage
+    await supabase
+      .from('campaigns')
+      .update({
+        current_stage: 'daily_plan',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', campaignId);
+    void syncCampaignVersionStage(campaignId, 'daily_plan').catch(() => {});
 
     res.status(200).json({
       success: true,

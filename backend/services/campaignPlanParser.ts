@@ -20,6 +20,14 @@ const dailyPlanSchema = z.object({
   success_projection: z.number().optional(),
 });
 
+const platformContentItem = z.object({
+  type: z.string(),
+  count: z.number(),
+  topic: z.string().optional(),
+  topics: z.array(z.string()).optional(),
+  /** Platforms this content appears on. When length > 1, same content is shared across platforms — show under each. */
+  platforms: z.array(z.string()).optional(),
+});
 /** New weekly blueprint schema - allocation-driven, no daily[] required */
 const weeklyBlueprintSchemaBase = z
   .object({
@@ -32,7 +40,12 @@ const weeklyBlueprintSchemaBase = z
     total_weekly_content_count: z.number(),
     weekly_kpi_focus: z.enum(KPI_FOCUS_OPTIONS),
     theme: z.string().optional(),
+    topics_to_cover: z.array(z.string()).optional(),
     daily: z.array(dailyPlanSchema).optional(),
+    /** Per-platform breakdown: e.g. { "facebook": [{ type: "post", count: 2 }, { type: "story", count: 1 }] } — makes "facebook: 2" explicit as 2 posts, 1 story */
+    platform_content_breakdown: z.record(z.string(), z.array(platformContentItem)).optional(),
+    /** Per-platform topic overrides for editing: e.g. { "facebook": ["Professional neglecting personal lives"] } */
+    platform_topics: z.record(z.string(), z.array(z.string())).optional(),
   })
   .strict();
 
@@ -91,23 +104,34 @@ const BLUEPRINT_SCHEMA_DESC = `
   primary_objective: string,
   platform_allocation: Record<string, number>,
   content_type_mix: string[],
+  platform_content_breakdown?: Record<string, Array<{ type: string, count: number, topics?: string[], platforms?: string[] }>>,
   cta_type: "None" | "Soft CTA" | "Engagement CTA" | "Authority CTA" | "Direct Conversion CTA",
   total_weekly_content_count: number,
   weekly_kpi_focus: "Reach growth" | "Engagement rate" | "Follower growth" | "Leads generated" | "Bookings",
-  theme: string
+  theme: string,
+  topics_to_cover: string[]
 }> }
 
 Rules:
 - platform_allocation keys: use lowercase (e.g. linkedin, facebook, instagram, youtube, blog).
 - platform_allocation values: numeric post/video/article counts per platform.
+- platform_content_breakdown: Per platform, list content with topics. Each item: { type, count, topics: ["(1) Topic for piece 1", "(2) Topic for piece 2"], platforms?: ["facebook","linkedin"] }. SHARED CONTENT: When one piece is shared across platforms (e.g. same post on Facebook+LinkedIn), include it in EACH platform's array AND set platforms: ["facebook","linkedin"] so it displays under both. topics: one topic per piece when count>1, e.g. topics: ["(1) Identifying personal challenges", "(2) Second topic"]. type = post, story, reel, video, article, carousel, thread, banner.
 - total_weekly_content_count MUST equal the sum of all platform_allocation values.
 - Extract phase_label from "Phase Label" (e.g. "Audience Activation", "Conversion Acceleration").
 - Extract cta_type exactly as one of the 5 options.
 - Extract weekly_kpi_focus exactly as one of the 5 options.
 - content_type_mix: array of strings (e.g. ["1 authority post", "1 educational post"]).
-- theme: REQUIRED. Concrete weekly theme—what we're doing that week given the topic (e.g. "Introduce the stress-reduction framework", "Share customer success story"). Not the phase label.
+- theme: REQUIRED. Concrete weekly theme.
+- topics_to_cover: REQUIRED. Array of 2–5 specific topics to cover that week (e.g. ["Mindfulness basics", "Breathing techniques", "Sleep hygiene"]).
 `;
 
+export type PlatformContentItem = {
+  type: string;
+  count: number;
+  topic?: string;
+  topics?: string[];
+  platforms?: string[];
+};
 export type WeeklyBlueprintWeek = {
   week: number;
   phase_label: string;
@@ -118,6 +142,9 @@ export type WeeklyBlueprintWeek = {
   total_weekly_content_count: number;
   weekly_kpi_focus: (typeof KPI_FOCUS_OPTIONS)[number];
   theme?: string;
+  topics_to_cover?: string[];
+  platform_content_breakdown?: Record<string, PlatformContentItem[]>;
+  platform_topics?: Record<string, string[]>;
   daily?: Array<{
     day: string;
     objective: string;
@@ -133,6 +160,8 @@ export type WeeklyBlueprintWeek = {
     effort_score?: number;
     success_projection?: number;
   }>;
+  /** Dynamic extras: summary, objectives, days_to_post, content_brief, etc. */
+  week_extras?: Record<string, unknown>;
 };
 
 export type ParsedPlan = {
@@ -296,11 +325,34 @@ export async function parseAiPlatformCustomization(planText: string): Promise<{
   });
 
   const raw = completion.choices[0]?.message?.content?.trim() || '';
-  const parsed = JSON.parse(raw);
-  const validation = platformCustomizationSchema.safeParse(parsed);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw || '{}');
+  } catch {
+    throw new Error('Invalid platform customization schema: AI response was not valid JSON');
+  }
+  if (parsed === null || typeof parsed !== 'object') {
+    parsed = {};
+  }
+  const obj = parsed as Record<string, unknown>;
+  // Normalize: AI may return Day/platforms (capitalized) or nested structure
+  const day = obj.day ?? obj.Day ?? (typeof obj.dayName === 'string' ? obj.dayName : '');
+  const platformsRaw = obj.platforms ?? obj.Platforms ?? obj.platform_content ?? {};
+  const platforms: Record<string, string> =
+    typeof platformsRaw === 'object' && platformsRaw !== null
+      ? Object.fromEntries(
+          Object.entries(platformsRaw).filter(
+            ([, v]) => v != null && typeof v === 'string'
+          ) as [string, string][]
+        )
+      : {};
+  const normalized = { day: String(day || 'Unknown'), platforms };
+  const validation = platformCustomizationSchema.safeParse(normalized);
   if (!validation.success) {
     console.error('Platform customization schema validation failed', {
       issues: validation.error.issues,
+      parsed,
+      normalized,
     });
     throw new Error('Invalid platform customization schema');
   }

@@ -1,4 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
+import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -9,6 +10,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
+  }
+
+  const policyResult = await validateAndModerateUserMessage(String(message), {
+    chatContext: context ? String(context) : 'general',
+  });
+  if (!policyResult.allowed) {
+    return res.status(400).json({
+      error: 'Your message couldn\'t be processed. Please rephrase and try again.',
+    });
   }
 
   if (!apiKey) {

@@ -135,6 +135,8 @@ interface AIChatProps {
   optimizationContext?: { roiScore: number; headlines: string[] };
   /** Pre-filled planning context from campaign setup — AI will skip these questions */
   prefilledPlanning?: Record<string, unknown> | null;
+  /** Existing plan when refining (avoids re-asking; skips to refine mode) */
+  initialPlan?: { weeks: any[] } | null;
 }
 
 type AIProvider = 'gpt' | 'claude' | 'demo';
@@ -170,13 +172,16 @@ type StructuredWeek = {
   daily?: StructuredDay[];
   /** Blueprint format fields */
   phase_label?: string;
-  theme?: string;
+  topics_to_cover?: string[];
   primary_objective?: string;
   platform_allocation?: Record<string, number>;
   content_type_mix?: string[];
   cta_type?: string;
   total_weekly_content_count?: number;
   weekly_kpi_focus?: string;
+  /** Per-platform content types. Shared items (platforms.length>1) appear under each platform. */
+  platform_content_breakdown?: Record<string, Array<{ type: string; count: number; topic?: string; topics?: string[]; platforms?: string[] }>>;
+  platform_topics?: Record<string, string[]>;
   daily?: Array<{
     day: string;
     objective?: string;
@@ -227,9 +232,10 @@ type AiHistoryEntry = {
   created_at: string;
 };
 
-export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, recommendationContext, onProgramGenerated, governanceLocked, optimizationContext, prefilledPlanning }: AIChatProps) {
+export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, recommendationContext, onProgramGenerated, governanceLocked, optimizationContext, prefilledPlanning, initialPlan }: AIChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
+  const [inputClearKey, setInputClearKey] = useState(0);
   const [isTyping, setIsTyping] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [showSettings, setShowSettings] = useState(false);
@@ -241,6 +247,8 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [uiErrorMessage, setUiErrorMessage] = useState<string | null>(null);
   const [campaignLearnings, setCampaignLearnings] = useState<CampaignLearning[]>([]);
   const [showDateSelection, setShowDateSelection] = useState(false);
+  const [commitStartDate, setCommitStartDate] = useState('');
+  const [commitDurationWeeks, setCommitDurationWeeks] = useState(12);
   const [selectedPlan, setSelectedPlan] = useState<string>('');
   const [showPlanPreview, setShowPlanPreview] = useState(false);
   const [structuredPlan, setStructuredPlan] = useState<StructuredPlan | null>(null);
@@ -285,6 +293,10 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [isPlatformIntelLoading, setIsPlatformIntelLoading] = useState(false);
   const [hasViewedPlanMessageId, setHasViewedPlanMessageId] = useState<number | null>(null);
   const [showPlanOverview, setShowPlanOverview] = useState(false);
+  const [retrievePlanData, setRetrievePlanData] = useState<{ savedPlan?: { content: string; savedAt: string }; committedPlan?: { weeks: any[] }; draftPlan?: { weeks: any[]; savedAt: string } } | null>(null);
+  const [planSource, setPlanSource] = useState<'ai' | 'committed' | 'draft'>('ai');
+  const [isRetrievePlanLoading, setIsRetrievePlanLoading] = useState(false);
+  const [isParsingSavedPlan, setIsParsingSavedPlan] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -317,6 +329,24 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       initializeCampaignThread(campaignId, campaignData);
     }
   }, [campaignId, campaignData, recommendationContext]);
+
+  // Fetch saved/committed plan availability when chat opens for a campaign
+  useEffect(() => {
+    if (!isOpen || !campaignId) {
+      setRetrievePlanData(null);
+      return;
+    }
+    let cancelled = false;
+    setIsRetrievePlanLoading(true);
+    fetch(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled && data) setRetrievePlanData(data);
+      })
+      .catch(() => { if (!cancelled) setRetrievePlanData(null); })
+      .finally(() => { if (!cancelled) setIsRetrievePlanLoading(false); });
+    return () => { cancelled = true; };
+  }, [isOpen, campaignId]);
 
   useEffect(() => {
     if (activeTab === 'history' && campaignId) {
@@ -399,10 +429,49 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     loadAdminStatus();
   }, []);
 
-  const saveAIContentForPlan = async (aiMessage: string) => {
+  const saveAIContentForPlan = async (aiMessage: string, structuredPlanToSave?: StructuredPlan | null) => {
     if (!campaignId) return;
     try {
-      const response = await fetch('/api/campaigns/save-ai-content', {
+      // When structured plan exists, save to twelve_week_plan (same table; status: draft or edited_committed)
+      if (structuredPlanToSave?.weeks?.length) {
+        const isEditOfCommitted = planSource === 'committed';
+        const api = isEditOfCommitted ? '/api/campaigns/update-edited-committed' : '/api/campaigns/save-draft-plan';
+        const draftRes = await fetchWithAuth(api, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            campaignId,
+            structuredPlan: { weeks: structuredPlanToSave.weeks },
+          }),
+        });
+        if (draftRes.ok) {
+          if (typeof window !== 'undefined') {
+            try {
+              window.sessionStorage.setItem(
+                `campaign_chat_draft_${campaignId}`,
+                JSON.stringify({ messages, savedAt: new Date().toISOString() })
+              );
+            } catch (e) {
+              console.warn('Could not persist chat to sessionStorage', e);
+            }
+          }
+          const successMessage: ChatMessage = {
+            id: Date.now(),
+            type: 'ai',
+            message: isEditOfCommitted
+              ? '✅ Changes saved to committed plan (edited).'
+              : '✅ Plan saved as draft. Topics, platforms, and content breakdown preserved.',
+            timestamp: new Date().toLocaleTimeString(),
+            provider: getProviderName(selectedProvider),
+            campaignId
+          };
+          setMessages(prev => [...prev, successMessage]);
+          return;
+        }
+        const err = await draftRes.json().catch(() => ({}));
+        throw new Error(err?.error ?? err?.message ?? 'Failed to save draft plan');
+      }
+      const response = await fetchWithAuth('/api/campaigns/save-ai-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -434,14 +503,17 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
         };
         setMessages(prev => [...prev, successMessage]);
       } else {
-        throw new Error('Failed to save content');
+        const errData = await response.json().catch(() => ({}));
+        const detail = errData?.error ?? errData?.message ?? response.statusText;
+        throw new Error(detail || 'Failed to save content');
       }
     } catch (error) {
       console.error('Error saving AI content:', error);
+      const detail = error instanceof Error ? error.message : 'Unknown error';
       const errorMessage: ChatMessage = {
         id: Date.now(),
         type: 'ai',
-        message: '❌ Failed to save AI content. Please try again.',
+        message: `❌ Failed to save AI content. ${detail}`,
         timestamp: new Date().toLocaleTimeString(),
         provider: getProviderName(selectedProvider),
         campaignId
@@ -469,6 +541,9 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     }
     setShowPlanOverview(false);
     setShowPlanPreview(false);
+    const defaultWeeks = structuredPlan?.weeks?.length ?? (campaignData as { duration_weeks?: number })?.duration_weeks ?? 12;
+    setCommitDurationWeeks(typeof defaultWeeks === 'number' && defaultWeeks >= 1 && defaultWeeks <= 52 ? defaultWeeks : 12);
+    setCommitStartDate(new Date().toISOString().split('T')[0]);
     setShowDateSelection(true);
   };
 
@@ -479,6 +554,55 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       setShowPlanOverview(true);
     } else {
       setShowPlanPreview(true);
+    }
+  };
+
+  const loadDraftPlanAndEdit = () => {
+    const plan = retrievePlanData?.draftPlan;
+    if (!plan?.weeks?.length) return;
+    setStructuredPlan({ weeks: plan.weeks, format: 'blueprint' });
+    setStructuredPlanMessageId(Date.now());
+    setPlanSource('draft');
+    setShowPlanOverview(true);
+  };
+
+  const loadCommittedPlanAndEdit = () => {
+    const plan = retrievePlanData?.committedPlan;
+    if (!plan?.weeks?.length) return;
+    setStructuredPlan({ weeks: plan.weeks, format: 'blueprint' });
+    setStructuredPlanMessageId(Date.now());
+    setPlanSource('committed');
+    setShowPlanOverview(true);
+  };
+
+  const loadSavedPlanAndEdit = async () => {
+    const saved = retrievePlanData?.savedPlan;
+    if (!saved?.content) return;
+    setIsParsingSavedPlan(true);
+    try {
+      const res = await fetch('/api/campaigns/parse-saved-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: saved.content }),
+      });
+      if (res.ok) {
+        const { weeks } = await res.json();
+        if (Array.isArray(weeks) && weeks.length > 0) {
+          setStructuredPlan({ weeks, format: 'blueprint' });
+          setStructuredPlanMessageId(Date.now());
+          setPlanSource('draft');
+          setShowPlanOverview(true);
+        } else {
+          setUiErrorMessage('Could not parse saved plan into editable format.');
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setUiErrorMessage(err.details || err.error || 'Failed to parse saved plan.');
+      }
+    } catch (e) {
+      setUiErrorMessage('Failed to parse saved plan. Please try again.');
+    } finally {
+      setIsParsingSavedPlan(false);
     }
   };
 
@@ -518,7 +642,7 @@ Weeks 10-12: Optimization & Growth
 This comprehensive approach ensures consistent growth and engagement across all platforms.`;
   };
 
-  const create12WeekPlan = async (startDate: string) => {
+  const create12WeekPlan = async (startDate: string, durationWeeks?: number) => {
     try {
       setIsLoading(true);
       
@@ -548,38 +672,55 @@ This comprehensive approach ensures consistent growth and engagement across all 
         aiContentLength: aiContent?.length
       });
       
-      const response = await fetch('/api/campaigns/create-12week-plan', {
+      const resolvedDuration = typeof durationWeeks === 'number' && durationWeeks >= 1 && durationWeeks <= 52
+        ? durationWeeks
+        : (structuredPlan?.weeks?.length ?? (campaignData as { duration_weeks?: number })?.duration_weeks);
+      const body: Record<string, unknown> = {
+        campaignId,
+        startDate,
+        aiContent,
+        provider: selectedProvider,
+        companyId: resolvedCompanyId || undefined,
+        ...(typeof resolvedDuration === 'number' && resolvedDuration >= 1 && resolvedDuration <= 52 ? { durationWeeks: resolvedDuration } : {}),
+      };
+      if (structuredPlan?.weeks?.length) {
+        body.structuredPlan = { weeks: structuredPlan.weeks };
+      }
+      const response = await fetchWithAuth('/api/campaigns/create-12week-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          campaignId,
-          startDate,
-          aiContent,
-          provider: selectedProvider
-        })
+        body: JSON.stringify(body),
       });
 
       if (response.ok) {
         const result = await response.json();
-        
-        // Show success message
+
+        // Refetch retrieve-plan so "View committed plan" / "Load committed plan" appear
+        const refetchRes = await fetch(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`);
+        if (refetchRes.ok) {
+          const refetchData = await refetchRes.json();
+          setRetrievePlanData(refetchData);
+        }
+
+        const weeksMsg = typeof resolvedDuration === 'number' ? resolvedDuration : (structuredPlan?.weeks?.length ?? 12);
         const successMessage: ChatMessage = {
           id: Date.now(),
           type: 'ai',
-          message: `🎉 Campaign plan created successfully! Starting from ${new Date(startDate).toLocaleDateString()}. You can now view your plan in the hierarchical navigation.`,
+          message: `🎉 ${weeksMsg}-week campaign plan created successfully! Starting from ${new Date(startDate).toLocaleDateString()}. Use **View committed plan** above to open your plan.`,
           timestamp: new Date().toLocaleTimeString(),
           provider: getProviderName(selectedProvider),
           campaignId
         };
         setMessages(prev => [...prev, successMessage]);
-        
+
         setShowDateSelection(false);
         setSelectedPlan('');
       } else {
-        // Get the actual error message from the API response
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         console.error('API Error Response:', errorData);
-        throw new Error(`Failed to create plan: ${errorData.error || errorData.message || 'Unknown error'}`);
+        const detail = errorData.details || errorData.message || errorData.error || 'Unknown error';
+        const hint = errorData.hint ? ` (${errorData.hint})` : '';
+        throw new Error(`Failed to create plan: ${detail}${hint}`);
       }
     } catch (error) {
       console.error('Error creating campaign plan:', error);
@@ -607,9 +748,10 @@ This comprehensive approach ensures consistent growth and engagement across all 
     const parts: string[] = [
       `Hello! I'm here to help you turn **"${name}"** into a complete content marketing plan.`,
     ];
+    const durationWeeks = (prefilledPlanning?.campaign_duration as number) ?? campaignData?.duration_weeks ?? 12;
     if (prefilledPlanning && Object.keys(prefilledPlanning).length > 0) {
       parts.push('\n\nI already have from your setup:\n' + Object.entries(prefilledPlanning).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n'));
-      parts.push(`\n\nI'll ask only what's still needed. Send any message to continue.`);
+      parts.push(`\n\nI'll ask only what's still needed to build your ${durationWeeks}-week plan.\n\n**Who is your primary target audience?** (e.g., professionals, entrepreneurs, parents, educators)`);
       return parts.join('');
     }
     if (desc) {
@@ -631,13 +773,16 @@ This comprehensive approach ensures consistent growth and engagement across all 
   const buildPrefilledWelcome = (name: string): string => {
     const pre = prefilledPlanning;
     if (!pre || Object.keys(pre).length === 0) return '';
+    const durationWeeks = (pre.campaign_duration as number) ?? (campaignData as { duration_weeks?: number })?.duration_weeks ?? 12;
     const items = Object.entries(pre).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n');
     return `Hello! I'm your AI assistant for "${name}".
 
 I already have these from your campaign setup:
 ${items}
 
-I'll ask only what's still needed. Send any message to continue—I'll skip the questions you've already answered.\n\n`;
+I'll ask only what's still needed to build your ${durationWeeks}-week plan.
+
+**Who is your primary target audience?** (e.g., professionals, entrepreneurs, parents, educators)\n\n`;
   };
 
   const GENERIC_WELCOME = (name: string) => {
@@ -657,9 +802,15 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
     const existingMessages = await loadCampaignMessages(campaignId);
     
     if (existingMessages.length === 0) {
-      const welcomeText = recommendationContext && (recommendationContext.target_regions?.length || recommendationContext.context_payload)
-        ? buildRecommendationWelcome(campaignData)
-        : GENERIC_WELCOME(campaignData?.name || 'this campaign');
+      const durationWeeks = (campaignData?.duration_weeks ?? initialPlan?.weeks?.length ?? 12);
+      let welcomeText: string;
+      if (initialPlan?.weeks?.length && context?.toLowerCase().includes('12week-plan')) {
+        welcomeText = `Hello! You're refining your **${durationWeeks}-week campaign plan**. I won't ask questions—just describe the changes you want (e.g., "Add topic X to Week 1", "Change Week 2 theme to...", "Add 2 LinkedIn posts to Week 3"). I'll apply them and return the updated plan.`;
+      } else if (recommendationContext && (recommendationContext.target_regions?.length || recommendationContext.context_payload)) {
+        welcomeText = buildRecommendationWelcome(campaignData);
+      } else {
+        welcomeText = GENERIC_WELCOME(campaignData?.name || 'this campaign');
+      }
       const welcomeMessage: ChatMessage = {
         id: Date.now(),
         type: 'ai',
@@ -812,12 +963,13 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
   }, [messages]);
 
   const sendMessage = async () => {
-    if (!newMessage.trim() && attachments.length === 0) return;
+    const messageText = newMessage.trim();
+    if (!messageText && attachments.length === 0) return;
 
     const userMessage: ChatMessage = {
       id: Date.now(),
       type: 'user',
-      message: newMessage,
+      message: messageText,
       timestamp: new Date().toLocaleTimeString(),
       attachments: attachments.length > 0 ? [...attachments] : undefined,
       campaignId
@@ -825,9 +977,9 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
 
     setMessages(prev => [...prev, userMessage]);
     await saveCampaignMessage(userMessage);
-    
     setNewMessage('');
     setAttachments([]);
+    setInputClearKey((k) => k + 1);
     setIsTyping(true);
     setIsLoading(true);
     setUiErrorMessage(null);
@@ -850,7 +1002,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
 
       if (selectedProvider === 'demo') {
         await new Promise(resolve => setTimeout(resolve, 1500));
-        response = generateDemoResponse(newMessage, context, campaignData, campaignLearnings);
+        response = generateDemoResponse(messageText, context, campaignData, campaignLearnings);
         provider = 'Demo AI';
         aiResponse.message = response;
         aiResponse.provider = provider;
@@ -863,28 +1015,32 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
 
         const mode = context.toLowerCase().includes('daily')
           ? 'refine_day'
-          : context.toLowerCase().includes('campaign-planning')
+          : context.toLowerCase().includes('campaign-planning') || context.toLowerCase().includes('12week-plan')
           ? 'generate_plan'
           : 'platform_customize';
 
         setModeLoading((prev) => ({ ...prev, [mode]: true }));
 
-        const targetDay = extractTargetDay(newMessage);
-        const platforms = extractPlatforms(newMessage);
+        const targetDay = extractTargetDay(messageText);
+        const platforms = extractPlatforms(messageText);
 
         const conversationHistory = [...messages, userMessage].map((m) => ({
           type: m.type as 'user' | 'ai',
           message: m.message,
         }));
 
+        const effectiveCurrentPlan = initialPlan?.weeks?.length
+          ? initialPlan
+          : (showPlanOverview && structuredPlan ? { weeks: structuredPlan.weeks } : undefined);
         const planResponse = await callCampaignPlanAPI(
-          newMessage,
+          messageText,
           mode,
           {
-            durationWeeks: mode === 'generate_plan' ? 12 : undefined,
+            durationWeeks: mode === 'generate_plan' ? (campaignData?.duration_weeks ?? undefined) : undefined,
             targetDay: mode !== 'generate_plan' ? targetDay : undefined,
             platforms: mode === 'platform_customize' ? platforms : undefined,
             conversationHistory: mode === 'generate_plan' ? conversationHistory : undefined,
+            currentPlan: effectiveCurrentPlan,
           }
         );
 
@@ -894,6 +1050,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
           structuredPlanFromResponse = planResponse.plan;
           setStructuredPlan(planResponse.plan);
           setStructuredPlanMessageId(aiResponseId);
+          setPlanSource('ai');
           console.log('Structured plan received', planResponse.plan);
           response = 'Structured plan generated.';
         } else if (planResponse.day) {
@@ -980,6 +1137,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
       targetDay?: string;
       platforms?: string[];
       conversationHistory?: Array<{ type: 'user' | 'ai'; message: string }>;
+      currentPlan?: { weeks: any[] };
     }
   ): Promise<{
     plan?: StructuredPlan;
@@ -1002,12 +1160,18 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
         messages: options?.conversationHistory,
         recommendationContext,
         optimizationContext,
+        currentPlan: options?.currentPlan,
       }),
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'AI plan API error' }));
-      throw new Error(errorData.error || 'AI plan API error');
+      const raw = errorData.error || errorData.message || 'AI plan API error';
+      const friendly =
+        response.status === 400
+          ? 'Your message couldn\'t be processed. Please rephrase and try again.'
+          : raw;
+      throw new Error(friendly);
     }
 
     const data = await response.json();
@@ -1093,18 +1257,21 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
     return {
       weeks: plan.weeks.map((week) => {
         if (week.week !== refinedDay.week) return week;
+        const daily = week.daily || [];
+        const updated = daily.map((day) =>
+          day.day.toLowerCase() === refinedDay.day.toLowerCase()
+            ? {
+                day: refinedDay.day,
+                objective: refinedDay.objective,
+                content: refinedDay.content,
+                platforms: refinedDay.platforms,
+              }
+            : day
+        );
+        const found = daily.some((d) => d.day.toLowerCase() === refinedDay.day.toLowerCase());
         return {
           ...week,
-          daily: week.daily.map((day) =>
-            day.day.toLowerCase() === refinedDay.day.toLowerCase()
-              ? {
-                  day: refinedDay.day,
-                  objective: refinedDay.objective,
-                  content: refinedDay.content,
-                  platforms: refinedDay.platforms,
-                }
-              : day
-          ),
+          daily: found ? updated : [...updated, { day: refinedDay.day, objective: refinedDay.objective, content: refinedDay.content, platforms: refinedDay.platforms }],
         };
       }),
     };
@@ -1118,7 +1285,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
     return {
       weeks: plan.weeks.map((week) => ({
         ...week,
-        daily: week.daily.map((day) =>
+        daily: (week.daily || []).map((day) =>
           day.day.toLowerCase() === targetDay
             ? {
                 ...day,
@@ -1131,6 +1298,80 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
         ),
       })),
     };
+  };
+
+  /** Renders platform + content breakdown for full visibility: e.g. "Facebook: 2 posts, 1 story" */
+  const renderWeekPlatformContent = (week: StructuredWeek) => {
+    const breakdown = week.platform_content_breakdown;
+    if (breakdown && Object.keys(breakdown).length > 0) {
+      return (
+        <div className="space-y-1">
+          <div className="text-gray-500 font-medium">Platforms & content types:</div>
+          {(() => {
+            const platformAlloc = week.platform_allocation || {};
+            const platformKeys = [...new Set([...Object.keys(breakdown), ...Object.keys(platformAlloc)])];
+            return platformKeys.map((platform) => {
+              const directItems = breakdown[platform] || [];
+              const sharedFromOthers = Object.entries(breakdown).flatMap(([p, items]) =>
+                p === platform ? [] : items.filter((it) => (it.platforms || [p]).includes(platform))
+              );
+              const seen = new Set<string>();
+              const allItems = [...directItems, ...sharedFromOthers].filter((it) => {
+                const key = `${it.type}-${it.topics?.[0] ?? it.topic ?? ''}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              });
+              if (allItems.length === 0) return null;
+              return (
+                <div key={platform} className="border-l-2 border-indigo-100 pl-2">
+                  <span className="font-medium capitalize text-gray-700">{platform}:</span>
+                  <div className="mt-0.5 space-y-1 text-gray-600">
+                    {allItems.map((it, idx) => {
+                      const topics = it.topics || (it.topic ? [it.topic] : []);
+                      const label = it.count > 1 ? `${it.type} (${it.count})` : it.type;
+                      const shared = (it.platforms?.length ?? 0) > 1;
+                      return (
+                        <div key={idx} className="text-xs">
+                          <span className="font-medium">{label}</span>
+                          {shared && <span className="ml-1 text-indigo-600">(shared)</span>}
+                          {topics.length > 0 && (
+                            <ul className="list-decimal list-inside mt-0.5 ml-1">{topics.map((t, i) => <li key={i}>{t}</li>)}</ul>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            });
+          })()}
+        </div>
+      );
+    }
+    const platforms = week.platform_allocation ? Object.entries(week.platform_allocation) : [];
+    const contentTypes = week.content_type_mix || [];
+    if (platforms.length === 0 && contentTypes.length === 0) return <span className="text-gray-400">—</span>;
+    return (
+      <div className="space-y-1">
+        {platforms.length > 0 && (
+          <div>
+            <div className="text-gray-500 font-medium">Platforms (items per week):</div>
+            <div className="flex flex-wrap gap-1 mt-0.5">
+              {platforms.map(([p, n]) => (
+                <span key={p} className="bg-gray-100 px-2 py-0.5 rounded capitalize">{p}: {n}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {contentTypes.length > 0 && (
+          <div>
+            <div className="text-gray-500 font-medium">Content to create:</div>
+            <ul className="list-disc list-inside mt-0.5 text-gray-600">{contentTypes.map((c, i) => <li key={i}>{c}</li>)}</ul>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const renderStructuredPlan = (plan: StructuredPlan) => {
@@ -1148,13 +1389,13 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
             {isBlueprint ? (
               <div className="space-y-2 text-xs">
                 {week.primary_objective && <div className="text-gray-600">{week.primary_objective}</div>}
-                {week.platform_allocation && (
-                  <div className="flex flex-wrap gap-2">
-                    {Object.entries(week.platform_allocation).map(([p, n]) => (
-                      <span key={p} className="bg-gray-100 px-2 py-0.5 rounded">{p}: {n}</span>
-                    ))}
+                {(week.topics_to_cover?.length ?? 0) > 0 && (
+                  <div>
+                    <div className="text-gray-500 font-medium">Topics to cover:</div>
+                    <ul className="list-disc list-inside mt-0.5">{week.topics_to_cover!.map((t, i) => <li key={i}>{t}</li>)}</ul>
                   </div>
                 )}
+                {renderWeekPlatformContent(week)}
                 {week.cta_type && <div>CTA: {week.cta_type}</div>}
                 {week.weekly_kpi_focus && <div>KPI: {week.weekly_kpi_focus}</div>}
               </div>
@@ -1203,7 +1444,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
                     {Object.entries(day.platforms || {}).map(([platform, text]) => (
                       <div key={`${week.week}-${day.day}-${platform}`} className="bg-gray-50 rounded p-2">
                         <div className="text-xs font-semibold text-gray-700 capitalize">{platform}</div>
-                        <div className="text-xs text-gray-600 mt-1">{text}</div>
+                        <div className="text-xs text-gray-600 mt-1 whitespace-pre-wrap">{text}</div>
                       </div>
                     ))}
                   </div>
@@ -1243,8 +1484,14 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
 
       const data = await response.json();
       setUiSuccessMessage(
-        `Scheduled ${data.scheduled_count || 0} posts. Skipped ${data.skipped_count || 0}.`
+        `Scheduled ${data.scheduled_count || 0} posts. Skipped ${data.skipped_count || 0}. Use **View committed plan** above to open your plan.`
       );
+      // Refetch so "View committed plan" appears
+      const refetchRes = await fetch(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`);
+      if (refetchRes.ok) {
+        const refetchData = await refetchRes.json();
+        setRetrievePlanData(refetchData);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to schedule the plan. Please try again.';
       console.error('Error scheduling structured plan:', error);
@@ -1781,7 +2028,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
 
   const renderPlanSummary = (plan: StructuredPlan) => {
     const weekCount = plan.weeks.length;
-    const dayCount = plan.weeks.reduce((sum, week) => sum + week.daily.length, 0);
+    const dayCount = plan.weeks.reduce((sum, week) => sum + (week.daily?.length ?? 0), 0);
     return `${weekCount} weeks • ${dayCount} days`;
   };
 
@@ -1970,6 +2217,50 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
           {uiSuccessMessage && (
             <div className="bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg p-3">
               {uiSuccessMessage}
+            </div>
+          )}
+
+          {/* Load saved or committed plan (with edit) - prominent when committed plan exists */}
+          {activeTab === 'chat' && (retrievePlanData?.savedPlan || retrievePlanData?.committedPlan || retrievePlanData?.draftPlan) && (
+            <div className={`rounded-lg p-3 flex flex-wrap items-center gap-2 ${retrievePlanData?.committedPlan ? 'bg-emerald-50 border-2 border-emerald-300' : 'bg-indigo-50 border border-indigo-200'}`}>
+              {isRetrievePlanLoading ? (
+                <span className="text-sm text-indigo-700">Checking for existing plans…</span>
+              ) : (
+                <>
+                  <span className="text-sm font-medium text-indigo-900">
+                    {retrievePlanData?.committedPlan ? 'Your committed plan:' : 'Existing plans:'}
+                  </span>
+                  {retrievePlanData?.savedPlan && (
+                    <button
+                      onClick={loadSavedPlanAndEdit}
+                      disabled={isParsingSavedPlan}
+                      className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {isParsingSavedPlan ? 'Loading…' : 'Load saved plan (Edit)'}
+                    </button>
+                  )}
+                  {retrievePlanData?.committedPlan && (
+                    <>
+                      <button
+                        onClick={() => {
+                          const params = new URLSearchParams({ campaignId: campaignId! });
+                          if (resolvedCompanyId) params.set('companyId', resolvedCompanyId);
+                          window.location.href = `/campaign-planning-hierarchical?${params.toString()}`;
+                        }}
+                        className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
+                      >
+                        View committed plan
+                      </button>
+                      <button
+                        onClick={loadCommittedPlanAndEdit}
+                        className="px-3 py-1.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700"
+                      >
+                        Load committed plan (Edit)
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
             </div>
           )}
 
@@ -2545,110 +2836,90 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Plan Preview Modal */}
-        {/* 12-Week Plan Overview — spread across weeks with platform, content type, AI button */}
+        {/* Plan Review — Split: Week cards left, AI chat right. Refine via chat, then Commit. */}
         {showPlanOverview && structuredPlan && (
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] mx-4 flex flex-col">
-              <div className="bg-gradient-to-r from-purple-500 to-violet-600 text-white p-4 rounded-t-2xl flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold">12-Week Plan Overview</h3>
-                  <p className="text-purple-100 text-sm">Platform, content type, and content to create per week</p>
-                </div>
-                <button
-                  onClick={() => setShowPlanOverview(false)}
-                  className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-              
-              <div className="flex-1 overflow-y-auto p-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          <div className="absolute inset-0 bg-white z-40 flex flex-col">
+            <div className="bg-gradient-to-r from-purple-500 to-violet-600 text-white p-3 flex items-center justify-between shrink-0">
+              <h3 className="text-lg font-bold">Review & Refine Plan</h3>
+              <p className="text-purple-100 text-sm hidden sm:inline">Make changes through chat on the right, then Commit</p>
+              <button onClick={() => setShowPlanOverview(false)} className="p-2 hover:bg-white/20 rounded-lg">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="flex-1 flex min-h-0">
+              {/* Left: Week cards */}
+              <div className="w-[45%] min-w-[280px] overflow-y-auto p-4 border-r border-gray-200 bg-gray-50">
+                <div className="grid grid-cols-1 gap-3">
                   {structuredPlan.weeks.map((week) => {
                     const themeLabel = week.theme || week.phase_label || `Week ${week.week}`;
-                    const platforms = week.platform_allocation
-                      ? Object.entries(week.platform_allocation).map(([p, n]) => ({ name: p, count: n }))
-                      : [];
-                    const contentTypes = week.content_type_mix || [];
                     const hasDaily = week.daily && week.daily.length > 0;
                     return (
-                      <div
-                        key={week.week}
-                        className="border border-gray-200 rounded-xl p-4 bg-white shadow-sm hover:shadow-md transition-shadow"
-                      >
-                        <div className="flex items-center justify-between mb-3">
+                      <div key={week.week} className="border border-gray-200 rounded-xl p-4 bg-white shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-2">
                           <span className="font-semibold text-gray-900">Week {week.week}</span>
                           <button
-                            onClick={() => requestDailyPlanForWeek(week.week)}
+                            onClick={() => { setNewMessage(`Generate the daily plan for Week ${week.week}.`); setTimeout(() => inputRef.current?.focus(), 100); }}
                             disabled={isBusy}
-                            className="flex items-center gap-1 px-2 py-1 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 disabled:opacity-50 transition-colors"
-                            title="Generate daily plan for this week"
+                            className="flex items-center gap-1 px-2 py-1 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 disabled:opacity-50"
+                            title="Generate daily plan"
                           >
                             <Sparkles className="h-3 w-3" />
                             AI daily
                           </button>
                         </div>
-                        <div className="text-xs text-gray-600 mb-2 font-medium">{themeLabel}</div>
-                        
-                        <div className="space-y-2 text-xs">
-                          <div>
-                            <div className="text-gray-500 uppercase tracking-wide mb-1">Platforms</div>
-                            <div className="flex flex-wrap gap-1">
-                              {platforms.length > 0 ? platforms.map(({ name, count }) => (
-                                <span key={name} className="bg-gray-100 px-1.5 py-0.5 rounded capitalize">{name}: {count}</span>
-                              )) : <span className="text-gray-400">—</span>}
-                            </div>
+                        <div className="text-xs text-gray-600 font-medium mb-1">{themeLabel}</div>
+                        {week.primary_objective && <div className="text-xs text-gray-600 mb-1">{week.primary_objective}</div>}
+                        {(week.topics_to_cover?.length ?? 0) > 0 && (
+                          <div className="mb-2">
+                            <div className="text-gray-500 font-medium text-xs">Topics to cover:</div>
+                            <ul className="list-disc list-inside text-xs text-gray-700">{week.topics_to_cover!.map((t, i) => <li key={i}>{t}</li>)}</ul>
                           </div>
-                          <div>
-                            <div className="text-gray-500 uppercase tracking-wide mb-1">Content to create</div>
-                            <ul className="list-disc list-inside text-gray-700 space-y-0.5">
-                              {contentTypes.length > 0 ? contentTypes.map((ct, i) => (
-                                <li key={i}>{ct}</li>
-                              )) : <span className="text-gray-400">—</span>}
-                            </ul>
-                          </div>
-                          <div>
-                            <div className="text-gray-500 uppercase tracking-wide mb-1">Available</div>
-                            <span className="text-gray-500 italic">(from your content allocation)</span>
-                          </div>
-                          {hasDaily && (
-                            <div className="pt-2 border-t border-gray-100">
-                              <div className="text-gray-500 uppercase tracking-wide mb-1">Daily plan</div>
-                              <span className="text-green-600">✓ {week.daily!.length} days defined</span>
-                            </div>
-                          )}
+                        )}
+                        <div className="text-xs space-y-1 mb-1">
+                          {renderWeekPlatformContent(week)}
+                          {week.cta_type && <div className="text-gray-500">CTA: {week.cta_type} • KPI: {week.weekly_kpi_focus || '—'}</div>}
+                          {hasDaily && <span className="text-green-600">✓ {week.daily!.length} days</span>}
                         </div>
                       </div>
                     );
                   })}
                 </div>
               </div>
-              
-              <div className="border-t border-gray-200 p-4 bg-gray-50 rounded-b-2xl">
-                <div className="flex justify-between items-center">
-                  <button
-                    onClick={() => setShowPlanOverview(false)}
-                    className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
-                  >
-                    Close
+              {/* Right: Chat */}
+              <div className="flex-1 flex flex-col min-h-0 bg-white">
+                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  <div className="text-sm text-gray-500 bg-gray-50 rounded-lg p-3">Edit via natural language, e.g. &quot;Week 1 Facebook topic: Professional neglecting personal lives&quot;, &quot;Same post on Facebook and LinkedIn&quot;, &quot;Week 3 LinkedIn: 2 posts, 1 article&quot;</div>
+                  {messages.map((m) => (
+                    <div key={m.id} className={`flex ${m.type === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[85%] px-3 py-2 rounded-lg text-sm ${m.type === 'user' ? 'bg-indigo-500 text-white' : 'bg-gray-100 text-gray-900'}`}>
+                        {m.type === 'ai' && structuredPlan && structuredPlanMessageId === m.id ? renderStructuredPlan(structuredPlan) : <div className="whitespace-pre-wrap">{m.message}</div>}
+                      </div>
+                    </div>
+                  ))}
+                  {isTyping && <div className="flex justify-start"><div className="bg-gray-100 px-3 py-2 rounded-lg text-sm text-gray-600">Thinking…</div></div>}
+                  <div ref={messagesEndRef} />
+                </div>
+                <div className="p-4 border-t flex gap-2 shrink-0">
+                  <input
+                    key={inputClearKey}
+                    ref={(el) => { inputRef.current = el; }}
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    placeholder="e.g. Week 1 Facebook topic: Professional neglecting personal lives. Week 3 LinkedIn: 2 posts, 1 article."
+                    className="flex-1 px-3 py-2 border rounded-lg text-sm"
+                    disabled={isBusy}
+                  />
+                  <button onClick={sendMessage} disabled={!newMessage.trim() || isBusy} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
+                    {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send'}
                   </button>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => commitPlan()}
-                      className="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:from-blue-600 hover:to-indigo-700 transition-all duration-200 font-medium"
-                    >
-                      Commit This Plan
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowPlanOverview(false);
-                        saveAIContentForPlan(serializeStructuredPlanToText(structuredPlan));
-                      }}
-                      className="px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all duration-200 font-medium"
-                    >
-                      Save for Later
-                    </button>
+                </div>
+                <div className="px-4 pb-4 flex justify-between items-center gap-3">
+                  <button onClick={() => setShowPlanOverview(false)} className="text-gray-600 hover:text-gray-800 text-sm">Close</button>
+                  <div className="flex gap-2">
+                    <button onClick={() => { setShowPlanOverview(false); saveAIContentForPlan(serializeStructuredPlanToText(structuredPlan), structuredPlan); }} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg text-sm font-medium">Save for Later</button>
+                    <button onClick={() => commitPlan()} className="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg font-medium">Commit This Plan</button>
                   </div>
                 </div>
               </div>
@@ -2714,29 +2985,42 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
           </div>
         )}
 
-        {/* Date Selection Modal */}
+        {/* Commit Plan: Start Date & Duration */}
         {showDateSelection && (
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
             <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4">
               <div className="text-center mb-6">
-                <h3 className="text-xl font-bold text-gray-900 mb-2">Select Start Date</h3>
-                <p className="text-gray-600">Choose when your campaign should begin</p>
+                <h3 className="text-xl font-bold text-gray-900 mb-2">Commit Plan</h3>
+                <p className="text-gray-600">Confirm start date and number of weeks</p>
               </div>
               
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Campaign Start Date
+                    Start Date
                   </label>
                   <input
                     type="date"
+                    value={commitStartDate}
                     min={new Date().toISOString().split('T')[0]}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    onChange={(e) => setCommitStartDate(e.target.value || new Date().toISOString().split('T')[0])}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Number of Weeks
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={52}
+                    value={commitDurationWeeks}
                     onChange={(e) => {
-                      if (e.target.value) {
-                        create12WeekPlan(e.target.value);
-                      }
+                      const v = parseInt(e.target.value, 10);
+                      if (!isNaN(v) && v >= 1 && v <= 52) setCommitDurationWeeks(v);
                     }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </div>
                 
@@ -2748,11 +3032,11 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
                     Cancel
                   </button>
                   <button
-                    onClick={() => create12WeekPlan(new Date().toISOString().split('T')[0])}
-                    disabled={isLoading}
+                    onClick={() => create12WeekPlan(commitStartDate || new Date().toISOString().split('T')[0], commitDurationWeeks)}
+                    disabled={isLoading || !commitStartDate}
                     className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
                   >
-                    {isLoading ? 'Creating...' : 'Start Today'}
+                    {isLoading ? 'Creating...' : `Commit ${commitDurationWeeks}-Week Plan`}
                   </button>
                 </div>
               </div>
@@ -2865,7 +3149,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
                   Commit Plan
                 </button>
                 <button
-                  onClick={() => saveAIContentForPlan(lastPlanMessage.message)}
+                  onClick={() => saveAIContentForPlan(lastPlanMessage?.message ?? '', structuredPlan ?? undefined)}
                   disabled={isBusy}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium transition-colors disabled:opacity-50"
                   title="Save chat for campaign planning (draft/edit)"
@@ -2881,6 +3165,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
           
           <div className="flex items-center gap-2">
             <input
+              key={inputClearKey}
               ref={(el) => { inputRef.current = el; }}
               type="text"
               value={newMessage}

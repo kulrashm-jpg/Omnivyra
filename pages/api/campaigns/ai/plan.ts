@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runCampaignAiPlan, CampaignAiMode } from '../../../../backend/services/campaignAiOrchestrator';
 import { saveAiCampaignPlan } from '../../../../backend/db/campaignPlanStore';
+import { validateAndModerateUserMessage } from '../../../../backend/chatGovernance';
 
 const MODES: CampaignAiMode[] = ['generate_plan', 'refine_day', 'platform_customize'];
 
@@ -10,7 +11,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { campaignId, mode, message, durationWeeks, targetDay, platforms, messages: conversationHistory, recommendationContext, optimizationContext } = req.body || {};
+    const { campaignId, mode, message, durationWeeks, targetDay, platforms, messages: conversationHistory, recommendationContext, optimizationContext, currentPlan } = req.body || {};
 
     if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'campaignId is required' });
@@ -22,6 +23,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'message is required' });
     }
 
+    const policyResult = await validateAndModerateUserMessage(message, {
+      chatContext: 'campaign_planning',
+    });
+    if (!policyResult.allowed) {
+      const preview = String(message).slice(0, 80) + (message.length > 80 ? '...' : '');
+      console.warn('[plan] Chat moderation rejected. Message:', JSON.stringify(preview), 'Reason:', policyResult.reason, 'Code:', policyResult.code);
+      return res.status(400).json({
+        error: 'Your message couldn\'t be processed. Please rephrase and try again.',
+      });
+    }
+
     const result = await runCampaignAiPlan({
       campaignId,
       mode,
@@ -31,10 +43,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       platforms: Array.isArray(platforms) ? platforms : undefined,
       conversationHistory: Array.isArray(conversationHistory) ? conversationHistory : undefined,
       recommendationContext: recommendationContext && typeof recommendationContext === 'object' ? recommendationContext : undefined,
-      optimizationContext:
+        optimizationContext:
         optimizationContext && typeof optimizationContext === 'object' && Array.isArray(optimizationContext.headlines)
           ? { roiScore: Number(optimizationContext.roiScore) || 50, headlines: optimizationContext.headlines }
           : undefined,
+      currentPlan: currentPlan && typeof currentPlan === 'object' ? currentPlan : undefined,
+      prefilledPlanning: reqPrefilled && typeof reqPrefilled === 'object' ? reqPrefilled : undefined,
     });
 
     if (typeof saveAiCampaignPlan === 'function') {

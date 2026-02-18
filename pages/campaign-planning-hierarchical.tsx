@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import Head from 'next/head';
+import { supabase } from '../utils/supabaseClient';
 import { 
   ArrowLeft, 
   Calendar, 
@@ -28,6 +30,9 @@ import {
   Trash2,
   MoreHorizontal
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
+
+const CampaignAIChat = dynamic(() => import('../components/CampaignAIChat'), { ssr: false });
 
 interface Campaign {
   id: string;
@@ -36,6 +41,7 @@ interface Campaign {
   userId: string;
   createdAt: string;
   progress: number;
+  company_id?: string;
 }
 
 interface WeekPlan {
@@ -60,6 +66,7 @@ interface WeekPlan {
 interface CampaignOverview {
   totalWeeks: number;
   completedWeeks: number;
+  progressPercentage?: number;
   campaigns: Campaign[];
   plans: WeekPlan[];
 }
@@ -78,6 +85,53 @@ export default function CampaignPlanningHierarchical() {
   const [selectedWeekForAI, setSelectedWeekForAI] = useState<number | null>(null);
   const [showDailyPlanCreation, setShowDailyPlanCreation] = useState(false);
   const [selectedWeekForDaily, setSelectedWeekForDaily] = useState<number | null>(null);
+  const [isExpanding, setIsExpanding] = useState(false);
+  const [showAIChat, setShowAIChat] = useState(false);
+
+  // Prefer overview.plans (committed blueprint) — it has full platform_content_breakdown, topics_to_cover.
+  // Fall back to weeklyPlans only when overview has no plans.
+  const displayPlans = React.useMemo(() => {
+    const fromOverview = overview?.plans ?? [];
+    const fromWeekly = weeklyPlans ?? [];
+    const source = fromOverview.length > 0 ? fromOverview : fromWeekly;
+    return source.map((p: any) => {
+      const weekNum = p.week ?? p.weekNumber ?? 0;
+      return {
+        ...p,
+        week: weekNum,
+        weekNumber: weekNum,
+        id: p.id ?? `week-${weekNum}`,
+        theme: p.theme ?? `Week ${weekNum}`,
+        focusArea: p.contentFocus ?? p.focusArea ?? '',
+        contentFocus: p.contentFocus ?? p.focusArea ?? '',
+        status: p.status ?? 'pending',
+        aiContent: p.aiContent,
+        aiSuggestions: p.aiSuggestions ?? p.topics_to_cover ?? [],
+        dailyContent: p.dailyContent,
+        keyMessaging: p.keyMessaging,
+        contentTypes: p.contentTypes ?? p.content_type_mix ?? [],
+        platforms: p.platforms ?? (p.platform_allocation ? Object.keys(p.platform_allocation) : []) ?? [],
+        refinementData: p.refinementData ?? p,
+        platform_content_breakdown: p.platform_content_breakdown ?? {},
+        platform_allocation: p.platform_allocation ?? {},
+        topics_to_cover: p.topics_to_cover ?? p.aiSuggestions ?? [],
+        targetAudience: p.targetAudience,
+        week_extras: p.week_extras ?? {},
+      };
+    });
+  }, [weeklyPlans, overview?.plans]);
+
+  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  };
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -93,13 +147,51 @@ export default function CampaignPlanningHierarchical() {
   const fetchCampaignOverview = async (id: string) => {
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/campaigns/hierarchical-navigation?campaignId=${id}&action=get-overview`);
+      const response = await fetchWithAuth(`/api/campaigns/hierarchical-navigation?campaignId=${id}&action=get-overview`);
       if (response.ok) {
         const data = await response.json();
-
         setOverview(data.overview);
       } else {
-        console.error('Failed to fetch campaign overview');
+        // Fallback: committed plan may exist in blueprint even if campaign metadata lookup failed
+        const plansRes = await fetchWithAuth(`/api/campaigns/get-weekly-plans?campaignId=${id}`);
+        if (plansRes.ok) {
+          const weeks = await plansRes.json();
+          if (Array.isArray(weeks) && weeks.length > 0) {
+            const SCORE_SKELETON = 15;
+            const SCORE_CONTENT_PLAN = 50;
+            const getWeekScore = (p: any): number => {
+              const hasTopics = Array.isArray(p.topics_to_cover) && p.topics_to_cover.length > 0;
+              const hasBreakdown = p.platform_content_breakdown && typeof p.platform_content_breakdown === 'object'
+                && Object.values(p.platform_content_breakdown).some((arr: any) => Array.isArray(arr) && arr.length > 0);
+              const hasPlatforms = p.platform_allocation && typeof p.platform_allocation === 'object'
+                && Object.keys(p.platform_allocation).length > 0;
+              return ((hasTopics || hasBreakdown) && hasPlatforms) ? SCORE_CONTENT_PLAN : SCORE_SKELETON;
+            };
+            const plans = weeks.map((w: any) => ({
+              id: `week-${w.weekNumber}`,
+              week: w.weekNumber,
+              weekNumber: w.weekNumber,
+              status: 'ai-enhanced',
+              theme: w.theme || `Week ${w.weekNumber}`,
+              contentFocus: w.focusArea || w.theme,
+              platform_allocation: w.platform_allocation ?? {},
+              platform_content_breakdown: w.platform_content_breakdown ?? {},
+              topics_to_cover: w.topics_to_cover ?? [],
+              contentTypes: w.contentTypes ?? [],
+              aiSuggestions: w.topics_to_cover ?? [],
+            }));
+            const totalScore = plans.reduce((sum: number, p: any) => sum + getWeekScore(p), 0);
+            const progressPercentage = Math.min(100, Math.round((totalScore / (plans.length * 100)) * 100));
+            const completedWeeks = plans.filter((p: any) => getWeekScore(p) >= SCORE_CONTENT_PLAN).length;
+            setOverview({
+              totalWeeks: plans.length,
+              completedWeeks,
+              progressPercentage,
+              campaigns: [{ id, name: 'Your Campaign', status: 'planning', progress: progressPercentage, userId: '', createdAt: '', description: '' }],
+              plans,
+            });
+          }
+        }
       }
     } catch (error) {
       console.error('Error fetching campaign overview:', error);
@@ -110,7 +202,7 @@ export default function CampaignPlanningHierarchical() {
 
   const fetchWeeklyPlans = async (campaignId: string) => {
     try {
-      const response = await fetch(`/api/campaigns/get-weekly-plans?campaignId=${campaignId}`);
+      const response = await fetchWithAuth(`/api/campaigns/get-weekly-plans?campaignId=${campaignId}`);
       if (response.ok) {
         const data = await response.json();
         console.log('Weekly plans loaded:', data);
@@ -141,6 +233,26 @@ export default function CampaignPlanningHierarchical() {
       default: return 'bg-gray-100 text-gray-800 border-gray-200';
     }
   };
+  const getStageColor = (stage: string) => {
+    const m: Record<string, string> = {
+      planning: 'bg-blue-100 text-blue-800',
+      twelve_week_plan: 'bg-indigo-100 text-indigo-800',
+      daily_plan: 'bg-amber-100 text-amber-800',
+      charting: 'bg-teal-100 text-teal-800',
+      schedule: 'bg-green-100 text-green-800',
+    };
+    return m[stage] ?? 'bg-gray-100 text-gray-800';
+  };
+  const getStageLabel = (stage: string) => {
+    const labels: Record<string, string> = {
+      planning: 'Planning',
+      twelve_week_plan: '12 Week Plan',
+      daily_plan: 'Daily Plan',
+      charting: 'Charting',
+      schedule: 'Schedule',
+    };
+    return labels[stage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
+  };
 
   const getWeekIcon = (week: number) => {
     const icons = [
@@ -161,6 +273,25 @@ export default function CampaignPlanningHierarchical() {
     }
   };
 
+  const handleExpandToWeekPlans = async () => {
+    if (!campaignId) return;
+    setIsExpanding(true);
+    try {
+      const res = await fetchWithAuth(`/api/campaigns/${campaignId}/expand-to-week-plans`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        fetchWeeklyPlans(campaignId);
+        fetchCampaignOverview(campaignId);
+      } else {
+        alert(data.hint || data.error || 'Could not expand. Create a 12-week plan first.');
+      }
+    } catch {
+      alert('Failed to expand to week plans.');
+    } finally {
+      setIsExpanding(false);
+    }
+  };
+
   const handleAIEnhanceWeek = async (weekPlan: WeekPlan) => {
     try {
       // Generate detailed daily structure for this week
@@ -172,7 +303,7 @@ export default function CampaignPlanningHierarchical() {
         campaignId: campaignId
       };
 
-      const response = await fetch('/api/campaigns/generate-weekly-structure', {
+      const response = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
@@ -237,7 +368,7 @@ export default function CampaignPlanningHierarchical() {
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading 12-week campaign plan...</p>
+          <p className="text-gray-600">Loading campaign plan...</p>
         </div>
       </div>
     );
@@ -263,34 +394,48 @@ export default function CampaignPlanningHierarchical() {
   const campaign = overview.campaigns[0];
 
   return (
+    <>
+      <Head>
+        <title>{overview.totalWeeks}-Week Campaign Plan{campaign?.name ? ` – ${campaign.name}` : ''}</title>
+      </Head>
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <div className="flex items-center gap-4">
             <button 
-              onClick={() => window.location.href = '/campaigns'}
+              onClick={() => window.location.href = `/campaign-details/${campaignId}`}
               className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
             >
               <ArrowLeft className="w-5 h-5" />
-              Back to Campaigns
+              Back to Campaign
             </button>
             
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">12-Week Campaign Plan</h1>
+              <h1 className="text-2xl font-bold text-gray-900">{overview.totalWeeks}-Week Campaign Plan</h1>
               <p className="text-gray-600">Campaign: {campaign?.name}</p>
               <div className="flex items-center gap-4 mt-2">
-                <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(campaign?.status || 'planning')}`}>
-                  {campaign?.status || 'Planning'}
+                <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStageColor(campaign?.current_stage || campaign?.status || 'planning')}`}>
+                  {getStageLabel(campaign?.current_stage || campaign?.status || 'planning')}
                 </span>
                 <span className="text-sm text-gray-500">
-                  {overview.completedWeeks} of {overview.totalWeeks} weeks completed
+                  {overview.completedWeeks} of {overview.totalWeeks} weeks with content plan
                 </span>
               </div>
             </div>
           </div>
           
-          <div className="flex gap-4">
+          <div className="flex gap-4 flex-wrap">
+            {(weeklyPlans?.length ?? 0) === 0 && (
+              <button 
+                onClick={handleExpandToWeekPlans}
+                disabled={isExpanding}
+                className="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 disabled:opacity-50"
+              >
+                <Sparkles className="w-4 h-4" />
+                {isExpanding ? 'Expanding…' : 'Expand to Week Plans'}
+              </button>
+            )}
             <button 
               onClick={handleCreateNewPlan}
               className="bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center gap-2"
@@ -299,9 +444,12 @@ export default function CampaignPlanningHierarchical() {
               Add Week Plan
             </button>
             
-            <button className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center gap-2">
+            <button
+              onClick={() => setShowAIChat(true)}
+              className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center gap-2"
+            >
               <Sparkles className="w-4 h-4" />
-              AI Assistant
+              AI Assistant (refine plan)
             </button>
           </div>
         </div>
@@ -311,14 +459,14 @@ export default function CampaignPlanningHierarchical() {
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-lg font-semibold text-gray-900">Campaign Progress</h2>
             <div className="text-sm text-gray-600">
-              {Math.round((overview.completedWeeks / overview.totalWeeks) * 100)}% Complete
+              {overview.progressPercentage ?? Math.round((overview.completedWeeks / overview.totalWeeks) * 100)}% Complete
             </div>
           </div>
           
           <div className="w-full bg-gray-200 rounded-full h-3 mb-4">
             <div 
               className="bg-gradient-to-r from-purple-500 to-violet-600 h-3 rounded-full transition-all duration-300"
-              style={{ width: `${(overview.completedWeeks / overview.totalWeeks) * 100}%` }}
+              style={{ width: `${overview.progressPercentage ?? (overview.completedWeeks / overview.totalWeeks) * 100}%` }}
             />
           </div>
           
@@ -329,15 +477,15 @@ export default function CampaignPlanningHierarchical() {
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-green-600">{overview.completedWeeks}</div>
-              <div className="text-sm text-gray-600">Completed</div>
+              <div className="text-sm text-gray-600">Content Plan Ready</div>
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-yellow-600">{overview.plans.length - overview.completedWeeks}</div>
-              <div className="text-sm text-gray-600">Pending</div>
+              <div className="text-sm text-gray-600">Skeleton Only</div>
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-blue-600">{overview.plans.length}</div>
-              <div className="text-sm text-gray-600">Plans Created</div>
+              <div className="text-sm text-gray-600">Weeks Planned</div>
             </div>
           </div>
         </div>
@@ -345,7 +493,7 @@ export default function CampaignPlanningHierarchical() {
         {/* 12-Week Grid */}
         <div className="mb-8">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-semibold text-gray-900">12-Week Content Plan</h2>
+            <h2 className="text-xl font-semibold text-gray-900">{overview.totalWeeks}-Week Content Plan</h2>
             
             <div className="flex gap-2">
               <select 
@@ -361,7 +509,7 @@ export default function CampaignPlanningHierarchical() {
             </div>
           </div>
 
-          {weeklyPlans.length === 0 ? (
+          {displayPlans.length === 0 ? (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
               <Calendar className="w-16 h-16 text-gray-300 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-gray-900 mb-2">No Weekly Plans Created</h3>
@@ -376,9 +524,9 @@ export default function CampaignPlanningHierarchical() {
             </div>
           ) : (
             <div className="space-y-4">
-              {Array.from({ length: (overview?.totalWeeks ?? weeklyPlans.length) || 12 }, (_, index) => {
+              {Array.from({ length: (overview?.totalWeeks ?? displayPlans.length) || 12 }, (_, index) => {
                 const weekNumber = index + 1;
-                const plan = weeklyPlans.find(p => p.weekNumber === weekNumber);
+                const plan = displayPlans.find((p: any) => (p.weekNumber ?? p.week) === weekNumber);
                 const isSelected = selectedWeek?.week === weekNumber;
                 
                 return (
@@ -510,6 +658,100 @@ export default function CampaignPlanningHierarchical() {
                     {isSelected && selectedWeek && (
                       <div className="border-t border-gray-100">
                         <div className="p-4">
+                          {/* Week context from committed plan: platforms, content types, topics */}
+                          {(selectedWeek.platform_allocation && Object.keys(selectedWeek.platform_allocation).length > 0) ||
+                           (selectedWeek.platform_content_breakdown && Object.keys(selectedWeek.platform_content_breakdown).length > 0) ||
+                           (selectedWeek.topics_to_cover && selectedWeek.topics_to_cover.length > 0) ? (
+                            <div className="mb-4 p-4 rounded-lg bg-indigo-50/80 border border-indigo-100">
+                              <h4 className="text-sm font-semibold text-indigo-900 mb-3">Week context (from committed plan)</h4>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                                {selectedWeek.platform_allocation && Object.keys(selectedWeek.platform_allocation).length > 0 && (
+                                  <div>
+                                    <span className="font-medium text-gray-700">Platforms & volume:</span>
+                                    <div className="flex flex-wrap gap-2 mt-1">
+                                      {Object.entries(selectedWeek.platform_allocation).map(([platform, count]) => (
+                                        <span key={platform} className="px-2 py-0.5 bg-white rounded text-gray-800 border">
+                                          {platform}: {count} posts
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {selectedWeek.platform_content_breakdown && Object.keys(selectedWeek.platform_content_breakdown).length > 0 && (
+                                  <div>
+                                    <span className="font-medium text-gray-700">Per-platform content:</span>
+                                    <div className="mt-1 space-y-1">
+                                      {Object.entries(selectedWeek.platform_content_breakdown).map(([platform, items]: [string, any]) => (
+                                        <div key={platform} className="text-xs">
+                                          <span className="font-medium capitalize">{platform}:</span>{' '}
+                                          {(Array.isArray(items) ? items : []).map((it: any) =>
+                                            `${it.type || 'post'}${it.count > 1 ? ` ×${it.count}` : ''}${it.topic ? ` (${it.topic})` : ''}`
+                                          ).join(', ')}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {selectedWeek.contentTypes && selectedWeek.contentTypes.length > 0 && (
+                                  <div>
+                                    <span className="font-medium text-gray-700">Content types:</span>
+                                    <div className="flex flex-wrap gap-1 mt-1">
+                                      {selectedWeek.contentTypes.map((ct: string) => (
+                                        <span key={ct} className="px-2 py-0.5 bg-white rounded text-gray-700 border text-xs">
+                                          {ct}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {selectedWeek.topics_to_cover && selectedWeek.topics_to_cover.length > 0 && (
+                                  <div>
+                                    <span className="font-medium text-gray-700">Topics to cover:</span>
+                                    <ul className="mt-1 list-disc list-inside text-gray-600 text-xs">
+                                      {selectedWeek.topics_to_cover.slice(0, 6).map((t: string, i: number) => (
+                                        <li key={i}>{t}</li>
+                                      ))}
+                                      {selectedWeek.topics_to_cover.length > 6 && (
+                                        <li className="text-gray-500">+{selectedWeek.topics_to_cover.length - 6} more</li>
+                                      )}
+                                    </ul>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ) : null}
+                          {/* Dynamic week extras: summary, objectives, days_to_post, etc. */}
+                          {selectedWeek.week_extras && typeof selectedWeek.week_extras === 'object' && Object.keys(selectedWeek.week_extras).length > 0 && (
+                            <div className="mb-4 p-4 rounded-lg bg-amber-50/80 border border-amber-100">
+                              <h4 className="text-sm font-semibold text-amber-900 mb-3">Week extras (AI-enriched)</h4>
+                              <div className="space-y-3 text-sm">
+                                {Object.entries(selectedWeek.week_extras).map(([key, val]) => {
+                                  const label = key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+                                  const display = Array.isArray(val)
+                                    ? val.map((v: any) => (typeof v === 'object' ? JSON.stringify(v) : String(v))).join(', ')
+                                    : typeof val === 'object' && val !== null
+                                      ? JSON.stringify(val)
+                                      : String(val ?? '');
+                                  return (
+                                    <div key={key}>
+                                      <span className="font-medium text-gray-700">{label}:</span>
+                                      <p className="mt-0.5 text-gray-600 text-xs whitespace-pre-wrap">{display}</p>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          {/* Refine this week with AI chat */}
+                          <div className="mb-4 flex items-center gap-2">
+                            <button
+                              onClick={() => setShowAIChat(true)}
+                              className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors"
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                              Refine Week {weekNumber} with AI Chat
+                            </button>
+                          </div>
                           <h4 className="text-sm font-medium text-gray-700 mb-3">7-Day Content Plan</h4>
                           <div className="grid grid-cols-7 gap-2">
                             {Array.from({ length: 7 }, (_, dayIndex) => {
@@ -627,75 +869,101 @@ export default function CampaignPlanningHierarchical() {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-6">
-                  <div>
-                    <h3 className="text-lg font-medium text-gray-900 mb-3">Week Overview</h3>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-sm font-medium text-gray-700">Content Focus</label>
-                        <p className="text-gray-600">{selectedWeek.contentFocus}</p>
-                      </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-medium text-gray-900">Week Overview</h3>
+                    <div>
+                      <label className="text-sm font-medium text-gray-700">Content Focus</label>
+                      <p className="text-gray-600">{selectedWeek.contentFocus || selectedWeek.theme}</p>
+                    </div>
+                    {selectedWeek.targetAudience && (
                       <div>
                         <label className="text-sm font-medium text-gray-700">Target Audience</label>
                         <p className="text-gray-600">{selectedWeek.targetAudience}</p>
                       </div>
+                    )}
+                    {selectedWeek.keyMessaging && selectedWeek.keyMessaging !== 'AI-generated messaging' && (
                       <div>
                         <label className="text-sm font-medium text-gray-700">Key Messaging</label>
                         <p className="text-gray-600">{selectedWeek.keyMessaging}</p>
                       </div>
-                      {selectedWeek.platforms && (
-                        <div>
-                          <label className="text-sm font-medium text-gray-700">Platforms</label>
-                          <div className="flex flex-wrap gap-2 mt-1">
-                            {selectedWeek.platforms.map((platform: string, index: number) => (
-                              <span key={index} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
-                                {platform}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <h3 className="text-lg font-medium text-gray-900 mb-3">Content Plan</h3>
-                    <div className="space-y-2">
-                      {selectedWeek.contentTypes?.map((contentType: string, index: number) => (
-                        <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded">
-                          <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                          <span className="text-sm text-gray-700">{contentType}</span>
-                        </div>
-                      ))}
-                    </div>
-                    
-                    {/* AI Generated Content Preview */}
-                    {selectedWeek.aiContent && (Array.isArray(selectedWeek.aiContent) ? selectedWeek.aiContent.length > 0 : Object.keys(selectedWeek.aiContent).length > 0) && (
-                      <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                        <h4 className="text-sm font-medium text-blue-900 mb-2">AI Generated Content</h4>
-                        <div className="text-xs text-blue-800">
-                          {typeof selectedWeek.aiContent === 'string' 
-                            ? selectedWeek.aiContent.substring(0, 200) + '...'
-                            : Array.isArray(selectedWeek.aiContent)
-                            ? selectedWeek.aiContent.join(', ')
-                            : 'Content structure generated by AI'
-                          }
+                    )}
+                    {selectedWeek.topics_to_cover && selectedWeek.topics_to_cover.length > 0 && (
+                      <div>
+                        <label className="text-sm font-medium text-gray-700 mb-2 block">Topics to cover</label>
+                        <ul className="list-disc list-inside space-y-1 text-gray-700 text-sm">
+                          {selectedWeek.topics_to_cover.map((t: string, i: number) => (
+                            <li key={i}>{t}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {selectedWeek.platform_allocation && Object.keys(selectedWeek.platform_allocation).length > 0 && (
+                      <div>
+                        <label className="text-sm font-medium text-gray-700 mb-2 block">Platforms (items per week)</label>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(selectedWeek.platform_allocation).map(([platform, count]) => (
+                            <span key={platform} className="px-3 py-1 bg-indigo-100 text-indigo-800 rounded font-medium">
+                              {platform}: {count}
+                            </span>
+                          ))}
                         </div>
                       </div>
                     )}
-
-                    {/* AI Suggestions */}
-                    {selectedWeek.aiSuggestions && selectedWeek.aiSuggestions.length > 0 && (
-                      <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
-                        <h4 className="text-sm font-medium text-purple-900 mb-2">AI Suggestions</h4>
-                        <div className="space-y-1">
-                          {selectedWeek.aiSuggestions.map((suggestion: string, index: number) => (
-                            <div key={index} className="text-xs text-purple-800 flex items-center gap-2">
-                              <span className="w-1 h-1 bg-purple-500 rounded-full"></span>
-                              {suggestion}
-                            </div>
+                    {(!selectedWeek.platform_allocation || Object.keys(selectedWeek.platform_allocation).length === 0) && selectedWeek.platforms && selectedWeek.platforms.length > 0 && (
+                      <div>
+                        <label className="text-sm font-medium text-gray-700 mb-2 block">Platforms</label>
+                        <div className="flex flex-wrap gap-2">
+                          {selectedWeek.platforms.map((p: string, i: number) => (
+                            <span key={i} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">{p}</span>
                           ))}
                         </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-medium text-gray-900">Content Plan</h3>
+                    {selectedWeek.platform_content_breakdown && Object.keys(selectedWeek.platform_content_breakdown).length > 0 ? (
+                      <div className="space-y-3">
+                        <label className="text-sm font-medium text-gray-700 block">Content to create</label>
+                        {Object.entries(selectedWeek.platform_content_breakdown).map(([platform, items]: [string, any]) => (
+                          <div key={platform} className="p-3 bg-gray-50 rounded-lg">
+                            <span className="font-medium text-gray-800 capitalize">{platform}:</span>
+                            <ul className="mt-2 space-y-1 text-sm text-gray-700">
+                              {(Array.isArray(items) ? items : []).map((it: any, idx: number) => (
+                                <li key={idx} className="flex items-center gap-2">
+                                  <span className="w-2 h-2 bg-purple-500 rounded-full flex-shrink-0" />
+                                  {it.count} {it.type || 'post'}
+                                  {it.topic ? ` — ${it.topic}` : ''}
+                                  {it.topics?.length ? ` (${it.topics.join(', ')})` : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {selectedWeek.contentTypes?.map((ct: string, i: number) => (
+                          <div key={i} className="flex items-center gap-2 p-2 bg-gray-50 rounded">
+                            <span className="w-2 h-2 bg-purple-500 rounded-full" />
+                            <span className="text-sm text-gray-700">{ct}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {selectedWeek.aiSuggestions && selectedWeek.aiSuggestions.length > 0 && (
+                      <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                        <h4 className="text-sm font-medium text-purple-900 mb-2">Topics / suggestions</h4>
+                        <ul className="space-y-1 text-xs text-purple-800">
+                          {selectedWeek.aiSuggestions.map((s: string, i: number) => (
+                            <li key={i} className="flex items-center gap-2">
+                              <span className="w-1 h-1 bg-purple-500 rounded-full" />
+                              {s}
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
                     
@@ -819,11 +1087,11 @@ export default function CampaignPlanningHierarchical() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Current Week Plan</label>
                   <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                    {weeklyPlans.find(p => p.weekNumber === selectedWeekForAI) ? (
+                    {displayPlans.find((p: any) => (p.weekNumber ?? p.week) === selectedWeekForAI) ? (
                       <>
-                        <p><strong>Theme:</strong> {weeklyPlans.find(p => p.weekNumber === selectedWeekForAI)?.theme}</p>
-                        <p><strong>Focus:</strong> {weeklyPlans.find(p => p.weekNumber === selectedWeekForAI)?.focusArea}</p>
-                        <p><strong>Key Messaging:</strong> {weeklyPlans.find(p => p.weekNumber === selectedWeekForAI)?.keyMessaging}</p>
+                        <p><strong>Theme:</strong> {displayPlans.find((p: any) => (p.weekNumber ?? p.week) === selectedWeekForAI)?.theme}</p>
+                        <p><strong>Focus:</strong> {displayPlans.find((p: any) => (p.weekNumber ?? p.week) === selectedWeekForAI)?.focusArea}</p>
+                        <p><strong>Key Messaging:</strong> {displayPlans.find((p: any) => (p.weekNumber ?? p.week) === selectedWeekForAI)?.keyMessaging}</p>
                       </>
                     ) : (
                       <p className="text-gray-500">No plan data available</p>
@@ -874,18 +1142,54 @@ export default function CampaignPlanningHierarchical() {
               </div>
               
               <div className="space-y-6">
-                {/* Week Overview */}
+                {/* Week Overview — from committed plan */}
                 <div className="bg-gray-50 p-4 rounded-lg">
-                  <h4 className="font-medium mb-2">Week {selectedWeekForDaily} Overview</h4>
-                  {weeklyPlans.find(p => p.weekNumber === selectedWeekForDaily) ? (
-                    <>
-                      <p><strong>Theme:</strong> {weeklyPlans.find(p => p.weekNumber === selectedWeekForDaily)?.theme}</p>
-                      <p><strong>Focus:</strong> {weeklyPlans.find(p => p.weekNumber === selectedWeekForDaily)?.focusArea}</p>
-                      <p><strong>Content Types:</strong> {weeklyPlans.find(p => p.weekNumber === selectedWeekForDaily)?.contentTypes?.join(', ')}</p>
-                    </>
-                  ) : (
-                    <p className="text-gray-500">No plan data available</p>
-                  )}
+                  <h4 className="font-medium mb-2">Week {selectedWeekForDaily} Overview (from committed plan)</h4>
+                  {(() => {
+                    const plan = displayPlans.find((p: any) => (p.weekNumber ?? p.week) === selectedWeekForDaily);
+                    if (!plan) return <p className="text-gray-500">No plan data available</p>;
+                    return (
+                      <div className="space-y-2 text-sm">
+                        <p><strong>Theme:</strong> {plan.theme}</p>
+                        <p><strong>Focus:</strong> {plan.focusArea}</p>
+                        {plan.contentTypes?.length > 0 && (
+                          <p><strong>Content types:</strong> {plan.contentTypes.join(', ')}</p>
+                        )}
+                        {plan.platform_allocation && Object.keys(plan.platform_allocation).length > 0 && (
+                          <div>
+                            <strong>Platforms & volume:</strong>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {Object.entries(plan.platform_allocation).map(([p, c]) => (
+                                <span key={p} className="px-2 py-0.5 bg-indigo-100 rounded text-xs">{p}: {c} posts</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {plan.platform_content_breakdown && Object.keys(plan.platform_content_breakdown).length > 0 && (
+                          <div>
+                            <strong>Per-platform content:</strong>
+                            <div className="mt-1 space-y-1 text-xs">
+                              {Object.entries(plan.platform_content_breakdown).map(([platform, items]: [string, any]) => (
+                                <div key={platform}><span className="font-medium capitalize">{platform}:</span>{' '}
+                                  {(Array.isArray(items) ? items : []).map((it: any) =>
+                                    `${it.type || 'post'}${it.count > 1 ? ` ×${it.count}` : ''}${it.topic ? ` (${it.topic})` : ''}`
+                                  ).join(', ')}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {plan.topics_to_cover?.length > 0 && (
+                          <div>
+                            <strong>Topics to cover:</strong>
+                            <ul className="mt-1 list-disc list-inside text-xs">{plan.topics_to_cover.slice(0, 6).map((t: string, i: number) => (
+                              <li key={i}>{t}</li>
+                            ))}</ul>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Daily Planning Form */}
@@ -974,7 +1278,37 @@ export default function CampaignPlanningHierarchical() {
             </div>
           </div>
         )}
+
+        {/* AI Chat for refining plan / week content */}
+        {campaignId && campaign && (
+          <CampaignAIChat
+            isOpen={showAIChat}
+            onClose={() => setShowAIChat(false)}
+            onMinimize={() => setShowAIChat(false)}
+            context="12week-plan"
+            companyId={campaign.company_id}
+            campaignId={campaignId}
+            campaignData={{
+              id: campaignId,
+              name: campaign.name,
+              status: campaign.status,
+              company_id: campaign.company_id,
+              created_at: campaign.createdAt,
+              description: (campaign as { description?: string }).description,
+              duration_weeks: overview.totalWeeks,
+            }}
+            prefilledPlanning={{
+              campaign_duration: overview.totalWeeks,
+              ...(overview.plans?.length ? { existing_plan_weeks: overview.plans.length } : {}),
+            }}
+            initialPlan={overview.plans?.length ? { weeks: displayPlans.map((p: any) => {
+              const ref = p.refinementData ?? p;
+              return { week_number: p.week ?? ref.week_number, phase_label: p.theme ?? ref.phase_label, topics_to_cover: p.topics_to_cover ?? ref.topics_to_cover ?? [], platform_allocation: p.platform_allocation ?? ref.platform_allocation ?? {}, platform_content_breakdown: p.platform_content_breakdown ?? ref.platform_content_breakdown ?? {}, primary_objective: p.contentFocus ?? ref.primary_objective };
+            }) } : undefined}
+          />
+        )}
       </div>
     </div>
+    </>
   );
 }

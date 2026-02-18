@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { generateCampaignPlan } from './aiGateway';
+import { computeCampaignPlanningQAState } from '../chatGovernance';
 import { assessVirality } from './viralityAdvisorService';
 import { buildCampaignSnapshotWithHash, canonicalJsonStringify } from './viralitySnapshotBuilder';
 import { buildDecideRequest, requestDecision, DecisionResult } from './omnivyreClient';
@@ -41,6 +42,8 @@ export interface CampaignAiPlanInput {
   recommendationContext?: RecommendationContext | null;
   /** Stage 35: ROI + optimization headlines for AI context injection */
   optimizationContext?: OptimizationContext | null;
+  /** When refining an existing plan, pass the current plan so AI can apply changes */
+  currentPlan?: { weeks: any[] };
 }
 
 export interface CampaignAiPlanResult {
@@ -95,7 +98,7 @@ export interface CampaignAiPlanResult {
 const GATHER_ORDER = [
   { key: 'target_audience', question: 'Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)' },
   { key: 'available_content', question: 'Do you have any existing content for this campaign? (e.g., how many videos, blog posts, or carousel posts you already have that fit the topic)' },
-  { key: 'available_content_allocation', question: 'CONTINGENT: Only ask if they said they have content. For each piece (e.g., "I have this video and this blog")—which category/objective should it serve: brand awareness, network expansion, lead generation, authority positioning, engagement growth, or product promotion? And which specific week(s) in your plan should it fill? This assigns each piece to a placeholder for that week.' },
+  { key: 'available_content_allocation', question: 'CONTINGENT: Only ask if they said they have content. For each piece (e.g., "I have this video and this blog")—which category/objective should it serve: brand awareness, network expansion, lead generation, authority positioning, engagement growth, or product promotion? And which specific week(s) in your plan should it fill? This assigns each piece to a placeholder for that week.', contingentOn: 'available_content' },
   { key: 'tentative_start', question: 'When do you want to start the campaign? Please provide a date in YY-MM-DD format (e.g., 25-03-01).' },
   { key: 'campaign_types', question: 'Which campaign types matter most for you? Pick one or more: brand awareness, network expansion, lead generation, authority positioning, engagement growth, product promotion. Which is primary?' },
   { key: 'content_capacity', question: 'How much content can you produce per week, and how will you create it? For each format—blogs, videos, carousels, single posts, stories—how many per week? And is creation manual, AI-assisted, or full AI?' },
@@ -277,6 +280,8 @@ function buildPromptContext(input: {
   baselineContext?: BaselineContextResult;
   optimizationContext?: { roiScore: number; headlines: string[] } | null;
   prefilledPlanning?: Record<string, unknown> | null;
+  qaState?: { answeredKeys: string[]; userConfirmed: boolean; nextQuestion: { key: string; question: string } | null };
+  currentPlan?: { weeks: any[] };
 }): { system: string; user: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> } {
   const diagnosticsWithBaseline = { ...input.diagnostics };
   if (input.baselineContext && !('unavailable' in input.baselineContext)) {
@@ -330,8 +335,37 @@ ${Object.entries(input.prefilledPlanning)
 Start from the first required question that is NOT listed above. If most are filled, ask only the missing ones.`
       : '';
 
+  const refinePlanBlock = input.currentPlan?.weeks?.length
+    ? `
+REFINE PLAN MODE: The user is reviewing their campaign plan and wants to make changes via natural language. Here is the current plan:
+${JSON.stringify(input.currentPlan.weeks, null, 2)}
+
+The user's request: "${input.message}"
+
+Apply their changes. Accept natural-language edits like:
+- "Week 1 Facebook topic should be 'Professional neglecting personal lives'" → set topic for that platform
+- "Week 3 LinkedIn: 2 posts and 1 article" → update platform_content_breakdown for linkedin
+- "Change Week 5 theme to X" or "Add topic Y to Week 5"
+- "Week 2 Instagram: 1 reel, 2 stories" → explicit platform+content breakdown
+- "Same post on Facebook and LinkedIn" → include that item in BOTH platform arrays (platforms: ["facebook","linkedin"]) so it displays under both
+
+DAILY PLAN GENERATION: When the user asks to "Generate the daily plan for Week X" or "AI daily" for a week, populate that week's \`daily\` array with 5–7 days (Mon–Fri or include weekend as appropriate). For each day include:
+- \`day\`: "Monday", "Tuesday", etc.
+- \`objective\`: short objective for the day
+- \`content\`: overarching content focus
+- \`platforms\`: Record<string, string> — for each platform in the week's platform_allocation, format the value as:
+  "Type: [LinkedIn Post | Facebook Post | Blog Article | etc.]\\nTitle: [catchy title]\\nSummary: [1–2 sentence summary of the content]"
+- \`best_time\`: suggested best time to post (e.g. "9:00 AM")
+- Suggest the best day of the week for each platform when relevant (e.g. "LinkedIn: Tuesday; Facebook: Wednesday")
+- Use the week's topics_to_cover and platform_content_breakdown to inform content. Output a concise summary per platform per day (e.g. "LinkedIn Post: title, summary; Facebook: title, summary").
+
+Keep the same structure (weeks array with theme, phase_label, primary_objective, platform_allocation, content_type_mix, platform_content_breakdown, platform_topics, cta_type, weekly_kpi_focus, topics_to_cover, daily). When user specifies topic or content type for a platform+week, set platform_content_breakdown and/or platform_topics accordingly. Return the REVISED FULL PLAN wrapped in BEGIN_12WEEK_PLAN and END_12WEEK_PLAN. Do NOT ask questions—just output the revised plan.`
+    : null;
+
   const modeHint =
-    input.mode === 'platform_customize'
+    refinePlanBlock
+      ? refinePlanBlock
+      : input.mode === 'platform_customize'
       ? '\nFocus only on the target day and provide platform-specific variants for the requested platforms.\n'
       : input.mode === 'generate_plan' && (input.conversationHistory?.length ?? 0) > 0
       ? `
@@ -339,29 +373,36 @@ ONE-BY-ONE QUESTIONING MODE (generate_plan with conversation):
 
 You are building a ${durationWeeks}-week campaign plan through conversation. You MUST gather details first, then generate the plan ONLY when the user explicitly asks for it or when you have all required info.
 ${prefilledBlock}
+${input.qaState?.userConfirmed ? `
+GOVERNANCE OVERRIDE (MANDATORY): The user has confirmed. Output BEGIN_12WEEK_PLAN immediately. Do NOT ask any more questions.` : ''}
+${input.qaState?.answeredKeys?.length && !input.qaState?.userConfirmed ? `
+GOVERNANCE: Do NOT re-ask these (already answered): ${input.qaState.answeredKeys.join(', ')}.` : ''}
+${input.qaState?.nextQuestion && !input.qaState?.userConfirmed ? `
+GOVERNANCE: Ask ONLY this next question — do not change to a different one: "${input.qaState.nextQuestion.question}"` : ''}
 
 REQUIRED INFO TO GATHER (in order, one question at a time — skip any already in ALREADY KNOWN above):
 1. target_audience — Who is your primary target audience?
-2. available_content — Do they have existing content (videos, posts, blogs) for this campaign?
-3. available_content_allocation — ONLY IF they have content: For each piece (e.g., "I have this video and this blog"), ask: Which category/objective should it serve (brand awareness, network expansion, lead gen, authority, engagement, product promotion)? And which specific week(s) should it fill? This assigns the content to the right placeholder for that week.
-4. tentative_start — When do they want to start? They must provide a date in YY-MM-DD format (e.g., 25-03-01). If they say "first of March" or similar, ask them to give the exact date in YY-MM-DD.
+2. available_content — Do they have existing content (videos, posts, blogs) for this campaign? VALID "no content" answers: "no", "none", "zero", "I don't have any", "no content", or any message that clearly means no (e.g. "professionals no" when answering after target_audience = the "no" part answers this). Accept and move to next question.
+3. available_content_allocation — ONLY IF they have content: For each piece, ask category/objective and which week(s) to fill.
+4. tentative_start — When do they want to start? Date in YY-MM-DD format (e.g., 25-03-01).
 5. campaign_types — Which matter most: brand awareness, network expansion, lead generation, authority positioning, engagement growth, product promotion?
-6. content_capacity — Per format (blogs, videos, carousels, posts, stories): how many/week? Creation method: manual, AI-assisted, or full AI?
+6. content_capacity — Per format: how many/week? Creation method: manual, AI-assisted, or full AI?
 7. campaign_duration — How many weeks (e.g., 6, 12, 24)?
 8. platforms — Which platforms will they focus on?
-9. key_messages — Key messages or pain points?
-10. success_metrics — What metrics to track?
+9. key_messages — Key messages or pain points? (USER MAY DEFER: see INFER-AND-PROCEED rule below)
+10. success_metrics — What metrics to track? (USER MAY DEFER: see INFER-AND-PROCEED rule below)
+
+INFER-AND-PROCEED: For key_messages and success_metrics, if the user says "you define it", "you make it", "you decide", "you need to define it", "up to you", "your choice", or similar — treat as VALID. Infer from theme, campaign type, and target audience. Do NOT re-ask. Proceed to the next question or to plan generation.
 
 CRITICAL RULES:
-- VALIDATE each answer against the question asked. If the answer does NOT fit (e.g., a date like "26-03-01" when you asked for target audience, or "professionals" when you asked for a date), politely re-ask the SAME question and explain what format you need. Do NOT move to the next question until you receive a valid answer.
+- VALIDATE each answer against the question asked. If the answer does NOT fit (e.g., a date when you asked for target audience), politely re-ask the SAME question. Do NOT move on until you receive a valid answer.
+- For available_content: "no", "none", "zero", "I don't have any", or messages containing/ending with "no" (e.g. "X no" when X was a prior answer) = valid "no content". Proceed to tentative_start. Do NOT re-ask.
 - After EACH valid user answer, reply with ONLY the next question. Be conversational and warm. Do NOT generate the plan yet.
-- ONLY output BEGIN_12WEEK_PLAN ... END_12WEEK_PLAN when BOTH are true:
-  (a) The user has answered ALL required questions (skip available_content_allocation if they have no existing content), AND
-  (b) The user explicitly says to create/generate the plan. Valid confirmations include: "create my plan", "generate plan", "I'm ready", "that's all", "go ahead", "create campaign", "build the plan", and when you have just asked "Would you like me to create your plan now?", any affirmative reply such as "yes", "sure", "please", "ok", "okay", "yeah", "yep", "create it", "do it", "go for it".
-- If the user has not answered all questions, NEVER generate the plan — ask the next question instead.
-- If the user answered all questions but has NOT said to create the plan, ask: "I have everything I need. Would you like me to create your ${durationWeeks}-week plan now?" When they reply "yes", "sure", "ok", or similar, GENERATE the plan immediately. NEVER restart from question 1.
-- Use the recommendation context (target_regions, context_payload) and all previous answers to inform the plan when you eventually generate it.
-- Each week MUST have a concrete theme (topic for that week) decided by AI—what we are doing from the campaign objective standpoint that week, given the topic. This theme is required before scheduling.
+- CONFIRMATION OVERRIDE (MUST OBEY): If YOUR last message was "Would you like me to create your ${durationWeeks}-week plan now?" (or similar), and the user replies with "yes", "sure", "ok", "okay", "please", "yeah", "yep", "create it", "do it", "go for it" — IMMEDIATELY output BEGIN_12WEEK_PLAN. Do NOT ask any more questions. Do NOT repeat the confirmation. Do NOT ask key_messages or success_metrics after this. GENERATE THE PLAN NOW.
+- ONLY output BEGIN_12WEEK_PLAN when BOTH are true: (a) user has answered required questions (or deferred key_messages/success_metrics), AND (b) user confirms. Valid confirmations: "create my plan", "generate plan", "I'm ready", "go ahead", "yes", "sure", "ok", "share 12 weeks plan", "if you don't have any questions" (meaning generate).
+- If the user says "share 12 weeks plan" or "no questions" or "just create the plan" early — skip remaining questions and generate with inferred values.
+- If the user answered all questions but has NOT confirmed, ask: "I have everything I need. Would you like me to create your ${durationWeeks}-week plan now?" When they reply "yes", "sure", "ok", etc., GENERATE immediately. NEVER restart from question 1.
+- Use the recommendation context and all previous answers to inform the plan. Each week MUST have a concrete theme and topics to cover.
 `
       : '\n';
 
@@ -505,8 +546,13 @@ For each week, provide:
 
 9. Weekly Theme (REQUIRED — must be decided before scheduling)
    A concrete, topic-specific theme for the week. NOT the phase label.
-   Example: "Introduce the 3-pillar stress-reduction framework" or "Share customer success: overcoming anxiety" or "Launch the community discussion on decision fatigue".
-   Must state what we are specifically doing from the campaign objective standpoint that week, given the campaign topic. This is the thematic angle for the week—not "brand awareness" but "what we're doing for brand awareness this week, considering our topic".
+   Example: "Introduce the 3-pillar stress-reduction framework" or "Share customer success: overcoming anxiety".
+   Must state what we are specifically doing from the campaign objective standpoint that week, given the campaign topic.
+
+10. Topics to Cover This Week (REQUIRED)
+   A list of 2–5 specific topics or content angles to cover in that week. Each topic should be actionable for content creation.
+   Example: ["Mindfulness basics and definition", "3 breathing techniques", "Sleep hygiene connection", "Quick wins for busy professionals"]
+   These topics drive the actual content—posts, videos, carousels—for the week. Must align with the weekly theme.
 
 BEHAVIORAL ENFORCEMENT RULES
 
@@ -530,10 +576,11 @@ Weighted Doctrine Enforcement:
 
 Format Enforcement:
 - No narrative paragraphs.
-- No theme-only weeks (but weekly theme is required).
-- All 9 sections required per week.
+- No theme-only weeks (but weekly theme and topics to cover are required).
+- All 10 sections required per week.
 - All weeks must follow identical structure.
 - Weekly theme must be explicit and topic-specific—do not leave blank.
+- Topics to cover must list 2–5 concrete sub-topics for content creation.
 `;
 
   const BASELINE_REALITY_CONTEXT_UNAVAILABLE = `
@@ -622,10 +669,10 @@ Do NOT override weighted doctrine. Baseline conditioning only modulates pacing, 
       (m) => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.message })
     );
     return {
-      system: 'You are a campaign planning assistant. Ask one question at a time. When the user has answered all planning questions AND confirms ("yes", "sure", "create my plan", etc.), GENERATE the plan immediately. Never restart from question 1.',
+      system: 'You are a campaign planning assistant. Ask one question at a time. When the user confirms ("yes", "sure", "ok", "create my plan"), GENERATE the plan immediately. Never restart from question 1.',
       user: baseUser,
       messages: [
-        { role: 'system', content: `Ask one question at a time. Only generate the ${durationWeeks}-week plan when: (1) user has answered all planning questions, AND (2) user confirms (e.g. "yes", "sure", "create my plan", "go ahead"). When they say "yes" or "sure" in reply to "Would you like me to create your plan now?", GENERATE the plan immediately. NEVER restart from question 1—if they have answered and confirmed, output BEGIN_12WEEK_PLAN. For the plan, wrap with BEGIN_12WEEK_PLAN and END_12WEEK_PLAN.` },
+        { role: 'system', content: `Ask one question at a time. CRITICAL: When your last message was "Would you like me to create your plan now?" and the user replies "yes", "sure", "ok", "okay" — OUTPUT BEGIN_12WEEK_PLAN IMMEDIATELY. For "Do you have existing content?" — accept "no", "none", "zero", or messages containing "no" (e.g. "X no" = no content). Move to next question. For key_messages/success_metrics: if user says "you define it" or "you make it", infer and proceed. Wrap the plan with BEGIN_12WEEK_PLAN and END_12WEEK_PLAN.` },
         ...conversationMessages.slice(-50),
         { role: 'user', content: baseUser },
       ],
@@ -704,6 +751,7 @@ async function runWithContext(
     } | null;
     baselineContext?: BaselineContextResult;
     prefilledPlanning?: Record<string, unknown>;
+    qaState?: { answeredKeys: string[]; userConfirmed: boolean; nextQuestion: { key: string; question: string } | null };
   }
 ): Promise<CampaignAiPlanResult> {
   const prompt = buildPromptContext({
@@ -724,6 +772,8 @@ async function runWithContext(
     baselineContext: ctx.baselineContext,
     optimizationContext: input.optimizationContext ?? null,
     prefilledPlanning: ctx.prefilledPlanning ?? null,
+    qaState: ctx.qaState,
+    currentPlan: input.currentPlan,
   });
 
   const completion = await generateCampaignPlan({
@@ -985,7 +1035,33 @@ export async function runCampaignAiPlan(
     versionRow,
   });
 
-  const result = await runWithContext(inputWithDuration, { ...ctx, prefilledPlanning });
+  const qaState =
+    input.mode === 'generate_plan' && (input.conversationHistory?.length ?? 0) > 0
+      ? computeCampaignPlanningQAState({
+          gatherOrder: GATHER_ORDER.map((g) => ({
+            key: g.key,
+            question: g.question,
+            contingentOn: (g as { contingentOn?: string }).contingentOn,
+          })),
+          prefilledKeys: Object.keys(prefilledPlanning || {}),
+          conversationHistory: (input.conversationHistory ?? []).map((m) => ({
+            type: m.type as 'user' | 'ai',
+            message: m.message,
+          })),
+        })
+      : undefined;
+
+  const result = await runWithContext(inputWithDuration, {
+    ...ctx,
+    prefilledPlanning,
+    qaState: qaState
+      ? {
+          answeredKeys: qaState.answeredKeys,
+          userConfirmed: qaState.userConfirmed,
+          nextQuestion: qaState.nextQuestion,
+        }
+      : undefined,
+  });
 
   if (result.omnivyre_decision && baselineContext && !('unavailable' in baselineContext)) {
     result.omnivyre_decision = {

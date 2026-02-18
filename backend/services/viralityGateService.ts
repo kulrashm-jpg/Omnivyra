@@ -31,7 +31,8 @@ interface CampaignReadinessRow {
 
 function isInsufficientEvidenceLabel(text?: string | null): boolean {
   if (!text) return false;
-  return text.trim().toLowerCase() === 'insufficient evidence';
+  const t = text.trim().toLowerCase();
+  return t === 'insufficient evidence' || t.includes('most findings lack supporting evidence');
 }
 
 function hasLowConfidence(diagnostics: DiagnosticsByType): boolean {
@@ -56,7 +57,7 @@ function collectBlockingReasons(diagnostics: DiagnosticsByType): string[] {
     }
   });
 
-  return reasons;
+  return [...new Set(reasons)];
 }
 
 function hasStructuralGaps(diagnostics: DiagnosticsByType): boolean {
@@ -94,6 +95,7 @@ function buildRequiredActions(diagnostics: DiagnosticsByType): GateRequiredActio
 
 function buildAdvisoryNotes(assessment: ViralityAssessment): string[] {
   const notes: string[] = [];
+  const seen = new Set<string>();
   const diagnostics = assessment.diagnostics;
 
   const summaries = [
@@ -103,12 +105,13 @@ function buildAdvisoryNotes(assessment: ViralityAssessment): string[] {
   ];
 
   summaries.forEach((summary) => {
-    if (summary && !isInsufficientEvidenceLabel(summary)) {
+    if (summary && !isInsufficientEvidenceLabel(summary) && !seen.has(summary.trim())) {
+      seen.add(summary.trim());
       notes.push(summary);
     }
   });
 
-  if (assessment.overall_summary && !isInsufficientEvidenceLabel(assessment.overall_summary)) {
+  if (assessment.overall_summary && !isInsufficientEvidenceLabel(assessment.overall_summary) && !seen.has(assessment.overall_summary.trim())) {
     notes.push(assessment.overall_summary);
   }
 

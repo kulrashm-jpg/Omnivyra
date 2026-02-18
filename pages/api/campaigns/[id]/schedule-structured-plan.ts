@@ -2,6 +2,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockdownService';
 import { scheduleStructuredPlan } from '../../../../backend/services/structuredPlanScheduler';
+import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
+import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
 import { assertBlueprintActive, assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../../backend/services/campaignBlueprintService';
 import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../../backend/services/CampaignFinalizationGuard';
 import { normalizeExecutionState } from '../../../../backend/governance/ExecutionStateMachine';
@@ -9,6 +11,7 @@ import { assertSchedulerExecutable, SchedulerIntegrityError } from '../../../../
 import { acquireSchedulerLock, releaseSchedulerLock, SchedulerLockError } from '../../../../backend/services/SchedulerLockService';
 import { checkAndCompleteCampaignIfEligible } from '../../../../backend/services/CampaignCompletionService';
 import { recordGovernanceEvent } from '../../../../backend/services/GovernanceEventService';
+import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 
 async function getCompanyId(campaignId: string): Promise<string | null> {
   const { data } = await supabase
@@ -115,9 +118,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // Persist the committed plan to twelve_week_plan so it appears in "Load committed plan" and retrieve-plan
+    const blueprint = fromStructuredPlan({ weeks: plan.weeks, campaign_id: id });
+    await saveCampaignBlueprintFromLegacy({ campaignId: id, blueprint, source: 'schedule-structured-plan' });
+
     const result = await scheduleStructuredPlan(plan, id);
 
+    // Update campaign status to reflect committed/scheduled state
+    await supabase
+      .from('campaigns')
+      .update({
+        status: 'active',
+        current_stage: 'schedule',
+        blueprint_status: 'ACTIVE',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id);
+
     void checkAndCompleteCampaignIfEligible(id).catch(() => {});
+    void syncCampaignVersionStage(id, 'schedule', companyId).catch(() => {});
 
     if (companyId) {
       await recordGovernanceEvent({

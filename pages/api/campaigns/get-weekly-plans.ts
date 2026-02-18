@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -13,33 +14,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
-    let weeklyPlans: any[] | null = null;
-    let weeklyError: any = null;
-
-    const { data: plans, error } = await supabase
-      .from('weekly_content_plans')
-      .select('*')
-      .eq('campaign_id', campaignId)
-      .order('week_number');
-
-    if (error) {
-      weeklyError = error;
-      const { data: refinements, error: refError } = await supabase
-        .from('weekly_content_refinements')
+    // Blueprint (twelve_week_plan) is source of truth for committed plans — check first
+    const blueprint = await getUnifiedCampaignBlueprint(campaignId as string);
+    let source: any[] = [];
+    if (blueprint?.weeks && blueprint.weeks.length > 0) {
+      source = blueprint.weeks.map((w) => ({
+        week_number: w.week_number,
+        phase: w.phase_label,
+        theme: w.phase_label,
+        focus_area: w.primary_objective || w.phase_label,
+        key_messaging: w.topics_to_cover?.join('; ') ?? null,
+        content_types: w.content_type_mix ?? w.content_types ?? [],
+        platform_strategy: null,
+        refinement_status: 'ai_enhanced',
+        completion_percentage: 0,
+        platform_allocation: w.platform_allocation ?? {},
+        platform_content_breakdown: w.platform_content_breakdown ?? {},
+        topics_to_cover: w.topics_to_cover ?? [],
+      }));
+    }
+    // Fallback to legacy tables when no committed blueprint
+    if (source.length === 0) {
+      const { data: plans, error: plansError } = await supabase
+        .from('weekly_content_plans')
         .select('*')
         .eq('campaign_id', campaignId)
         .order('week_number');
-      weeklyPlans = refError ? [] : (refinements || []);
-    } else {
-      weeklyPlans = plans || [];
+      if (!plansError && plans && plans.length > 0) {
+        source = plans;
+      } else {
+        const { data: refinements, error: refError } = await supabase
+          .from('weekly_content_refinements')
+          .select('*')
+          .eq('campaign_id', campaignId)
+          .order('week_number');
+        if (!refError && refinements && refinements.length > 0) {
+          source = refinements;
+        }
+      }
     }
-
-    if (weeklyError && !weeklyPlans) {
-      console.error('Error fetching weekly plans:', weeklyError);
-      return res.status(500).json({ error: 'Failed to fetch weekly plans' });
-    }
-
-    const source = weeklyPlans || [];
 
     // Format response (supports both weekly_content_plans and weekly_content_refinements schemas)
     const response = source.map(plan => ({
@@ -56,6 +69,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       hashtagSuggestions: plan.hashtag_suggestions ?? [],
       status: plan.status ?? plan.refinement_status ?? 'planned',
       completionPercentage: plan.completion_percentage ?? 0,
+      platform_allocation: plan.platform_allocation ?? {},
+      platform_content_breakdown: plan.platform_content_breakdown ?? {},
+      topics_to_cover: plan.topics_to_cover ?? [],
     }));
 
     res.status(200).json(response);

@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../backend/db/supabaseClient';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -13,43 +13,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Save AI content to database
+    const threadId = `save_${campaignId}_${Date.now()}`;
+    const messagesPayload = [
+      {
+        role: 'assistant',
+        content: aiContent,
+        timestamp: timestamp || new Date().toISOString(),
+        provider: provider || 'unknown'
+      }
+    ];
+
+    // Save AI content to database (ai_threads.id is required; thread_type/status from migration)
+    const insertPayload: Record<string, unknown> = {
+      id: threadId,
+      campaign_id: campaignId,
+      messages: messagesPayload,
+      thread_type: 'content_planning',
+      status: 'saved_for_planning',
+      created_at: new Date().toISOString(),
+    };
     const { data, error } = await supabase
       .from('ai_threads')
-      .insert({
-        campaign_id: campaignId,
-        thread_type: 'content_planning',
-        messages: [
-          {
-            role: 'assistant',
-            content: aiContent,
-            timestamp: timestamp || new Date().toISOString(),
-            provider: provider || 'unknown'
-          }
-        ],
-        status: 'saved_for_planning',
-        created_at: new Date().toISOString()
-      })
+      .insert(insertPayload as any)
       .select();
 
     if (error) {
       console.error('Error saving AI content:', error);
-      return res.status(500).json({ error: 'Failed to save AI content' });
+      return res.status(500).json({
+        error: 'Failed to save AI content',
+        message: error.message,
+        details: error.details,
+      });
     }
 
-    // Also save to content_plans table for easy access
+    // Also save to content_plans table for easy access (platform required by base schema)
     const { error: contentError } = await supabase
       .from('content_plans')
       .insert({
         campaign_id: campaignId,
+        platform: 'multi',
         content_type: 'ai_generated_plan',
-        title: 'AI Generated Content Plan',
         description: aiContent,
-        status: 'draft',
+        status: 'planned',
         ai_generated: true,
-        ai_provider: provider || 'unknown',
         created_at: new Date().toISOString()
-      });
+      } as Record<string, unknown>);
 
     if (contentError) {
       console.error('Error saving to content_plans:', contentError);

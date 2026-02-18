@@ -38,7 +38,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .select('id, company_id, status');
 
     if (campaignsError) {
-      return res.status(500).json({ error: 'FAILED_TO_LOAD_CAMPAIGNS' });
+      console.error('[campaign-health] campaigns error:', campaignsError);
+      return res.status(500).json({
+        error: 'FAILED_TO_LOAD_CAMPAIGNS',
+        details: process.env.NODE_ENV === 'development' ? campaignsError.message : undefined,
+      });
     }
 
     const { data: versions, error: versionsError } = await supabase
@@ -46,7 +50,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .select('id, campaign_id, status, created_at');
 
     if (versionsError) {
-      return res.status(500).json({ error: 'FAILED_TO_LOAD_CAMPAIGN_VERSIONS' });
+      console.error('[campaign-health] campaign_versions error:', versionsError);
+      return res.status(500).json({
+        error: 'FAILED_TO_LOAD_CAMPAIGN_VERSIONS',
+        details: process.env.NODE_ENV === 'development' ? versionsError.message : undefined,
+      });
     }
 
     const campaignRows = campaigns || [];

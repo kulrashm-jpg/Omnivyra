@@ -31,12 +31,16 @@ export function fromStructuredPlan(plan: any): CampaignBlueprint {
     week_number: w.week ?? 0,
     phase_label: String(w.phase_label ?? w.theme ?? `Week ${w.week ?? 0}`),
     primary_objective: String(w.primary_objective ?? w.theme ?? ''),
+    topics_to_cover: Array.isArray(w.topics_to_cover) ? [...w.topics_to_cover] : undefined,
     platform_allocation: typeof w.platform_allocation === 'object' && w.platform_allocation
       ? { ...w.platform_allocation }
       : {},
     content_type_mix: Array.isArray(w.content_type_mix) ? [...w.content_type_mix] : ['post'],
     cta_type: String(w.cta_type ?? 'None'),
     weekly_kpi_focus: String(w.weekly_kpi_focus ?? 'Reach growth'),
+    platform_content_breakdown: w.platform_content_breakdown,
+    platform_topics: w.platform_topics,
+    week_extras: (w.week_extras && typeof w.week_extras === 'object') ? { ...w.week_extras } : undefined,
   }));
 
   return {

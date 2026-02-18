@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Edit, Trash2, ExternalLink as ExternalLinkIcon, Link2 } from 'lucide-react';
+import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Edit, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import Header from './Header';
 import { supabase } from '../utils/supabaseClient';
@@ -49,7 +49,21 @@ export default function DashboardPage() {
   const [campaignProgress, setCampaignProgress] = useState<{[key: string]: CampaignProgress}>({});
   const [leadCaptureModalOpen, setLeadCaptureModalOpen] = useState(false);
   const [leadCaptureToast, setLeadCaptureToast] = useState<string | null>(null);
+  const [stageFilter, setStageFilter] = useState<string>('all');
+  const [stageAvailability, setStageAvailability] = useState<Record<string, { stages: Record<string, boolean>; counts: Record<string, number> }>>({});
   const isCompanyAdmin = (userRole || '').toString() === 'COMPANY_ADMIN';
+
+  const CAMPAIGN_STAGES = [
+    { id: 'all', label: 'All' },
+    { id: 'planning', label: 'Planning' },
+    { id: 'twelve_week_plan', label: '12 Week Plan' },
+    { id: 'daily_plan', label: 'Daily Plan' },
+    { id: 'charting', label: 'Charting' },
+    { id: 'schedule', label: 'Schedule' },
+  ] as const;
+  const filteredCampaigns = stageFilter === 'all'
+    ? campaigns
+    : campaigns.filter((c) => (c.current_stage || c.status) === stageFilter);
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     const { data } = await supabase.auth.getSession();
@@ -71,6 +85,44 @@ export default function DashboardPage() {
   useEffect(() => {
     console.log('DASHBOARD_SELECTED_COMPANY', selectedCompanyId, { isAdmin });
   }, [selectedCompanyId, isAdmin]);
+
+  const campaignIds = campaigns.map((c) => c.id).filter(Boolean).join(',');
+  const [expandingCampaignId, setExpandingCampaignId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!campaignIds) {
+      setStageAvailability({});
+      return;
+    }
+    fetchWithAuth(
+      `/api/campaigns/stage-availability-batch?campaignIds=${encodeURIComponent(campaignIds)}`
+    )
+      .then((r) => r.ok ? r.json() : { availability: {} })
+      .then((data) => setStageAvailability(data.availability || {}))
+      .catch(() => setStageAvailability({}));
+  }, [campaignIds]);
+
+  const handleExpandToWeekPlans = async (campaignId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandingCampaignId(campaignId);
+    try {
+      const res = await fetchWithAuth(`/api/campaigns/${campaignId}/expand-to-week-plans`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const ids = campaignIds.split(',').filter(Boolean);
+        const r = await fetchWithAuth(`/api/campaigns/stage-availability-batch?campaignIds=${ids.join(',')}`);
+        if (r.ok) {
+          const data = await r.json();
+          setStageAvailability(data.availability || {});
+        }
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setExpandingCampaignId(null);
+    }
+  };
 
 
   const loadDashboardData = async () => {
@@ -188,45 +240,38 @@ export default function DashboardPage() {
 
   // Handler functions
   const handleEditCampaign = (campaignId: string) => {
-    window.location.href = `/campaign-planning?id=${campaignId}&mode=edit`;
+    const params = new URLSearchParams({ campaignId, mode: 'edit' });
+    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
+    window.location.href = `/campaign-planning?${params.toString()}`;
   };
 
   const handleDeleteCampaign = async (campaignId: string) => {
-    // Check if user is super admin
+    if (!selectedCompanyId) {
+      alert('Please select a company before deleting campaigns.');
+      return;
+    }
+
     try {
-      if (!selectedCompanyId) {
-        alert('Please select a company before deleting campaigns.');
+      const { data } = await supabase.auth.getSession();
+      if (!data?.session?.access_token) {
+        alert('Your session may have expired. Please refresh the page and try again.');
         return;
       }
-      const adminUrl = `/api/admin/check-super-admin?companyId=${selectedCompanyId}`;
-      console.log('DASHBOARD_API_CALL', adminUrl);
-      const response = await fetch(adminUrl);
-      const result = await response.json();
-      
-      if (!result.isSuperAdmin) {
-        alert('Access Denied: Only super admins can delete campaigns. Please contact your administrator.');
-        return;
-      }
-    } catch (error) {
-      console.error('Error checking super admin status:', error);
-      alert('Error verifying permissions. Please try again.');
+    } catch {
+      alert('Unable to verify session. Please sign in again.');
       return;
     }
 
     if (confirm('Are you sure you want to delete this campaign?')) {
       try {
-        console.log('Deleting campaign:', campaignId);
-        
-        // Use the super admin delete API
-        const deleteUrl = `/api/admin/delete-campaign?companyId=${selectedCompanyId}`;
-        console.log('DASHBOARD_API_CALL', deleteUrl);
-        const deleteResponse = await fetch(deleteUrl, {
+        const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
+        const deleteResponse = await fetchWithAuth(deleteUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             campaignId,
-            reason: prompt('Please provide a reason for deleting this campaign:') || 'No reason provided',
-            ipAddress: '127.0.0.1', // In production, get real IP
+            companyId: selectedCompanyId,
+            ipAddress: '127.0.0.1',
             userAgent: navigator.userAgent
           })
         });
@@ -256,13 +301,28 @@ export default function DashboardPage() {
   };
 
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active': return 'from-green-500 to-emerald-600';
-      case 'planning': return 'from-blue-500 to-cyan-600';
-      case 'completed': return 'from-purple-500 to-violet-600';
-      default: return 'from-gray-500 to-slate-600';
-    }
+  const getStageColor = (stage: string) => {
+    const stageMap: Record<string, string> = {
+      planning: 'from-blue-500 to-cyan-600',
+      twelve_week_plan: 'from-indigo-500 to-purple-600',
+      daily_plan: 'from-amber-500 to-orange-600',
+      charting: 'from-teal-500 to-emerald-600',
+      schedule: 'from-green-500 to-emerald-600',
+      active: 'from-green-500 to-emerald-600',
+      completed: 'from-purple-500 to-violet-600',
+    };
+    return stageMap[stage] ?? 'from-gray-500 to-slate-600';
+  };
+
+  const getStageLabel = (stage: string) => {
+    const labels: Record<string, string> = {
+      planning: 'Planning',
+      twelve_week_plan: '12 Week Plan',
+      daily_plan: 'Daily Plan',
+      charting: 'Charting',
+      schedule: 'Schedule',
+    };
+    return labels[stage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
   };
 
   if (isLoading) {
@@ -516,7 +576,7 @@ export default function DashboardPage() {
                       >
                         <div className="flex items-center justify-between mb-4">
                           <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-lg bg-gradient-to-r ${getStatusColor(campaign.status)}`}>
+                            <div className={`p-2 rounded-lg bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)}`}>
                               <Play className="h-4 w-4 text-white" />
                             </div>
                             <div>
@@ -532,9 +592,19 @@ export default function DashboardPage() {
                                 e.stopPropagation();
                                 handleViewCampaign(campaign.id);
                               }}
-                              className={`px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r ${getStatusColor(campaign.status)} text-white hover:opacity-80 transition-opacity`}
+                              className={`px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)} text-white hover:opacity-80 transition-opacity`}
                             >
-                              {campaign.status.charAt(0).toUpperCase() + campaign.status.slice(1)}
+                              {getStageLabel(campaign.current_stage || campaign.status)}
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.location.href = `/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`;
+                              }}
+                              className="p-2 hover:bg-indigo-100 rounded-lg transition-colors"
+                              title="View committed plan"
+                            >
+                              <FileText className="h-4 w-4 text-indigo-600" />
                             </button>
                             <button
                               onClick={(e) => {
@@ -568,7 +638,7 @@ export default function DashboardPage() {
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                             <span className="text-sm text-gray-600">Stage:</span>
-                            <span className="text-sm font-medium">{campaign.current_stage || 'Planning'}</span>
+                            <span className="text-sm font-medium">{getStageLabel(campaign.current_stage || campaign.status)}</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
@@ -576,6 +646,68 @@ export default function DashboardPage() {
                             <span className="text-sm font-medium">{campaign.created_at ? new Date(campaign.created_at).toLocaleDateString() : 'Recently'}</span>
                           </div>
                         </div>
+
+                        {(stageAvailability[campaign.id]?.stages && Object.values(stageAvailability[campaign.id].stages).some(Boolean)) && (
+                          <div className="flex flex-wrap gap-1.5 mb-4">
+                            {stageAvailability[campaign.id].stages.twelveWeekPlan && (
+                              <a
+                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+                              >
+                                12 Week
+                              </a>
+                            )}
+                            {stageAvailability[campaign.id].stages.twelveWeekPlan && !stageAvailability[campaign.id].stages.detailedWeekPlans && (
+                              <button
+                                onClick={(e) => handleExpandToWeekPlans(campaign.id, e)}
+                                disabled={expandingCampaignId === campaign.id}
+                                className="text-xs px-2 py-1 rounded bg-purple-100 text-purple-700 hover:bg-purple-200 disabled:opacity-50"
+                              >
+                                {expandingCampaignId === campaign.id ? 'Expanding…' : 'Expand to Week Plans'}
+                              </button>
+                            )}
+                            {stageAvailability[campaign.id].stages.detailedWeekPlans && (
+                              <a
+                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-purple-100 text-purple-700 hover:bg-purple-200"
+                              >
+                                Week Plans
+                              </a>
+                            )}
+                            {stageAvailability[campaign.id].stages.aiEnrichedWeeks && (
+                              <span className="text-xs px-2 py-1 rounded bg-violet-100 text-violet-700">AI Enriched</span>
+                            )}
+                            {stageAvailability[campaign.id].stages.dailyPlans && (
+                              <a
+                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200"
+                              >
+                                Daily
+                              </a>
+                            )}
+                            {stageAvailability[campaign.id].stages.charting && (
+                              <a
+                                href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-teal-100 text-teal-700 hover:bg-teal-200"
+                              >
+                                Charting
+                              </a>
+                            )}
+                            {stageAvailability[campaign.id].stages.schedule && (
+                              <a
+                                href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
+                              >
+                                Scheduled
+                              </a>
+                            )}
+                          </div>
+                        )}
                         
                         <div className="space-y-2">
                           <div className="flex justify-between text-sm">
@@ -736,6 +868,23 @@ export default function DashboardPage() {
               </button>
             </div>
 
+            {/* Stage Filter */}
+            <div className="flex flex-wrap gap-2">
+              {CAMPAIGN_STAGES.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setStageFilter(s.id)}
+                  className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                    stageFilter === s.id
+                      ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md'
+                      : 'bg-white/80 text-gray-600 hover:bg-gray-100 border border-gray-200'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+
             {/* Campaigns List */}
             <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 overflow-hidden">
               {isLoadingData ? (
@@ -743,10 +892,12 @@ export default function DashboardPage() {
                   <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
                   <span className="ml-2 text-gray-600">Loading campaigns...</span>
                 </div>
-              ) : campaigns.length === 0 ? (
+              ) : filteredCampaigns.length === 0 ? (
                 <div className="text-center py-16">
                   <Target className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-                  <h3 className="text-xl font-medium text-gray-900 mb-2">No campaigns found</h3>
+                  <h3 className="text-xl font-medium text-gray-900 mb-2">
+                    {campaigns.length === 0 ? 'No campaigns found' : `No campaigns in ${CAMPAIGN_STAGES.find((s) => s.id === stageFilter)?.label ?? stageFilter}`}
+                  </h3>
                   <p className="text-gray-600 mb-8">Create your first campaign to get started with content management</p>
                   <button 
                     onClick={() => window.location.href = '/create-campaign'}
@@ -763,7 +914,7 @@ export default function DashboardPage() {
               ) : (
                 <div className="p-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {campaigns.map((campaign) => (
+                    {filteredCampaigns.map((campaign) => (
                       <div
                         key={campaign.id}
                         role="button"
@@ -774,7 +925,7 @@ export default function DashboardPage() {
                       >
                         <div className="flex items-center justify-between mb-4">
                           <div className="flex items-center gap-3">
-                            <div className={`p-3 rounded-lg bg-gradient-to-r ${getStatusColor(campaign.status)}`}>
+                            <div className={`p-3 rounded-lg bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)}`}>
                               <Target className="h-6 w-6 text-white" />
                             </div>
                             <div>
@@ -793,11 +944,21 @@ export default function DashboardPage() {
                                 e.stopPropagation();
                                 handleViewCampaign(campaign.id);
                               }}
-                              className={`px-4 py-2 rounded-full text-sm font-medium bg-gradient-to-r ${getStatusColor(campaign.status)} text-white hover:opacity-80 transition-opacity`}
+                              className={`px-4 py-2 rounded-full text-sm font-medium bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)} text-white hover:opacity-80 transition-opacity`}
                             >
-                              {campaign.status.charAt(0).toUpperCase() + campaign.status.slice(1)}
+                              {getStageLabel(campaign.current_stage || campaign.status)}
                             </button>
                           <div className="flex items-center gap-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.location.href = `/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`;
+                              }}
+                              className="p-2 hover:bg-indigo-100 rounded-lg transition-colors"
+                              title="View committed plan"
+                            >
+                              <FileText className="h-4 w-4 text-indigo-600" />
+                            </button>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -835,9 +996,71 @@ export default function DashboardPage() {
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
                             <span className="text-sm text-gray-600">Stage:</span>
-                            <span className="text-sm font-medium">{campaign.current_stage || 'Planning'}</span>
+                            <span className="text-sm font-medium">{getStageLabel(campaign.current_stage || campaign.status)}</span>
                           </div>
                         </div>
+
+                        {(stageAvailability[campaign.id]?.stages && Object.values(stageAvailability[campaign.id].stages).some(Boolean)) && (
+                          <div className="flex flex-wrap gap-1.5 mb-4">
+                            {stageAvailability[campaign.id].stages.twelveWeekPlan && (
+                              <a
+                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+                              >
+                                12 Week
+                              </a>
+                            )}
+                            {stageAvailability[campaign.id].stages.twelveWeekPlan && !stageAvailability[campaign.id].stages.detailedWeekPlans && (
+                              <button
+                                onClick={(e) => handleExpandToWeekPlans(campaign.id, e)}
+                                disabled={expandingCampaignId === campaign.id}
+                                className="text-xs px-2 py-1 rounded bg-purple-100 text-purple-700 hover:bg-purple-200 disabled:opacity-50"
+                              >
+                                {expandingCampaignId === campaign.id ? 'Expanding…' : 'Expand to Week Plans'}
+                              </button>
+                            )}
+                            {stageAvailability[campaign.id].stages.detailedWeekPlans && (
+                              <a
+                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-purple-100 text-purple-700 hover:bg-purple-200"
+                              >
+                                Week Plans
+                              </a>
+                            )}
+                            {stageAvailability[campaign.id].stages.aiEnrichedWeeks && (
+                              <span className="text-xs px-2 py-1 rounded bg-violet-100 text-violet-700">AI Enriched</span>
+                            )}
+                            {stageAvailability[campaign.id].stages.dailyPlans && (
+                              <a
+                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200"
+                              >
+                                Daily
+                              </a>
+                            )}
+                            {stageAvailability[campaign.id].stages.charting && (
+                              <a
+                                href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-teal-100 text-teal-700 hover:bg-teal-200"
+                              >
+                                Charting
+                              </a>
+                            )}
+                            {stageAvailability[campaign.id].stages.schedule && (
+                              <a
+                                href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-xs px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
+                              >
+                                Scheduled
+                              </a>
+                            )}
+                          </div>
+                        )}
                         
                         <div className="space-y-2">
                           <div className="flex justify-between text-sm">

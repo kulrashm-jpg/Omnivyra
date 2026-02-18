@@ -20,6 +20,5 @@ export const getSupabaseUserFromRequest = async (
   if (error || !data?.user) {
     return { user: null, error: 'INVALID_AUTH' };
   }
-
   return { user: { id: data.user.id, email: data.user.email }, error: null };
 };

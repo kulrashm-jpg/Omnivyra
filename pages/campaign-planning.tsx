@@ -23,6 +23,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import CampaignAIChat from '../components/CampaignAIChat';
+import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import DailyPlanningInterface from '../components/DailyPlanningInterface';
 import AIContentIntegration from '../components/AIContentIntegration';
 import ContentCreationPanel from '../components/ContentCreationPanel';
@@ -114,6 +115,8 @@ export default function CampaignPlanning() {
   const isStrategyProposed = strategyStatus === 'proposed';
   const isDraftMode =
     typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'draft';
+  const isEditMode =
+    (router.query?.mode === 'edit') || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'edit');
   const forecastDelta = (() => {
     const variance = forecastVsActual?.variance || {};
     const candidates = [
@@ -152,7 +155,7 @@ export default function CampaignPlanning() {
     console.log('useEffect triggered - checking URL params');
     const urlParams = new URLSearchParams(window.location.search);
     const mode = urlParams.get('mode');
-    const existingCampaignId = urlParams.get('campaignId');
+    const existingCampaignId = urlParams.get('campaignId') || urlParams.get('id'); // support both for compatibility
     const context = urlParams.get('context');
     const hash = urlParams.get('hash');
     const draftMode = mode === 'draft';
@@ -237,12 +240,15 @@ export default function CampaignPlanning() {
     } else if (mode === 'edit' && existingCampaignId) {
       console.log('Edit mode - loading campaign with ID:', existingCampaignId);
       loadCampaign(existingCampaignId);
+    } else if (mode === 'edit' && !existingCampaignId) {
+      // Edit mode without campaignId: redirect to campaigns list
+      console.warn('Edit mode without campaignId, redirecting to campaigns');
+      if (typeof window !== 'undefined') window.location.href = '/campaigns';
     } else if (existingCampaignId) {
       console.log('Loading campaign with ID:', existingCampaignId);
       loadCampaign(existingCampaignId);
     } else {
       console.log('No campaign ID found in URL, checking for existing campaigns');
-      // If no campaign ID in URL, check if there's an existing campaign
       loadExistingCampaign();
     }
   }, []);
@@ -416,7 +422,7 @@ export default function CampaignPlanning() {
   const fetchStrategyStatus = async (id: string) => {
     setIsStrategyStatusLoading(true);
     try {
-      const response = await fetch(`/api/campaigns/${id}/strategy-status`);
+      const response = await fetchWithAuth(`/api/campaigns/${id}/strategy-status`);
       if (!response.ok) {
         setStrategyStatus(null);
         return;
@@ -433,7 +439,7 @@ export default function CampaignPlanning() {
 
   const fetchReapprovalStatus = async (id: string) => {
     try {
-      const response = await fetch(`/api/campaigns/${id}/reapproval-status`);
+      const response = await fetchWithAuth(`/api/campaigns/${id}/reapproval-status`);
       if (!response.ok) {
         setReapprovalStatus(null);
         return;
@@ -450,7 +456,7 @@ export default function CampaignPlanning() {
     setIsAiImprovementsLoading(true);
     setAiImprovementsError(null);
     try {
-      const response = await fetch(`/api/campaigns/${id}/ai-improvements`);
+      const response = await fetchWithAuth(`/api/campaigns/${id}/ai-improvements`);
       if (!response.ok) {
         setAiImprovements([]);
         setAiImprovementsError('Failed to load AI suggestions.');
@@ -474,7 +480,7 @@ export default function CampaignPlanning() {
     setIsForecastLoading(true);
     setForecastError(null);
     try {
-      const response = await fetch(`/api/campaigns/${id}/forecast-vs-actual`);
+      const response = await fetchWithAuth(`/api/campaigns/${id}/forecast-vs-actual`);
       if (!response.ok) {
         setForecastVsActual(null);
         setForecastError('Failed to load forecast accuracy.');
@@ -495,7 +501,7 @@ export default function CampaignPlanning() {
     setIsOptimizationLoading(true);
     setOptimizationError(null);
     try {
-      const response = await fetch(`/api/campaigns/${id}/optimization-advice`);
+      const response = await fetchWithAuth(`/api/campaigns/${id}/optimization-advice`);
       if (!response.ok) {
         setOptimizationAdvice(null);
         setOptimizationError('Failed to load optimization advice.');
@@ -516,7 +522,7 @@ export default function CampaignPlanning() {
     setIsViralTopicLoading(true);
     setViralTopicError(null);
     try {
-      const response = await fetch(`/api/campaigns/${id}/viral-topic-memory`);
+      const response = await fetchWithAuth(`/api/campaigns/${id}/viral-topic-memory`);
       if (!response.ok) {
         setViralTopicMemory(null);
         setViralTopicError('Failed to load viral topic memory.');
@@ -537,7 +543,7 @@ export default function CampaignPlanning() {
     setIsLeadIntelLoading(true);
     setLeadIntelError(null);
     try {
-      const response = await fetch(`/api/campaigns/${id}/lead-conversion-intelligence`);
+      const response = await fetchWithAuth(`/api/campaigns/${id}/lead-conversion-intelligence`);
       if (!response.ok) {
         setLeadConversionIntel(null);
         setLeadIntelError('Failed to load lead conversion intelligence.');
@@ -558,7 +564,7 @@ export default function CampaignPlanning() {
     setIsMomentumLoading(true);
     setMomentumError(null);
     try {
-      const response = await fetch(`/api/campaigns/${id}/momentum-amplifier`);
+      const response = await fetchWithAuth(`/api/campaigns/${id}/momentum-amplifier`);
       if (!response.ok) {
         setMomentumData(null);
         setMomentumError('Failed to load momentum insights.');
@@ -579,7 +585,7 @@ export default function CampaignPlanning() {
     setIsPlatformAdviceLoading(true);
     setPlatformAdviceError(null);
     try {
-      const response = await fetch(`/api/campaigns/${id}/platform-allocation-advice`);
+      const response = await fetchWithAuth(`/api/campaigns/${id}/platform-allocation-advice`);
       if (!response.ok) {
         setPlatformAdvice(null);
         setPlatformAdviceError('Failed to load platform allocation advice.');
@@ -890,8 +896,13 @@ export default function CampaignPlanning() {
       // Always set the campaign ID from URL params first
       console.log('Setting campaign ID from URL:', id);
       setCampaignId(id);
-      
-      const response = await fetch(`/api/campaigns?type=campaign&campaignId=${id}`);
+      const companyId = typeof window !== 'undefined'
+        ? (new URLSearchParams(window.location.search).get('companyId') || window.localStorage.getItem('selected_company_id') || window.localStorage.getItem('company_id'))
+        : undefined;
+      const campaignsUrl = companyId
+        ? `/api/campaigns?type=campaign&campaignId=${id}&companyId=${encodeURIComponent(companyId)}`
+        : `/api/campaigns?type=campaign&campaignId=${id}`;
+      const response = await fetchWithAuth(campaignsUrl);
       console.log('Campaign API response status:', response.status);
       
       if (response.ok) {
@@ -918,8 +929,11 @@ export default function CampaignPlanning() {
         // Check if campaign plan exists
         await checkExistingPlan(id);
 
-        // Load goals
-        const goalsResponse = await fetch(`/api/campaigns?type=goals&campaignId=${id}`);
+        // Load goals (include companyId if available for API)
+        const goalsUrl = companyId
+          ? `/api/campaigns?type=goals&campaignId=${id}&companyId=${encodeURIComponent(companyId)}`
+          : `/api/campaigns?type=goals&campaignId=${id}`;
+        const goalsResponse = await fetchWithAuth(goalsUrl);
         if (goalsResponse.ok) {
           const goalsResult = await goalsResponse.json();
           setCampaignData(prev => ({
@@ -1237,9 +1251,11 @@ export default function CampaignPlanning() {
               </button>
               <div>
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                  Campaign Planning
+                  {isEditMode && campaignData?.name ? `Editing: ${campaignData.name}` : 'Campaign Planning'}
                 </h1>
-                <p className="text-gray-600 mt-1">Define your campaign structure and content goals</p>
+                <p className="text-gray-600 mt-1">
+                  {isEditMode && campaignId ? 'Edit this campaign\'s structure, goals, and content' : 'Define your campaign structure and content goals'}
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -1310,10 +1326,10 @@ export default function CampaignPlanning() {
                       </button>
                       
                       <button 
-                        onClick={() => window.location.href = '/campaigns'}
+                        onClick={() => window.location.href = campaignId ? `/campaign-details/${campaignId}` : '/campaigns'}
                         className="px-4 py-2 text-gray-600 hover:text-gray-900 font-medium transition-colors"
                       >
-                        Back to Campaigns
+                        {campaignId ? 'View Campaign Details' : 'Back to Campaigns'}
                       </button>
                     </>
                   );

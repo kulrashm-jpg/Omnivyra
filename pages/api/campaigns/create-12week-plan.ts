@@ -1,8 +1,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { v4 as uuidv4 } from 'uuid';
-import { fromLegacyRefinements, blueprintWeeksToLegacyRefinements } from '../../../backend/services/campaignBlueprintAdapter';
+import { fromLegacyRefinements, fromStructuredPlan, blueprintWeeksToLegacyRefinements } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
+import { syncCampaignVersionStage } from '../../../backend/db/campaignVersionStore';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -10,12 +11,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    let { campaignId, startDate, aiContent, provider } = req.body;
-    console.log('API Request body:', { campaignId, startDate, aiContent: aiContent?.substring(0, 100) + '...', provider });
+    let { campaignId, startDate, aiContent, provider, companyId, durationWeeks: reqDurationWeeks, structuredPlan, weeks: reqWeeks } = req.body;
+    const hasStructuredPlan = (Array.isArray(reqWeeks) && reqWeeks.length > 0) || (structuredPlan && Array.isArray(structuredPlan?.weeks) && structuredPlan.weeks.length > 0);
+    const weeksFromPlan = reqWeeks ?? structuredPlan?.weeks ?? [];
+    console.log('API Request body:', { campaignId, startDate, hasStructuredPlan, weeksCount: weeksFromPlan?.length, durationWeeks: reqDurationWeeks });
 
-    if (!campaignId || !startDate || !aiContent) {
-      console.error('Missing required fields:', { campaignId: !!campaignId, startDate: !!startDate, aiContent: !!aiContent });
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!campaignId || !startDate) {
+      return res.status(400).json({ error: 'campaignId and startDate are required' });
+    }
+    if (!hasStructuredPlan && !aiContent) {
+      return res.status(400).json({ error: 'Either aiContent or structuredPlan.weeks is required' });
     }
 
     const startDateObj = new Date(startDate);
@@ -39,17 +44,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (campaignError) {
       console.log('Campaign does not exist, creating new one:', campaignError.message);
       // Create the campaign with the provided campaignId
+      const summary = (aiContent || JSON.stringify(structuredPlan?.weeks || []).slice(0, 200)) + '...';
       const { data: newCampaign, error: createError } = await supabase
         .from('campaigns')
         .insert({
           id: campaignId, // Use the provided campaign ID
           name: req.body.campaignName || 'New Campaign', // Use provided name or default
-          description: aiContent.substring(0, 200) + '...',
+          description: summary,
           status: 'planning',
           current_stage: 'planning',
           timeframe: 'quarter',
           start_date: startDate,
-          ai_generated_summary: aiContent,
+          ai_generated_summary: aiContent || summary,
           user_id: '550e8400-e29b-41d4-a716-446655440000', // Default user
           thread_id: 'thread_' + Date.now(),
           created_at: new Date().toISOString(),
@@ -65,7 +71,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       
       campaign = newCampaign;
       console.log('Campaign created successfully:', campaign?.id);
-      
+
+      // Ensure campaign appears on dashboard: insert campaign_versions when companyId provided
+      if (companyId && typeof companyId === 'string') {
+        const { error: cvError } = await supabase.from('campaign_versions').insert({
+          company_id: companyId,
+          campaign_id: campaignId,
+          campaign_snapshot: { campaign },
+          status: 'planning',
+          version: 1,
+          created_at: new Date().toISOString(),
+        });
+        if (cvError) console.warn('campaign_versions insert failed:', cvError.message);
+      }
+
       // Update campaignId to the actual database ID for the response
       campaignId = campaign.id;
     } else {
@@ -84,38 +103,69 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (updateError) {
         console.error('Error updating campaign:', updateError);
-        return res.status(500).json({ error: 'Failed to update campaign', details: updateError });
+        const msg = updateError.message || 'Unknown database error';
+        const hint = updateError.code === '42703' ? 'Missing column - run migrations: ai_generated_summary, weekly_themes' : null;
+        return res.status(500).json({
+          error: 'Failed to update campaign',
+          details: msg,
+          hint,
+          code: updateError.code,
+        });
       }
       
       campaign = updatedCampaign;
       console.log('Campaign updated successfully:', campaign?.id);
     }
 
-    const weeklyThemes = generateWeeklyThemes(aiContent);
-    const durationFromThemes = weeklyThemes.length || 12;
-    const weeklyPlans = generateWeeklyPlans(startDateObj, aiContent, durationFromThemes);
+    // Resolve duration: request > campaign.duration_weeks > 12 (user/AI-selected duration takes precedence)
+    const campaignDuration = (campaign as { duration_weeks?: number | null })?.duration_weeks;
+    const durationWeeks = typeof reqDurationWeeks === 'number' && reqDurationWeeks >= 1 && reqDurationWeeks <= 52
+      ? Math.floor(reqDurationWeeks)
+      : (campaignDuration != null && campaignDuration >= 1 && campaignDuration <= 52 ? campaignDuration : 12);
+
+    let blueprint;
+    let weeklyThemes: { theme: string; focusArea: string; suggestions: string[] }[];
+
+    if (hasStructuredPlan) {
+      // Use finalized structured plan (topics, platform_content_breakdown, etc.) — preserves all details
+      blueprint = fromStructuredPlan({ weeks: weeksFromPlan, campaign_id: campaignId });
+      weeklyThemes = blueprint.weeks.map((w) => ({
+        theme: w.phase_label || `Week ${w.week_number}`,
+        focusArea: w.primary_objective || '',
+        suggestions: w.topics_to_cover ?? [],
+      }));
+    } else {
+      const themes = generateWeeklyThemes(aiContent || '', durationWeeks);
+      weeklyThemes = themes.map((t) => ({
+        theme: t.theme,
+        focusArea: t.focusArea ?? (t as any).focus_area ?? '',
+        suggestions: t.suggestions || [],
+      }));
+      const syntheticRefinements = themes.map((t, i) => ({
+        week_number: i + 1,
+        theme: t.theme,
+        focus_area: (t as any).focus_area ?? t.theme,
+        ai_suggestions: t.suggestions || [],
+        content_plan: null,
+      }));
+      blueprint = fromLegacyRefinements(syntheticRefinements, campaignId);
+    }
 
     await supabase
       .from('campaigns')
       .update({
         weekly_themes: weeklyThemes,
+        current_stage: 'twelve_week_plan',
+        duration_weeks: blueprint.duration_weeks || durationWeeks,
         updated_at: new Date().toISOString()
       })
       .eq('id', campaignId);
-
-    const syntheticRefinements = weeklyThemes.map((t, i) => ({
-      week_number: i + 1,
-      theme: t.theme,
-      focus_area: t.focusArea,
-      ai_suggestions: t.suggestions || [],
-      content_plan: null,
-    }));
-    const blueprint = fromLegacyRefinements(syntheticRefinements, campaignId);
+    void syncCampaignVersionStage(campaignId, 'twelve_week_plan', companyId).catch(() => {});
 
     await saveCampaignBlueprintFromLegacy({
       campaignId,
       blueprint,
-      source: 'create-12week-plan',
+      source: hasStructuredPlan ? 'structured-commit' : 'create-12week-plan',
     });
     console.warn('DEPRECATED: create-12week-plan now writes blueprint first; legacy weekly_content_refinements derived from blueprint');
 
@@ -148,9 +198,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.log('Weekly refinements table might not exist yet:', error);
     }
 
-    const durationWeeks = blueprint.duration_weeks || blueprint.weeks.length || 12;
+    const perfDurationWeeks = blueprint.duration_weeks || blueprint.weeks.length || durationWeeks;
     try {
-      for (let week = 1; week <= durationWeeks; week++) {
+      for (let week = 1; week <= perfDurationWeeks; week++) {
         const weekStartDate = new Date(startDateObj);
         weekStartDate.setDate(startDateObj.getDate() + (week - 1) * 7);
         
@@ -202,9 +252,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 }
 
-function generateWeeklyThemes(aiContent: string) {
-  // Extract themes from AI content or generate default themes
-  const themes = [
+function generateWeeklyThemes(aiContent: string, count: number = 12) {
+  const base = [
     { theme: 'Foundation & Awareness', focusArea: 'Brand Introduction', suggestions: ['Company story', 'Team introduction', 'Value proposition'] },
     { theme: 'Problem-Solution Fit', focusArea: 'Pain Points', suggestions: ['Customer problems', 'Solution benefits', 'Case studies'] },
     { theme: 'Educational Authority', focusArea: 'Industry Expertise', suggestions: ['How-to guides', 'Industry insights', 'Best practices'] },
@@ -218,8 +267,13 @@ function generateWeeklyThemes(aiContent: string) {
     { theme: 'Partnerships', focusArea: 'Collaborations', suggestions: ['Partner features', 'Joint content', 'Cross-promotion'] },
     { theme: 'Call-to-Action', focusArea: 'Conversion', suggestions: ['Trial offers', 'Limited promotions', 'Sign-up campaigns'] }
   ];
-
-  return themes;
+  const n = Math.max(1, Math.min(52, Math.floor(count)));
+  if (n <= base.length) return base.slice(0, n);
+  const result = [...base];
+  for (let i = base.length; i < n; i++) {
+    result.push({ theme: `Week ${i + 1} Focus`, focusArea: 'Content & Engagement', suggestions: ['Ongoing topics', 'Audience feedback', 'Performance optimization'] });
+  }
+  return result;
 }
 
 function generateWeeklyPlans(startDate: Date, aiContent: string, durationWeeks: number) {

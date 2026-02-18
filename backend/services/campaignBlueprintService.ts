@@ -182,15 +182,31 @@ export async function getUnifiedCampaignBlueprint(
 
   try {
     // 1. Check twelve_week_plan (Flow B - Structured Blueprint)
-    const { data: planRow, error: planError } = await supabase
+    // Prefer: edited_committed > committed > draft (status column if present)
+    let planRow: { weeks?: any; blueprint?: any } | null = null;
+    const { data: planRows, error: planError } = await supabase
       .from('twelve_week_plan')
-      .select('weeks, blueprint')
+      .select('weeks, blueprint, status')
       .eq('campaign_id', campaignId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .order('updated_at', { ascending: false })
+      .limit(10);
 
-    if (!planError && planRow) {
+    if (!planError && planRows && planRows.length > 0) {
+      const withStatus = planRows.find((r: any) => ['edited_committed', 'committed'].includes(r?.status));
+      planRow = withStatus ?? planRows[0];
+    } else if (planError) {
+      // Fallback: status column may not exist; fetch without it
+      const { data: fallbackRows } = await supabase
+        .from('twelve_week_plan')
+        .select('weeks, blueprint')
+        .eq('campaign_id', campaignId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (fallbackRows) planRow = fallbackRows as any;
+    }
+
+    if (planRow) {
       // Prefer stored blueprint if available
       if (planRow.blueprint && typeof planRow.blueprint === 'object') {
         const bp = planRow.blueprint as CampaignBlueprint;

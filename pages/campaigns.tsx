@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Edit, Trash2 } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
+import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 
 interface Campaign {
   id: string;
@@ -26,6 +27,10 @@ export default function CampaignsList() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [reapprovalMap, setReapprovalMap] = useState<Record<string, boolean>>({});
+  const [stageFilter, setStageFilter] = useState<string>('all');
+  const filteredCampaigns = stageFilter === 'all'
+    ? campaigns
+    : campaigns.filter((c) => (c.current_stage || c.status) === stageFilter);
 
   useEffect(() => {
     if (!selectedCompanyId) return;
@@ -88,38 +93,29 @@ export default function CampaignsList() {
 
   const handleEditCampaign = (campaignId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    // Navigate to campaign planning in edit mode
-    window.location.href = `/campaign-planning?mode=edit&campaignId=${campaignId}`;
+    const params = new URLSearchParams({ campaignId, mode: 'edit' });
+    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
+    window.location.href = `/campaign-planning?${params.toString()}`;
   };
 
   const handleDeleteCampaign = async (campaignId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    
-    // Check if user is super admin
-    try {
-      const response = await fetch('/api/admin/check-super-admin');
-      const result = await response.json();
-      
-      if (!result.isSuperAdmin) {
-        alert('Access Denied: Only super admins can delete campaigns. Please contact your administrator.');
-        return;
-      }
-    } catch (error) {
-      console.error('Error checking super admin status:', error);
-      alert('Error verifying permissions. Please try again.');
+
+    if (!selectedCompanyId) {
+      alert('Please select a company before deleting campaigns.');
       return;
     }
 
     if (confirm('Are you sure you want to delete this campaign? This action cannot be undone.')) {
       try {
-        // Use the super admin delete API
-        const deleteResponse = await fetch('/api/admin/delete-campaign', {
+        const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
+        const deleteResponse = await fetchWithAuth(deleteUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             campaignId,
-            reason: prompt('Please provide a reason for deleting this campaign:') || 'No reason provided',
-            ipAddress: '127.0.0.1', // In production, get real IP
+            companyId: selectedCompanyId,
+            ipAddress: '127.0.0.1',
             userAgent: navigator.userAgent
           })
         });
@@ -142,12 +138,26 @@ export default function CampaignsList() {
     }
   };
 
-  const statusColors = {
-    'planning': 'bg-blue-100 text-blue-800',
-    'active': 'bg-green-100 text-green-800',
-    'completed': 'bg-gray-100 text-gray-800',
-    'paused': 'bg-yellow-100 text-yellow-800',
-    'cancelled': 'bg-red-100 text-red-800'
+  const stageColors: Record<string, string> = {
+    planning: 'bg-blue-100 text-blue-800',
+    twelve_week_plan: 'bg-indigo-100 text-indigo-800',
+    daily_plan: 'bg-amber-100 text-amber-800',
+    charting: 'bg-teal-100 text-teal-800',
+    schedule: 'bg-green-100 text-green-800',
+    active: 'bg-green-100 text-green-800',
+    completed: 'bg-gray-100 text-gray-800',
+    paused: 'bg-yellow-100 text-yellow-800',
+    cancelled: 'bg-red-100 text-red-800',
+  };
+  const getStageLabel = (stage: string) => {
+    const labels: Record<string, string> = {
+      planning: 'Planning',
+      twelve_week_plan: '12 Week Plan',
+      daily_plan: 'Daily Plan',
+      charting: 'Charting',
+      schedule: 'Schedule',
+    };
+    return labels[stage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
   };
 
   return (
@@ -227,24 +237,57 @@ export default function CampaignsList() {
           </div>
         </div>
 
+        {/* Stage Filter */}
+        <div className="flex flex-wrap gap-2 mb-6">
+          {[
+            { id: 'all', label: 'All' },
+            { id: 'planning', label: 'Planning' },
+            { id: 'twelve_week_plan', label: '12 Week Plan' },
+            { id: 'daily_plan', label: 'Daily Plan' },
+            { id: 'charting', label: 'Charting' },
+            { id: 'schedule', label: 'Schedule' },
+          ].map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setStageFilter(s.id)}
+              className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                stageFilter === s.id
+                  ? 'bg-gradient-to-r from-purple-500 to-violet-600 text-white'
+                  : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
         {/* Campaigns List */}
         {isLoading ? (
           <div className="text-center py-12">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500 mx-auto"></div>
             <p className="mt-4 text-gray-600">Loading campaigns...</p>
           </div>
-        ) : campaigns.length === 0 ? (
+        ) : filteredCampaigns.length === 0 ? (
           <div className="text-center py-12">
             <Target className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">No Campaigns Yet</h3>
-            <p className="text-gray-600 mb-6">Create your first campaign to get started with content planning</p>
-            <button 
-              onClick={() => window.location.href = '/create-campaign'}
-              className="bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 mx-auto"
-            >
-              <Plus className="w-5 h-5" />
-              Create Your First Campaign
-            </button>
+            <h3 className="text-xl font-semibold text-gray-900 mb-2">{campaigns.length === 0 ? 'No Campaigns Yet' : 'No campaigns in this stage'}</h3>
+            <p className="text-gray-600 mb-6">{campaigns.length === 0 ? 'Create your first campaign to get started with content planning' : 'Try selecting "All" or another stage'}</p>
+            {campaigns.length === 0 ? (
+              <button 
+                onClick={() => window.location.href = '/create-campaign'}
+                className="bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 mx-auto"
+              >
+                <Plus className="w-5 h-5" />
+                Create Your First Campaign
+              </button>
+            ) : (
+              <button 
+                onClick={() => setStageFilter('all')}
+                className="bg-white border border-purple-500 text-purple-600 hover:bg-purple-50 px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 mx-auto"
+              >
+                View All Campaigns
+              </button>
+            )}
           </div>
         ) : (
           <div className="bg-white rounded-lg shadow-sm border border-gray-200">
@@ -263,7 +306,7 @@ export default function CampaignsList() {
 
             {/* Campaign Rows */}
             <div className="divide-y divide-gray-200">
-              {campaigns.map((campaign, index) => (
+              {filteredCampaigns.map((campaign, index) => (
                 <div 
                   key={campaign.id}
                   className="px-6 py-4 hover:bg-gray-50 transition-colors cursor-pointer"
@@ -285,8 +328,8 @@ export default function CampaignsList() {
                     {/* Status */}
                     <div className="col-span-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${statusColors[campaign.status] || 'bg-gray-100 text-gray-800'}`}>
-                          {campaign.status}
+                        <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${stageColors[campaign.current_stage || campaign.status] || 'bg-gray-100 text-gray-800'}`}>
+                          {getStageLabel(campaign.current_stage || campaign.status)}
                         </span>
                         {reapprovalMap[campaign.id] && (
                           <span className="inline-flex px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">

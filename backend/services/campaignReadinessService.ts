@@ -2,9 +2,11 @@
  * Campaign Readiness Service
  *
  * Calculates and stores readiness status for campaigns.
+ * Considers: weekly_content_plans, weekly_content_refinements, twelve_week_plan blueprint, daily_content_plans.
  */
 
 import { supabase } from '../db/supabaseClient';
+import { getUnifiedCampaignBlueprint } from './campaignBlueprintService';
 
 export type ReadinessState = 'not_ready' | 'partial' | 'ready';
 
@@ -104,12 +106,36 @@ export async function evaluateCampaignReadiness(
   } else {
     weekNumbers = (weeklyPlans || []).map((plan: any) => plan.week_number);
   }
-  const weeklyCount = weekNumbers.length;
+  let weeklyCount = weekNumbers.length;
 
+  let weeksWithTopicsCount = 0;
+  if (weeklyCount === 0) {
+    const blueprint = await getUnifiedCampaignBlueprint(campaignId);
+    if (blueprint?.weeks?.length) {
+      weekNumbers = blueprint.weeks.map((w: any) => w.week_number ?? 0).filter(Boolean);
+      weeklyCount = weekNumbers.length;
+      weeksWithTopicsCount = blueprint.weeks.filter(
+        (w: any) => Array.isArray(w.topics_to_cover) && w.topics_to_cover.length > 0
+      ).length;
+      if (weeklyCount > 0) {
+        blockingIssues.push({
+          code: 'WEEKLY_TOPICS_DONE_NEED_DAILY',
+          message: weeksWithTopicsCount > 0
+            ? `${weeksWithTopicsCount} week(s) have topics. Structure into daily plans with platforms and content, then schedule.`
+            : 'Weekly structure defined. Add topics and daily plans, then schedule.',
+        });
+      }
+    }
+  } else {
+    const blueprint = await getUnifiedCampaignBlueprint(campaignId);
+    weeksWithTopicsCount = blueprint?.weeks?.filter(
+      (w: any) => Array.isArray(w.topics_to_cover) && w.topics_to_cover.length > 0
+    ).length ?? 0;
+  }
   if (weeklyCount === 0) {
     blockingIssues.push({
       code: 'MISSING_WEEKLY_PLANS',
-      message: 'No weekly plans found',
+      message: 'No weekly plans found. Build your campaign plan with AI Assistant to get started.',
     });
   }
 
@@ -140,10 +166,12 @@ export async function evaluateCampaignReadiness(
   const missingWeeks = weekNumbers.filter((week) => !weeksWithDaily.has(week));
 
   if (weeklyCount > 0 && missingWeeks.length > 0) {
-    blockingIssues.push({
-      code: 'MISSING_DAILY_PLANS',
-      message: `Week(s) missing daily plans: ${missingWeeks.join(', ')}`,
-    });
+    const hasWeeklyTopicsMsg = blockingIssues.some((b) => b.code === 'WEEKLY_TOPICS_DONE_NEED_DAILY');
+    const msg =
+      missingWeeks.length >= weeklyCount
+        ? 'All weeks need daily plans with content, then schedule.'
+        : `Week(s) missing daily plans: ${missingWeeks.slice(0, 10).join(', ')}${missingWeeks.length > 10 ? '...' : ''}`;
+    if (!hasWeeklyTopicsMsg) blockingIssues.push({ code: 'MISSING_DAILY_PLANS', message: msg });
   }
 
   const contentReadyCount = dailyList.filter((plan: any) =>
@@ -185,8 +213,13 @@ export async function evaluateCampaignReadiness(
     });
   }
 
+  // Partial credit for weekly structure: 0.3 skeleton, 0.6 with topics, 1.0 with daily
+  const weeklyStructureScore =
+    weeklyCount === 0 ? 0
+    : weeksWithTopicsCount > 0 ? 0.3 + 0.3 * (weeksWithTopicsCount / Math.max(weeklyCount, 1))
+    : 0.2;
   const components = [
-    weeklyCount > 0 ? 1 : 0,
+    Math.min(1, weeklyStructureScore + (weeklyCount > 0 ? weeksWithDaily.size / Math.max(weeklyCount, 1) * 0.7 : 0)),
     weeklyCount > 0 ? weeksWithDaily.size / weeklyCount : 0,
     dailyCount > 0 ? contentReadyCount / dailyCount : 0,
     mediaRequiredCount > 0 ? mediaReadyCount / mediaRequiredCount : 1,

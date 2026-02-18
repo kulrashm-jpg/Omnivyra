@@ -1,0 +1,6 @@
+-- Week extras: dynamic JSONB keys per week (summary, objectives, days_to_post, etc.)
+-- No schema change needed: twelve_week_plan.weeks is already JSONB.
+-- Each week object can include:
+--   week_extras: { summary?: string, objectives?: string[], days_to_post?: string[], ... }
+-- Add keys dynamically via AI chat refinement or API; stored inside weeks array.
+-- Example: { "week": 1, "phase_label": "...", "week_extras": { "summary": "...", "objectives": ["..."], "days_to_post": ["Tue", "Thu"] } }

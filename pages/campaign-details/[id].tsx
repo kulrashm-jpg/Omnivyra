@@ -533,6 +533,26 @@ export default function CampaignDetails() {
       default: return 'bg-gray-100 text-gray-800';
     }
   };
+  const getStageColor = (stage: string) => {
+    const m: Record<string, string> = {
+      planning: 'bg-blue-100 text-blue-800',
+      twelve_week_plan: 'bg-indigo-100 text-indigo-800',
+      daily_plan: 'bg-amber-100 text-amber-800',
+      charting: 'bg-teal-100 text-teal-800',
+      schedule: 'bg-green-100 text-green-800',
+    };
+    return m[stage] ?? 'bg-gray-100 text-gray-800';
+  };
+  const getStageLabel = (stage: string) => {
+    const labels: Record<string, string> = {
+      planning: 'Planning',
+      twelve_week_plan: '12 Week Plan',
+      daily_plan: 'Daily Plan',
+      charting: 'Charting',
+      schedule: 'Schedule',
+    };
+    return labels[stage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
+  };
 
   const getPhaseColor = (phase: string) => {
     switch (phase) {
@@ -1271,8 +1291,8 @@ export default function CampaignDetails() {
                 </h1>
                 <p className="text-gray-600 mt-1">Content Marketing Plan</p>
                 <div className="flex items-center gap-4 mt-2">
-                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(campaign.status)}`}>
-                    {campaign.status}
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStageColor(campaign.current_stage || campaign.status)}`}>
+                    {getStageLabel(campaign.current_stage || campaign.status)}
                   </span>
                   <span className="text-sm text-gray-700">
                     Readiness: <span className="font-semibold">{readiness?.readiness_percentage ?? '--'}%</span>
@@ -1619,16 +1639,27 @@ export default function CampaignDetails() {
                   </div>
                 );
               })()}
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
                 <h2 className="text-xl font-semibold">Content Plan</h2>
-                <button 
-                  onClick={() => router.push(`/ai-chat?campaignId=${campaign.id}&context=12week-plan`)}
-                  disabled={!campaign?.start_date || !(campaign as any).duration_weeks}
-                  className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Sparkles className="h-4 w-4" />
-                  AI Enhance All Weeks
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => router.push(`/campaign-planning-hierarchical?campaignId=${campaign.id}`)}
+                    disabled={!campaign?.start_date || !(campaign as any).duration_weeks}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="View plan and work on daily content for each week"
+                  >
+                    <Calendar className="h-4 w-4" />
+                    View Plan & Work on Daily
+                  </button>
+                  <button 
+                    onClick={() => router.push(`/ai-chat?campaignId=${campaign.id}&context=12week-plan`)}
+                    disabled={!campaign?.start_date || !(campaign as any).duration_weeks}
+                    className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    AI Enhance All Weeks
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-4">
@@ -1653,6 +1684,14 @@ export default function CampaignDetails() {
                               <h3 className="font-semibold text-lg">Week {weekNumber}</h3>
                               <p className="text-gray-600">{weekPlan?.theme || `Week ${weekNumber} Theme`}</p>
                               <p className="text-sm text-gray-500">{weekPlan?.focusArea || `Week ${weekNumber} Focus Area`}</p>
+                              {(weekPlan as any)?.platform_allocation && Object.keys((weekPlan as any).platform_allocation).length > 0 && (
+                                <p className="text-xs text-indigo-600 mt-1">
+                                  {Object.entries((weekPlan as any).platform_allocation).map(([p, c]) => `${p}: ${c}`).join(' · ')}
+                                </p>
+                              )}
+                              {(weekPlan as any)?.topics_to_cover?.length > 0 && (
+                                <p className="text-xs text-gray-500 mt-0.5">{((weekPlan as any).topics_to_cover as string[]).length} topics</p>
+                              )}
                             </div>
                           </div>
                           
@@ -1694,11 +1733,11 @@ export default function CampaignDetails() {
                         </div>
                       </div>
 
-                      {/* Week Details (Expanded) */}
+                      {/* Week Details (Expanded) — committed plan content */}
                       {isExpanded && (
                         <div className="border-t bg-gray-50 p-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            {/* Week Overview */}
+                            {/* Week Overview — from committed plan */}
                             <div>
                               <h4 className="font-semibold mb-3">Week Overview</h4>
                               <div className="space-y-2">
@@ -1710,10 +1749,59 @@ export default function CampaignDetails() {
                                   <span className="text-sm font-medium text-gray-600">Focus:</span>
                                   <span className="ml-2 text-sm">{weekPlan?.focusArea || `Week ${weekNumber} Focus`}</span>
                                 </div>
-                                <div>
-                                  <span className="text-sm font-medium text-gray-600">Key Messaging:</span>
-                                  <span className="ml-2 text-sm">{weekPlan?.keyMessaging || 'Key messaging for this week'}</span>
-                                </div>
+                                {(weekPlan as any)?.keyMessaging && (weekPlan as any).keyMessaging !== 'AI-generated messaging' && (
+                                  <div>
+                                    <span className="text-sm font-medium text-gray-600">Key Messaging:</span>
+                                    <span className="ml-2 text-sm">{(weekPlan as any).keyMessaging}</span>
+                                  </div>
+                                )}
+                                {(weekPlan as any)?.platform_allocation && Object.keys((weekPlan as any).platform_allocation).length > 0 && (
+                                  <div>
+                                    <span className="text-sm font-medium text-gray-600">Platforms (items per week):</span>
+                                    <div className="flex flex-wrap gap-1 mt-1">
+                                      {Object.entries((weekPlan as any).platform_allocation).map(([p, c]) => (
+                                        <span key={p} className="px-2 py-0.5 bg-indigo-100 rounded text-xs font-medium">{p}: {c}</span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {(weekPlan as any)?.contentTypes?.length > 0 && (
+                                  <div>
+                                    <span className="text-sm font-medium text-gray-600">Content types:</span>
+                                    <span className="ml-2 text-sm">{(weekPlan as any).contentTypes.join(', ')}</span>
+                                  </div>
+                                )}
+                                {(weekPlan as any)?.topics_to_cover?.length > 0 && (
+                                  <div>
+                                    <span className="text-sm font-medium text-gray-600">Topics to cover:</span>
+                                    <ul className="mt-1 list-disc list-inside text-sm text-gray-700">
+                                      {((weekPlan as any).topics_to_cover as string[]).map((t, i) => (
+                                        <li key={i}>{t}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {(weekPlan as any)?.platform_content_breakdown && Object.keys((weekPlan as any).platform_content_breakdown).length > 0 && (
+                                  <div>
+                                    <span className="text-sm font-medium text-gray-600">Content to create:</span>
+                                    <div className="mt-2 space-y-2">
+                                      {Object.entries((weekPlan as any).platform_content_breakdown).map(([platform, items]: [string, any]) => (
+                                        <div key={platform} className="p-2 bg-white rounded border text-xs">
+                                          <span className="font-medium capitalize text-gray-800">{platform}:</span>
+                                          <ul className="mt-1 space-y-0.5 text-gray-700">
+                                            {(Array.isArray(items) ? items : []).map((it: any, idx: number) => (
+                                              <li key={idx}>
+                                                {it.count} {it.type || 'post'}
+                                                {it.topic ? ` — ${it.topic}` : ''}
+                                                {it.topics?.length ? ` (${it.topics.join(', ')})` : ''}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             </div>
 

@@ -1,10 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import {
   getResolvedCampaignPlanContext,
   PrePlanningRequiredError,
 } from '../../../backend/services/campaignBlueprintService';
-import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
+import { getTrendSnapshots, syncCampaignVersionStage } from '../../../backend/db/campaignVersionStore';
 import {
   buildPlatformExecutionPlan,
 } from '../../../backend/services/platformIntelligenceService';
@@ -77,6 +78,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       weekNumber: Number(weekNumber),
       planJson: plan,
     });
+
+    // Advance to charting (social media alignment) when building platform plan
+    if (campaignId) {
+      const { data: camp } = await supabase
+        .from('campaigns')
+        .select('current_stage')
+        .eq('id', campaignId)
+        .single();
+      const stage = (camp as { current_stage?: string })?.current_stage;
+      if (stage && stage !== 'schedule' && stage !== 'charting') {
+        await supabase
+          .from('campaigns')
+          .update({ current_stage: 'charting', updated_at: new Date().toISOString() })
+          .eq('id', campaignId);
+        void syncCampaignVersionStage(campaignId, 'charting', companyId).catch(() => {});
+      }
+    }
 
     const healthReport = validateCampaignHealth({
       companyProfile: profile,
