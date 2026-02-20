@@ -71,6 +71,18 @@ export type CompanyProfile = {
     dominant_problem_domains?: string[];
     brand_positioning_angle?: string | null;
   } | null;
+  // Problem & Transformation Intelligence
+  core_problem_statement?: string | null;
+  pain_symptoms?: string[] | null;
+  awareness_gap?: string | null;
+  problem_impact?: string | null;
+  life_with_problem?: string | null;
+  life_after_solution?: string | null;
+  desired_transformation?: string | null;
+  transformation_mechanism?: string | null;
+  authority_domains?: string[] | null;
+  /** User-selected signals that MUST be injected into AI context. */
+  forced_context_fields?: Record<string, boolean> | null;
 }
 
 /** Commercial strategy fields; when saved by user they are added to user_locked_fields. */
@@ -94,6 +106,544 @@ export const MARKETING_INTELLIGENCE_FIELD_NAMES = [
   'competitive_advantages',
   'growth_priorities',
 ] as const;
+
+/** Problem & Transformation Intelligence fields; when saved they are added to user_locked_fields. */
+export const PROBLEM_TRANSFORMATION_FIELD_NAMES = [
+  'core_problem_statement',
+  'pain_symptoms',
+  'awareness_gap',
+  'problem_impact',
+  'life_with_problem',
+  'life_after_solution',
+  'desired_transformation',
+  'transformation_mechanism',
+  'authority_domains',
+] as const;
+
+export type ProblemTransformationQuestionsResult = {
+  section: 'problem_transformation_intelligence';
+  questions: string[];
+};
+
+export type ProblemTransformationRefinedOutput = {
+  core_problem_statement: string | null;
+  pain_symptoms: string[];
+  awareness_gap: string | null;
+  problem_impact: string | null;
+  life_with_problem: string | null;
+  life_after_solution: string | null;
+  desired_transformation: string | null;
+  transformation_mechanism: string | null;
+  authority_domains: string[];
+};
+
+export type ProfileCompletenessResult = {
+  score: number;
+  section_scores: {
+    identity: number;
+    brand_strategy: number;
+    customer_icp: number;
+    problem_transformation: number;
+    campaign_guidance: number;
+    commercial: number;
+  };
+  missing_sections: string[];
+};
+
+export function buildProblemTransformationQuestions(): ProblemTransformationQuestionsResult {
+  return {
+    section: 'problem_transformation_intelligence',
+    questions: [
+      'What core problem do your customers face?',
+      'What symptoms show this problem exists?',
+      'What do customers usually misunderstand about this problem?',
+      'What happens if this problem is not solved?',
+      'Describe customer life BEFORE your solution.',
+      'Describe customer life AFTER your solution.',
+      'What transformation does your solution create?',
+      'How does your company uniquely create this transformation?',
+      'In which domains is your company an authority?',
+    ],
+  };
+}
+
+const PROBLEM_TRANSFORMATION_QUESTIONS = buildProblemTransformationQuestions().questions;
+
+const PT_FIELD_NAMES = [
+  'core_problem_statement',
+  'pain_symptoms',
+  'awareness_gap',
+  'problem_impact',
+  'life_with_problem',
+  'life_after_solution',
+  'desired_transformation',
+  'transformation_mechanism',
+  'authority_domains',
+] as const;
+
+export type ProblemTransformationExistingFields = Partial<{
+  core_problem_statement: string | null;
+  pain_symptoms: string[];
+  awareness_gap: string | null;
+  problem_impact: string | null;
+  life_with_problem: string | null;
+  life_after_solution: string | null;
+  desired_transformation: string | null;
+  transformation_mechanism: string | null;
+  authority_domains: string[];
+}>;
+
+export type ProblemTransformationPromptResult = {
+  systemPrompt: string;
+  userPrompt: string;
+};
+
+/** Strategic prompt builder: THINK → ANALYZE → STRUCTURE → OUTPUT */
+export function buildProblemTransformationStrategicPrompt(
+  mode: 'fill' | 'refine',
+  profile: CompanyProfile | null,
+  existingFields: ProblemTransformationExistingFields & { qaPairs?: Array<{ question: string; answer: string }> }
+): ProblemTransformationPromptResult {
+  const thinkFlow =
+    'Follow this reasoning flow: THINK (absorb context) → ANALYZE (identify gaps/weaknesses) → STRUCTURE (organize) → OUTPUT (strict JSON only).';
+
+  const companyContext = profile
+    ? [
+        `Industry: ${profile.industry ?? ''}`,
+        `Target audience: ${(profile.target_audience ?? (profile.target_audience_list ?? []).join(', ')) || ''}`,
+        `Campaign focus: ${profile.campaign_focus ?? ''}`,
+        `Content themes: ${(profile.content_themes ?? (profile.content_themes_list ?? []).join(', ')) || ''}`,
+        `Brand positioning: ${profile.brand_positioning ?? ''}`,
+        `Unique value: ${profile.unique_value ?? ''}`,
+        `Authority domains (existing): ${(profile.authority_domains ?? []).join(', ') || 'none'}`,
+      ]
+        .filter(Boolean)
+        .join('. ')
+    : 'No company context.';
+
+  if (mode === 'fill') {
+    const qaPairs = existingFields.qaPairs ?? [];
+    const systemPrompt =
+      'You are the Problem & Transformation AI Engine — AUTO FILL MODE.\n\n' +
+      'Your ONLY job: Automatically fill or improve ALL Problem & Transformation fields.\n' +
+      'You MUST NOT behave like chat.\n\n' +
+      thinkFlow +
+      '\n\nMODE: fill_with_ai\n\n' +
+      'BEHAVIOR (STRICT):\n' +
+      '1. Read ALL available context.\n' +
+      '2. Infer missing strategic intelligence.\n' +
+      '3. Fill ALL empty fields.\n' +
+      '4. Improve weak or generic wording.\n' +
+      '5. Generate DIAMOND-oriented angles.\n\n' +
+      'HARD RULES:\n' +
+      '- DO NOT ask ANY question.\n' +
+      '- DO NOT request clarification.\n' +
+      '- DO NOT start conversation.\n' +
+      '- DO NOT ask \"what else\".\n' +
+      '- If information is missing: infer best deterministic assumption.\n\n' +
+      'THINKING ORDER:\n' +
+      '1) Core Problem\n2) Emotional pain\n3) Practical pain\n4) Awareness gap (misconceptions)\n' +
+      '5) Problem impact\n6) Life with problem\n7) Life after solution\n8) Desired transformation\n' +
+      '9) Transformation mechanism\n10) Authority domains\n11) Diamond opportunities\n\n' +
+      'Return JSON only in this schema:\n' +
+      '{\n' +
+      '  "updates": {\n' +
+      '    "core_problem_statement": string | null,\n' +
+      '    "pain_symptoms": [] | null,\n' +
+      '    "awareness_gap": string | null,\n' +
+      '    "problem_impact": string | null,\n' +
+      '    "life_with_problem": string | null,\n' +
+      '    "life_after_solution": string | null,\n' +
+      '    "desired_transformation": string | null,\n' +
+      '    "transformation_mechanism": string | null,\n' +
+      '    "authority_domains": [] | null\n' +
+      '  },\n' +
+      '  "strategic_insights": [],\n' +
+      '  "diamond_opportunities": [],\n' +
+      '  "one_next_question": null,\n' +
+      '  "reasoning_summary": ""\n' +
+      '}';
+
+    const userPrompt =
+      `Company context:\n${companyContext}\n\n` +
+      (qaPairs.length > 0
+        ? 'User Q&A:\n' +
+          qaPairs.map((p) => `Q: ${p.question}\nA: ${p.answer}`).join('\n\n') +
+          '\n\nUse full company profile + existing context to auto-fill and improve all fields.'
+        : 'Use full company profile + existing context to auto-fill and improve all fields.');
+
+    return { systemPrompt, userPrompt };
+  }
+
+  // refine mode
+  const existingText =
+    existingFields && typeof existingFields === 'object'
+      ? PT_FIELD_NAMES.map((k) => {
+          const v = existingFields[k as keyof ProblemTransformationExistingFields];
+          const display = Array.isArray(v) ? (v as string[]).join(', ') : String(v ?? '').trim();
+          return `${k}: ${display || '(empty)'}`;
+        }).join('\n')
+      : '';
+
+  const strategistInstruction =
+    'Think like a strategist helping this company discover hidden customer pains and transformation gaps. Expand depth, not verbosity.';
+
+  const systemPrompt =
+    strategistInstruction +
+    '\n\n' +
+    thinkFlow +
+    '\n\n**REFINE MODE:**\n' +
+    '1. Read current values. Identify weaknesses: too generic, too broad, duplicated meaning, not actionable, missing angles.\n' +
+    '2. Expand coverage across: awareness, education, authority, transformation, conversion intent.\n' +
+    '3. Improve fields WITHOUT losing original intent. Preserve essence; increase specificity.\n' +
+    '4. Add nuanced misconceptions (awareness_gap). Add emotional + practical pain.\n\n' +
+    '**RULES:**\n' +
+    '- Ask ONE short question at a time when conversing. When outputting done: merge user input with improvements.\n' +
+    '- pain_symptoms and authority_domains: string arrays.\n' +
+    'Response: { "nextQuestion": "..." } or { "done": true, "structuredFields": { ...all 9 fields } }\n' +
+    'Return valid JSON only. No markdown.';
+
+  const userPrompt =
+    `Company context:\n${companyContext}\n\n` +
+    `Current values:\n${existingText}\n\n` +
+    'Refine: identify weaknesses, improve specificity, add depth. Output all 9 fields when done.';
+
+  return { systemPrompt, userPrompt };
+}
+
+function normalizeToArray(value: string | string[] | null | undefined): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((v) => String(v).split(/[,;|\n]+/).map((s) => s.trim()))
+      .filter(Boolean);
+  }
+  return String(value)
+    .split(/[,;|\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function dedupeArray(arr: string[]): string[] {
+  const seen = new Set<string>();
+  return arr.filter((s) => {
+    const lower = s.toLowerCase().trim();
+    if (seen.has(lower)) return false;
+    seen.add(lower);
+    return true;
+  });
+}
+
+const EMPTY_PT_OUTPUT: ProblemTransformationRefinedOutput = {
+  core_problem_statement: null,
+  pain_symptoms: [],
+  awareness_gap: null,
+  problem_impact: null,
+  life_with_problem: null,
+  life_after_solution: null,
+  desired_transformation: null,
+  transformation_mechanism: null,
+  authority_domains: [],
+};
+
+function parseAndNormalizePT(parsed: Record<string, unknown>): ProblemTransformationRefinedOutput {
+  const payload =
+    parsed && typeof parsed === 'object' && parsed.updates && typeof parsed.updates === 'object'
+      ? (parsed.updates as Record<string, unknown>)
+      : parsed;
+  const str = (v: unknown): string | null =>
+    v != null && String(v).trim() ? String(v).trim() : null;
+  const pain = normalizeToArray(payload.pain_symptoms as string | string[] | null | undefined);
+  const auth = normalizeToArray(payload.authority_domains as string | string[] | null | undefined);
+  return {
+    core_problem_statement: str(payload.core_problem_statement),
+    pain_symptoms: dedupeArray(pain),
+    awareness_gap: str(payload.awareness_gap),
+    problem_impact: str(payload.problem_impact),
+    life_with_problem: str(payload.life_with_problem),
+    life_after_solution: str(payload.life_after_solution),
+    desired_transformation: str(payload.desired_transformation),
+    transformation_mechanism: str(payload.transformation_mechanism),
+    authority_domains: dedupeArray(auth),
+  };
+}
+
+/** Anti-stuck: merge AI result with existing; never return partial structure. */
+function mergeWithExisting(
+  aiResult: ProblemTransformationRefinedOutput,
+  existing: ProblemTransformationExistingFields
+): ProblemTransformationRefinedOutput {
+  return {
+    core_problem_statement: aiResult.core_problem_statement ?? existing.core_problem_statement ?? null,
+    pain_symptoms: (aiResult.pain_symptoms?.length ? aiResult.pain_symptoms : existing.pain_symptoms) ?? [],
+    awareness_gap: aiResult.awareness_gap ?? existing.awareness_gap ?? null,
+    problem_impact: aiResult.problem_impact ?? existing.problem_impact ?? null,
+    life_with_problem: aiResult.life_with_problem ?? existing.life_with_problem ?? null,
+    life_after_solution: aiResult.life_after_solution ?? existing.life_after_solution ?? null,
+    desired_transformation: aiResult.desired_transformation ?? existing.desired_transformation ?? null,
+    transformation_mechanism: aiResult.transformation_mechanism ?? existing.transformation_mechanism ?? null,
+    authority_domains: (aiResult.authority_domains?.length ? aiResult.authority_domains : existing.authority_domains) ?? [],
+  };
+}
+
+function isPartialOrEmpty(result: ProblemTransformationRefinedOutput): boolean {
+  const hasCore = !!result.core_problem_statement;
+  const hasAnyArray = (result.pain_symptoms?.length ?? 0) > 0 || (result.authority_domains?.length ?? 0) > 0;
+  const textCount = [
+    result.awareness_gap,
+    result.problem_impact,
+    result.life_with_problem,
+    result.life_after_solution,
+    result.desired_transformation,
+    result.transformation_mechanism,
+  ].filter(Boolean).length;
+  return !hasCore && !hasAnyArray && textCount === 0;
+}
+
+export async function refineProblemTransformationAnswers(
+  rawAnswers: (string | null | undefined)[],
+  options?: { companyId?: string; profile?: CompanyProfile | null; existingFields?: ProblemTransformationExistingFields }
+): Promise<ProblemTransformationRefinedOutput> {
+  const client = getOpenAiClient();
+  const qaPairs = PROBLEM_TRANSFORMATION_QUESTIONS.map((q, i) => ({
+    question: q,
+    answer: rawAnswers[i] ?? '',
+  }));
+
+  const profile = options?.profile ?? null;
+  const existingFields = options?.existingFields ?? {};
+  const useStrategic = !!profile || options?.companyId;
+
+  let systemPrompt: string;
+  let userPrompt: string;
+
+  if (useStrategic && profile) {
+    const built = buildProblemTransformationStrategicPrompt('fill', profile, {
+      ...existingFields,
+      qaPairs,
+    });
+    systemPrompt = built.systemPrompt;
+    userPrompt = built.userPrompt;
+  } else {
+    systemPrompt =
+      'You are a company profile refinement engine. Extract and structure problem-transformation intelligence from user answers.\n\n' +
+      'THINK → ANALYZE → STRUCTURE → OUTPUT. Return valid JSON only.\n' +
+      'Output: { core_problem_statement, pain_symptoms: string[], awareness_gap, problem_impact, life_with_problem, life_after_solution, desired_transformation, transformation_mechanism, authority_domains: string[] }';
+    userPrompt =
+      'Q&A:\n' +
+      qaPairs.map((p) => `Q: ${p.question}\nA: ${p.answer}`).join('\n\n') +
+      '\n\nGenerate ALL 9 fields. Output JSON only.';
+  }
+
+  const callLLM = (retryStrict = false) =>
+    client.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: retryStrict ? userPrompt + '\n\nReturn ONLY valid JSON. No markdown, no commentary.' : userPrompt },
+      ],
+    });
+
+  let raw = '';
+  try {
+    const completion = await callLLM(false);
+    raw = completion.choices[0]?.message?.content?.trim() || '{}';
+  } catch {
+    return mergeWithExisting(EMPTY_PT_OUTPUT, existingFields);
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    try {
+      const retry = await callLLM(true);
+      raw = retry.choices[0]?.message?.content?.trim() || '{}';
+      parsed = JSON.parse(raw);
+    } catch {
+      return mergeWithExisting(EMPTY_PT_OUTPUT, existingFields);
+    }
+  }
+
+  const result = parseAndNormalizePT(parsed);
+  if (isPartialOrEmpty(result)) {
+    return mergeWithExisting(result, existingFields);
+  }
+  return result;
+}
+
+export async function saveProblemTransformationAnswers(
+  companyId: string,
+  rawAnswers: (string | null | undefined)[]
+): Promise<CompanyProfile> {
+  const resolvedId = normalizeCompanyId(companyId);
+  const profile = await fetchProfileRaw(resolvedId);
+  const existingPT: ProblemTransformationExistingFields = profile
+    ? {
+        core_problem_statement: profile.core_problem_statement ?? null,
+        pain_symptoms: profile.pain_symptoms ?? [],
+        awareness_gap: profile.awareness_gap ?? null,
+        problem_impact: profile.problem_impact ?? null,
+        life_with_problem: profile.life_with_problem ?? null,
+        life_after_solution: profile.life_after_solution ?? null,
+        desired_transformation: profile.desired_transformation ?? null,
+        transformation_mechanism: profile.transformation_mechanism ?? null,
+        authority_domains: profile.authority_domains ?? [],
+      }
+    : {};
+  const refined = await refineProblemTransformationAnswers(rawAnswers, {
+    companyId: resolvedId,
+    profile,
+    existingFields: existingPT,
+  });
+  const existing = profile;
+  const lockedSet = new Set<string>(
+    Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []
+  );
+
+  const merged: Partial<CompanyProfile> = { company_id: resolvedId };
+
+  const applyField = <K extends keyof ProblemTransformationRefinedOutput>(
+    key: K,
+    refinedVal: ProblemTransformationRefinedOutput[K],
+    existingVal: unknown
+  ) => {
+    if (lockedSet.has(key) && existingVal != null) {
+      (merged as Record<string, unknown>)[key] = existingVal;
+    } else {
+      (merged as Record<string, unknown>)[key] = refinedVal;
+    }
+  };
+
+  applyField('core_problem_statement', refined.core_problem_statement, existing?.core_problem_statement);
+  applyField('pain_symptoms', refined.pain_symptoms, existing?.pain_symptoms);
+  applyField('awareness_gap', refined.awareness_gap, existing?.awareness_gap);
+  applyField('problem_impact', refined.problem_impact, existing?.problem_impact);
+  applyField('life_with_problem', refined.life_with_problem, existing?.life_with_problem);
+  applyField('life_after_solution', refined.life_after_solution, existing?.life_after_solution);
+  applyField('desired_transformation', refined.desired_transformation, existing?.desired_transformation);
+  applyField('transformation_mechanism', refined.transformation_mechanism, existing?.transformation_mechanism);
+  applyField('authority_domains', refined.authority_domains, existing?.authority_domains);
+
+  const fieldConfidence: Record<string, string> = { ...(existing?.field_confidence || {}) };
+  for (const key of PROBLEM_TRANSFORMATION_FIELD_NAMES) {
+    const val = (merged as Record<string, unknown>)[key];
+    if (val != null && (Array.isArray(val) ? val.length > 0 : String(val).trim())) {
+      fieldConfidence[key] = 'Medium';
+    }
+  }
+  merged.field_confidence = fieldConfidence;
+
+  return saveProfile({ ...existing, ...merged } as Partial<CompanyProfile>, {
+    source: 'ai_refined',
+  });
+}
+
+const SECTION_WEIGHTS = {
+  identity: 0.2,
+  brand_strategy: 0.15,
+  customer_icp: 0.15,
+  problem_transformation: 0.25,
+  campaign_guidance: 0.15,
+  commercial: 0.1,
+} as const;
+
+const IDENTITY_FIELDS = ['name', 'industry', 'category', 'website_url', 'geography'] as const;
+const BRAND_STRATEGY_FIELDS = [
+  'brand_voice',
+  'brand_positioning',
+  'unique_value',
+  'key_messages',
+  'competitive_advantages',
+] as const;
+const CUSTOMER_ICP_FIELDS = [
+  'target_audience',
+  'target_customer_segment',
+  'ideal_customer_profile',
+] as const;
+const PROBLEM_TRANSFORMATION_FIELDS = [
+  'core_problem_statement',
+  'pain_symptoms',
+  'awareness_gap',
+  'problem_impact',
+  'life_with_problem',
+  'life_after_solution',
+  'desired_transformation',
+  'transformation_mechanism',
+  'authority_domains',
+] as const;
+const CAMPAIGN_GUIDANCE_FIELDS = [
+  'content_themes',
+  'campaign_focus',
+  'content_strategy',
+  'campaign_purpose_intent',
+  'growth_priorities',
+  'goals',
+] as const;
+const COMMERCIAL_FIELDS = [
+  'pricing_model',
+  'sales_motion',
+  'avg_deal_size',
+  'sales_cycle',
+  'key_metrics',
+  'marketing_channels',
+] as const;
+
+function hasValue(profile: CompanyProfile | null, field: string): boolean {
+  if (!profile) return false;
+  const val = (profile as Record<string, unknown>)[field];
+  if (val == null) return false;
+  if (Array.isArray(val)) return val.length > 0;
+  if (typeof val === 'object') return Object.keys(val as object).length > 0;
+  return String(val).trim().length > 0;
+}
+
+function sectionScore(profile: CompanyProfile | null, fields: readonly string[]): number {
+  if (!profile) return 0;
+  let filled = 0;
+  for (const f of fields) {
+    if (hasValue(profile, f)) filled++;
+  }
+  return fields.length > 0 ? (filled / fields.length) * 100 : 0;
+}
+
+export function calculateCompanyProfileCompleteness(
+  profile: CompanyProfile | null
+): ProfileCompletenessResult {
+  const section_scores = {
+    identity: sectionScore(profile, IDENTITY_FIELDS),
+    brand_strategy: sectionScore(profile, BRAND_STRATEGY_FIELDS),
+    customer_icp: sectionScore(profile, CUSTOMER_ICP_FIELDS),
+    problem_transformation: sectionScore(profile, PROBLEM_TRANSFORMATION_FIELDS),
+    campaign_guidance: sectionScore(profile, CAMPAIGN_GUIDANCE_FIELDS),
+    commercial: sectionScore(profile, COMMERCIAL_FIELDS),
+  };
+
+  const missing_sections: string[] = [];
+  if (section_scores.identity < 100) missing_sections.push('identity');
+  if (section_scores.brand_strategy < 100) missing_sections.push('brand_strategy');
+  if (section_scores.customer_icp < 100) missing_sections.push('customer_icp');
+  if (section_scores.problem_transformation < 100) missing_sections.push('problem_transformation');
+  if (section_scores.campaign_guidance < 100) missing_sections.push('campaign_guidance');
+  if (section_scores.commercial < 100) missing_sections.push('commercial');
+
+  const score = Math.round(
+    section_scores.identity * SECTION_WEIGHTS.identity +
+      section_scores.brand_strategy * SECTION_WEIGHTS.brand_strategy +
+      section_scores.customer_icp * SECTION_WEIGHTS.customer_icp +
+      section_scores.problem_transformation * SECTION_WEIGHTS.problem_transformation +
+      section_scores.campaign_guidance * SECTION_WEIGHTS.campaign_guidance +
+      section_scores.commercial * SECTION_WEIGHTS.commercial
+  );
+
+  return {
+    score: Math.min(100, Math.max(0, score)),
+    section_scores,
+    missing_sections,
+  };
+}
 
 export type CompanyProfileRefinementDetails = {
   company_id: string;
@@ -1540,7 +2090,14 @@ const splitToList = (value?: string | null): string[] => {
     .filter(Boolean);
 };
 
-export async function saveProfile(input: Partial<CompanyProfile>): Promise<CompanyProfile> {
+export type SaveProfileOptions = {
+  source?: 'user' | 'ai_refined';
+};
+
+export async function saveProfile(
+  input: Partial<CompanyProfile>,
+  options?: SaveProfileOptions
+): Promise<CompanyProfile> {
   let companyId = input.company_id;
   if (!companyId) {
     companyId = randomUUID();
@@ -1548,9 +2105,11 @@ export async function saveProfile(input: Partial<CompanyProfile>): Promise<Compa
   companyId = normalizeCompanyId(companyId);
   console.log('Resolved company_id:', companyId);
   const existing = await fetchProfileRaw(companyId);
+  const nowIso = new Date().toISOString();
+  const source = (options?.source ?? 'user') as 'user' | 'ai_refined';
 
-  const lastRefinedAt =
-    input.last_refined_at ?? existing?.last_refined_at ?? new Date().toISOString();
+  // Treat every profile save as a fresh refinement/update timestamp.
+  const lastRefinedAt = nowIso;
   const confidenceScore = input.confidence_score ?? existing?.confidence_score ?? 0;
 
   const payload = {
@@ -1617,9 +2176,9 @@ export async function saveProfile(input: Partial<CompanyProfile>): Promise<Compa
     unique_value: input.unique_value ?? existing?.unique_value ?? null,
     content_themes: input.content_themes ?? existing?.content_themes ?? null,
     confidence_score: confidenceScore,
-    source: 'user' as const,
+    source,
     last_refined_at: lastRefinedAt,
-    updated_at: new Date().toISOString(),
+    updated_at: nowIso,
     target_customer_segment: input.target_customer_segment ?? existing?.target_customer_segment ?? null,
     ideal_customer_profile: input.ideal_customer_profile ?? existing?.ideal_customer_profile ?? null,
     pricing_model: input.pricing_model ?? existing?.pricing_model ?? null,
@@ -1637,6 +2196,16 @@ export async function saveProfile(input: Partial<CompanyProfile>): Promise<Compa
     competitive_advantages: input.competitive_advantages ?? existing?.competitive_advantages ?? null,
     growth_priorities: input.growth_priorities ?? existing?.growth_priorities ?? null,
     campaign_purpose_intent: input.campaign_purpose_intent ?? existing?.campaign_purpose_intent ?? null,
+    core_problem_statement: input.core_problem_statement ?? existing?.core_problem_statement ?? null,
+    pain_symptoms: input.pain_symptoms ?? existing?.pain_symptoms ?? null,
+    awareness_gap: input.awareness_gap ?? existing?.awareness_gap ?? null,
+    problem_impact: input.problem_impact ?? existing?.problem_impact ?? null,
+    life_with_problem: input.life_with_problem ?? existing?.life_with_problem ?? null,
+    life_after_solution: input.life_after_solution ?? existing?.life_after_solution ?? null,
+    desired_transformation: input.desired_transformation ?? existing?.desired_transformation ?? null,
+    transformation_mechanism: input.transformation_mechanism ?? existing?.transformation_mechanism ?? null,
+    authority_domains: input.authority_domains ?? existing?.authority_domains ?? null,
+    forced_context_fields: input.forced_context_fields ?? existing?.forced_context_fields ?? null,
   };
 
   const lockedSet = new Set<string>(Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []);
@@ -1651,6 +2220,14 @@ export async function saveProfile(input: Partial<CompanyProfile>): Promise<Compa
   for (const key of MARKETING_INTELLIGENCE_FIELD_NAMES) {
     const val = input[key];
     if (val !== undefined && val !== null && String(val).trim() !== '') {
+      lockedSet.add(key);
+      didLock = true;
+    }
+  }
+  for (const key of PROBLEM_TRANSFORMATION_FIELD_NAMES) {
+    const val = input[key as keyof CompanyProfile];
+    const hasVal = Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && String(val).trim() !== '';
+    if (hasVal) {
       lockedSet.add(key);
       didLock = true;
     }

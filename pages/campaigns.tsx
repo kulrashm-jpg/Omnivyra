@@ -3,6 +3,7 @@ import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Edit, Trash2 } fr
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { getStageLabelWithDuration } from '../backend/types/CampaignStage';
 
 interface Campaign {
   id: string;
@@ -149,16 +150,8 @@ export default function CampaignsList() {
     paused: 'bg-yellow-100 text-yellow-800',
     cancelled: 'bg-red-100 text-red-800',
   };
-  const getStageLabel = (stage: string) => {
-    const labels: Record<string, string> = {
-      planning: 'Planning',
-      twelve_week_plan: '12 Week Plan',
-      daily_plan: 'Daily Plan',
-      charting: 'Charting',
-      schedule: 'Schedule',
-    };
-    return labels[stage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
-  };
+  const getStageLabel = (stage: string, durationWeeks?: number | null) =>
+    getStageLabelWithDuration(stage, durationWeeks);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
@@ -216,7 +209,7 @@ export default function CampaignsList() {
               <div className="ml-4">
                 <p className="text-sm text-gray-600">Total Content</p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {campaigns.reduce((sum, c) => sum + c.stats.totalContent, 0)}
+                  {campaigns.reduce((sum, c) => sum + (c.stats?.totalContent ?? 0), 0)}
                 </p>
               </div>
             </div>
@@ -320,6 +313,9 @@ export default function CampaignsList() {
                           {campaign.name}
                         </h3>
                         <p className="text-xs text-gray-500 truncate">
+                          ID: <code className="text-gray-600">{campaign.id}</code>
+                        </p>
+                        <p className="text-xs text-gray-400 truncate">
                           {campaign.description || 'No description'}
                         </p>
                       </div>
@@ -350,10 +346,10 @@ export default function CampaignsList() {
                     <div className="col-span-2">
                       <div className="flex gap-4 text-sm">
                         <span className="text-gray-600">
-                          <span className="font-medium">{campaign.stats.weeklyPlans}</span> weeks
+                          <span className="font-medium">{campaign.stats?.weeklyPlans ?? 0}</span> weeks
                         </span>
                         <span className="text-gray-600">
-                          <span className="font-medium">{campaign.stats.totalContent}</span> content
+                          <span className="font-medium">{campaign.stats?.totalContent ?? 0}</span> content
                         </span>
                       </div>
                     </div>
@@ -371,11 +367,11 @@ export default function CampaignsList() {
                         <div className="w-full bg-gray-200 rounded-full h-2">
                           <div 
                             className="bg-blue-600 h-2 rounded-full"
-                            style={{ width: `${Math.min((campaign.stats.weeklyPlans / 12) * 100, 100)}%` }}
+                            style={{ width: `${Math.min(((campaign.stats?.weeklyPlans ?? 0) / 12) * 100, 100)}%` }}
                           />
                         </div>
                         <span className="text-xs text-gray-600 w-8">
-                          {Math.round((campaign.stats.weeklyPlans / 12) * 100)}%
+                          {Math.round(((campaign.stats?.weeklyPlans ?? 0) / 12) * 100)}%
                         </span>
                       </div>
                     </div>

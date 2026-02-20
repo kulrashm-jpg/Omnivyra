@@ -21,7 +21,8 @@ import {
   TrendingUp,
   Target,
   Calendar,
-  Save
+  Save,
+  PenTool
 } from 'lucide-react';
 import ChatVoiceButton from './ChatVoiceButton';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
@@ -137,6 +138,14 @@ interface AIChatProps {
   prefilledPlanning?: Record<string, unknown> | null;
   /** Existing plan when refining (avoids re-asking; skips to refine mode) */
   initialPlan?: { weeks: any[] } | null;
+  /** Render as full-page embedded view (no overlay) for new-tab usage */
+  standalone?: boolean;
+  /** Pre-selected weeks and areas from recommendations page (skips scope questions) */
+  vetScope?: { selectedWeeks: number[]; areasByWeek?: Record<number, string[]> };
+  /** Client-collected planning context (form, pre-planning result) — merged server-side to avoid re-asking */
+  collectedPlanningContext?: Record<string, unknown> | null;
+  /** Force fresh planning chat once (ignore cached/loaded history). */
+  forceFreshPlanningThread?: boolean;
 }
 
 type AIProvider = 'gpt' | 'claude' | 'demo';
@@ -232,7 +241,7 @@ type AiHistoryEntry = {
   created_at: string;
 };
 
-export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, recommendationContext, onProgramGenerated, governanceLocked, optimizationContext, prefilledPlanning, initialPlan }: AIChatProps) {
+export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, recommendationContext, onProgramGenerated, governanceLocked, optimizationContext, prefilledPlanning, initialPlan, standalone = false, vetScope, collectedPlanningContext, forceFreshPlanningThread = false }: AIChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [inputClearKey, setInputClearKey] = useState(0);
@@ -293,6 +302,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [isPlatformIntelLoading, setIsPlatformIntelLoading] = useState(false);
   const [hasViewedPlanMessageId, setHasViewedPlanMessageId] = useState<number | null>(null);
   const [showPlanOverview, setShowPlanOverview] = useState(false);
+  const [pendingAmendment, setPendingAmendment] = useState<StructuredPlan | null>(null);
   const [retrievePlanData, setRetrievePlanData] = useState<{ savedPlan?: { content: string; savedAt: string }; committedPlan?: { weeks: any[] }; draftPlan?: { weeks: any[]; savedAt: string } } | null>(null);
   const [planSource, setPlanSource] = useState<'ai' | 'committed' | 'draft'>('ai');
   const [isRetrievePlanLoading, setIsRetrievePlanLoading] = useState(false);
@@ -300,6 +310,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const freshThreadAppliedRef = useRef<Set<string>>(new Set());
   const resolvedCompanyId = useMemo(() => {
     if (companyId) return companyId;
     if (typeof window === 'undefined') return '';
@@ -318,6 +329,24 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     return true;
   };
 
+  const resolveWorkingDurationWeeks = (): number => {
+    const candidates: Array<unknown> = [
+      structuredPlan?.weeks?.length,
+      retrievePlanData?.draftPlan?.weeks?.length,
+      retrievePlanData?.committedPlan?.weeks?.length,
+      initialPlan?.weeks?.length,
+      (prefilledPlanning?.campaign_duration as number | undefined),
+      (campaignData as { duration_weeks?: number } | undefined)?.duration_weeks,
+    ];
+    for (const candidate of candidates) {
+      const parsed = Number(candidate);
+      if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 52) {
+        return parsed;
+      }
+    }
+    return 12;
+  };
+
   // Debug: Log props when component mounts or props change
   useEffect(() => {
     console.log('CampaignAIChat props:', { isOpen, context, campaignId, hasCampaignData: !!campaignData });
@@ -328,7 +357,21 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     if (campaignId && campaignData) {
       initializeCampaignThread(campaignId, campaignData);
     }
-  }, [campaignId, campaignData, recommendationContext]);
+  }, [campaignId, campaignData, recommendationContext, initialPlan, context]);
+
+  // Persist recommendations chat to session storage when messages change (separate from planning)
+  useEffect(() => {
+    if (context?.toLowerCase().includes('campaign-recommendations') && campaignId && messages.length > 0 && typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.setItem(
+          `campaign_chat_draft_${campaignId}_recommendations`,
+          JSON.stringify({ messages, savedAt: new Date().toISOString() })
+        );
+      } catch (e) {
+        console.warn('Could not persist recommendations chat to sessionStorage', e);
+      }
+    }
+  }, [context, campaignId, messages]);
 
   // Fetch saved/committed plan availability when chat opens for a campaign
   useEffect(() => {
@@ -448,7 +491,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
           if (typeof window !== 'undefined') {
             try {
               window.sessionStorage.setItem(
-                `campaign_chat_draft_${campaignId}`,
+                getChatStorageKey(campaignId),
                 JSON.stringify({ messages, savedAt: new Date().toISOString() })
               );
             } catch (e) {
@@ -486,7 +529,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
         if (typeof window !== 'undefined') {
           try {
             window.sessionStorage.setItem(
-              `campaign_chat_draft_${campaignId}`,
+              getChatStorageKey(campaignId),
               JSON.stringify({ messages, savedAt: new Date().toISOString() })
             );
           } catch (e) {
@@ -541,7 +584,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     }
     setShowPlanOverview(false);
     setShowPlanPreview(false);
-    const defaultWeeks = structuredPlan?.weeks?.length ?? (campaignData as { duration_weeks?: number })?.duration_weeks ?? 12;
+    const defaultWeeks = resolveWorkingDurationWeeks();
     setCommitDurationWeeks(typeof defaultWeeks === 'number' && defaultWeeks >= 1 && defaultWeeks <= 52 ? defaultWeeks : 12);
     setCommitStartDate(new Date().toISOString().split('T')[0]);
     setShowDateSelection(true);
@@ -674,7 +717,7 @@ This comprehensive approach ensures consistent growth and engagement across all 
       
       const resolvedDuration = typeof durationWeeks === 'number' && durationWeeks >= 1 && durationWeeks <= 52
         ? durationWeeks
-        : (structuredPlan?.weeks?.length ?? (campaignData as { duration_weeks?: number })?.duration_weeks);
+        : resolveWorkingDurationWeeks();
       const body: Record<string, unknown> = {
         campaignId,
         startDate,
@@ -702,7 +745,7 @@ This comprehensive approach ensures consistent growth and engagement across all 
           setRetrievePlanData(refetchData);
         }
 
-        const weeksMsg = typeof resolvedDuration === 'number' ? resolvedDuration : (structuredPlan?.weeks?.length ?? 12);
+        const weeksMsg = typeof resolvedDuration === 'number' ? resolvedDuration : resolveWorkingDurationWeeks();
         const successMessage: ChatMessage = {
           id: Date.now(),
           type: 'ai',
@@ -798,13 +841,45 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
   };
 
   const initializeCampaignThread = async (campaignId: string, campaignData: any) => {
-    // Load existing conversation for this campaign
-    const existingMessages = await loadCampaignMessages(campaignId);
-    
+    const contextKey = `${campaignId}:${String(context || 'general').toLowerCase()}`;
+    const isPlanningContext =
+      context.toLowerCase().includes('campaign-planning') ||
+      context.toLowerCase().includes('12week-plan');
+    const shouldForceFreshNow =
+      forceFreshPlanningThread &&
+      isPlanningContext &&
+      !freshThreadAppliedRef.current.has(contextKey);
+
+    if (shouldForceFreshNow && typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.removeItem(getChatStorageKey(campaignId));
+      } catch (e) {
+        console.warn('Could not clear saved chat draft', e);
+      }
+      freshThreadAppliedRef.current.add(contextKey);
+    }
+
+    // Load existing conversation for this campaign (context-specific: recommendations use separate storage)
+    let existingMessages = shouldForceFreshNow ? [] : await loadCampaignMessages(campaignId);
+    // If we now have recommendations but stored messages are from "no recs" state, start fresh with consultation welcome
+    const isRecsContext = context?.toLowerCase().includes('campaign-recommendations');
+    if (isRecsContext && initialPlan?.weeks?.length && existingMessages.length > 0) {
+      const firstAi = existingMessages.find((m) => m.type === 'ai')?.message ?? '';
+      if (firstAi.includes('Generate recommendations first')) existingMessages = [];
+    }
     if (existingMessages.length === 0) {
       const durationWeeks = (campaignData?.duration_weeks ?? initialPlan?.weeks?.length ?? 12);
       let welcomeText: string;
-      if (initialPlan?.weeks?.length && context?.toLowerCase().includes('12week-plan')) {
+      const isRecommendationsContext = context?.toLowerCase().includes('campaign-recommendations');
+      if (isRecommendationsContext) {
+        welcomeText = initialPlan?.weeks?.length
+          ? `Hello! I'm your expert consultant for **improving this campaign's plan**. You've got recommendations loaded.
+
+I'll ask a few quick questions first to focus our work—scope (all weeks or specific week), interest areas (topics, content types, geo focus, scheduling, target customer, etc.), and what's missing from a content manager standpoint. Once you answer, I'll refine accordingly. When you're satisfied, apply the agreed changes to your campaign.
+
+**Would you like to improve all weeks, or focus on a specific week (or weeks)?**`
+          : `Hello! I'm your expert consultant for **vetting and refining recommendations**. Generate recommendations first (click "Generate Recommendations" above), then I'll help you improve them by scope (all weeks or specific weeks), topics, content types, geo focus, and more.`;
+      } else if (initialPlan?.weeks?.length && context?.toLowerCase().includes('12week-plan')) {
         welcomeText = `Hello! You're refining your **${durationWeeks}-week campaign plan**. I won't ask questions—just describe the changes you want (e.g., "Add topic X to Week 1", "Change Week 2 theme to...", "Add 2 LinkedIn posts to Week 3"). I'll apply them and return the updated plan.`;
       } else if (recommendationContext && (recommendationContext.target_regions?.length || recommendationContext.context_payload)) {
         welcomeText = buildRecommendationWelcome(campaignData);
@@ -825,10 +900,16 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
     }
   };
 
+  const getChatStorageKey = (cid: string) =>
+    context?.toLowerCase().includes('campaign-recommendations')
+      ? `campaign_chat_draft_${cid}_recommendations`
+      : `campaign_chat_draft_${cid}`;
+
   const loadCampaignMessages = async (campaignId: string): Promise<ChatMessage[]> => {
+    const storageKey = getChatStorageKey(campaignId);
     if (typeof window !== 'undefined') {
       try {
-        const stored = window.sessionStorage.getItem(`campaign_chat_draft_${campaignId}`);
+        const stored = window.sessionStorage.getItem(storageKey);
         if (stored) {
           const parsed = JSON.parse(stored) as { messages?: ChatMessage[] };
           if (Array.isArray(parsed.messages) && parsed.messages.length > 0) {
@@ -839,6 +920,8 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
         console.warn('Could not load saved chat draft', e);
       }
     }
+    // For recommendations context, use only session storage (avoid mixing with planning conversation)
+    if (context?.toLowerCase().includes('campaign-recommendations')) return [];
     try {
       const response = await fetch(`/api/ai/campaign-messages?campaignId=${campaignId}`);
       if (response.ok) {
@@ -1015,7 +1098,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
 
         const mode = context.toLowerCase().includes('daily')
           ? 'refine_day'
-          : context.toLowerCase().includes('campaign-planning') || context.toLowerCase().includes('12week-plan')
+          : context.toLowerCase().includes('campaign-planning') || context.toLowerCase().includes('12week-plan') || context.toLowerCase().includes('campaign-recommendations')
           ? 'generate_plan'
           : 'platform_customize';
 
@@ -1032,6 +1115,8 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
         const effectiveCurrentPlan = initialPlan?.weeks?.length
           ? initialPlan
           : (showPlanOverview && structuredPlan ? { weeks: structuredPlan.weeks } : undefined);
+        const totalWeeks = campaignData?.duration_weeks ?? effectiveCurrentPlan?.weeks?.length ?? 12;
+        const scopeWeeks = effectiveCurrentPlan && mode === 'generate_plan' ? extractScopeWeeks(messageText, totalWeeks) : null;
         const planResponse = await callCampaignPlanAPI(
           messageText,
           mode,
@@ -1041,6 +1126,9 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
             platforms: mode === 'platform_customize' ? platforms : undefined,
             conversationHistory: mode === 'generate_plan' ? conversationHistory : undefined,
             currentPlan: effectiveCurrentPlan,
+            scopeWeeks: scopeWeeks ?? undefined,
+            chatContext: context?.toLowerCase().includes('campaign-recommendations') ? 'campaign-recommendations' : undefined,
+            vetScope: vetScope,
           }
         );
 
@@ -1051,8 +1139,15 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
           setStructuredPlan(planResponse.plan);
           setStructuredPlanMessageId(aiResponseId);
           setPlanSource('ai');
-          console.log('Structured plan received', planResponse.plan);
-          response = 'Structured plan generated.';
+          const isRefineMode = !!effectiveCurrentPlan?.weeks?.length;
+          if (isRefineMode) {
+            setPendingAmendment(planResponse.plan);
+            response = 'Changes applied to your plan. Review below and click **Amend** when ready to save all changes.';
+          } else {
+            setPendingAmendment(null);
+            response = 'Structured plan generated.';
+          }
+          console.log('Structured plan received', planResponse.plan, 'refineMode:', isRefineMode);
         } else if (planResponse.day) {
           setStructuredPlan((prev) =>
             prev ? updatePlanWithRefinedDay(prev, planResponse.day) : prev
@@ -1083,18 +1178,18 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
         throw new Error('Invalid provider');
       }
 
-      // Check if AI generated a campaign program
-      if (onProgramGenerated && context === 'campaign-planning') {
+      // Check if AI generated a campaign program — only auto-call when NOT in refine mode (no pending amendment)
+      if (onProgramGenerated && context === 'campaign-planning' && !effectiveCurrentPlan?.weeks?.length) {
         const planForProgram = structuredPlanFromResponse || structuredPlan;
         if (planForProgram) {
           const programData = convertStructuredPlanToProgram(planForProgram);
-          onProgramGenerated(programData);
+          onProgramGenerated({ program: programData, structuredPlan: planForProgram });
         } else {
           const programMatch = response.match(/(\d+.*week.*program|week.*program|campaign.*program|weekly.*program)/i);
           if (programMatch || response.includes('Week 1') || response.includes('Week 2')) {
             const programData = extractProgramFromResponse(response);
             if (programData) {
-              onProgramGenerated(programData);
+              onProgramGenerated({ program: programData });
             }
           }
         }
@@ -1138,6 +1233,9 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
       platforms?: string[];
       conversationHistory?: Array<{ type: 'user' | 'ai'; message: string }>;
       currentPlan?: { weeks: any[] };
+      scopeWeeks?: number[] | null;
+      chatContext?: string;
+      vetScope?: { selectedWeeks: number[]; areasByWeek?: Record<number, string[]> };
     }
   ): Promise<{
     plan?: StructuredPlan;
@@ -1161,6 +1259,10 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
         recommendationContext,
         optimizationContext,
         currentPlan: options?.currentPlan,
+        scopeWeeks: options?.scopeWeeks,
+        chatContext: options?.chatContext,
+        vetScope: options?.vetScope ?? vetScope,
+        collectedPlanningContext: collectedPlanningContext && Object.keys(collectedPlanningContext).length > 0 ? collectedPlanningContext : undefined,
       }),
     });
 
@@ -1987,6 +2089,27 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
     return found.map((platform) => (platform === 'x' ? 'twitter' : platform));
   };
 
+  /** Parse week numbers from message: "week 1", "weeks 2 and 3", "all weeks" → [1] or [2,3] or null (all) */
+  const extractScopeWeeks = (message: string, totalWeeks: number): number[] | null => {
+    const lower = message.toLowerCase().trim();
+    if (/all\s*weeks|every\s*week|entire\s*plan|whole\s*plan/i.test(lower)) return null;
+    const weeks: number[] = [];
+    const singleMatch = lower.match(/\bweek\s+(\d+)\b/gi);
+    if (singleMatch) {
+      for (const m of singleMatch) {
+        const num = parseInt(m.replace(/\D/g, ''), 10);
+        if (num >= 1 && num <= totalWeeks && !weeks.includes(num)) weeks.push(num);
+      }
+    }
+    const rangeMatch = lower.match(/\bweeks?\s+(\d+)\s*(?:-|to|and|&)\s*(\d+)\b/i);
+    if (rangeMatch) {
+      const lo = Math.max(1, parseInt(rangeMatch[1], 10));
+      const hi = Math.min(totalWeeks, parseInt(rangeMatch[2], 10));
+      for (let i = lo; i <= hi; i++) if (!weeks.includes(i)) weeks.push(i);
+    }
+    return weeks.length > 0 ? weeks.sort((a, b) => a - b) : null;
+  };
+
   const convertStructuredPlanToProgram = (plan: StructuredPlan) => {
     const platformSet = new Set<string>();
     const weeks = plan.weeks.map((week) => {
@@ -2033,17 +2156,18 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
   };
 
   const isBusy = isLoading || isSchedulingPlan;
+  const isRecsChat = context?.toLowerCase().includes('campaign-recommendations');
 
-  if (!isOpen) return null;
+  if (!isOpen && !standalone) return null;
 
   return (
-    <div className={`fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex ${isFullscreen ? 'items-stretch justify-stretch p-0' : 'items-center justify-center p-2 sm:p-4'}`}>
-      <div className={`bg-white shadow-2xl flex flex-col ${isFullscreen ? 'h-full w-full max-w-none rounded-none' : 'w-[min(95vw,90rem)] h-[min(90vh,calc(100vh-1rem))] min-w-[20rem] min-h-[20rem] rounded-2xl'}`}>
+    <div className={`flex flex-col ${standalone ? 'h-full w-full min-h-0' : `fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex ${isFullscreen ? 'items-stretch justify-stretch p-0' : 'items-center justify-center p-2 sm:p-4'}`}`}>
+      <div className={`bg-white flex flex-col flex-1 min-h-0 ${standalone ? 'h-full w-full shadow-none rounded-none' : `shadow-2xl ${isFullscreen ? 'h-full w-full max-w-none rounded-none' : 'w-[min(95vw,90rem)] h-[min(90vh,calc(100vh-1rem))] min-w-[20rem] min-h-[20rem] rounded-2xl'}`}`}>
         {/* Header */}
-        <div className={`bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 flex items-center justify-between ${isFullscreen ? 'rounded-none' : 'rounded-t-2xl'}`}>
+        <div className={`text-white p-4 flex items-center justify-between ${isFullscreen ? 'rounded-none' : 'rounded-t-2xl'} ${isRecsChat ? 'bg-gradient-to-r from-emerald-500 to-teal-600' : 'bg-gradient-to-r from-indigo-500 to-purple-600'}`}>
           <div>
             <h3 className="text-lg font-semibold">Campaign AI Assistant</h3>
-            <p className="text-indigo-100 text-sm">{campaignData?.name || 'Campaign'}</p>
+            <p className={`text-sm ${isRecsChat ? 'text-emerald-100' : 'text-indigo-100'}`}>{campaignData?.name || 'Campaign'}</p>
           </div>
           <div className="flex items-center gap-1">
             <button
@@ -2752,7 +2876,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
               <div key={message.id} className={`flex w-full ${message.type === 'user' ? 'justify-end' : 'justify-start'} px-1 sm:px-2`}>
                 <div className={`px-4 py-3 rounded-lg min-w-0 ${
                   message.type === 'user' 
-                    ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white max-w-[90%]'
+                    ? (isRecsChat ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white max-w-[90%]' : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white max-w-[90%]')
                     : 'bg-gray-100 text-gray-900 w-full'
                 }`}>
                   {message.type === 'ai' &&
@@ -2763,7 +2887,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
                       <button
                         onClick={() => setShowScheduleConfirm(true)}
                         disabled={isBusy || !campaignId || governanceLocked}
-                        className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-lg hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 text-sm font-medium disabled:opacity-50"
+                        className={`w-full flex items-center justify-center gap-2 px-3 py-2 text-white rounded-lg transition-all duration-200 text-sm font-medium disabled:opacity-50 ${isRecsChat ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700' : 'bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700'}`}
                       >
                         <Calendar className="h-4 w-4" />
                         Schedule this plan
@@ -2786,7 +2910,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
                   )}
                   
                   <div className={`text-xs mt-2 flex items-center gap-1 ${
-                    message.type === 'user' ? 'text-indigo-100' : 'text-gray-500'
+                    message.type === 'user' ? (isRecsChat ? 'text-emerald-100' : 'text-indigo-100') : 'text-gray-500'
                   }`}>
                     <span>{message.timestamp}</span>
                     {message.provider && (
@@ -2806,7 +2930,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
               <div className="bg-gray-100 text-gray-900 px-4 py-3 rounded-lg min-w-0">
                 <div className="flex items-center gap-2">
                   {isLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
+                    <Loader2 className={`h-4 w-4 animate-spin ${isRecsChat ? 'text-emerald-500' : 'text-indigo-500'}`} />
                   ) : (
                     <div className="flex space-x-1">
                       <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
@@ -2891,7 +3015,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
                   <div className="text-sm text-gray-500 bg-gray-50 rounded-lg p-3">Edit via natural language, e.g. &quot;Week 1 Facebook topic: Professional neglecting personal lives&quot;, &quot;Same post on Facebook and LinkedIn&quot;, &quot;Week 3 LinkedIn: 2 posts, 1 article&quot;</div>
                   {messages.map((m) => (
                     <div key={m.id} className={`flex ${m.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[85%] px-3 py-2 rounded-lg text-sm ${m.type === 'user' ? 'bg-indigo-500 text-white' : 'bg-gray-100 text-gray-900'}`}>
+                      <div className={`max-w-[85%] px-3 py-2 rounded-lg text-sm ${m.type === 'user' ? (isRecsChat ? 'bg-emerald-600 text-white' : 'bg-indigo-500 text-white') : 'bg-gray-100 text-gray-900'}`}>
                         {m.type === 'ai' && structuredPlan && structuredPlanMessageId === m.id ? renderStructuredPlan(structuredPlan) : <div className="whitespace-pre-wrap">{m.message}</div>}
                       </div>
                     </div>
@@ -2911,7 +3035,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
                     className="flex-1 px-3 py-2 border rounded-lg text-sm"
                     disabled={isBusy}
                   />
-                  <button onClick={sendMessage} disabled={!newMessage.trim() || isBusy} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
+                  <button onClick={sendMessage} disabled={!newMessage.trim() || isBusy} className={`px-4 py-2 text-white rounded-lg text-sm font-medium disabled:opacity-50 ${isRecsChat ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
                     {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send'}
                   </button>
                 </div>
@@ -3172,7 +3296,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
               onChange={(e) => setNewMessage(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder={`Ask ${getProviderName(selectedProvider)} about "${campaignData?.name || 'your campaign'}"...`}
-              className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200"
+              className={`flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-200 ${isRecsChat ? 'focus:ring-emerald-500' : 'focus:ring-indigo-500'}`}
               disabled={isBusy}
             />
             <ChatVoiceButton
@@ -3184,7 +3308,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
             <button
               onClick={sendMessage}
               disabled={(!newMessage.trim() && attachments.length === 0) || isBusy}
-              className="p-3 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 disabled:opacity-50 text-white rounded-lg transition-all duration-200"
+              className={`p-3 disabled:opacity-50 text-white rounded-lg transition-all duration-200 ${isRecsChat ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700' : 'bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700'}`}
             >
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </button>

@@ -1,6 +1,8 @@
 export type OpportunityTabProps = {
   companyId: string | null;
   regions?: string[] | null;
+  /** Optional enriched recommendation cards from recommendation engine (`trends_used`). */
+  engineRecommendations?: Array<Record<string, unknown>>;
   onPromote: (opportunityId: string) => Promise<void>;
   onAction: (
     opportunityId: string,

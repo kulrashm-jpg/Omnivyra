@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import { supabase } from '../utils/supabaseClient';
+import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import VoiceNotesComponent from '../components/VoiceNotesComponent';
 import {
   buildTrendSourceCounts,
@@ -363,7 +364,7 @@ export default function RecommendationsPage() {
     const loadCampaigns = async () => {
       setIsCampaignLoading(true);
       try {
-        const response = await fetch(`/api/campaigns?companyId=${encodeURIComponent(selectedCompanyId)}`);
+        const response = await fetchWithAuth(`/api/campaigns?companyId=${encodeURIComponent(selectedCompanyId)}`);
         if (!response.ok) {
           throw new Error('Failed to load campaigns');
         }
@@ -390,21 +391,6 @@ export default function RecommendationsPage() {
     };
     loadCampaigns();
   }, [selectedCompanyId, campaignIdLocked]);
-
-  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) {
-      throw new Error('Not authenticated');
-    }
-    return fetch(input, {
-      ...init,
-      headers: {
-        ...(init?.headers || {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  };
 
   const handleOpportunityPromote = async (opportunityId: string) => {
     if (!selectedCompanyId) return;
@@ -433,10 +419,13 @@ export default function RecommendationsPage() {
     action: string,
     opts?: { scheduled_for?: string }
   ) => {
+    if (!selectedCompanyId) {
+      throw new Error('companyId required');
+    }
     const res = await fetchWithAuth(`/api/opportunities/${opportunityId}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, ...opts }),
+      body: JSON.stringify({ action, companyId: selectedCompanyId, ...opts }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -590,10 +579,14 @@ export default function RecommendationsPage() {
         campaignId: selectedCampaignId,
       });
       const response = await fetch(`/api/recommendations/detected-opportunities?${params.toString()}`);
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error('Failed to load detected opportunities');
+        const msg = data?.error || data?.message || `Failed to load detected opportunities (${response.status})`;
+        console.error('Detected opportunities API error:', response.status, msg, data);
+        setDetectedError(msg);
+        setDetectedOpportunities([]);
+        return;
       }
-      const data = await response.json();
       setDetectedOpportunities(Array.isArray(data?.opportunities) ? data.opportunities : []);
     } catch (error) {
       console.error('Error loading detected opportunities:', error);
@@ -1316,6 +1309,7 @@ export default function RecommendationsPage() {
                     ? opportunityRegions.split(',').map((r) => r.trim()).filter(Boolean)
                     : undefined
                 }
+                engineRecommendations={(engineResult?.trends_used as Array<Record<string, unknown>> | undefined) ?? []}
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
                 fetchWithAuth={fetchWithAuth}

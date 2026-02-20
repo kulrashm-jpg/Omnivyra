@@ -1,62 +1,107 @@
 import React, { useState, useEffect } from 'react';
+import type { ContextMode, FocusModule } from './engine-framework/UnifiedContextModeSelector';
 
 type FetchWithAuth = (input: RequestInfo, init?: RequestInit) => Promise<Response>;
 
-type MissionContext = {
-  company_name: string;
-  mission_statement: string;
-  core_problem_domains: string[];
-  target_persona: string;
-  transformation_outcome: string;
-  disqualified_signals: string[];
-  opportunity_intent: string;
-  geography?: string;
-};
-
-type Profile = {
-  name?: string;
-  target_customer_segment?: string | null;
-  key_messages?: string | null;
-  campaign_focus?: string | null;
-  geography?: string | null;
-  geography_list?: string[];
+type CompanyContextApi = {
+  company_context?: Record<string, unknown> | null;
+  company_context_completion?: number;
+  forced_context_enabled_fields?: string[];
+  forced_context_active_labels?: string[];
+  forced_context?: Record<string, unknown> | null;
 };
 
 type Props = {
   companyId: string | null;
   fetchWithAuth: FetchWithAuth;
+  contextMode?: ContextMode;
+  focusedModules?: FocusModule[];
+  additionalDirection?: string;
 };
 
-export default function EngineContextPanel({ companyId, fetchWithAuth }: Props) {
+const SECTION_LABELS: Record<string, string> = {
+  identity: 'Identity',
+  brand: 'Brand Strategy',
+  customer: 'Customer / ICP',
+  problem_transformation: 'Problem & Transformation',
+  campaign: 'Campaign Guidance',
+  commercial: 'Commercial',
+};
+
+const MODULE_TO_SECTIONS: Record<FocusModule, string[]> = {
+  TARGET_CUSTOMER: ['customer'],
+  PROBLEM_DOMAIN: ['problem_transformation'],
+  CAMPAIGN_PURPOSE: ['campaign'],
+  OFFERINGS: ['brand', 'campaign'],
+  GEOGRAPHY: ['identity'],
+  PRICING: ['commercial'],
+};
+
+function isGeographyField(fieldKey: string): boolean {
+  return fieldKey === 'geography' || fieldKey === 'geography_list';
+}
+
+function hasValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.values(value as Record<string, unknown>).some(hasValue);
+  return String(value).trim().length > 0;
+}
+
+function formatValue(value: unknown): string {
+  if (Array.isArray(value)) return value.join(', ');
+  if (typeof value === 'object' && value != null) return JSON.stringify(value);
+  return String(value ?? '');
+}
+
+export default function EngineContextPanel({
+  companyId,
+  fetchWithAuth,
+  contextMode = 'FULL',
+  focusedModules = [],
+  additionalDirection = '',
+}: Props) {
   const [collapsed, setCollapsed] = useState(true);
-  const [missionContext, setMissionContext] = useState<MissionContext | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [contextData, setContextData] = useState<CompanyContextApi | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    if (!companyId || typeof window === 'undefined') return;
+    const handleProfileUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<{ companyId?: string }>).detail;
+      if (!detail?.companyId || detail.companyId === companyId) {
+        setRefreshToken((v) => v + 1);
+      }
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === `company_profile_updated:${companyId}`) {
+        setRefreshToken((v) => v + 1);
+      }
+    };
+    window.addEventListener('company-profile-updated', handleProfileUpdated as EventListener);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('company-profile-updated', handleProfileUpdated as EventListener);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [companyId]);
 
   useEffect(() => {
     if (!companyId) {
-      setMissionContext(null);
-      setProfile(null);
+      setContextData(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
-    Promise.all([
-      fetchWithAuth(`/api/company-profile/mission-context?companyId=${encodeURIComponent(companyId)}&mode=FULL`),
-      fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`),
-    ])
-      .then(async ([missionRes, profileRes]) => {
+    fetchWithAuth(`/api/company-profile/context?companyId=${encodeURIComponent(companyId)}`)
+      .then(async (res) => {
         if (cancelled) return;
-        if (missionRes.ok) {
-          const missionData = await missionRes.json();
-          if (missionData?.mission_context) setMissionContext(missionData.mission_context);
-        }
-        if (profileRes.ok) {
-          const profileData = await profileRes.json();
-          if (profileData?.profile) setProfile(profileData.profile);
-        }
+        if (!res.ok) throw new Error('Failed to load company context');
+        const data = (await res.json()) as CompanyContextApi;
+        setContextData(data);
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load');
@@ -67,22 +112,28 @@ export default function EngineContextPanel({ companyId, fetchWithAuth }: Props) 
     return () => {
       cancelled = true;
     };
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, fetchWithAuth, refreshToken]);
 
-  const geography =
-    missionContext?.geography ||
-    profile?.geography ||
-    (profile?.geography_list?.length ? profile.geography_list.join(', ') : null);
-  const hasContent = !!(
-    missionContext?.mission_statement ||
-    (missionContext?.core_problem_domains?.length ?? 0) > 0 ||
-    missionContext?.opportunity_intent ||
-    profile?.name ||
-    profile?.target_customer_segment ||
-    profile?.key_messages ||
-    profile?.campaign_focus ||
-    geography
-  );
+  const companyContext = (contextData?.company_context ?? {}) as Record<string, Record<string, unknown>>;
+  const activeSectionKeys =
+    contextMode === 'FOCUSED'
+      ? Array.from(
+          new Set(
+            focusedModules.flatMap((m) => MODULE_TO_SECTIONS[m] ?? [])
+          )
+        )
+      : Object.keys(companyContext);
+
+  const visibleSections = activeSectionKeys
+    .map((sectionKey) => ({
+      key: sectionKey,
+      label: SECTION_LABELS[sectionKey] || sectionKey.replace(/_/g, ' '),
+      values: (companyContext[sectionKey] ?? {}) as Record<string, unknown>,
+    }))
+    .filter((s) => hasValue(s.values));
+
+  const hasForced = (contextData?.forced_context_active_labels?.length ?? 0) > 0;
+  const forcedContext = (contextData?.forced_context ?? {}) as Record<string, unknown>;
 
   return (
     <div className="border border-gray-200 rounded-lg bg-gray-50/80 overflow-hidden">
@@ -98,62 +149,70 @@ export default function EngineContextPanel({ companyId, fetchWithAuth }: Props) 
         <div className="px-3 pb-3 pt-0 text-sm text-gray-600 space-y-2">
           {loading && <p className="text-gray-500">Loading…</p>}
           {error && <p className="text-red-600">{error}</p>}
-          {!loading && !error && !hasContent && (
-            <p className="text-gray-500">No company profile or mission context loaded.</p>
+          {!loading && !error && contextMode === 'NONE' && (
+            <div className="space-y-1">
+              <p className="text-gray-700">
+                <span className="font-medium">No Company Context:</span> trend discovery runs without company/forced context.
+              </p>
+              {additionalDirection.trim() ? (
+                <p className="text-gray-700">
+                  <span className="font-medium">Research direction:</span> {additionalDirection}
+                </p>
+              ) : (
+                <p className="text-amber-700">
+                  Add “Additional Research Direction” to guide this run.
+                </p>
+              )}
+            </div>
           )}
-          {!loading && !error && hasContent && (
+          {!loading && !error && contextMode !== 'NONE' && (
             <>
-              {missionContext?.mission_statement && (
-                <div>
-                  <span className="text-gray-500 font-medium">Mission:</span>
-                  <p className="mt-0.5 text-gray-700">{missionContext.mission_statement}</p>
+              <p className="text-gray-700">
+                <span className="font-medium">Context mode:</span> {contextMode === 'FULL' ? 'Full Company Context' : 'Focused Context'}
+              </p>
+              {visibleSections.length === 0 ? (
+                <p className="text-gray-500">No matching company context fields available for this mode.</p>
+              ) : (
+                <div className="space-y-2">
+                  {visibleSections.map((section) => (
+                    (() => {
+                      const entries = Object.entries(section.values)
+                        .filter(([field, value]) => !isGeographyField(field) && hasValue(value));
+                      if (entries.length === 0) return null;
+                      return (
+                    <div key={section.key}>
+                      <span className="text-gray-500 font-medium">{section.label}:</span>
+                      <ul className="mt-0.5 list-disc list-inside text-gray-700 space-y-0.5">
+                        {entries.map(([field, value]) => (
+                            <li key={field}>
+                              {field.replace(/_/g, ' ')}: {formatValue(value)}
+                            </li>
+                        ))}
+                      </ul>
+                    </div>
+                      );
+                    })()
+                  ))}
                 </div>
               )}
-              {missionContext?.core_problem_domains && missionContext.core_problem_domains.length > 0 && (
-                <div>
-                  <span className="text-gray-500 font-medium">Core Problem Domains:</span>
+              {hasForced && (
+                <div className="pt-1">
+                  <span className="text-gray-500 font-medium">Forced Context (active selections):</span>
                   <ul className="mt-0.5 list-disc list-inside text-gray-700 space-y-0.5">
-                    {missionContext.core_problem_domains.map((d, i) => (
-                      <li key={i}>{d}</li>
-                    ))}
+                    {(contextData?.forced_context_enabled_fields ?? [])
+                      .filter((fieldKey) => !isGeographyField(fieldKey))
+                      .map((fieldKey) => {
+                      const allKeys = contextData?.forced_context_enabled_fields ?? [];
+                      const index = allKeys.indexOf(fieldKey);
+                      const label = (contextData?.forced_context_active_labels ?? [])[index] || fieldKey.replace(/_/g, ' ');
+                      const value = forcedContext[fieldKey];
+                      return (
+                        <li key={label}>
+                          {label}{hasValue(value) ? `: ${formatValue(value)}` : ''}
+                        </li>
+                      );
+                    })}
                   </ul>
-                </div>
-              )}
-              {missionContext?.opportunity_intent && (
-                <div>
-                  <span className="text-gray-500 font-medium">Opportunity Intent:</span>
-                  <p className="mt-0.5 text-gray-700">{missionContext.opportunity_intent}</p>
-                </div>
-              )}
-              {!missionContext && profile && (
-                <>
-                  {profile.name && (
-                    <div>
-                      <span className="text-gray-500">Company:</span>{' '}
-                      <span className="font-medium text-gray-900">{profile.name}</span>
-                    </div>
-                  )}
-                  {profile.target_customer_segment && (
-                    <div>
-                      <span className="text-gray-500">Target customer segment:</span>{' '}
-                      {profile.target_customer_segment}
-                    </div>
-                  )}
-                  {profile.key_messages && (
-                    <div>
-                      <span className="text-gray-500">Key messages:</span> {profile.key_messages}
-                    </div>
-                  )}
-                  {profile.campaign_focus && (
-                    <div>
-                      <span className="text-gray-500">Campaign focus:</span> {profile.campaign_focus}
-                    </div>
-                  )}
-                </>
-              )}
-              {geography && (
-                <div>
-                  <span className="text-gray-500">Geography:</span> {geography}
                 </div>
               )}
             </>

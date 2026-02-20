@@ -4,6 +4,7 @@ import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle
 import { useCompanyContext } from './CompanyContext';
 import Header from './Header';
 import { supabase } from '../utils/supabaseClient';
+import { getStageLabelWithDuration } from '../backend/types/CampaignStage';
 
 interface Campaign {
   id: string;
@@ -15,6 +16,7 @@ interface Campaign {
   end_date: string;
   created_at: string;
   platforms: string[];
+  duration_weeks?: number | null;
 }
 
 interface CampaignProgress {
@@ -56,7 +58,7 @@ export default function DashboardPage() {
   const CAMPAIGN_STAGES = [
     { id: 'all', label: 'All' },
     { id: 'planning', label: 'Planning' },
-    { id: 'twelve_week_plan', label: '12 Week Plan' },
+    { id: 'twelve_week_plan', label: 'Week Plan' },
     { id: 'daily_plan', label: 'Daily Plan' },
     { id: 'charting', label: 'Charting' },
     { id: 'schedule', label: 'Schedule' },
@@ -314,16 +316,8 @@ export default function DashboardPage() {
     return stageMap[stage] ?? 'from-gray-500 to-slate-600';
   };
 
-  const getStageLabel = (stage: string) => {
-    const labels: Record<string, string> = {
-      planning: 'Planning',
-      twelve_week_plan: '12 Week Plan',
-      daily_plan: 'Daily Plan',
-      charting: 'Charting',
-      schedule: 'Schedule',
-    };
-    return labels[stage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
-  };
+  const getStageLabel = (stage: string, durationWeeks?: number | null) =>
+    getStageLabelWithDuration(stage, durationWeeks);
 
   if (isLoading) {
     return (
@@ -581,6 +575,7 @@ export default function DashboardPage() {
                             </div>
                             <div>
                               <h3 className="font-semibold text-gray-900">{campaign.name}</h3>
+                              <p className="text-xs text-gray-500 font-mono">ID: {campaign.id}</p>
                               <p className="text-sm text-gray-600">
                                 {campaign.start_date ? new Date(campaign.start_date).toLocaleDateString() : 'Not scheduled'} - {campaign.end_date ? new Date(campaign.end_date).toLocaleDateString() : 'Not scheduled'}
                               </p>
@@ -594,7 +589,7 @@ export default function DashboardPage() {
                               }}
                               className={`px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)} text-white hover:opacity-80 transition-opacity`}
                             >
-                              {getStageLabel(campaign.current_stage || campaign.status)}
+                              {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
                             </button>
                             <button
                               onClick={(e) => {
@@ -638,7 +633,7 @@ export default function DashboardPage() {
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                             <span className="text-sm text-gray-600">Stage:</span>
-                            <span className="text-sm font-medium">{getStageLabel(campaign.current_stage || campaign.status)}</span>
+                            <span className="text-sm font-medium">{getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
@@ -655,7 +650,7 @@ export default function DashboardPage() {
                                 onClick={(e) => e.stopPropagation()}
                                 className="text-xs px-2 py-1 rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
                               >
-                                12 Week
+                                {campaign.duration_weeks ?? 12} Week
                               </a>
                             )}
                             {stageAvailability[campaign.id].stages.twelveWeekPlan && !stageAvailability[campaign.id].stages.detailedWeekPlans && (
@@ -792,38 +787,6 @@ export default function DashboardPage() {
                   View Recommendations
                 </button>
               </div>
-              <div className="bg-gradient-to-br from-blue-500 to-cyan-600 rounded-2xl p-6 text-white">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <Target className="h-6 w-6" />
-                  </div>
-                  <h3 className="text-xl font-bold">Start Planning</h3>
-                </div>
-                <p className="text-blue-100 mb-4">Create a new campaign and define your content strategy</p>
-                <button 
-                  onClick={() => window.location.href = '/create-campaign'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-                >
-                  Plan Campaign
-                </button>
-              </div>
-              
-              <div className="bg-gradient-to-br from-purple-500 to-violet-600 rounded-2xl p-6 text-white">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <TrendingUp className="h-6 w-6" />
-                  </div>
-                  <h3 className="text-xl font-bold">Market Analysis</h3>
-                </div>
-                <p className="text-purple-100 mb-4">Analyze trends and competitor content</p>
-                <button 
-                  onClick={() => window.location.href = '/market-analysis'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-                >
-                  Analyze Market
-                </button>
-              </div>
-              
               <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl p-6 text-white">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="p-2 bg-white/20 rounded-lg">
@@ -930,6 +893,7 @@ export default function DashboardPage() {
                             </div>
                             <div>
                               <h3 className="text-lg font-semibold text-gray-900">{campaign.name}</h3>
+                              <p className="text-xs text-gray-500 font-mono mt-0.5">ID: {campaign.id}</p>
                               <p className="text-gray-600 mt-1">{campaign.description || 'No description available'}</p>
                               <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
                                 <span>Created: {campaign.created_at ? new Date(campaign.created_at).toLocaleDateString() : 'Recently'}</span>
@@ -946,7 +910,7 @@ export default function DashboardPage() {
                               }}
                               className={`px-4 py-2 rounded-full text-sm font-medium bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)} text-white hover:opacity-80 transition-opacity`}
                             >
-                              {getStageLabel(campaign.current_stage || campaign.status)}
+                              {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
                             </button>
                           <div className="flex items-center gap-2">
                             <button
@@ -996,7 +960,7 @@ export default function DashboardPage() {
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
                             <span className="text-sm text-gray-600">Stage:</span>
-                            <span className="text-sm font-medium">{getStageLabel(campaign.current_stage || campaign.status)}</span>
+                            <span className="text-sm font-medium">{getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}</span>
                           </div>
                         </div>
 
@@ -1008,7 +972,7 @@ export default function DashboardPage() {
                                 onClick={(e) => e.stopPropagation()}
                                 className="text-xs px-2 py-1 rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
                               >
-                                12 Week
+                                {campaign.duration_weeks ?? 12} Week
                               </a>
                             )}
                             {stageAvailability[campaign.id].stages.twelveWeekPlan && !stageAvailability[campaign.id].stages.detailedWeekPlans && (

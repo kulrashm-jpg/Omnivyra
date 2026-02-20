@@ -1253,6 +1253,9 @@ export default function CampaignPlanning() {
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
                   {isEditMode && campaignData?.name ? `Editing: ${campaignData.name}` : 'Campaign Planning'}
                 </h1>
+                {isEditMode && campaignId && (
+                  <p className="text-xs text-gray-500 font-mono mt-0.5">ID: {campaignId}</p>
+                )}
                 <p className="text-gray-600 mt-1">
                   {isEditMode && campaignId ? 'Edit this campaign\'s structure, goals, and content' : 'Define your campaign structure and content goals'}
                 </p>

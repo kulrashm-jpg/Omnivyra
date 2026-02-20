@@ -26,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { data: job, error: jobError } = await supabase
     .from('lead_jobs_v1')
-    .select('id, company_id, status, mode, total_found, total_qualified, confidence_index, error, progress_stage')
+    .select('id, company_id, status, mode, total_found, total_qualified, confidence_index, error, progress_stage, created_at')
     .eq('id', jobId)
     .single();
 
@@ -82,5 +82,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     results: enriched,
     clusters,
     error: job.error ?? null,
+    created_at: (job as { created_at?: string }).created_at ?? null,
   });
 }

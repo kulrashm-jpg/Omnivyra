@@ -51,11 +51,17 @@ export class BlueprintExecutionFreezeError extends Error {
 export async function assertBlueprintMutable(campaignId: string): Promise<void> {
   const { data: campaign, error: campError } = await supabase
     .from('campaigns')
-    .select('execution_status, blueprint_status')
+    .select('execution_status, blueprint_status, duration_weeks')
     .eq('id', campaignId)
     .maybeSingle();
 
   if (campError || !campaign) return;
+
+  // Campaigns without duration are not yet initialized — allow pre-planning and blueprint generation
+  const durationWeeks = (campaign as { duration_weeks?: number | null }).duration_weeks;
+  if (durationWeeks == null) {
+    return;
+  }
 
   const executionStatus = String(campaign.execution_status ?? 'ACTIVE').toUpperCase();
   const blueprintStatus = String(campaign.blueprint_status ?? 'ACTIVE').toUpperCase();

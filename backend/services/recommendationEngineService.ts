@@ -27,12 +27,26 @@ import {
   mergeTrendsAcrossSources,
   mergeSignalsAcrossRegions,
   removeDuplicates,
-  scoreByFrequency,
   tagByPlatform,
   TrendSignalNormalized,
 } from './trendProcessingService';
 import { normalizeTrends } from './trendNormalizationService';
 import { supabase } from '../db/supabaseClient';
+import { deriveDisqualifiedSignals } from './companyMissionContext';
+import { buildCompanyContext } from './companyContextService';
+import { polishRecommendations } from './recommendationPolishService';
+import { enrichRecommendationIntelligence } from './recommendationIntelligenceService';
+import { buildCompanyStrategyDNA, type CompanyStrategyDNA } from './companyStrategyDNAService';
+import { analyzeStrategySignals } from './recommendationStrategyFeedbackService';
+import { sequenceRecommendations } from './recommendationSequencingService';
+import { buildCampaignBlueprint } from './recommendationBlueprintService';
+import { validateCampaignBlueprint } from './recommendationBlueprintValidationService';
+import {
+  resolveExecutionBlueprint,
+  EXECUTION_SOURCE_VALIDATED,
+} from './blueprintExecutionResolver';
+import { enrichRecommendationCards } from './recommendationCardEnrichmentService';
+import { buildFallbackRecommendationSignals } from './recommendationFallbackSignalService';
 
 export type RecommendationEngineInput = {
   companyId: string;
@@ -110,6 +124,24 @@ export type RecommendationEngineResult = {
   global_disclaimer?: string;
   /** EXTERNAL = from APIs; PROFILE_ONLY = no external signals. */
   signals_source?: 'EXTERNAL' | 'PROFILE_ONLY';
+  /** Canonical company context (when profile available). */
+  company_context?: import('./companyContextService').CompanyContext;
+  /** Deterministic strategy interpretation from company profile. */
+  strategy_dna?: CompanyStrategyDNA;
+  /** Read-only analysis of strategy strengths/weaknesses from recommendations. */
+  strategy_feedback?: import('./recommendationStrategyFeedbackService').StrategyFeedback;
+  /** Strategic execution ladder (sequencing only, no ranking change). */
+  strategy_sequence?: import('./recommendationSequencingService').StrategySequence;
+  /** Deterministic blueprint from strategy_sequence when duration known. */
+  campaign_blueprint?: import('./recommendationBlueprintService').CampaignBlueprint | null;
+  /** Validation result with issues and corrected blueprint. */
+  campaign_blueprint_validation?: import('./recommendationBlueprintValidationService').BlueprintValidationResult;
+  /** Corrected blueprint (validated version). */
+  campaign_blueprint_validated?: import('./recommendationBlueprintService').CampaignBlueprint | null;
+  /** Execution-safe blueprint (validated only; never raw). Use for execution flows. */
+  execution_blueprint_resolved?: import('./recommendationBlueprintService').CampaignBlueprint | null;
+  /** When execution_blueprint_resolved is set: "validated_blueprint". */
+  execution_source?: 'validated_blueprint';
 };
 
 /** Removed DEFAULT_DURATION_WEEKS - duration must come from input.durationWeeks or blueprint. No silent 12-week default. */
@@ -151,6 +183,318 @@ const normalizeList = (value?: string | null): string[] =>
     .split(/[,;/|]+/g)
     .map((entry) => entry.trim())
     .filter(Boolean);
+
+const tokenize = (value: string): string[] =>
+  value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 2);
+
+/** Exported for unit testing; used in pre-filter and alignment. */
+export const buildCoreProblemTokens = (profile: any): Set<string> => {
+  const raw = [
+    ...normalizeList(profile?.campaign_focus),
+    ...normalizeList(profile?.content_themes),
+    ...(Array.isArray(profile?.content_themes_list) ? profile.content_themes_list : []),
+    ...(Array.isArray(profile?.authority_domains) ? profile.authority_domains : []),
+    ...(profile?.core_problem_statement ? normalizeList(profile.core_problem_statement) : []),
+    ...(Array.isArray(profile?.pain_symptoms) ? profile.pain_symptoms.map((s: string) => String(s).trim()).filter(Boolean) : []),
+    ...(profile?.desired_transformation ? normalizeList(profile.desired_transformation) : []),
+  ]
+    .filter(Boolean)
+    .map((s: string) => s.trim());
+  const tokens = new Set(raw.flatMap((s: string) => tokenize(s)));
+  return tokens;
+};
+
+const hasOverlapWithTokens = (topic: string, tokens: Set<string>): boolean => {
+  if (tokens.size === 0) return true;
+  const topicTokens = tokenize(topic);
+  return topicTokens.some((t) => tokens.has(t));
+};
+
+const WEIGHT_HIGH = 3;
+const WEIGHT_MEDIUM = 2;
+const WEIGHT_LOW = 1;
+
+const GENERIC_TOKEN_BLACKLIST = new Set([
+  'tools',
+  'software',
+  'platform',
+  'strategies',
+  'tips',
+]);
+
+const DOWNWEIGHT_TOKENS = new Set([
+  'marketing',
+  'growth',
+  'tech',
+  'engagement',
+]);
+
+/** Exported for unit testing; used in alignment scoring. */
+export const buildWeightedAlignmentTokens = (profile: any): Map<string, number> => {
+  const map = new Map<string, number>();
+  const addWithWeight = (values: string[], w: number) => {
+    values.forEach((s) =>
+      tokenize(s).forEach((t) => {
+        if (GENERIC_TOKEN_BLACKLIST.has(t)) return;
+        const effectiveWeight = DOWNWEIGHT_TOKENS.has(t) ? w * 0.5 : w;
+        const current = map.get(t) ?? 0;
+        if (effectiveWeight > current) map.set(t, effectiveWeight);
+      })
+    );
+  };
+  addWithWeight(normalizeList(profile?.campaign_focus), WEIGHT_HIGH);
+  addWithWeight(normalizeList(profile?.content_themes), WEIGHT_MEDIUM);
+  addWithWeight(normalizeList(profile?.growth_priorities), WEIGHT_MEDIUM);
+  addWithWeight(normalizeList(profile?.industry), WEIGHT_LOW);
+  addWithWeight(normalizeList(profile?.goals), WEIGHT_LOW);
+  addWithWeight(
+    (Array.isArray(profile?.content_themes_list) ? profile.content_themes_list : []).map(
+      (s: string) => String(s).trim()
+    ),
+    WEIGHT_MEDIUM
+  );
+  addWithWeight(
+    (Array.isArray(profile?.industry_list) ? profile.industry_list : []).map((s: string) =>
+      String(s).trim()
+    ),
+    WEIGHT_LOW
+  );
+  addWithWeight(
+    (Array.isArray(profile?.goals_list) ? profile.goals_list : []).map((s: string) =>
+      String(s).trim()
+    ),
+    WEIGHT_LOW
+  );
+  addWithWeight(
+    (Array.isArray(profile?.authority_domains) ? profile.authority_domains : []).map((s: string) =>
+      String(s).trim()
+    ),
+    WEIGHT_HIGH
+  );
+  if (profile?.core_problem_statement) {
+    addWithWeight(normalizeList(profile.core_problem_statement), WEIGHT_HIGH);
+  }
+  if (Array.isArray(profile?.pain_symptoms)) {
+    addWithWeight(
+      profile.pain_symptoms.map((s: string) => String(s).trim()).filter(Boolean),
+      WEIGHT_HIGH
+    );
+  }
+  if (profile?.desired_transformation) {
+    addWithWeight(normalizeList(profile.desired_transformation), WEIGHT_HIGH);
+  }
+  return map;
+};
+
+const computeAlignmentScore = (topic: string, weightedTokens: Map<string, number>): number => {
+  if (weightedTokens.size === 0) return 1;
+  const topicTokens = tokenize(topic);
+  if (topicTokens.length === 0) return 0;
+  const topicSet = new Set(topicTokens);
+  let weightedOverlap = 0;
+  let maxWeight = 0;
+  weightedTokens.forEach((w, t) => {
+    maxWeight += w;
+    if (topicSet.has(t)) weightedOverlap += w;
+  });
+  if (maxWeight <= 0) return 1;
+  return Number(Math.min(1, (weightedOverlap / maxWeight)).toFixed(4));
+};
+
+const STRATEGY_MODIFIER_MIN = 0.85;
+const STRATEGY_MODIFIER_MAX = 1.25;
+
+const COMMERCIAL_TOKENS = new Set([
+  'pricing',
+  'revenue',
+  'roi',
+  'sales',
+  'conversion',
+  'pipeline',
+  'buyer',
+]);
+const AWARENESS_TOPIC_TOKENS = new Set([
+  'awareness',
+  'discovery',
+  'introduction',
+  'learn',
+  'education',
+]);
+const TECHNICAL_OR_AUTHORITY_TOKENS = new Set([
+  'api',
+  'sdk',
+  'kubernetes',
+  'terraform',
+  'devops',
+  'microservice',
+  'thought',
+  'leadership',
+  'expertise',
+  'framework',
+]);
+
+/** Strategy-aware scoring modifier. Returns value in [0.85, 1.25]. If strategyDNA missing → 1. */
+function computeStrategyModifier(
+  strategyDNA: CompanyStrategyDNA | null | undefined,
+  trend: TrendSignalNormalized,
+  profile: any,
+  opts?: { alignmentScore?: number; volumeMedian?: number; volumeMax?: number }
+): number {
+  if (!strategyDNA) return 1;
+
+  const topic = String(trend.topic || '').toLowerCase();
+  const topicTokens = new Set(tokenize(topic));
+  const vol = Number(trend.volume ?? 0) || 0;
+  const freq = trend.frequency ?? 0;
+  const volumeMedian = opts?.volumeMedian ?? 0;
+  const volumeMax = opts?.volumeMax ?? 1;
+  const alignmentScore = opts?.alignmentScore ?? 0.5;
+  const isFrequencyLow = freq <= 2;
+  const isVolumeBelowMedian = volumeMedian > 0 && vol < volumeMedian;
+  const isAlignmentHigh = alignmentScore >= 0.5;
+
+  let modifier = 1;
+
+  switch (strategyDNA.mode) {
+    case 'problem_transformation': {
+      const problemTokens = new Set([
+        ...(profile?.core_problem_statement
+          ? tokenize(String(profile.core_problem_statement))
+          : []),
+        ...(Array.isArray(profile?.pain_symptoms)
+          ? profile.pain_symptoms.flatMap((s: string) => tokenize(s))
+          : []),
+        ...(profile?.desired_transformation
+          ? tokenize(String(profile.desired_transformation))
+          : []),
+      ].filter((t) => t.length > 2));
+      if (problemTokens.size > 0 && [...topicTokens].some((t) => problemTokens.has(t))) modifier += 0.15;
+      if (isAlignmentHigh && (isFrequencyLow || isVolumeBelowMedian)) modifier += 0.10;
+      break;
+    }
+    case 'authority_positioning': {
+      const authTokens = new Set(
+        (Array.isArray(profile?.authority_domains) ? profile.authority_domains : [])
+          .flatMap((s: string) => tokenize(s))
+          .filter((t) => t.length > 2)
+      );
+      if (authTokens.size > 0 && [...topicTokens].some((t) => authTokens.has(t))) modifier += 0.20;
+      if (isFrequencyLow) modifier += 0.05;
+      break;
+    }
+    case 'commercial_growth': {
+      const hasCommercial = [...topicTokens].some((t) => COMMERCIAL_TOKENS.has(t));
+      if (hasCommercial) modifier += 0.15;
+      const authTokens = new Set(
+        (Array.isArray(profile?.authority_domains) ? profile.authority_domains : [])
+          .flatMap((s: string) => tokenize(s))
+          .filter((t) => t.length > 2)
+      );
+      const problemTokens = new Set([
+        ...(profile?.core_problem_statement
+          ? tokenize(String(profile.core_problem_statement))
+          : []),
+        ...(Array.isArray(profile?.pain_symptoms)
+          ? profile.pain_symptoms.flatMap((s: string) => tokenize(s))
+          : []),
+      ].filter((t) => t.length > 2));
+      const hasAuthorityOverlap = authTokens.size > 0 && [...topicTokens].some((t) => authTokens.has(t));
+      const hasProblemOverlap = problemTokens.size > 0 && [...topicTokens].some((t) => problemTokens.has(t));
+      const isAwarenessOnly =
+        !hasCommercial && !hasAuthorityOverlap && !hasProblemOverlap &&
+        [...topicTokens].some((t) => AWARENESS_TOPIC_TOKENS.has(t));
+      if (isAwarenessOnly) modifier -= 0.10;
+      break;
+    }
+    case 'audience_engagement': {
+      const audienceTokens = new Set(
+        [
+          ...(profile?.target_audience ? tokenize(String(profile.target_audience)) : []),
+          ...(profile?.brand_voice ? tokenize(String(profile.brand_voice)) : []),
+        ].filter((t) => t.length > 2)
+      );
+      if (audienceTokens.size > 0 && [...topicTokens].some((t) => audienceTokens.has(t))) modifier += 0.10;
+      const authTokens = new Set(
+        (Array.isArray(profile?.authority_domains) ? profile.authority_domains : [])
+          .flatMap((s: string) => tokenize(s))
+          .filter((t) => t.length > 2)
+      );
+      const isTechnicalOrAuthorityHeavy =
+        [...topicTokens].some((t) => TECHNICAL_OR_AUTHORITY_TOKENS.has(t)) ||
+        (authTokens.size > 0 && [...topicTokens].some((t) => authTokens.has(t)));
+      if (isTechnicalOrAuthorityHeavy) modifier -= 0.05;
+      break;
+    }
+    case 'educational_default':
+    default:
+      modifier = 1;
+  }
+
+  return Math.max(STRATEGY_MODIFIER_MIN, Math.min(STRATEGY_MODIFIER_MAX, modifier));
+}
+
+const computeMedian = (arr: number[]): number => {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+const scoreByAlignmentThenPopularity = (
+  signals: TrendSignalNormalized[],
+  profile: any
+): TrendSignalNormalized[] => {
+  const weightedTokens = buildWeightedAlignmentTokens(profile);
+  const strategyDNA = profile ? buildCompanyStrategyDNA(profile) : null;
+  const volumes = signals.map((s) => Number(s.volume ?? 0) || 0);
+  const volumeMax = Math.max(...volumes, 1);
+  const volumeMedian = computeMedian(volumes);
+
+  return [...signals].sort((a, b) => {
+    const alignA = computeAlignmentScore(a.topic, weightedTokens);
+    const alignB = computeAlignmentScore(b.topic, weightedTokens);
+    const modA = computeStrategyModifier(strategyDNA, a, profile, {
+      alignmentScore: alignA,
+      volumeMax,
+      volumeMedian,
+    });
+    const modB = computeStrategyModifier(strategyDNA, b, profile, {
+      alignmentScore: alignB,
+      volumeMax,
+      volumeMedian,
+    });
+    const finalA = alignA * modA;
+    const finalB = alignB * modB;
+    if (finalB !== finalA) return finalB - finalA;
+    const freqB = b.frequency ?? 0;
+    const freqA = a.frequency ?? 0;
+    if (freqB !== freqA) return freqB - freqA;
+    const volB = b.volume ?? 0;
+    const volA = a.volume ?? 0;
+    return volB - volA;
+  });
+};
+
+/** @internal Exported for unit testing weighted alignment scoring and diamond scoring guard */
+export {
+  buildWeightedAlignmentTokens,
+  computeAlignmentScore,
+  computeStrategyModifier,
+  scoreByAlignmentThenPopularity,
+};
+
+const containsDisqualifiedKeyword = (topic: string, disqualified: string[]): boolean => {
+  const lower = topic.toLowerCase();
+  return disqualified.some((kw) => {
+    const k = String(kw).trim().toLowerCase();
+    if (!k || k.length < 3) return false;
+    return lower.includes(k) || tokenize(topic).some((t) => k.includes(t) || t.includes(k));
+  });
+};
 
 const normalizePlatformName = (value: string): string => {
   const normalized = value.trim().toLowerCase();
@@ -475,21 +819,26 @@ const buildScoringAdjustments = (
 
 const applyPersonaPlatformBias = (
   trends: TrendSignalNormalized[],
-  summary: PersonaSummary
+  summary: PersonaSummary,
+  profile?: any
 ): TrendSignalNormalized[] => {
-  if (!summary.platform_preferences.length || trends.length === 0) return trends;
+  if (trends.length === 0) return trends;
+  if (!summary.platform_preferences.length && !profile) return trends;
+  const weightedTokens = profile ? buildWeightedAlignmentTokens(profile) : new Map<string, number>();
+  const useAlignment = weightedTokens.size > 0;
   const preferenceSet = new Set(summary.platform_preferences.map((value) => value.toLowerCase()));
   const scored = trends.map((trend, index) => {
     const platformTag = String(trend.platform_tag || '').toLowerCase();
     const source = String(trend.source || '').toLowerCase();
     const preferenceMatch =
-      (platformTag && preferenceSet.has(platformTag)) ||
-      preferenceSet.has(source);
+      (platformTag && preferenceSet.has(platformTag)) || preferenceSet.has(source);
     const confidence = typeof trend.signal_confidence === 'number' ? trend.signal_confidence : 0.6;
+    const alignmentScore = useAlignment ? computeAlignmentScore(trend.topic, weightedTokens) : 1;
+    const baseScore = useAlignment ? alignmentScore * 0.6 + confidence * 0.4 : confidence;
     return {
       trend,
       index,
-      score: confidence + (preferenceMatch ? 0.15 : 0),
+      score: baseScore + (preferenceMatch ? 0.15 : 0),
     };
   });
   return scored
@@ -567,6 +916,39 @@ const ensureCampaignCompanyLink = async (companyId: string, campaignId?: string 
     throw linkError;
   }
 };
+
+const RECOMMENDED_TOPICS_LOOKBACK_DAYS = 90;
+
+/** Fetch recommended topics for a company from prior recommendation snapshots (like Trend campaigns). Used to seed blueprint themes. */
+export async function getRecommendedTopicsForCompany(
+  companyId: string,
+  limit = 15
+): Promise<string[]> {
+  const since = new Date(
+    Date.now() - RECOMMENDED_TOPICS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
+  const { data, error } = await supabase
+    .from('recommendation_snapshots')
+    .select('trend_topic, final_score')
+    .eq('company_id', companyId)
+    .gte('created_at', since)
+    .not('trend_topic', 'is', null);
+
+  if (error || !data?.length) return [];
+
+  const byTopic = new Map<string, number>();
+  for (const row of data as { trend_topic: string; final_score?: number }[]) {
+    const topic = String(row?.trend_topic || '').trim();
+    if (!topic) continue;
+    const score = typeof row.final_score === 'number' ? row.final_score : 0;
+    const existing = byTopic.get(topic) ?? -1;
+    if (score > existing) byTopic.set(topic, score);
+  }
+  return Array.from(byTopic.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([t]) => t);
+}
 
 export const generateRecommendations = async (
   input: RecommendationEngineInput,
@@ -649,6 +1031,12 @@ export const generateRecommendations = async (
   );
 
   const regions = Array.isArray(input.regions) ? input.regions.filter((r) => String(r).trim()) : [];
+  const effectiveRegions =
+    regions.length > 0
+      ? regions
+      : Array.isArray(profile?.geography_list) && profile.geography_list.length > 0
+        ? profile.geography_list.map((g: any) => String(g).trim()).filter(Boolean)
+        : [];
   let rawSignals: TrendSignal[] = [];
   let missingEnvPlaceholders: string[] = [];
   const category = pickProfileCategory(profile);
@@ -656,9 +1044,9 @@ export const generateRecommendations = async (
   let merged: TrendSignalNormalized[];
   let tagged: TrendSignalNormalized[];
 
-  if (regions.length > 0) {
+  if (effectiveRegions.length > 0) {
     const perRegionSignals: Array<{ region: string; signals: TrendSignal[] }> = [];
-    for (const regionCode of regions) {
+    for (const regionCode of effectiveRegions) {
       const geo = String(regionCode).trim().toUpperCase() === 'GLOBAL' ? undefined : String(regionCode).trim();
       try {
         const externalSummary = await fetchExternalApis(
@@ -754,96 +1142,126 @@ export const generateRecommendations = async (
     tagged = tagByPlatform(merged);
   }
 
+  let usedFallbackContextSignals = false;
   if (tagged.length === 0) {
     console.warn('EXTERNAL_API_NO_SIGNALS');
-    const fallbackPlan = await generateCampaignStrategy({
-      companyId: input.companyId,
-      objective,
-      durationWeeks,
-    });
-    const enabledApis = await getEnabledApis(input.companyId);
-    const runtimeApiIds =
-      Array.isArray(input.selectedApiIds) && input.selectedApiIds.length > 0
-        ? input.selectedApiIds
-        : enabledApis.map((api) => api.id);
-    const signalQuality = await getExternalApiRuntimeSnapshot(runtimeApiIds);
-    const healthReport = getOmniVyraHealthReport();
-    const lastMeta = getLastMeta();
-    if (!isOmniVyraEnabled()) {
-      setLastFallbackReason('omnivyra_disabled');
+    const fallbackSignals = buildFallbackRecommendationSignals(profile ?? null);
+    if (fallbackSignals.length > 0) {
+      merged = mergeTrendsAcrossSources(fallbackSignals);
+      tagged = tagByPlatform(merged).map((trend) => ({
+        ...trend,
+        platform_tag: trend.platform_tag ?? 'context',
+      }));
+      usedFallbackContextSignals = tagged.length > 0;
     }
-    const baseConfidence = computeConfidence([], undefined);
-    const scoringAdjustments = buildScoringAdjustments(baseConfidence, [], profile, personaSummary);
-    const scenarioOutcomes = input.simulate
-      ? computeScenarioOutcomes(scoringAdjustments.adjusted_confidence, 0)
-      : undefined;
-    const result = {
-      trends_used: [],
-      trends_ignored: [],
-      weekly_plan: fallbackPlan.weekly_plan ?? [],
-      daily_plan: fallbackPlan.daily_plan ?? [],
-      confidence_score: scoringAdjustments.adjusted_confidence,
-      explanation: buildExplanation({
-        trendsUsed: [],
-        sources: [],
-        fallbackReason: 'No external signals found. Generated a fallback plan.',
-      }),
-      sources: [],
-      persona_summary: personaSummary,
-      scoring_adjustments: scoringAdjustments,
-      scenario_outcomes: scenarioOutcomes,
-      signal_quality: {
-        external_api_health_snapshot: signalQuality.health_snapshot,
-        cache_hits: signalQuality.cache_stats,
-        rate_limited_sources: signalQuality.rate_limited_sources,
-        signal_confidence_summary: signalQuality.signal_confidence_summary,
-      },
-      omnivyra_metadata: {
-        placeholders: ['no_external_signals', ...missingEnvPlaceholders],
-      },
-      omnivyra_status: {
-        status: healthReport.status,
-        confidence: undefined,
-        contract_version: lastMeta?.contract_version,
-        latency_ms: lastMeta?.latency_ms,
-        fallback_reason: getLastFallbackReason() ?? (isOmniVyraEnabled() ? null : 'omnivyra_disabled'),
-        last_error: healthReport.last_error,
-        endpoint: lastMeta?.endpoint ?? null,
-      },
-      global_disclaimer: regions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
-      signals_source: 'PROFILE_ONLY' as const,
-    } as RecommendationEngineResult;
-
-    if (isOmniVyraEnabled()) {
-      const learning = await sendLearningSnapshot({
+    if (!usedFallbackContextSignals) {
+      console.warn('FALLBACK_NO_SIGNALS');
+      const fallbackPlan = await generateCampaignStrategy({
         companyId: input.companyId,
-        campaignId: input.campaignId ?? undefined,
+        objective,
+        durationWeeks,
+      });
+      const enabledApis = await getEnabledApis(input.companyId);
+      const runtimeApiIds =
+        Array.isArray(input.selectedApiIds) && input.selectedApiIds.length > 0
+          ? input.selectedApiIds
+          : enabledApis.map((api) => api.id);
+      const signalQuality = await getExternalApiRuntimeSnapshot(runtimeApiIds);
+      const healthReport = getOmniVyraHealthReport();
+      const lastMeta = getLastMeta();
+      if (!isOmniVyraEnabled()) {
+        setLastFallbackReason('omnivyra_disabled');
+      }
+      const baseConfidence = computeConfidence([], undefined);
+      const scoringAdjustments = buildScoringAdjustments(baseConfidence, [], profile, personaSummary);
+      const scenarioOutcomes = input.simulate
+        ? computeScenarioOutcomes(scoringAdjustments.adjusted_confidence, 0)
+        : undefined;
+      const result = {
         trends_used: [],
         trends_ignored: [],
-        signal_confidence_summary: result.signal_quality?.signal_confidence_summary ?? null,
-        novelty_score: undefined,
-        confidence_score: result.confidence_score,
-        placeholders: result.omnivyra_metadata?.placeholders ?? [],
-        explanation: result.explanation,
-        external_api_health_snapshot: result.signal_quality?.external_api_health_snapshot ?? [],
-        timestamp: new Date().toISOString(),
-      });
-      result.omnivyra_learning = { status: learning.status, error: learning.error };
-    } else {
-      result.omnivyra_learning = { status: 'skipped' };
-    }
+        weekly_plan: fallbackPlan.weekly_plan ?? [],
+        daily_plan: fallbackPlan.daily_plan ?? [],
+        confidence_score: scoringAdjustments.adjusted_confidence,
+        explanation: buildExplanation({
+          trendsUsed: [],
+          sources: [],
+          fallbackReason: 'No external signals found. Generated a fallback plan.',
+        }),
+        sources: [],
+        persona_summary: personaSummary,
+        scoring_adjustments: scoringAdjustments,
+        scenario_outcomes: scenarioOutcomes,
+        signal_quality: {
+          external_api_health_snapshot: signalQuality.health_snapshot,
+          cache_hits: signalQuality.cache_stats,
+          rate_limited_sources: signalQuality.rate_limited_sources,
+          signal_confidence_summary: signalQuality.signal_confidence_summary,
+        },
+        omnivyra_metadata: {
+          placeholders: ['no_external_signals', ...missingEnvPlaceholders],
+        },
+        company_context: profile ? buildCompanyContext(profile) : undefined,
+        omnivyra_status: {
+          status: healthReport.status,
+          confidence: undefined,
+          contract_version: lastMeta?.contract_version,
+          latency_ms: lastMeta?.latency_ms,
+          fallback_reason: getLastFallbackReason() ?? (isOmniVyraEnabled() ? null : 'omnivyra_disabled'),
+          last_error: healthReport.last_error,
+          endpoint: lastMeta?.endpoint ?? null,
+        },
+        global_disclaimer: effectiveRegions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
+        signals_source: 'PROFILE_ONLY' as const,
+      } as RecommendationEngineResult;
 
-    return result;
+      if (isOmniVyraEnabled()) {
+        const learning = await sendLearningSnapshot({
+          companyId: input.companyId,
+          campaignId: input.campaignId ?? undefined,
+          trends_used: [],
+          trends_ignored: [],
+          signal_confidence_summary: result.signal_quality?.signal_confidence_summary ?? null,
+          novelty_score: undefined,
+          confidence_score: result.confidence_score,
+          placeholders: result.omnivyra_metadata?.placeholders ?? [],
+          explanation: result.explanation,
+          external_api_health_snapshot: result.signal_quality?.external_api_health_snapshot ?? [],
+          timestamp: new Date().toISOString(),
+        });
+        result.omnivyra_learning = { status: learning.status, error: learning.error };
+      } else {
+        result.omnivyra_learning = { status: 'skipped' };
+      }
+
+      return result;
+    }
   }
 
-  let trendsUsed = tagged;
-  let trendsIgnored: TrendSignalNormalized[] = [];
+  const coreProblemTokens = buildCoreProblemTokens(profile);
+  const disqualifiedSignals = deriveDisqualifiedSignals(profile as any);
+  const [trendsToScore, filteredOut] = tagged.reduce<
+    [TrendSignalNormalized[], TrendSignalNormalized[]]
+  >(
+    ([keep, ignore], trend) => {
+      const hasOverlap = hasOverlapWithTokens(trend.topic, coreProblemTokens);
+      const isDisqualified = containsDisqualifiedKeyword(trend.topic, disqualifiedSignals);
+      if (!hasOverlap || isDisqualified) {
+        return [keep, [...ignore, trend]];
+      }
+      return [[...keep, trend], ignore];
+    },
+    [[], []]
+  );
+
+  let trendsUsed = trendsToScore;
+  let trendsIgnored: TrendSignalNormalized[] = [...filteredOut];
   let omnivyraMeta: RecommendationEngineResult['omnivyra_metadata'] = undefined;
   let fallbackReason: string | null = null;
 
   if (isOmniVyraEnabled()) {
     const relevance = await getTrendRelevance({
-      signals: tagged.map(normalizeTrendInput),
+      signals: trendsToScore.map(normalizeTrendInput),
       geo: pickProfileGeo(profile),
       category: pickProfileCategory(profile),
       companyProfile: profile,
@@ -855,9 +1273,10 @@ export const generateRecommendations = async (
       trendsUsed = relevant
         .map((item: any) => byTopic[String(item?.topic || item).toLowerCase()])
         .filter(Boolean);
-      trendsIgnored = ignored
+      const omnivyraIgnored = ignored
         .map((item: any) => byTopic[String(item?.topic || item).toLowerCase()])
         .filter(Boolean);
+      trendsIgnored = [...filteredOut, ...omnivyraIgnored];
     } else {
       fallbackReason = (relevance._omnivyra_meta?.error_type || 'omnivyra_unavailable') as string;
       setLastFallbackReason(fallbackReason);
@@ -890,7 +1309,7 @@ export const generateRecommendations = async (
       console.warn('OMNIVYRA_FALLBACK_RANKING', { reason: ranking.error?.message });
     }
   } else {
-    trendsUsed = scoreByFrequency(trendsUsed);
+    trendsUsed = scoreByAlignmentThenPopularity(trendsUsed, profile);
     fallbackReason = 'omnivyra_disabled';
     setLastFallbackReason(fallbackReason);
   }
@@ -977,7 +1396,18 @@ export const generateRecommendations = async (
     dailyPlan = retryPlan.daily_plan ?? dailyPlan;
   }
 
-  trendsUsed = applyPersonaPlatformBias(trendsUsed, personaSummary);
+  trendsUsed = applyPersonaPlatformBias(trendsUsed, personaSummary, profile);
+  const polished = polishRecommendations(trendsUsed, profile);
+  if (polished.length > 0) {
+    trendsUsed = polished as TrendSignalNormalized[];
+  }
+  const enriched = enrichRecommendationIntelligence(trendsUsed, profile);
+  if (enriched.length > 0) {
+    trendsUsed = enriched as TrendSignalNormalized[];
+  }
+  const strategyDNA = profile ? buildCompanyStrategyDNA(profile) : null;
+  const strategySequence =
+    trendsUsed.length > 0 ? sequenceRecommendations(trendsUsed, strategyDNA) : undefined;
   const baseConfidence = computeConfidence(trendsUsed, omnivyraMeta?.confidence);
   const scoringAdjustments = buildScoringAdjustments(
     baseConfidence,
@@ -991,7 +1421,7 @@ export const generateRecommendations = async (
   const allUnhealthy =
     signalQuality.health_snapshot.length > 0 &&
     signalQuality.health_snapshot.every((item) => (item.health_score ?? 1) < 0.3);
-  if (allUnhealthy) {
+  if (allUnhealthy && !usedFallbackContextSignals) {
     const fallbackPlan = await generateCampaignStrategy({
       companyId: input.companyId,
       objective,
@@ -1032,6 +1462,9 @@ export const generateRecommendations = async (
       omnivyra_metadata: {
         placeholders: ['all_sources_unhealthy'],
       },
+      company_context: profile ? buildCompanyContext(profile) : undefined,
+      strategy_dna: profile ? buildCompanyStrategyDNA(profile) : undefined,
+      strategy_feedback: profile ? analyzeStrategySignals([], buildCompanyStrategyDNA(profile), profile) : undefined,
       omnivyra_status: {
         status: healthReport.status,
         confidence: undefined,
@@ -1041,7 +1474,7 @@ export const generateRecommendations = async (
         last_error: healthReport.last_error,
         endpoint: lastMeta?.endpoint ?? null,
       },
-      global_disclaimer: regions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
+      global_disclaimer: effectiveRegions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
       signals_source: 'PROFILE_ONLY' as const,
     } as RecommendationEngineResult;
 
@@ -1072,7 +1505,7 @@ export const generateRecommendations = async (
   const scenarioOutcomes = input.simulate
     ? computeScenarioOutcomes(confidence, trendsUsed.length)
     : undefined;
-  const result = {
+  let result = {
     trends_used: trendsUsed,
     trends_ignored: trendsIgnored,
     weekly_plan: weeklyPlan,
@@ -1104,9 +1537,36 @@ export const generateRecommendations = async (
       endpoint: lastMeta?.endpoint ?? null,
     },
     novelty_score: noveltyScore,
-    global_disclaimer: regions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
-    signals_source: 'EXTERNAL' as const,
+    global_disclaimer: effectiveRegions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
+    signals_source: (usedFallbackContextSignals ? 'PROFILE_ONLY' : 'EXTERNAL') as const,
+    company_context: profile ? buildCompanyContext(profile) : undefined,
+    strategy_dna: profile ? buildCompanyStrategyDNA(profile) : undefined,
+    strategy_feedback:
+      profile && trendsUsed.length > 0
+        ? analyzeStrategySignals(trendsUsed, strategyDNA ?? undefined, profile)
+        : undefined,
+    strategy_sequence: strategySequence,
+    campaign_blueprint:
+      strategySequence != null && durationWeeks != null
+        ? buildCampaignBlueprint(strategySequence, durationWeeks)
+        : undefined,
+    campaign_blueprint_validation: undefined,
+    campaign_blueprint_validated: undefined,
   } as RecommendationEngineResult;
+
+  if (result.campaign_blueprint != null) {
+    const validation = validateCampaignBlueprint(result.campaign_blueprint);
+    result.campaign_blueprint_validation = validation;
+    result.campaign_blueprint_validated = validation.corrected_blueprint;
+  }
+
+  result = enrichRecommendationCards(result);
+
+  const executionBlueprint = resolveExecutionBlueprint(result);
+  if (executionBlueprint != null) {
+    result.execution_blueprint_resolved = executionBlueprint;
+    result.execution_source = EXECUTION_SOURCE_VALIDATED;
+  }
 
   if (isOmniVyraEnabled()) {
     const learning = await sendLearningSnapshot({

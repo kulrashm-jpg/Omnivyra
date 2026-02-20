@@ -152,7 +152,7 @@ export const generatePrePlanningExplanation = async (
         {
           role: 'system',
           content:
-            'You are a campaign planning assistant. Summarize pre-planning evaluation results in 2-4 clear, concise sentences. Explain why the requested duration is or is not viable, what constraints apply, and what trade-offs exist. Do not add recommendations beyond what is in the data.',
+            'You are a campaign planning assistant. Summarize pre-planning evaluation results in 2-4 clear, concise sentences. Explain why the requested duration is or is not viable, what constraints apply, and what trade-offs exist. Do not add recommendations beyond what is in the data.\n\nIMPORTANT: When max_weeks_allowed is 999 or greater than 52, do NOT mention that number. Treat it as "no upper limit" and say instead that there are no duration restrictions, or that the requested duration is viable with no constraints. Never say "999 weeks" or "maximum of 999 weeks" to the user.',
         },
         {
           role: 'user',

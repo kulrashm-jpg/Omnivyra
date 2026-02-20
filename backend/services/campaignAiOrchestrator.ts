@@ -10,6 +10,12 @@ import { saveStructuredCampaignPlan, saveStructuredCampaignPlanDayUpdate, savePl
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
 import { getLatestSnapshotsPerPlatform } from '../db/platformMetricsSnapshotStore';
 import { getProfile } from './companyProfileService';
+import {
+  buildCompanyContext,
+  buildForcedCompanyContext,
+  formatForcedContextForPrompt,
+} from './companyContextService';
+import { buildCompanyStrategyDNA } from './companyStrategyDNAService';
 import { getPrimaryCampaignType, BACKWARD_COMPAT_DEFAULTS } from './campaignContextConfig';
 import { computeExpectedBaseline, classifyBaseline } from './baselineClassificationService';
 
@@ -44,6 +50,14 @@ export interface CampaignAiPlanInput {
   optimizationContext?: OptimizationContext | null;
   /** When refining an existing plan, pass the current plan so AI can apply changes */
   currentPlan?: { weeks: any[] };
+  /** Scope to specific weeks (1-based) — only modify these weeks; null/empty = all weeks */
+  scopeWeeks?: number[] | null;
+  /** Chat context (e.g. campaign-recommendations) for consultation-style flows */
+  chatContext?: string;
+  /** Pre-selected weeks and areas when opening from recommendations page */
+  vetScope?: { selectedWeeks: number[]; areasByWeek?: Record<number, string[]> };
+  /** Client-collected planning context (form state, pre-planning result) — merged with prefilled to avoid re-asking */
+  collectedPlanningContext?: Record<string, unknown>;
 }
 
 export interface CampaignAiPlanResult {
@@ -107,6 +121,25 @@ const GATHER_ORDER = [
   { key: 'key_messages', question: 'What are your key messages or pain points to address in this campaign?' },
   { key: 'success_metrics', question: 'What success metrics do you want to track? (e.g., engagement rate, reach, conversions, leads)' },
 ];
+
+/** Extract campaign_duration (weeks) from conversation when user answered the duration question. Uses most recent answer. */
+function extractDurationFromConversation(history: Array<{ type: string; message: string }>): number | null {
+  const qKeywords = ['weeks', 'week', 'how many', 'campaign run', 'duration', '6, 12'];
+  let lastFound: number | null = null;
+  for (let i = 0; i < (history?.length ?? 0) - 1; i++) {
+    const aiMsg = (history[i]?.message ?? '').toLowerCase();
+    const userMsg = (history[i + 1]?.message ?? '').trim();
+    if (history[i]?.type !== 'ai' || history[i + 1]?.type !== 'user') continue;
+    const aiAsksDuration = qKeywords.some((k) => aiMsg.includes(k));
+    if (!aiAsksDuration || !userMsg) continue;
+    const match = userMsg.match(/\b(\d{1,2})\s*(?:week|weeks)?\b/i) ?? userMsg.match(/\b(\d{1,2})\b/);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n >= 1 && n <= 52) lastFound = n;
+    }
+  }
+  return lastFound;
+}
 
 /** Campaign type → preferred platform (normalized) for dominant platform selection */
 const PRIMARY_TYPE_PLATFORM_PREFERENCE: Record<string, string[]> = {
@@ -272,6 +305,8 @@ function buildPromptContext(input: {
   conversationHistory?: Array<{ type: string; message: string }>;
   recommendationContext?: { target_regions?: string[] | null; context_payload?: Record<string, unknown> | null } | null;
   companyContext?: string | null;
+  forcedContextBlock?: string | null;
+  strategyDNA?: import('./companyStrategyDNAService').CompanyStrategyDNA | null;
   campaignIntentSummary?: {
     types: string[];
     weights: Record<string, number>;
@@ -282,6 +317,9 @@ function buildPromptContext(input: {
   prefilledPlanning?: Record<string, unknown> | null;
   qaState?: { answeredKeys: string[]; userConfirmed: boolean; nextQuestion: { key: string; question: string } | null };
   currentPlan?: { weeks: any[] };
+  scopeWeeks?: number[] | null;
+  chatContext?: string;
+  vetScope?: { selectedWeeks: number[]; areasByWeek?: Record<number, string[]> };
 }): { system: string; user: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> } {
   const diagnosticsWithBaseline = { ...input.diagnostics };
   if (input.baselineContext && !('unavailable' in input.baselineContext)) {
@@ -293,7 +331,7 @@ function buildPromptContext(input: {
     };
   }
 
-  const durationWeeks = input.durationWeeks ?? 12;
+  const durationWeeks = input.durationWeeks ?? (typeof (input.prefilledPlanning?.campaign_duration as number) === 'number' ? (input.prefilledPlanning.campaign_duration as number) : 12);
 
   const userPayload: Record<string, unknown> = {
     mode: input.mode,
@@ -311,6 +349,12 @@ function buildPromptContext(input: {
   if (input.companyContext) {
     userPayload.company_context = input.companyContext;
   }
+  if (input.forcedContextBlock) {
+    userPayload.forced_context = input.forcedContextBlock;
+  }
+  if (input.strategyDNA) {
+    userPayload.strategy_dna = input.strategyDNA;
+  }
   if (input.campaignIntentSummary) {
     userPayload.campaign_intent_summary = input.campaignIntentSummary;
   }
@@ -324,30 +368,91 @@ function buildPromptContext(input: {
     userPayload.prefilled_planning = input.prefilledPlanning;
   }
 
+  const recommendedTopics = input.prefilledPlanning?.recommended_topics;
+  const recommendedTopicsList = Array.isArray(recommendedTopics)
+    ? recommendedTopics.map((t) => String(t).trim()).filter(Boolean)
+    : [];
+  const strategicThemes = input.prefilledPlanning?.strategic_themes;
+  const strategicThemesList = Array.isArray(strategicThemes)
+    ? strategicThemes.map((t) => String(t).trim()).filter(Boolean)
+    : [];
+
   const prefilledBlock =
     input.prefilledPlanning && Object.keys(input.prefilledPlanning).length > 0
       ? `
 ALREADY KNOWN (from campaign setup — do NOT re-ask these):
 ${Object.entries(input.prefilledPlanning)
+  .filter(([k]) => k !== 'preplanning_form_completed' && k !== 'recommended_topics' && k !== 'strategic_themes')
   .map(([k, v]) => `- ${k}: ${v}`)
   .join('\n')}
+${strategicThemesList.length > 0 || recommendedTopicsList.length > 0
+  ? `
+${strategicThemesList.length > 0 ? `STRATEGIC THEMES (company content themes — align weekly themes and topics to these): ${strategicThemesList.join(', ')}\n\n` : ''}${recommendedTopicsList.length > 0 ? `RECOMMENDED TOPICS (from company trend data — like Trend campaigns): ${recommendedTopicsList.join(', ')}
+
+Use these topics to seed weekly themes and topics_to_cover. Prefer topics that align with the strategic themes above when present. Distribute them across weeks aligned with the campaign objective. Each week's theme and topics_to_cover should draw from these recommendations when relevant. You may add related sub-topics or angles.` : 'When building weekly themes, align with the strategic themes above.'}`
+  : ''}
+${input.prefilledPlanning?.preplanning_form_completed === true
+  ? `
+
+PREPLANNING COMPLETE: The user filled the pre-planning form and arrived at a recommended duration. Do NOT re-ask for tentative_start, campaign_duration, available_content, or content_capacity. Proceed to remaining questions (target_audience, campaign_types, platforms, etc.) or offer to create the plan with reasonable defaults if the user prefers.`
+  : ''}
 
 Start from the first required question that is NOT listed above. If most are filled, ask only the missing ones.`
       : '';
 
-  const refinePlanBlock = input.currentPlan?.weeks?.length
+  const isCampaignRecommendations = (input.chatContext ?? '').toLowerCase().includes('campaign-recommendations');
+
+  const hasPrefilledScope = !!(input.vetScope?.selectedWeeks?.length);
+  const scopeBlock = hasPrefilledScope
+    ? `
+PREFILLED SCOPE (user selected on recommendations page — do NOT re-ask):
+- Weeks to refine: ${input.vetScope!.selectedWeeks.join(', ')}
+${input.vetScope!.areasByWeek && Object.keys(input.vetScope.areasByWeek).length > 0
+  ? `- Areas by week: ${Object.entries(input.vetScope.areasByWeek)
+      .map(([w, arr]) => `Week ${w}: ${(arr as string[]).join(', ')}`)
+      .join('; ')}`
+  : ''}
+Skip scope and interest-area questions. Refine directly based on the above.`
+    : `
+CONSULTATION FLOW — Ask before refining:
+1. SCOPE: First ask "Would you like to work on the entire week plan, or focus on a specific week (or weeks)?" Wait for their answer.
+2. INTEREST AREAS: Then ask what matters most. Skip only when they've answered.`;
+
+  const campaignRecommendationsBlock = isCampaignRecommendations && input.currentPlan?.weeks?.length
+    ? `
+EXPERT CONSULTATION MODE (campaign recommendations): You are vetting and refining recommendations from a content manager standpoint. Here is the current plan/recommendations:
+${JSON.stringify(input.currentPlan.weeks, null, 2)}
+${scopeBlock}
+
+3. ASSESS WHAT'S MISSING: From a content manager standpoint, consider what could create great impact but isn't yet in the plan.
+4. REFINE: Apply refinements based on scope and interest areas. If specific weeks chosen, only modify those weeks.
+5. OUTPUT: When the user confirms or says "apply", "looks good", "merge", output the REVISED FULL PLAN wrapped in BEGIN_12WEEK_PLAN and END_12WEEK_PLAN.
+
+The user's message: "${input.message}"
+`
+    : null;
+
+  const scopeWeeks = input.scopeWeeks && input.scopeWeeks.length > 0 ? input.scopeWeeks : null;
+  const scopeHint = scopeWeeks ? `SCOPE: Only modify weeks ${scopeWeeks.join(', ')}. Leave all other weeks unchanged. Return the REVISED FULL PLAN.` : '';
+
+  const refinePlanBlock = !campaignRecommendationsBlock && input.currentPlan?.weeks?.length
     ? `
 REFINE PLAN MODE: The user is reviewing their campaign plan and wants to make changes via natural language. Here is the current plan:
 ${JSON.stringify(input.currentPlan.weeks, null, 2)}
 
 The user's request: "${input.message}"
+${scopeHint ? `\n${scopeHint}\n` : ''}
 
 Apply their changes. Accept natural-language edits like:
 - "Week 1 Facebook topic should be 'Professional neglecting personal lives'" → set topic for that platform
 - "Week 3 LinkedIn: 2 posts and 1 article" → update platform_content_breakdown for linkedin
-- "Change Week 5 theme to X" or "Add topic Y to Week 5"
+- "Change Week 5 theme to X" or "Add topic Y to Week 5" → update theme and/or append to topics_to_cover
+- "Append topic Z to Week 2" or "Add these topics to Week 2: A, B, C" → add to topics_to_cover (do not remove existing)
+- "Refine topics for Week 4" or "Replace Week 4 topics with X, Y, Z" → replace topics_to_cover for that week
 - "Week 2 Instagram: 1 reel, 2 stories" → explicit platform+content breakdown
 - "Same post on Facebook and LinkedIn" → include that item in BOTH platform arrays (platforms: ["facebook","linkedin"]) so it displays under both
+
+TOPICS: Users can append new topics to a week's topics_to_cover, refine/replace the list, or add sub-topics. Preserve existing topics when appending unless the user explicitly asks to replace.
 
 DAILY PLAN GENERATION: When the user asks to "Generate the daily plan for Week X" or "AI daily" for a week, populate that week's \`daily\` array with 5–7 days (Mon–Fri or include weekend as appropriate). For each day include:
 - \`day\`: "Monday", "Tuesday", etc.
@@ -363,7 +468,9 @@ Keep the same structure (weeks array with theme, phase_label, primary_objective,
     : null;
 
   const modeHint =
-    refinePlanBlock
+    campaignRecommendationsBlock
+      ? campaignRecommendationsBlock
+      : refinePlanBlock
       ? refinePlanBlock
       : input.mode === 'platform_customize'
       ? '\nFocus only on the target day and provide platform-specific variants for the requested platforms.\n'
@@ -395,12 +502,14 @@ REQUIRED INFO TO GATHER (in order, one question at a time — skip any already i
 INFER-AND-PROCEED: For key_messages and success_metrics, if the user says "you define it", "you make it", "you decide", "you need to define it", "up to you", "your choice", or similar — treat as VALID. Infer from theme, campaign type, and target audience. Do NOT re-ask. Proceed to the next question or to plan generation.
 
 CRITICAL RULES:
+- NEVER re-ask for information already in ALREADY KNOWN or in GOVERNANCE "Do NOT re-ask". Repetitive questions frustrate users — skip to the next missing item.
+- DURATION: Use the EXACT campaign_duration from ALREADY KNOWN or database. NEVER suggest a different duration (e.g. if 4 weeks is set, never suggest 5, 6, or 12). NEVER re-ask "how many weeks?" when campaign_duration is already known. Skip the duration question entirely.
 - VALIDATE each answer against the question asked. If the answer does NOT fit (e.g., a date when you asked for target audience), politely re-ask the SAME question. Do NOT move on until you receive a valid answer.
 - For available_content: "no", "none", "zero", "I don't have any", or messages containing/ending with "no" (e.g. "X no" when X was a prior answer) = valid "no content". Proceed to tentative_start. Do NOT re-ask.
 - After EACH valid user answer, reply with ONLY the next question. Be conversational and warm. Do NOT generate the plan yet.
 - CONFIRMATION OVERRIDE (MUST OBEY): If YOUR last message was "Would you like me to create your ${durationWeeks}-week plan now?" (or similar), and the user replies with "yes", "sure", "ok", "okay", "please", "yeah", "yep", "create it", "do it", "go for it" — IMMEDIATELY output BEGIN_12WEEK_PLAN. Do NOT ask any more questions. Do NOT repeat the confirmation. Do NOT ask key_messages or success_metrics after this. GENERATE THE PLAN NOW.
-- ONLY output BEGIN_12WEEK_PLAN when BOTH are true: (a) user has answered required questions (or deferred key_messages/success_metrics), AND (b) user confirms. Valid confirmations: "create my plan", "generate plan", "I'm ready", "go ahead", "yes", "sure", "ok", "share 12 weeks plan", "if you don't have any questions" (meaning generate).
-- If the user says "share 12 weeks plan" or "no questions" or "just create the plan" early — skip remaining questions and generate with inferred values.
+- ONLY output BEGIN_12WEEK_PLAN when BOTH are true: (a) user has answered required questions (or deferred key_messages/success_metrics), AND (b) user confirms. Valid confirmations: "create my plan", "generate plan", "I'm ready", "go ahead", "yes", "sure", "ok", "share plan", "if you don't have any questions" (meaning generate).
+- If the user says "share plan" or "no questions" or "just create the plan" early — skip remaining questions and generate with inferred values.
 - If the user answered all questions but has NOT confirmed, ask: "I have everything I need. Would you like me to create your ${durationWeeks}-week plan now?" When they reply "yes", "sure", "ok", etc., GENERATE immediately. NEVER restart from question 1.
 - Use the recommendation context and all previous answers to inform the plan. Each week MUST have a concrete theme and topics to cover.
 `
@@ -646,6 +755,8 @@ Do NOT override weighted doctrine. Baseline conditioning only modulates pacing, 
     'You MUST only use platforms and content types provided in platform_strategies.\n' +
     'Do not invent platforms or content formats.\n' +
     (input.companyContext ? '\nUse the provided company_context to align the plan with company strategy.\n' : '') +
+    (input.forcedContextBlock ? '\nCRITICAL: The forced_context block MUST be respected in all recommendations and content.\n' : '') +
+    (input.strategyDNA ? '\nUse strategy_dna (mode, growth_motion, content_style, decision_focus) to inform campaign structure and pacing.\n' : '') +
     (input.mode === 'generate_plan' && !input.conversationHistory?.length
       ? 'Return a detailed FREE-FORM TEXT campaign plan only.\n'
       : input.mode === 'generate_plan'
@@ -768,12 +879,17 @@ async function runWithContext(
     conversationHistory: input.conversationHistory,
     recommendationContext: input.recommendationContext,
     companyContext: ctx.companyContext ?? null,
+    forcedContextBlock: ctx.forcedContextBlock ?? null,
+    strategyDNA: ctx.strategyDNA ?? null,
     campaignIntentSummary: ctx.campaignIntentSummary ?? null,
     baselineContext: ctx.baselineContext,
     optimizationContext: input.optimizationContext ?? null,
     prefilledPlanning: ctx.prefilledPlanning ?? null,
     qaState: ctx.qaState,
     currentPlan: input.currentPlan,
+    scopeWeeks: input.scopeWeeks ?? null,
+    chatContext: input.chatContext,
+    vetScope: input.vetScope,
   });
 
   const completion = await generateCampaignPlan({
@@ -877,7 +993,9 @@ const LIGHTWEIGHT_SNAPSHOT_HASH = 'conversational-fallback';
 function createLightweightContext(
   campaignId: string,
   companyContext: string | null,
-  campaignIntentSummary: { types: string[]; weights: Record<string, number>; primary_type: string }
+  campaignIntentSummary: { types: string[]; weights: Record<string, number>; primary_type: string },
+  forcedContextBlock?: string | null,
+  strategyDNA?: ReturnType<typeof buildCompanyStrategyDNA> | null
 ): {
   snapshot: any;
   snapshot_hash: string;
@@ -885,6 +1003,8 @@ function createLightweightContext(
   omnivyreDecision: DecisionResult;
   platformStrategies: any[];
   companyContext: string | null;
+  forcedContextBlock?: string | null;
+  strategyDNA?: ReturnType<typeof buildCompanyStrategyDNA> | null;
   campaignIntentSummary: { types: string[]; weights: Record<string, number>; primary_type: string };
 } {
   return {
@@ -902,6 +1022,8 @@ function createLightweightContext(
     omnivyreDecision: { status: 'ok', recommendation: 'proceed' },
     platformStrategies: DEFAULT_PLATFORM_STRATEGIES,
     companyContext,
+    forcedContextBlock: forcedContextBlock ?? null,
+    strategyDNA: strategyDNA ?? null,
     campaignIntentSummary,
   };
 }
@@ -917,8 +1039,20 @@ export async function runCampaignAiPlan(
     .select('duration_weeks, start_date, description, name')
     .eq('id', input.campaignId)
     .maybeSingle();
+
+  const collectedDuration = (input.collectedPlanningContext?.campaign_duration as number) ?? undefined;
+  const fromConversation = extractDurationFromConversation(input.conversationHistory ?? []);
+
   if (resolvedDurationWeeks == null) {
-    resolvedDurationWeeks = campaignRow?.duration_weeks ?? 12;
+    // DB first: when campaign has duration_weeks in database, never contradict (e.g. after restart)
+    const dbDuration = typeof campaignRow?.duration_weeks === 'number' && campaignRow.duration_weeks >= 1 && campaignRow.duration_weeks <= 52 ? campaignRow.duration_weeks : undefined;
+    const conversationDuration = fromConversation && fromConversation >= 1 && fromConversation <= 52 ? fromConversation : undefined;
+    const collectedDurationValid = typeof collectedDuration === 'number' && collectedDuration >= 1 && collectedDuration <= 52 ? collectedDuration : undefined;
+    resolvedDurationWeeks =
+      dbDuration ??
+      conversationDuration ??
+      collectedDurationValid ??
+      12;
   }
 
   const inputWithDuration = { ...input, durationWeeks: resolvedDurationWeeks };
@@ -936,10 +1070,20 @@ export async function runCampaignAiPlan(
   };
 
   let companyContext: string | null = null;
+  let forcedContextBlock: string | null = null;
+  let strategyDNA: ReturnType<typeof buildCompanyStrategyDNA> | null = null;
   if (versionRow?.company_id && (buildMode === 'full_context' || buildMode === 'focused_context')) {
     try {
       const profile = await getProfile(versionRow.company_id, { autoRefine: false });
       companyContext = buildCompanyContextBlock(profile, buildMode, contextScope);
+      strategyDNA = buildCompanyStrategyDNA(profile);
+      if (profile?.forced_context_fields && Object.keys(profile.forced_context_fields).length > 0) {
+        const canonical = buildCompanyContext(profile);
+        const { forced_context } = buildForcedCompanyContext(canonical, profile.forced_context_fields);
+        if (Object.keys(forced_context).length > 0) {
+          forcedContextBlock = formatForcedContextForPrompt(forced_context);
+        }
+      }
     } catch (e) {
       console.warn('Failed to load company profile for context injection:', e);
     }
@@ -952,6 +1096,8 @@ export async function runCampaignAiPlan(
     omnivyreDecision: DecisionResult;
     platformStrategies: any[];
     companyContext: string | null;
+    forcedContextBlock: string | null;
+    strategyDNA: ReturnType<typeof buildCompanyStrategyDNA> | null;
     campaignIntentSummary: { types: string[]; weights: Record<string, number>; primary_type: string };
   }> => {
     const { snapshot } = await buildCampaignSnapshotWithHash(input.campaignId);
@@ -987,6 +1133,8 @@ export async function runCampaignAiPlan(
       omnivyreDecision,
       platformStrategies: platformStrategies.length > 0 ? platformStrategies : DEFAULT_PLATFORM_STRATEGIES,
       companyContext,
+      forcedContextBlock,
+      strategyDNA,
       campaignIntentSummary,
     };
   };
@@ -998,6 +1146,8 @@ export async function runCampaignAiPlan(
     omnivyreDecision: DecisionResult;
     platformStrategies: any[];
     companyContext: string | null;
+    forcedContextBlock?: string | null;
+    strategyDNA?: ReturnType<typeof buildCompanyStrategyDNA> | null;
     campaignIntentSummary: { types: string[]; weights: Record<string, number>; primary_type: string };
     baselineContext?: BaselineContextResult;
   };
@@ -1007,7 +1157,7 @@ export async function runCampaignAiPlan(
   } catch (err) {
     console.warn('Campaign AI full pipeline failed, using lightweight path:', err);
     if (isConversational) {
-      ctx = createLightweightContext(input.campaignId, companyContext, campaignIntentSummary);
+      ctx = createLightweightContext(input.campaignId, companyContext, campaignIntentSummary, forcedContextBlock, strategyDNA);
     } else {
       throw err;
     }
@@ -1030,13 +1180,24 @@ export async function runCampaignAiPlan(
   }
   ctx.baselineContext = baselineContext;
 
-  const prefilledPlanning = buildPrefilledPlanning({
+  let prefilledPlanning: Record<string, unknown> = buildPrefilledPlanning({
     campaign: campaignRow,
     versionRow,
   });
+  if (input.collectedPlanningContext && Object.keys(input.collectedPlanningContext).length > 0) {
+    prefilledPlanning = { ...prefilledPlanning, ...input.collectedPlanningContext };
+  }
+  // Ensure agreed duration is in prefilled — prevents AI from re-asking or contradicting (e.g. saying "6 weeks" when DB has 4)
+  if (resolvedDurationWeeks != null && resolvedDurationWeeks >= 1 && resolvedDurationWeeks <= 52) {
+    prefilledPlanning = { ...prefilledPlanning, campaign_duration: resolvedDurationWeeks };
+  }
+  // When duration is in DB (user/AI already selected), treat as preplanning complete — skip duration question entirely
+  if (campaignRow?.duration_weeks != null) {
+    prefilledPlanning = { ...prefilledPlanning, preplanning_form_completed: true };
+  }
 
   const qaState =
-    input.mode === 'generate_plan' && (input.conversationHistory?.length ?? 0) > 0
+    input.mode === 'generate_plan'
       ? computeCampaignPlanningQAState({
           gatherOrder: GATHER_ORDER.map((g) => ({
             key: g.key,

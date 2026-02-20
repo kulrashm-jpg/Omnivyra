@@ -254,16 +254,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           return res.status(400).json({ error: 'INVALID_PLAYBOOK_REFERENCE' });
         }
       }
-      const campaignDataWithUser = {
-        ...campaignDataWithoutCamelCase,
+      // campaigns table: only insert columns that exist (no companyId, build_mode, context_scope, etc.)
+      const campaignDataWithUser: Record<string, unknown> = {
+        id: campaignData.id ?? campaignDataWithoutCamelCase.id,
+        name: campaignData.name ?? campaignDataWithoutCamelCase.name,
+        description: campaignData.description ?? campaignDataWithoutCamelCase.description ?? null,
         user_id: requester.id,
-        start_date: startDate, // Map camelCase to snake_case
-        end_date: endDate, // Map camelCase to snake_case
-        status: 'pending_approval',
-        // Playbook reference only. It does NOT affect scheduling, publishing,
-        // approvals, or content generation. Campaign behavior remains unchanged.
+        start_date: startDate ?? null,
+        end_date: endDate ?? null,
+        status: 'planning',
+        current_stage: campaignData.current_stage ?? campaignDataWithoutCamelCase.current_stage ?? 'planning',
         virality_playbook_id: resolvedPlaybookId,
-        // Stage 11: Pre-planning gate — new campaigns require pre-planning before blueprint
         duration_weeks: null,
         duration_locked: false,
         blueprint_status: null,
@@ -297,9 +298,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'Campaign creation did not return data' });
       }
       const planning_context = campaignData.planning_context ?? campaignData.planningContext ?? null;
+      const source_opportunity_id =
+        campaignData.source_opportunity_id ?? campaignData.sourceOpportunityId ?? null;
+      const target_regions_raw = campaignData.target_regions ?? campaignData.targetRegions ?? null;
+      const context_payload_raw = campaignData.context_payload ?? campaignData.contextPayload ?? null;
+      const recommendation_id = campaignData.recommendation_id ?? campaignData.recommendationId ?? null;
       const snapshotPayload: Record<string, unknown> = { campaign };
       if (planning_context && typeof planning_context === 'object') {
         snapshotPayload.planning_context = planning_context;
+      }
+      if (typeof source_opportunity_id === 'string' && source_opportunity_id.trim()) {
+        snapshotPayload.source_opportunity_id = source_opportunity_id.trim();
+      }
+      if (Array.isArray(target_regions_raw)) {
+        const targetRegions = target_regions_raw
+          .map((value: unknown) => String(value || '').trim().toUpperCase())
+          .filter(Boolean);
+        if (targetRegions.length > 0) {
+          snapshotPayload.target_regions = targetRegions;
+        }
+      }
+      if (context_payload_raw && typeof context_payload_raw === 'object') {
+        snapshotPayload.context_payload = context_payload_raw;
+      }
+      if (typeof recommendation_id === 'string' && recommendation_id.trim()) {
+        snapshotPayload.metadata = {
+          recommendation_id: recommendation_id.trim(),
+        };
       }
       const { error: versionError } = await (supabase as any)
         .from('campaign_versions')

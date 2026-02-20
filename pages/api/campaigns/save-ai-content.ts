@@ -23,19 +23,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     ];
 
-    // Save AI content to database (ai_threads.id is required; thread_type/status from migration)
-    const insertPayload: Record<string, unknown> = {
+    // Save AI content to database.
+    // Some environments have extended columns (thread_type/status), others do not.
+    const baseInsertPayload: Record<string, unknown> = {
       id: threadId,
       campaign_id: campaignId,
       messages: messagesPayload,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const extendedInsertPayload: Record<string, unknown> = {
+      ...baseInsertPayload,
       thread_type: 'content_planning',
       status: 'saved_for_planning',
-      created_at: new Date().toISOString(),
     };
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('ai_threads')
-      .insert(insertPayload as any)
+      .insert(extendedInsertPayload as any)
       .select();
+
+    const message = String(error?.message || '');
+    const details = String(error?.details || '');
+    const isMissingColumnError =
+      !!error &&
+      (message.toLowerCase().includes('column') || details.toLowerCase().includes('column')) &&
+      (message.includes('thread_type') ||
+        message.includes('saved_for_planning') ||
+        details.includes('thread_type') ||
+        details.includes('saved_for_planning'));
+
+    if (isMissingColumnError) {
+      const retry = await supabase
+        .from('ai_threads')
+        .insert(baseInsertPayload as any)
+        .select();
+      data = retry.data as any;
+      error = retry.error as any;
+    }
 
     if (error) {
       console.error('Error saving AI content:', error);

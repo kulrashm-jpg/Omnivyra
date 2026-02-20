@@ -1,6 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import {
+  buildCompanyContext,
+  buildForcedCompanyContext,
+  formatForcedContextForPrompt,
+} from '../../../backend/services/companyContextService';
+import {
   getResolvedCampaignPlanContext,
   PrePlanningRequiredError,
 } from '../../../backend/services/campaignBlueprintService';
@@ -59,6 +64,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Day plan not found' });
     }
 
+    let forcedContext: string | null = null;
+    if (profile.forced_context_fields && Object.keys(profile.forced_context_fields).length > 0) {
+      const canonical = buildCompanyContext(profile);
+      const { forced_context } = buildForcedCompanyContext(canonical, profile.forced_context_fields);
+      if (Object.keys(forced_context).length > 0) {
+        forcedContext = formatForcedContextForPrompt(forced_context);
+      }
+    }
+
     const content = await generateContentForDay({
       companyProfile: profile,
       campaign: resolved.campaign,
@@ -66,6 +80,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       dayPlan,
       trend: dayPlan.trendUsed ?? null,
       platform: dayPlan.platform,
+      forcedContext,
       campaignMemory: await getCampaignMemory({ companyId, campaignId }),
     });
 

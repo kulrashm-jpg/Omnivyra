@@ -56,6 +56,19 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
     return;
   }
 
+  const CANCELLED_ERROR = 'Cancelled by user';
+
+  async function isCancelled(): Promise<boolean> {
+    const { data: recheck } = await supabase
+      .from('market_pulse_jobs_v1')
+      .select('error')
+      .eq('id', jobId)
+      .single();
+    return ((recheck?.error as string) ?? '').includes(CANCELLED_ERROR);
+  }
+
+  if (await isCancelled()) return;
+
   await supabase
     .from('market_pulse_jobs_v1')
     .update({ status: 'RUNNING', progress_stage: 'INITIALIZING' })
@@ -69,6 +82,9 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
   const contextPayload = row.context_payload ?? null;
 
   for (const region of regions) {
+    if (await isCancelled()) {
+      return;
+    }
     await supabase.from('market_pulse_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
     try {
       const result = await generateMarketPulseForRegion(companyId, region, contextPayload);

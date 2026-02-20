@@ -75,13 +75,47 @@ export default function ChatVoiceButton({
       ? window.SpeechRecognition || window.webkitSpeechRecognition
       : null;
 
-  const startRecording = () => {
+  const ensureMicrophonePermission = async (): Promise<boolean> => {
+    if (typeof window === 'undefined') return false;
+
+    const isSecure =
+      window.isSecureContext ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1';
+    if (!isSecure) {
+      setError('Microphone requires HTTPS (or localhost).');
+      return false;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      // Some browsers still support SpeechRecognition but not this API path.
+      return true;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      return true;
+    } catch (err: any) {
+      const code = String(err?.name || '').toLowerCase();
+      if (code.includes('notallowed') || code.includes('permission')) {
+        setError('Microphone access denied. Enable mic permission in browser site settings.');
+      } else {
+        setError('Unable to access microphone. Check device and browser permissions.');
+      }
+      return false;
+    }
+  };
+
+  const startRecording = async () => {
     setError(null);
     transcriptRef.current = '';
     if (!SpeechRecognitionCtor) {
       setError('Voice input not supported in this browser. Try Chrome or Edge.');
       return;
     }
+    const hasPermission = await ensureMicrophonePermission();
+    if (!hasPermission) return;
     try {
       const recognition = new SpeechRecognitionCtor();
       recognition.continuous = true;
@@ -101,7 +135,7 @@ export default function ChatVoiceButton({
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         if (event.error === 'not-allowed') {
-          setError('Microphone access denied.');
+          setError('Microphone access denied. Enable mic permission in browser site settings.');
         } else if (event.error !== 'aborted') {
           setError(event.message || `Voice error: ${event.error}`);
         }
@@ -146,7 +180,7 @@ export default function ChatVoiceButton({
   const handleClick = () => {
     if (disabled) return;
     if (isRecording) stopRecording();
-    else startRecording();
+    else void startRecording();
   };
 
   const effectiveTitle =

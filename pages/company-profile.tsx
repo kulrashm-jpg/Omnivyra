@@ -67,6 +67,15 @@ type CompanyProfile = {
     dominant_problem_domains?: string[];
     brand_positioning_angle?: string | null;
   } | null;
+  core_problem_statement?: string | null;
+  pain_symptoms?: string[] | null;
+  awareness_gap?: string | null;
+  problem_impact?: string | null;
+  life_with_problem?: string | null;
+  life_after_solution?: string | null;
+  desired_transformation?: string | null;
+  transformation_mechanism?: string | null;
+  authority_domains?: string[] | null;
 };
 
 type CompanyProfileRefinement = {
@@ -118,6 +127,15 @@ const emptyProfile: CompanyProfile = {
   brand_positioning: '',
   competitive_advantages: '',
   growth_priorities: '',
+  core_problem_statement: '',
+  pain_symptoms: [],
+  awareness_gap: '',
+  problem_impact: '',
+  life_with_problem: '',
+  life_after_solution: '',
+  desired_transformation: '',
+  transformation_mechanism: '',
+  authority_domains: [],
 };
 
 const splitToList = (value?: string): string[] => {
@@ -170,6 +188,7 @@ export default function CompanyProfilePage() {
     selectedCompanyName,
     setSelectedCompanyId,
     isLoading: isCompanyLoading,
+    isAuthenticated,
   } = useCompanyContext();
   const isAdmin = useMemo(() => user?.role === 'admin', [user]);
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
@@ -180,6 +199,8 @@ export default function CompanyProfilePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [overallProfileCompletion, setOverallProfileCompletion] = useState<number | null>(null);
+  const [problemTransformationCompletion, setProblemTransformationCompletion] = useState<number | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [lastFetchStatus, setLastFetchStatus] = useState<number | null>(null);
   const [lastFetchError, setLastFetchError] = useState<string | null>(null);
@@ -201,8 +222,44 @@ export default function CompanyProfilePage() {
   >([]);
   const [marketingIntelligenceInput, setMarketingIntelligenceInput] = useState('');
   const [marketingIntelligenceChatLoading, setMarketingIntelligenceChatLoading] = useState(false);
+  const [problemTransformationPanelOpen, setProblemTransformationPanelOpen] = useState(false);
+  const [problemTransformationQuestions, setProblemTransformationQuestions] = useState<string[]>([]);
+  const [problemTransformationAnswers, setProblemTransformationAnswers] = useState<string[]>([]);
+  const [problemTransformationLoading, setProblemTransformationLoading] = useState(false);
+  const [problemTransformationInferPanelOpen, setProblemTransformationInferPanelOpen] = useState(false);
+  const [problemTransformationInferMessages, setProblemTransformationInferMessages] = useState<
+    Array<{ role: 'user' | 'assistant'; content: string }>
+  >([]);
+  const [problemTransformationInferInput, setProblemTransformationInferInput] = useState('');
+  const [problemTransformationInferLoading, setProblemTransformationInferLoading] = useState(false);
+  const [pendingProblemTransformationUpdates, setPendingProblemTransformationUpdates] = useState<{
+    core_problem_statement?: string | null;
+    pain_symptoms?: string[];
+    awareness_gap?: string | null;
+    problem_impact?: string | null;
+    life_with_problem?: string | null;
+    life_after_solution?: string | null;
+    desired_transformation?: string | null;
+    transformation_mechanism?: string | null;
+    authority_domains?: string[];
+  } | null>(null);
 
   const activeProfile = profile ?? draftProfile;
+
+  const notifyCompanyProfileUpdated = (updatedCompanyId: string) => {
+    if (typeof window === 'undefined' || !updatedCompanyId) return;
+    const updatedAt = new Date().toISOString();
+    try {
+      localStorage.setItem(`company_profile_updated:${updatedCompanyId}`, updatedAt);
+    } catch {
+      // ignore storage quota/privacy errors
+    }
+    window.dispatchEvent(
+      new CustomEvent('company-profile-updated', {
+        detail: { companyId: updatedCompanyId, updatedAt },
+      })
+    );
+  };
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -234,16 +291,23 @@ export default function CompanyProfilePage() {
     const loadProfile = async () => {
       try {
         setIsLoading(true);
+        if (isCompanyLoading) return;
+        if (!isAuthenticated) {
+          setErrorMessage('Please sign in to view company profile.');
+          return;
+        }
         if (!companyId) {
           setErrorMessage('Select a company to continue.');
           return;
         }
         const response = await fetchWithAuth(
-          `/api/company-profile?companyId=${encodeURIComponent(companyId)}`
+          `/api/company-profile?companyId=${encodeURIComponent(companyId)}&includeCompleteness=1`
         );
         setLastFetchStatus(response.status);
         if (response.status === 404) {
           setProfile(null);
+          setOverallProfileCompletion(null);
+          setProblemTransformationCompletion(null);
           setNotFound(true);
           return;
         }
@@ -262,6 +326,8 @@ export default function CompanyProfilePage() {
         if (data.profile) {
           setDraftProfile(data.profile);
         }
+        setOverallProfileCompletion(data.overall_profile_completion ?? null);
+        setProblemTransformationCompletion(data.problem_transformation_completion ?? null);
         setNotFound(false);
         if (data.profile?.company_id) {
           setCompanyId(data.profile.company_id);
@@ -277,11 +343,12 @@ export default function CompanyProfilePage() {
     };
 
     loadProfile();
-  }, [companyId]);
+  }, [companyId, isAuthenticated, isCompanyLoading]);
 
   useEffect(() => {
     const loadRefinements = async () => {
       try {
+        if (isCompanyLoading || !isAuthenticated) return;
         if (!companyId) return;
         const response = await fetchWithAuth(
           companyId
@@ -304,7 +371,7 @@ export default function CompanyProfilePage() {
       }
     };
     loadRefinements();
-  }, [companyId]);
+  }, [companyId, isAuthenticated, isCompanyLoading]);
 
   const updateActiveProfile = (next: CompanyProfile) => {
     if (profile) {
@@ -316,9 +383,16 @@ export default function CompanyProfilePage() {
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    let token = data.session?.access_token;
     if (!token) {
-      throw new Error('Not authenticated');
+      const refreshed = await supabase.auth.refreshSession();
+      token = refreshed.data.session?.access_token;
+    }
+    if (!token) {
+      return new Response(JSON.stringify({ error: 'UNAUTHORIZED' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     return fetch(input, {
       ...init,
@@ -331,6 +405,11 @@ export default function CompanyProfilePage() {
 
   const handleChange = (field: keyof CompanyProfile, value: string) => {
     updateActiveProfile({ ...activeProfile, [field]: value });
+  };
+
+  const handleChangeArray = (field: 'pain_symptoms' | 'authority_domains', value: string) => {
+    const arr = splitToList(value);
+    updateActiveProfile({ ...activeProfile, [field]: arr });
   };
 
   const updateOtherSocial = (index: number, field: 'label' | 'url', value: string) => {
@@ -420,6 +499,15 @@ export default function CompanyProfilePage() {
         goals_list: activeProfile.goals_list ?? splitToList(activeProfile.goals),
         brand_voice_list: activeProfile.brand_voice_list ?? splitToList(activeProfile.brand_voice),
         social_profiles: buildSocialProfilesFromScalars(activeProfile),
+        core_problem_statement: activeProfile.core_problem_statement ?? null,
+        pain_symptoms: Array.isArray(activeProfile.pain_symptoms) ? activeProfile.pain_symptoms : splitToList(String(activeProfile.pain_symptoms || '')),
+        awareness_gap: activeProfile.awareness_gap ?? null,
+        problem_impact: activeProfile.problem_impact ?? null,
+        life_with_problem: activeProfile.life_with_problem ?? null,
+        life_after_solution: activeProfile.life_after_solution ?? null,
+        desired_transformation: activeProfile.desired_transformation ?? null,
+        transformation_mechanism: activeProfile.transformation_mechanism ?? null,
+        authority_domains: Array.isArray(activeProfile.authority_domains) ? activeProfile.authority_domains : splitToList(String(activeProfile.authority_domains || '')),
       };
       const response = await fetchWithAuth('/api/company-profile', {
         method: 'POST',
@@ -433,6 +521,16 @@ export default function CompanyProfilePage() {
       const data = await response.json();
       setProfile(data.profile || activeProfile);
       setDraftProfile(data.profile || activeProfile);
+      setOverallProfileCompletion(
+        data.overall_profile_completion ??
+          data.profile?.overall_profile_completion ??
+          calculateProfileCompletion(data.profile || activeProfile)
+      );
+      setProblemTransformationCompletion(
+        data.problem_transformation_completion ??
+          data.profile?.problem_transformation_completion ??
+          calculateProblemTransformationCompletion(data.profile || activeProfile)
+      );
       if (data.profile?.company_id) {
         setCompanyId(data.profile.company_id);
         setSelectedCompanyId(data.profile.company_id);
@@ -440,6 +538,7 @@ export default function CompanyProfilePage() {
       }
       setNotFound(false);
       setSuccessMessage('Company profile saved.');
+      notifyCompanyProfileUpdated(data.profile?.company_id || companyId);
     } catch (error) {
       console.error('Error saving company profile:', error);
       setErrorMessage('Failed to save company profile.');
@@ -471,6 +570,15 @@ export default function CompanyProfilePage() {
         goals_list: activeProfile.goals_list ?? splitToList(activeProfile.goals),
         brand_voice_list: activeProfile.brand_voice_list ?? splitToList(activeProfile.brand_voice),
         social_profiles: buildSocialProfilesFromScalars(activeProfile),
+        core_problem_statement: activeProfile.core_problem_statement ?? null,
+        pain_symptoms: Array.isArray(activeProfile.pain_symptoms) ? activeProfile.pain_symptoms : splitToList(String(activeProfile.pain_symptoms || '')),
+        awareness_gap: activeProfile.awareness_gap ?? null,
+        problem_impact: activeProfile.problem_impact ?? null,
+        life_with_problem: activeProfile.life_with_problem ?? null,
+        life_after_solution: activeProfile.life_after_solution ?? null,
+        desired_transformation: activeProfile.desired_transformation ?? null,
+        transformation_mechanism: activeProfile.transformation_mechanism ?? null,
+        authority_domains: Array.isArray(activeProfile.authority_domains) ? activeProfile.authority_domains : splitToList(String(activeProfile.authority_domains || '')),
       };
       const response = await fetchWithAuth('/api/company-profile/refine', {
         method: 'POST',
@@ -695,6 +803,323 @@ export default function CompanyProfilePage() {
     sendMarketingIntelligenceMessage();
   };
 
+  const openProblemTransformationPanel = async () => {
+    if (!companyId) return;
+    setProblemTransformationPanelOpen(true);
+    setProblemTransformationLoading(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const res = await fetchWithAuth(
+        `/api/company-profile/problem-transformation-questions?companyId=${encodeURIComponent(companyId)}`
+      );
+      if (!res.ok) throw new Error('Failed to load questions');
+      const data = await res.json();
+      const questions = data?.questions ?? [];
+      setProblemTransformationQuestions(questions);
+      const p = activeProfile;
+      const prefill: string[] = [
+        p.core_problem_statement ?? '',
+        joinList(p.pain_symptoms),
+        p.awareness_gap ?? '',
+        p.problem_impact ?? '',
+        p.life_with_problem ?? '',
+        p.life_after_solution ?? '',
+        p.desired_transformation ?? '',
+        p.transformation_mechanism ?? '',
+        joinList(p.authority_domains),
+      ];
+      setProblemTransformationAnswers(questions.map((_: string, i: number) => prefill[i] ?? ''));
+    } catch (e) {
+      setErrorMessage((e as Error).message || 'Failed to load questions');
+    } finally {
+      setProblemTransformationLoading(false);
+    }
+  };
+
+  const saveProblemTransformation = async () => {
+    if (!companyId) return;
+    setProblemTransformationLoading(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetchWithAuth(
+        `/api/company-profile/problem-transformation?companyId=${encodeURIComponent(companyId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyId, rawAnswers: problemTransformationAnswers }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || err?.details || 'Save failed');
+      }
+      const data = await res.json();
+      const updated = data.profile ?? activeProfile;
+      updateActiveProfile({ ...activeProfile, ...updated });
+      setProfile(updated);
+      setDraftProfile(updated);
+      setProblemTransformationPanelOpen(false);
+      setSuccessMessage('Problem & Transformation updated. Click Save Profile to lock these fields.');
+      notifyCompanyProfileUpdated(updated.company_id || companyId);
+    } catch (e) {
+      setErrorMessage((e as Error).message || 'Failed to save Problem & Transformation');
+    } finally {
+      setProblemTransformationLoading(false);
+    }
+  };
+
+  const openRefineProblemTransformationPanel = () => {
+    setProblemTransformationInferPanelOpen(true);
+    setProblemTransformationInferMessages([]);
+    setProblemTransformationInferInput('');
+    setPendingProblemTransformationUpdates(null);
+    setProblemTransformationInferLoading(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    sendProblemTransformationRefineMessage(undefined, true);
+  };
+
+  const openInferProblemTransformationPanel = async () => {
+    if (!companyId) return;
+    setProblemTransformationInferPanelOpen(true);
+    setProblemTransformationInferMessages([]);
+    setProblemTransformationInferInput('');
+    setPendingProblemTransformationUpdates(null);
+    setProblemTransformationInferLoading(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const res = await fetchWithAuth(
+        `/api/company-profile/infer-problem-transformation?companyId=${encodeURIComponent(companyId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyId }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || err?.details || 'Infer failed');
+      }
+      const data = await res.json();
+      const sf = data.structuredFields || {};
+      const updated = {
+        ...activeProfile,
+        core_problem_statement: sf.core_problem_statement ?? activeProfile.core_problem_statement,
+        pain_symptoms: Array.isArray(sf.pain_symptoms) ? sf.pain_symptoms : activeProfile.pain_symptoms ?? [],
+        awareness_gap: sf.awareness_gap ?? activeProfile.awareness_gap,
+        problem_impact: sf.problem_impact ?? activeProfile.problem_impact,
+        life_with_problem: sf.life_with_problem ?? activeProfile.life_with_problem,
+        life_after_solution: sf.life_after_solution ?? activeProfile.life_after_solution,
+        desired_transformation: sf.desired_transformation ?? activeProfile.desired_transformation,
+        transformation_mechanism: sf.transformation_mechanism ?? activeProfile.transformation_mechanism,
+        authority_domains: Array.isArray(sf.authority_domains) ? sf.authority_domains : activeProfile.authority_domains ?? [],
+      };
+      updateActiveProfile(updated);
+      setProfile(updated);
+      setDraftProfile(updated);
+      await sendProblemTransformationRefineMessage(undefined, true, sf);
+    } catch (e) {
+      setErrorMessage((e as Error).message || 'Failed to infer from profile');
+    } finally {
+      setProblemTransformationInferLoading(false);
+    }
+  };
+
+  const sendProblemTransformationRefineMessage = async (
+    userContent?: string,
+    isInitial = false,
+    inferredFields?: Record<string, unknown>
+  ) => {
+    const applyPendingProblemTransformationUpdates = (
+      updates: NonNullable<typeof pendingProblemTransformationUpdates>
+    ) => {
+      const applied = {
+        ...activeProfile,
+        core_problem_statement:
+          updates.core_problem_statement !== undefined
+            ? updates.core_problem_statement
+            : activeProfile.core_problem_statement,
+        pain_symptoms: Array.isArray(updates.pain_symptoms)
+          ? updates.pain_symptoms
+          : activeProfile.pain_symptoms ?? [],
+        awareness_gap:
+          updates.awareness_gap !== undefined ? updates.awareness_gap : activeProfile.awareness_gap,
+        problem_impact:
+          updates.problem_impact !== undefined ? updates.problem_impact : activeProfile.problem_impact,
+        life_with_problem:
+          updates.life_with_problem !== undefined
+            ? updates.life_with_problem
+            : activeProfile.life_with_problem,
+        life_after_solution:
+          updates.life_after_solution !== undefined
+            ? updates.life_after_solution
+            : activeProfile.life_after_solution,
+        desired_transformation:
+          updates.desired_transformation !== undefined
+            ? updates.desired_transformation
+            : activeProfile.desired_transformation,
+        transformation_mechanism:
+          updates.transformation_mechanism !== undefined
+            ? updates.transformation_mechanism
+            : activeProfile.transformation_mechanism,
+        authority_domains: Array.isArray(updates.authority_domains)
+          ? updates.authority_domains
+          : activeProfile.authority_domains ?? [],
+      };
+      updateActiveProfile(applied);
+      setProfile(applied);
+      setDraftProfile(applied);
+      setProblemTransformationCompletion(calculateProblemTransformationCompletion(applied));
+      setOverallProfileCompletion(calculateProfileCompletion(applied));
+      setPendingProblemTransformationUpdates(null);
+      setSuccessMessage('Applied suggested updates. Click Save Profile to persist these changes.');
+    };
+
+    const content = (userContent ?? problemTransformationInferInput).trim();
+    const isAgreement =
+      /^(yes|y|agree|agreed|approved?|ok|okay|apply|accept|go ahead|do it|proceed|sure)\b/i.test(
+        content
+      );
+    if (!isInitial && pendingProblemTransformationUpdates && isAgreement) {
+      const updates = pendingProblemTransformationUpdates;
+      applyPendingProblemTransformationUpdates(updates);
+      setProblemTransformationInferMessages((prev) => [
+        ...prev,
+        { role: 'user' as const, content },
+        {
+          role: 'assistant' as const,
+          content: 'Approved. I applied the suggested updates. Continue if you want deeper refinement.',
+        },
+      ]);
+      setProblemTransformationInferInput('');
+      return;
+    }
+    const isFirst = problemTransformationInferMessages.length === 0 && !content;
+    if (!content && !isFirst && !isInitial) return;
+    if (!companyId) return;
+
+    const nextMessages = isFirst || isInitial
+      ? problemTransformationInferMessages
+      : [...problemTransformationInferMessages, { role: 'user' as const, content }];
+    if (!isFirst && !isInitial && content) setProblemTransformationInferMessages(nextMessages);
+    setProblemTransformationInferInput('');
+    setProblemTransformationInferLoading(true);
+    setErrorMessage(null);
+    try {
+      const source = inferredFields ?? activeProfile;
+      const currentFields = {
+        core_problem_statement: source.core_problem_statement ?? '',
+        pain_symptoms: source.pain_symptoms ?? [],
+        awareness_gap: source.awareness_gap ?? '',
+        problem_impact: source.problem_impact ?? '',
+        life_with_problem: source.life_with_problem ?? '',
+        life_after_solution: source.life_after_solution ?? '',
+        desired_transformation: source.desired_transformation ?? '',
+        transformation_mechanism: source.transformation_mechanism ?? '',
+        authority_domains: source.authority_domains ?? [],
+      };
+      const conversation = nextMessages.map((m) => ({ role: m.role, content: m.content }));
+      const res = await fetchWithAuth(
+        `/api/company-profile/define-problem-transformation?companyId=${encodeURIComponent(companyId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companyId,
+            conversation: isInitial ? [] : conversation,
+            currentFields,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || err?.details || 'Refine failed');
+      }
+      const data = await res.json();
+      const buildPreviewSummary = (pv: Record<string, any>): string => {
+        const rows = Object.entries(pv || {})
+          .filter(([, v]) => v != null && (!Array.isArray(v) || v.length > 0) && String(v).trim() !== '')
+          .map(([k, v]) => {
+            const label = k.replace(/_/g, ' ');
+            const value = Array.isArray(v) ? v.join(', ') : String(v);
+            return `- ${label}: ${value}`;
+          });
+        if (rows.length === 0) return '';
+        return `Proposed updates:\n${rows.join('\n')}`;
+      };
+      if (data.previewUpdates) {
+        const pv = data.previewUpdates;
+        setPendingProblemTransformationUpdates({
+          core_problem_statement:
+            pv.core_problem_statement !== undefined ? pv.core_problem_statement : undefined,
+          pain_symptoms: Array.isArray(pv.pain_symptoms) ? pv.pain_symptoms : undefined,
+          awareness_gap: pv.awareness_gap !== undefined ? pv.awareness_gap : undefined,
+          problem_impact: pv.problem_impact !== undefined ? pv.problem_impact : undefined,
+          life_with_problem: pv.life_with_problem !== undefined ? pv.life_with_problem : undefined,
+          life_after_solution:
+            pv.life_after_solution !== undefined ? pv.life_after_solution : undefined,
+          desired_transformation:
+            pv.desired_transformation !== undefined ? pv.desired_transformation : undefined,
+          transformation_mechanism:
+            pv.transformation_mechanism !== undefined ? pv.transformation_mechanism : undefined,
+          authority_domains: Array.isArray(pv.authority_domains) ? pv.authority_domains : undefined,
+        });
+      }
+      if (data.done && data.structuredFields) {
+        const sf = data.structuredFields;
+        const updated = {
+          ...activeProfile,
+          core_problem_statement: sf.core_problem_statement ?? activeProfile.core_problem_statement,
+          pain_symptoms: Array.isArray(sf.pain_symptoms) ? sf.pain_symptoms : activeProfile.pain_symptoms ?? [],
+          awareness_gap: sf.awareness_gap ?? activeProfile.awareness_gap,
+          problem_impact: sf.problem_impact ?? activeProfile.problem_impact,
+          life_with_problem: sf.life_with_problem ?? activeProfile.life_with_problem,
+          life_after_solution: sf.life_after_solution ?? activeProfile.life_after_solution,
+          desired_transformation: sf.desired_transformation ?? activeProfile.desired_transformation,
+          transformation_mechanism: sf.transformation_mechanism ?? activeProfile.transformation_mechanism,
+          authority_domains: Array.isArray(sf.authority_domains) ? sf.authority_domains : activeProfile.authority_domains ?? [],
+        };
+        updateActiveProfile(updated);
+        setProfile(updated);
+        setDraftProfile(updated);
+        setPendingProblemTransformationUpdates(null);
+        setProblemTransformationInferPanelOpen(false);
+        setSuccessMessage('Problem & Transformation updated. Click Save Profile to lock these fields.');
+      } else if (data.nextQuestion) {
+        const previewSummary = data.previewUpdates
+          ? buildPreviewSummary(data.previewUpdates as Record<string, any>)
+          : '';
+        const strategicInsights = Array.isArray(data.strategic_insights) && data.strategic_insights.length > 0
+          ? `\n\nStrategic insights:\n${(data.strategic_insights as string[]).slice(0, 4).map((s) => `- ${s}`).join('\n')}`
+          : '';
+        setProblemTransformationInferMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant' as const,
+            content: data.previewUpdates
+              ? `${previewSummary}\n\n${data.nextQuestion}${strategicInsights}\n\nReply "apply" to accept these updates.`
+              : data.nextQuestion,
+          },
+        ]);
+      } else if (data.previewUpdates) {
+        const previewSummary = buildPreviewSummary(data.previewUpdates as Record<string, any>);
+        setProblemTransformationInferMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant' as const,
+            content: `${previewSummary}\n\nReply "apply" to accept these updates.`,
+          },
+        ]);
+      }
+    } catch (e) {
+      setErrorMessage((e as Error).message || 'Failed to refine Problem & Transformation');
+    } finally {
+      setProblemTransformationInferLoading(false);
+    }
+  };
+
   const generateMarketingIntelligence = async () => {
     if (!companyId) return;
     setMarketingIntelligenceLoading(true);
@@ -723,6 +1148,129 @@ export default function CompanyProfilePage() {
   const lastRefined = activeProfile.last_refined_at
     ? new Date(activeProfile.last_refined_at).toLocaleString()
     : 'Never';
+  const calculateProblemTransformationCompletion = (profileData: CompanyProfile): number => {
+    const filled = [
+      profileData.core_problem_statement,
+      Array.isArray(profileData.pain_symptoms) ? profileData.pain_symptoms.join(', ') : '',
+      profileData.awareness_gap,
+      profileData.problem_impact,
+      profileData.life_with_problem,
+      profileData.life_after_solution,
+      profileData.desired_transformation,
+      profileData.transformation_mechanism,
+      Array.isArray(profileData.authority_domains) ? profileData.authority_domains.join(', ') : '',
+    ].filter((v) => String(v ?? '').trim().length > 0).length;
+    return Math.round((filled / 9) * 100);
+  };
+  const calculateProfileCompletion = (profileData: CompanyProfile): number => {
+    const checkpoints = [
+      profileData.name,
+      profileData.industry || (profileData.industry_list ?? []).join(', '),
+      profileData.category || (profileData.category_list ?? []).join(', '),
+      profileData.target_audience || (profileData.target_audience_list ?? []).join(', '),
+      profileData.unique_value,
+      profileData.content_themes || (profileData.content_themes_list ?? []).join(', '),
+      profileData.brand_positioning,
+      profileData.campaign_focus,
+      profileData.core_problem_statement,
+      profileData.desired_transformation,
+    ];
+    const complete = checkpoints.filter((v) => String(v ?? '').trim().length > 0).length;
+    return Math.round((complete / checkpoints.length) * 100);
+  };
+  const uiProblemTransformationCompletion = calculateProblemTransformationCompletion(activeProfile);
+  const uiOverallProfileCompletion = calculateProfileCompletion(activeProfile);
+  const uiConfidence = Math.max(
+    0,
+    Math.min(
+      100,
+      Number(
+        activeProfile.overall_confidence ??
+          activeProfile.confidence_score ??
+          Math.round(uiOverallProfileCompletion * 0.85)
+      )
+    )
+  );
+  const toTitleCase = (value: string): string =>
+    value
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  const normalizeFieldKey = (value: string): string => value.toLowerCase().replace(/[^a-z]/g, '');
+  const canonicalFieldLabel = (rawLabel: string): string => {
+    const normalized = normalizeFieldKey(rawLabel);
+    const aliases: Array<{ label: string; keys: string[] }> = [
+      { label: 'Core Problem Statement', keys: ['coreproblemstatement', 'coreproblem'] },
+      { label: 'Pain Symptoms', keys: ['painsymptoms', 'painsymptom'] },
+      { label: 'Awareness Gap', keys: ['awarenessgap', 'misconception'] },
+      { label: 'Problem Impact', keys: ['problemimpact', 'impact'] },
+      { label: 'Life With Problem', keys: ['lifewithproblem', 'beforestate'] },
+      { label: 'Life After Solution', keys: ['lifeaftersolution', 'afterstate'] },
+      {
+        label: 'Desired Transformation',
+        keys: ['desiredtransformation', 'transformationgoal', 'transformation'],
+      },
+      {
+        label: 'Transformation Mechanism',
+        keys: ['transformationmechanism', 'transformatinmechanissm', 'mechanism'],
+      },
+      { label: 'Authority Domains', keys: ['authoritydomains', 'authoritydomain'] },
+    ];
+    const found = aliases.find((entry) => entry.keys.some((k) => normalized.includes(k)));
+    return found?.label ?? toTitleCase(rawLabel);
+  };
+  const renderProblemTransformationAssistantMessage = (content: string): React.ReactNode => {
+    const lines = content.split('\n');
+    const rendered: React.ReactNode[] = [];
+    for (let idx = 0; idx < lines.length; idx += 1) {
+      const line = lines[idx];
+      const proposedMatch = line.match(/^\s*-\s*([^:]+):\s*(.*)$/);
+      if (line.trim().toLowerCase() === 'proposed updates:') {
+        rendered.push(
+          <div key={`line-${idx}`} className="font-semibold text-gray-900 mb-2">
+            Proposed updates:
+          </div>
+        );
+        continue;
+      }
+      if (proposedMatch) {
+        const fieldLabel = canonicalFieldLabel(proposedMatch[1]);
+        const valueLines = [proposedMatch[2]];
+        while (idx + 1 < lines.length && !/^\s*-\s*[^:]+:\s*/.test(lines[idx + 1])) {
+          if (lines[idx + 1].trim().toLowerCase() === 'proposed updates:') break;
+          if (lines[idx + 1].trim() === '') break;
+          valueLines.push(lines[idx + 1].trim());
+          idx += 1;
+        }
+        rendered.push(
+          <div key={`line-${idx}`} className="mb-4 rounded-md border border-gray-200 p-3 bg-white/70">
+            <div className="font-bold text-gray-900">{fieldLabel}</div>
+            <div className="mt-2 text-gray-800 whitespace-pre-wrap">{valueLines.join('\n')}</div>
+          </div>
+        );
+        continue;
+      }
+      if (!line.trim()) {
+        rendered.push(<div key={`line-${idx}`} className="h-2" />);
+        continue;
+      }
+      rendered.push(
+        <div key={`line-${idx}`} className="whitespace-pre-wrap">
+          {line}
+        </div>
+      );
+    }
+    return (
+      <div>
+        {rendered}
+      </div>
+    );
+  };
+  const completionPercent = (value: number | null | undefined): number => {
+    if (value == null) return 0;
+    return Math.round(value <= 1 ? value * 100 : value);
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -738,7 +1286,23 @@ export default function CompanyProfilePage() {
           <div className="text-right text-sm text-gray-600">
             <div>Last refined: {lastRefined}</div>
             <div>
-              Confidence: {activeProfile.overall_confidence ?? activeProfile.confidence_score ?? 0}%
+              Confidence: {completionPercent(uiConfidence)}%
+            </div>
+            <div className="mt-2 pt-2 border-t border-gray-200">
+              <div>
+                Profile completion:{' '}
+                {completionPercent(
+                  overallProfileCompletion ?? uiOverallProfileCompletion
+                )}
+                %
+              </div>
+              <div>
+                Problem & Transformation:{' '}
+                {completionPercent(
+                  problemTransformationCompletion ?? uiProblemTransformationCompletion
+                )}
+                %
+              </div>
             </div>
           </div>
         </div>
@@ -1317,6 +1881,131 @@ export default function CompanyProfilePage() {
               </div>
             </div>
 
+            <div className="border-t pt-6 mt-6">
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Problem & Transformation</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Core problem, pain symptoms, and desired transformation used for recommendation alignment.
+                <br />
+                <strong>Fill with AI</strong> asks guided questions and structures answers.
+                <strong> Refine with AI</strong> suggests improvements and applies only after your agreement.
+              </p>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <button
+                  type="button"
+                  onClick={openInferProblemTransformationPanel}
+                  disabled={!companyId || problemTransformationInferLoading}
+                  className="px-4 py-2 bg-indigo-100 text-indigo-800 rounded-lg text-sm font-medium hover:bg-indigo-200 disabled:opacity-50"
+                >
+                  Infer from Profile
+                </button>
+                <button
+                  type="button"
+                  onClick={openProblemTransformationPanel}
+                  disabled={!companyId || problemTransformationLoading}
+                  className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+                >
+                  Fill with AI
+                </button>
+                <button
+                  type="button"
+                  onClick={openRefineProblemTransformationPanel}
+                  disabled={!companyId || problemTransformationInferLoading}
+                  className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+                >
+                  Refine with AI
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="text-sm font-medium text-gray-700">Core Problem Statement</label>
+                  <textarea
+                    value={activeProfile.core_problem_statement || ''}
+                    onChange={(e) => handleChange('core_problem_statement', e.target.value)}
+                    placeholder="One sentence: the core problem you solve"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-sm font-medium text-gray-700">Pain Symptoms</label>
+                  <textarea
+                    value={joinList(activeProfile.pain_symptoms)}
+                    onChange={(e) => handleChangeArray('pain_symptoms', e.target.value)}
+                    placeholder="Comma-separated: scope creep, delays, resource conflicts"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Awareness Gap</label>
+                  <input
+                    value={activeProfile.awareness_gap || ''}
+                    onChange={(e) => handleChange('awareness_gap', e.target.value)}
+                    placeholder="What target audience doesn't yet know"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Problem Impact</label>
+                  <input
+                    value={activeProfile.problem_impact || ''}
+                    onChange={(e) => handleChange('problem_impact', e.target.value)}
+                    placeholder="Business impact of the problem"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Life With Problem</label>
+                  <textarea
+                    value={activeProfile.life_with_problem || ''}
+                    onChange={(e) => handleChange('life_with_problem', e.target.value)}
+                    placeholder="Current state before solution"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Life After Solution</label>
+                  <textarea
+                    value={activeProfile.life_after_solution || ''}
+                    onChange={(e) => handleChange('life_after_solution', e.target.value)}
+                    placeholder="Desired state with solution"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Desired Transformation</label>
+                  <textarea
+                    value={activeProfile.desired_transformation || ''}
+                    onChange={(e) => handleChange('desired_transformation', e.target.value)}
+                    placeholder="Transformation you enable"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Transformation Mechanism</label>
+                  <input
+                    value={activeProfile.transformation_mechanism || ''}
+                    onChange={(e) => handleChange('transformation_mechanism', e.target.value)}
+                    placeholder="How you achieve the transformation"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-sm font-medium text-gray-700">Authority Domains</label>
+                  <textarea
+                    value={joinList(activeProfile.authority_domains)}
+                    onChange={(e) => handleChangeArray('authority_domains', e.target.value)}
+                    placeholder="Comma-separated: project management, agile, prioritization"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+
             {latestRefinement?.missing_fields_questions &&
               latestRefinement.missing_fields_questions.length > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
@@ -1438,7 +2127,9 @@ export default function CompanyProfilePage() {
                       : 'mr-8 bg-gray-100 text-gray-900'
                   }`}
                 >
-                  {msg.content}
+                  {msg.role === 'assistant'
+                    ? renderProblemTransformationAssistantMessage(msg.content)
+                    : msg.content}
                 </div>
               ))}
               {targetCustomerLoading && (
@@ -1614,6 +2305,145 @@ export default function CompanyProfilePage() {
                   Send
                 </button>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {problemTransformationInferPanelOpen && (
+        <div className="fixed inset-0 z-50 flex">
+          <div
+            className="absolute inset-0 bg-black/30"
+            onClick={() => !problemTransformationInferLoading && setProblemTransformationInferPanelOpen(false)}
+            aria-hidden
+          />
+          <div className="relative ml-auto w-full max-w-md bg-white shadow-xl flex flex-col h-full">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Infer & Refine Problem & Transformation</h3>
+              <button
+                type="button"
+                onClick={() => !problemTransformationInferLoading && setProblemTransformationInferPanelOpen(false)}
+                className="p-2 text-gray-500 hover:text-gray-700 rounded"
+                aria-label="Close"
+                disabled={problemTransformationInferLoading}
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {problemTransformationInferMessages.map((msg, i) => (
+                <div
+                  key={i}
+                  className={`rounded-lg p-3 text-sm ${
+                    msg.role === 'user'
+                      ? 'ml-8 bg-indigo-100 text-indigo-900'
+                      : 'mr-8 bg-gray-100 text-gray-900'
+                  }`}
+                >
+                  {msg.content}
+                </div>
+              ))}
+              {problemTransformationInferLoading && (
+                <div className="mr-8 rounded-lg p-3 text-sm bg-gray-100 text-gray-600">Thinking...</div>
+              )}
+            </div>
+            <div className="p-4 border-t">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  sendProblemTransformationRefineMessage();
+                }}
+                className="flex gap-2 items-center"
+              >
+                <input
+                  type="text"
+                  value={problemTransformationInferInput}
+                  onChange={(e) => setProblemTransformationInferInput(e.target.value)}
+                  placeholder="Type your answer..."
+                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  disabled={problemTransformationInferLoading}
+                />
+                <ChatVoiceButton
+                  onTranscription={(text) => setProblemTransformationInferInput(text)}
+                  disabled={problemTransformationInferLoading}
+                  context="company-profile"
+                  title={undefined}
+                />
+                <button
+                  type="submit"
+                  disabled={problemTransformationInferLoading}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                >
+                  Send
+                </button>
+                {pendingProblemTransformationUpdates && (
+                  <button
+                    type="button"
+                    onClick={() => sendProblemTransformationRefineMessage('apply')}
+                    disabled={problemTransformationInferLoading}
+                    className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                  >
+                    Apply updates
+                  </button>
+                )}
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {problemTransformationPanelOpen && (
+        <div className="fixed inset-0 z-50 flex">
+          <div
+            className="absolute inset-0 bg-black/30"
+            onClick={() => !problemTransformationLoading && setProblemTransformationPanelOpen(false)}
+            aria-hidden
+          />
+          <div className="relative ml-auto w-full max-w-lg bg-white shadow-xl flex flex-col h-full">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Fill Problem & Transformation with AI</h3>
+              <button
+                type="button"
+                onClick={() => !problemTransformationLoading && setProblemTransformationPanelOpen(false)}
+                className="p-2 text-gray-500 hover:text-gray-700 rounded"
+                aria-label="Close"
+                disabled={problemTransformationLoading}
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {problemTransformationLoading && problemTransformationQuestions.length === 0 ? (
+                <div className="text-sm text-gray-500">Loading questions...</div>
+              ) : (
+                problemTransformationQuestions.map((q, i) => (
+                  <div key={i} className="space-y-1">
+                    <label className="text-sm font-medium text-gray-700">{q}</label>
+                    <textarea
+                      value={problemTransformationAnswers[i] ?? ''}
+                      onChange={(e) => {
+                        const next = [...problemTransformationAnswers];
+                        next[i] = e.target.value;
+                        setProblemTransformationAnswers(next);
+                      }}
+                      placeholder="Your answer..."
+                      rows={2}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                      disabled={problemTransformationLoading}
+                    />
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="p-4 border-t">
+              <button
+                type="button"
+                onClick={saveProblemTransformation}
+                disabled={problemTransformationLoading || problemTransformationQuestions.length === 0}
+                className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {problemTransformationLoading ? 'Saving...' : 'Save (AI will filter & structure)'}
+              </button>
             </div>
           </div>
         </div>

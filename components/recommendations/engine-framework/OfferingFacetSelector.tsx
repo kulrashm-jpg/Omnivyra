@@ -41,6 +41,8 @@ function deriveFacets(profile: Record<string, unknown> | null): FacetCard[] {
   add('campaign_focus', profile.campaign_focus as string | undefined);
   add('key_messages', profile.key_messages as string | undefined);
   add('target_customer_segment', profile.target_customer_segment as string | undefined);
+  add('products_services', profile.products_services as string | undefined);
+  add('products_services_list', profile.products_services_list as string[] | undefined);
 
   return list.slice(0, 8);
 }
@@ -54,6 +56,28 @@ export default function OfferingFacetSelector({
 }: Props) {
   const [facets, setFacets] = useState<FacetCard[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    if (!companyId || typeof window === 'undefined') return;
+    const handleProfileUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<{ companyId?: string }>).detail;
+      if (!detail?.companyId || detail.companyId === companyId) {
+        setRefreshToken((v) => v + 1);
+      }
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === `company_profile_updated:${companyId}`) {
+        setRefreshToken((v) => v + 1);
+      }
+    };
+    window.addEventListener('company-profile-updated', handleProfileUpdated as EventListener);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('company-profile-updated', handleProfileUpdated as EventListener);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [companyId]);
 
   useEffect(() => {
     if (!companyId) {
@@ -80,7 +104,7 @@ export default function OfferingFacetSelector({
     return () => {
       cancelled = true;
     };
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, fetchWithAuth, refreshToken]);
 
   const toggle = (id: string) => {
     if (selectedFacets.includes(id)) {

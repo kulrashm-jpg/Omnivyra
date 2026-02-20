@@ -79,6 +79,25 @@ function deriveProblemDomains(profile: CompanyProfile): string[] {
     parseList(growthPriorities).forEach((s) => sources.push(s));
   }
 
+  const coreProblem = profile.core_problem_statement ?? '';
+  if (coreProblem) {
+    parseList(coreProblem).forEach((s) => sources.push(s));
+  }
+
+  const painSymptoms = profile.pain_symptoms;
+  if (Array.isArray(painSymptoms)) {
+    painSymptoms.forEach((s) => {
+      if (typeof s === 'string' && s.trim()) sources.push(s.trim());
+    });
+  }
+
+  const authorityDomains = profile.authority_domains;
+  if (Array.isArray(authorityDomains)) {
+    authorityDomains.forEach((s) => {
+      if (typeof s === 'string' && s.trim()) sources.push(s.trim());
+    });
+  }
+
   const unique = Array.from(new Set(sources.map((s) => s.trim().toLowerCase()))).slice(0, 8);
   return unique.length > 0
     ? unique.map((s) => s.charAt(0).toUpperCase() + s.slice(1))
@@ -94,6 +113,14 @@ function deriveMissionStatement(profile: CompanyProfile): string {
 }
 
 function deriveTransformationOutcome(profile: CompanyProfile): string {
+  const desiredTransformation = profile.desired_transformation ?? '';
+  if (desiredTransformation && desiredTransformation.trim().length > 15) {
+    return desiredTransformation.trim().slice(0, 200);
+  }
+  const lifeAfterSolution = (profile as { life_after_solution?: string | null }).life_after_solution ?? '';
+  if (lifeAfterSolution && lifeAfterSolution.trim().length > 15) {
+    return lifeAfterSolution.trim().slice(0, 200);
+  }
   const objectives = profile.campaign_focus ?? '';
   const valueProp = profile.unique_value ?? profile.competitive_advantages ?? '';
   if (objectives && objectives.trim().length > 15) return objectives.trim().slice(0, 200);
@@ -101,8 +128,21 @@ function deriveTransformationOutcome(profile: CompanyProfile): string {
   return 'Enable individuals to make confident decisions and restore clarity during uncertainty.';
 }
 
-function deriveDisqualifiedSignals(profile: CompanyProfile): string[] {
-  return [...DEFAULT_DISQUALIFIED];
+export function deriveDisqualifiedSignals(profile: CompanyProfile): string[] {
+  const result: string[] = [...DEFAULT_DISQUALIFIED];
+  const addFrom = (value: string | string[] | null | undefined) => {
+    const items = parseList(value);
+    items.forEach((s) => {
+      const lower = s.toLowerCase().trim();
+      if (lower.length > 2 && !result.some((r) => r.toLowerCase() === lower)) {
+        result.push(s.trim());
+      }
+    });
+  };
+  addFrom(profile.content_strategy);
+  const identitySafe = (profile as { identity_safe_topics?: string | string[] | null }).identity_safe_topics;
+  if (identitySafe) addFrom(identitySafe);
+  return result;
 }
 
 export async function buildCompanyMissionContext(

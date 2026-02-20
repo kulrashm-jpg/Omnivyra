@@ -55,12 +55,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const { data: campaign, error: campError } = await supabase
       .from('campaigns')
-      .select('id, execution_status')
+      .select('id, execution_status, duration_weeks')
       .eq('id', campaignId)
       .maybeSingle();
 
     if (campError || !campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    // DB first: if duration already set (e.g. after restart), return it — never contradict
+    const dbWeeks = typeof (campaign as { duration_weeks?: number }).duration_weeks === 'number' &&
+      (campaign as { duration_weeks: number }).duration_weeks >= 1 &&
+      (campaign as { duration_weeks: number }).duration_weeks <= 52
+      ? (campaign as { duration_weeks: number }).duration_weeks
+      : null;
+    if (dbWeeks != null) {
+      return res.status(200).json({
+        status: 'APPROVED',
+        requested_weeks: dbWeeks,
+        recommended_duration: dbWeeks,
+        max_weeks_allowed: dbWeeks,
+        min_weeks_required: dbWeeks,
+        limiting_constraints: [],
+        blocking_constraints: [],
+        trade_off_options: [],
+        explanation_summary: `Campaign duration is already set to ${dbWeeks} weeks.`,
+      });
     }
 
     const executionStatus = normalizeExecutionState((campaign as any).execution_status);

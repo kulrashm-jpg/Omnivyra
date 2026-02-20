@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/router';
-import { useOpportunities } from './useOpportunities';
-import type { OpportunityTabProps, OpportunityWithPayload } from './types';
-import { payloadHelpers } from './types';
+import { v4 as uuidv4 } from 'uuid';
+import type { OpportunityTabProps } from './types';
 import EngineContextPanel from '../EngineContextPanel';
 import UnifiedContextModeSelector, { type ContextMode, type FocusModule } from '../engine-framework/UnifiedContextModeSelector';
 import StrategicAspectSelector from '../engine-framework/StrategicAspectSelector';
@@ -10,6 +9,7 @@ import EngineJobStatusPanel from '../../engines/EngineJobStatusPanel';
 import { useEngineJobPolling } from '../../../hooks/useEngineJobPolling';
 import OfferingFacetSelector from '../engine-framework/OfferingFacetSelector';
 import StrategicConsole from '../engine-framework/StrategicConsole';
+import RecommendationBlueprintCard from '../cards/RecommendationBlueprintCard';
 
 const TYPE = 'TREND';
 
@@ -50,11 +50,21 @@ export type StrategicPayload = {
   selected_offerings: string[];
   selected_aspect: string | null;
   strategic_text: string;
+  strategic_intents?: string[];
   regions?: string[];
   cluster_inputs?: ClusterInput[];
   focused_modules?: string[];
   additional_direction?: string;
 };
+
+const STRATEGIC_INTENT_OPTIONS = [
+  'Brand awareness',
+  'Network expansion',
+  'Lead generation',
+  'Authority positioning',
+  'Engagement growth',
+  'Product promotion',
+] as const;
 
 const ISO_COUNTRIES = [
   { name: 'India', code: 'IN' },
@@ -69,224 +79,10 @@ const ISO_COUNTRIES = [
   { name: 'Japan', code: 'JP' },
 ];
 
-/** Derive placeholder sub-angles from summary text (comma/semicolon split or single line). */
-function deriveSubAngles(summary: string | null): string[] {
-  if (!summary || !summary.trim()) return ['Strategic angle 1', 'Strategic angle 2'];
-  const parts = summary.split(/[,;]|\s+and\s+/i).map((s) => s.trim()).filter(Boolean);
-  if (parts.length >= 2) return parts.slice(0, 4);
-  return [summary, 'Related angle', 'Supporting angle'];
-}
-
-/** Mock personas for expansion (no backend). */
-const MOCK_PERSONAS = ['Decision makers', 'Influencers', 'Primary segment'];
-
-/** Mock messaging hooks for expansion (no backend). */
-function deriveMessagingHooks(title: string, summary: string | null): string[] {
-  const base = title || 'Theme';
-  return [
-    `Why ${base} matters now`,
-    `Key benefit for your audience`,
-    summary ? `Tie-in: ${summary.slice(0, 60)}${summary.length > 60 ? '…' : ''}` : 'Clear call-to-action',
-  ];
-}
-
-type ThemeCardOpportunity = OpportunityWithPayload & { isCustom?: boolean; suggestedAudience?: string; messagingHooks?: string };
-
-function ThemeCard({
-  opportunity,
-  onPromote,
-  onArchive,
-  onMarkPossibility,
-  onActionComplete,
-  lastStrategicPayload,
-  isSelected,
-  onToggleSelect,
-}: {
-  opportunity: ThemeCardOpportunity;
-  onPromote: (id: string) => Promise<void>;
-  onArchive: (id: string) => Promise<void>;
-  onMarkPossibility: (id: string) => Promise<void>;
-  onActionComplete?: () => void;
-  lastStrategicPayload: StrategicPayload | null;
-  isSelected: boolean;
-  onToggleSelect: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const isCustom = !!(opportunity as ThemeCardOpportunity).isCustom;
-  const customAudience = (opportunity as ThemeCardOpportunity).suggestedAudience;
-  const customHooks = (opportunity as ThemeCardOpportunity).messagingHooks;
-
-  const run = async (fn: () => Promise<void>) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await fn();
-      onActionComplete?.();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const themeTitle = opportunity.title || 'Strategic theme';
-  const strategicAngle = opportunity.summary || '—';
-  const reachEstimate = payloadHelpers.reachEstimate(opportunity.payload);
-  const formats = payloadHelpers.formats(opportunity.payload);
-  const suggestedFormats = formats.length ? formats.join(', ') : '—';
-
-  const subAngles = deriveSubAngles(opportunity.summary);
-  const personas = customAudience ? customAudience.split(/[,;]/).map((s) => s.trim()).filter(Boolean) : MOCK_PERSONAS;
-  const messagingHooksList = customHooks ? customHooks.split(/[,;]/).map((s) => s.trim()).filter(Boolean) : deriveMessagingHooks(opportunity.title || '', opportunity.summary);
-
-  const contextModeLabel =
-    lastStrategicPayload?.context_mode === 'FULL'
-      ? 'Full Context'
-      : lastStrategicPayload?.context_mode === 'FOCUSED'
-        ? 'Focused Context'
-        : lastStrategicPayload?.context_mode === 'NONE'
-          ? 'No Context'
-          : lastStrategicPayload?.context_mode ?? null;
-  const modeBadge = contextModeLabel ? (
-    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-800">
-      {contextModeLabel}
-    </span>
-  ) : null;
-
-  return (
-    <div
-      className={`rounded-xl p-6 shadow-sm transition-all ${
-        isSelected
-          ? 'border-2 border-indigo-600 bg-indigo-50/80 ring-2 ring-indigo-200'
-          : 'border border-gray-200 bg-white hover:shadow-md'
-      }`}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <button
-          type="button"
-          onClick={onToggleSelect}
-          className="text-left flex-1 min-w-0"
-        >
-          <h3 className="text-lg font-semibold text-gray-900">{themeTitle}</h3>
-        </button>
-        <div className="flex flex-shrink-0 items-center gap-1.5">
-          {lastStrategicPayload?.cluster_inputs && lastStrategicPayload.cluster_inputs.length > 0 && (
-            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-800">
-              Cluster-Driven Theme
-            </span>
-          )}
-          {isCustom && (
-            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-200 text-gray-700">
-              Custom Pillar
-            </span>
-          )}
-          {modeBadge}
-        </div>
-      </div>
-      <p className="mt-2 text-sm text-gray-700 leading-relaxed">{strategicAngle}</p>
-      <dl className="mt-4 space-y-2 text-sm text-gray-600">
-        <div>
-          <span className="text-gray-500 font-medium">Estimated reach:</span>{' '}
-          <span className="text-gray-800">{reachEstimate}</span>
-        </div>
-        <div>
-          <span className="text-gray-500 font-medium">Suggested formats:</span>{' '}
-          <span className="text-gray-800">{suggestedFormats}</span>
-        </div>
-      </dl>
-      <div className="mt-5">
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); setExpanded((e) => !e); }}
-          className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-600 text-indigo-600 hover:bg-indigo-50"
-        >
-          {expanded ? 'Collapse' : 'Expand Theme Strategy'}
-        </button>
-      </div>
-
-      {expanded && (
-        <div className="mt-6 pt-6 border-t border-gray-200 space-y-6">
-          {lastStrategicPayload && (
-            <div className="mt-4 p-3 rounded-lg bg-gray-100 border border-gray-200 text-xs text-gray-600">
-              <div className="font-medium text-gray-700 mb-1">Generated Based On</div>
-              <div>Context: {lastStrategicPayload.context_mode}</div>
-              <div>Aspect: {lastStrategicPayload.selected_aspect || '—'}</div>
-              <div>Facets: {lastStrategicPayload.selected_offerings?.length ? lastStrategicPayload.selected_offerings.map((f: string) => f.split(':').slice(1).join(':') || f).join(', ') : '—'}</div>
-              <div>Strategic Input: {lastStrategicPayload.strategic_text ? (lastStrategicPayload.strategic_text.slice(0, 120) + (lastStrategicPayload.strategic_text.length > 120 ? '…' : '')) : 'None'}</div>
-              {lastStrategicPayload.regions?.length ? <div>Regions: {lastStrategicPayload.regions.join(', ')}</div> : null}
-            </div>
-          )}
-          {isCustom && !lastStrategicPayload && (
-            <div className="mt-4 p-3 rounded-lg bg-gray-100 border border-gray-200 text-xs text-gray-600">
-              Custom pillar — not generated from engine.
-            </div>
-          )}
-          <div>
-            <h4 className="text-sm font-semibold text-gray-800 mb-2">Sub-angles</h4>
-            <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-              {subAngles.map((angle, i) => (
-                <li key={i}>{angle}</li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <h4 className="text-sm font-semibold text-gray-800 mb-2">Suggested audience personas</h4>
-            <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-              {personas.map((p, i) => (
-                <li key={i}>{p}</li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <h4 className="text-sm font-semibold text-gray-800 mb-2">Suggested messaging hooks</h4>
-            <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-              {messagingHooksList.map((hook, i) => (
-                <li key={i}>{hook}</li>
-              ))}
-            </ul>
-          </div>
-          {!isCustom && (
-            <div className="flex flex-wrap gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => run(() => onPromote(opportunity.id))}
-                disabled={busy}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white disabled:opacity-50"
-              >
-                Build Campaign Blueprint
-              </button>
-              <button
-                type="button"
-                onClick={() => run(() => onMarkPossibility(opportunity.id))}
-                disabled={busy}
-                className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 disabled:opacity-50"
-              >
-                Mark as Long-Term Possibility
-              </button>
-              <button
-                type="button"
-                onClick={() => run(() => onArchive(opportunity.id))}
-                disabled={busy}
-                className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-600 disabled:opacity-50"
-              >
-                Archive Theme
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function TrendCampaignsTab(props: OpportunityTabProps) {
-  const { companyId, regions, onPromote, onAction, fetchWithAuth } = props;
+  const { companyId, regions, engineRecommendations, fetchWithAuth } = props;
   const router = useRouter();
-  const { opportunities, loading, error, hasRun, refetchGetOnly } = useOpportunities(
-    companyId,
-    TYPE,
-    fetchWithAuth,
-    { getRegions: () => regions ?? null }
-  );
+  const [hasRun, setHasRun] = useState(false);
   const [contextMode, setContextMode] = useState<ContextMode>('FULL');
   const [focusedModules, setFocusedModules] = useState<FocusModule[]>([]);
   const [additionalDirection, setAdditionalDirection] = useState('');
@@ -294,15 +90,13 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [selectedAspect, setSelectedAspect] = useState<string | null>(null);
   const [selectedFacets, setSelectedFacets] = useState<string[]>([]);
   const [strategicText, setStrategicText] = useState('');
+  const [selectedStrategicIntents, setSelectedStrategicIntents] = useState<string[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [lastStrategicPayload, setLastStrategicPayload] = useState<StrategicPayload | null>(null);
-  const [selectedThemeIds, setSelectedThemeIds] = useState<string[]>([]);
-  const [customPillars, setCustomPillars] = useState<ThemeCardOpportunity[]>([]);
+  const [customPillars, setCustomPillars] = useState<Array<{ id: string; title: string; summary: string | null }>>([]);
   const [showAddCustomForm, setShowAddCustomForm] = useState(false);
   const [customTitle, setCustomTitle] = useState('');
   const [customAngle, setCustomAngle] = useState('');
-  const [customAudience, setCustomAudience] = useState('');
-  const [customHooks, setCustomHooks] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [regionInput, setRegionInput] = useState('');
   const [regionWarning, setRegionWarning] = useState<string | null>(null);
@@ -325,6 +119,30 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const clusterBridgeConsumedRef = useRef(false);
   const pulseBridgeConsumedRef = useRef(false);
+  const [generatedEngineRecommendations, setGeneratedEngineRecommendations] = useState<
+    Array<Record<string, unknown>>
+  >([]);
+  const [archivedEngineIds, setArchivedEngineIds] = useState<Set<string>>(new Set());
+  const [longTermEngineIds, setLongTermEngineIds] = useState<Set<string>>(new Set());
+  const engineRecommendationSource =
+    generatedEngineRecommendations.length > 0 ? generatedEngineRecommendations : (engineRecommendations ?? []);
+  const engineRecommendationCards = useMemo<Array<{ id: string; recommendation: Record<string, unknown> }>>(() => {
+    if (!Array.isArray(engineRecommendationSource) || engineRecommendationSource.length === 0) return [];
+    return engineRecommendationSource.map((raw, index) => {
+      const rec = (raw ?? {}) as Record<string, unknown>;
+      const topic = typeof rec.topic === 'string' ? rec.topic : '';
+      const polishedTitle = typeof rec.polished_title === 'string' ? rec.polished_title : '';
+      const idBase =
+        (typeof rec.snapshot_hash === 'string' && rec.snapshot_hash) ||
+        (typeof rec.id === 'string' && rec.id) ||
+        `${topic || polishedTitle || 'rec'}-${index}`;
+      return { id: `engine-${idBase}`, recommendation: rec };
+    });
+  }, [engineRecommendationSource]);
+  const visibleEngineCards = useMemo(
+    () => engineRecommendationCards.filter((c) => !archivedEngineIds.has(c.id)),
+    [engineRecommendationCards, archivedEngineIds]
+  );
 
   const { job: polledJob } = useEngineJobPolling<{
     status?: string;
@@ -371,7 +189,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
 
   useEffect(() => {
     setValidationError(null);
-  }, [contextMode, selectedAspect, selectedFacets, strategicText]);
+  }, [contextMode, selectedAspect, selectedFacets, strategicText, selectedStrategicIntents]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || pulseBridgeConsumedRef.current) return;
@@ -482,6 +300,7 @@ Generate strategic campaign pillars to capture this demand.`;
       selected_offerings: selectedFacets,
       selected_aspect: selectedAspect,
       strategic_text: strategicText,
+      strategic_intents: selectedStrategicIntents.length > 0 ? selectedStrategicIntents : undefined,
       regions: regions.length > 0 ? regions : undefined,
       cluster_inputs: clusterInputs?.length ? clusterInputs : undefined,
       focused_modules: contextMode === 'FOCUSED' && focusedModules.length > 0 ? focusedModules : undefined,
@@ -508,28 +327,41 @@ Generate strategic campaign pillars to capture this demand.`;
     setValidationError(null);
     try {
       const payload = await buildStrategicPayload();
-      const postRes = await fetchWithAuth('/api/opportunities', {
+      setLastStrategicPayload(payload);
+      const regionList = regionInput
+        .split(',')
+        .map((r) => r.trim().toUpperCase())
+        .filter(Boolean);
+      const objective =
+        selectedStrategicIntents[0]?.toLowerCase().replace(/\s+/g, '_') || 'awareness';
+      const recRes = await fetchWithAuth('/api/recommendations/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId, type: TYPE, strategicPayload: payload }),
+        body: JSON.stringify({
+          companyId,
+          objective,
+          durationWeeks: 12,
+          ...(regionList.length > 0 ? { regions: regionList } : {}),
+        }),
       });
-      if (!postRes.ok) {
-        const err = await postRes.json().catch(() => ({}));
-        throw new Error(err?.error || 'Failed to generate themes');
+      if (!recRes.ok) {
+        const recErr = await recRes.json().catch(() => ({}));
+        const base = recErr?.error || 'Recommendation engine request failed';
+        const detail = recErr?.detail ? ` (${recErr.detail})` : '';
+        throw new Error(`${base}${detail}`);
       }
-      setLastStrategicPayload(payload);
-      await refetchGetOnly();
+      const recData = await recRes.json().catch(() => null);
+      const trends = Array.isArray(recData?.trends_used) ? recData.trends_used : [];
+      setGeneratedEngineRecommendations(trends as Array<Record<string, unknown>>);
+      if (trends.length === 0) {
+        setValidationError('Engine returned no recommendations for this input. Adjust context/objective and try again.');
+      }
     } catch (e) {
       setValidationError(e instanceof Error ? e.message : 'Failed to generate themes');
     } finally {
+      setHasRun(true);
       setIsSubmitting(false);
     }
-  };
-
-  const toggleThemeSelection = (id: string) => {
-    setSelectedThemeIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
   };
 
   const handleAddCustomPillar = () => {
@@ -550,57 +382,13 @@ Generate strategic campaign pillars to capture this demand.`;
         last_seen_at: new Date().toISOString(),
         payload: {},
         isCustom: true,
-        suggestedAudience: customAudience.trim() || undefined,
-        messagingHooks: customHooks.trim() || undefined,
       },
     ]);
     setCustomTitle('');
     setCustomAngle('');
-    setCustomAudience('');
-    setCustomHooks('');
     setShowAddCustomForm(false);
   };
 
-  const handleGenerateFromSelected = async () => {
-    if (!companyId || selectedThemeIds.length === 0) return;
-    setJobError(null);
-    setConsolidatedResult(null);
-    const payload = lastStrategicPayload ?? await buildStrategicPayload();
-    const regions = regionInput
-      .split(',')
-      .map((r) => r.trim().toUpperCase())
-      .filter(Boolean);
-    const regionCount = regions.length > 0 ? regions.length : 1;
-    const estimatedCalls = regionCount + 1;
-    if (estimatedCalls > 8) {
-      const confirmed = window.confirm(
-        `This execution will run ${estimatedCalls} model calls. Continue?`
-      );
-      if (!confirmed) return;
-    }
-    try {
-      const res = await fetchWithAuth('/api/recommendations/job/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          companyId,
-          selectedPillars: selectedThemeIds,
-          strategicPayload: payload,
-          regions: regions.length > 0 ? regions : undefined,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err?.error || 'Failed to start recommendation job');
-      }
-      const data = await res.json();
-      setJobId(data.jobId);
-      setJobStatus(data.status ?? 'PENDING');
-      setJobRegionCount(regions.length > 0 ? regions.length : 1);
-    } catch (e) {
-      setJobError(e instanceof Error ? e.message : 'Failed to start job');
-    }
-  };
 
   const modeIndicatorLabel =
     contextMode === 'FULL'
@@ -617,6 +405,7 @@ Generate strategic campaign pillars to capture this demand.`;
       if (additionalDirection.trim()) parts.push(<>• Research direction: &quot;{additionalDirection.slice(0, 80)}{additionalDirection.length > 80 ? '…' : ''}&quot;</>);
       if (selectedAspect) parts.push(<>• Aspect: {selectedAspect}</>);
       if (selectedFacets.length > 0) parts.push(<>• Offerings: {selectedFacets.map((id) => id.split(':').slice(1).join(':') || id).join(', ')}</>);
+      if (selectedStrategicIntents.length > 0) parts.push(<>• Objectives: {selectedStrategicIntents.join(', ')}</>);
       if (strategicText.trim()) parts.push(<>• Strategic text: &quot;{strategicText.slice(0, 60)}…&quot;</>);
       const regionList = regionInput.split(',').map((r) => r.trim().toUpperCase()).filter(Boolean);
       if (regionList.length) parts.push(<>• Regions: {regionList.join(', ')}</>);
@@ -626,6 +415,7 @@ Generate strategic campaign pillars to capture this demand.`;
     const lines: React.ReactNode[] = [<>Context: {contextMode}</>];
     if (list.length) lines.push(<>• Offerings: {list.join(', ')}</>);
     if (selectedAspect) lines.push(<>• Aspect: {selectedAspect}</>);
+    if (selectedStrategicIntents.length > 0) lines.push(<>• Objectives: {selectedStrategicIntents.join(', ')}</>);
     if (strategicText.trim()) lines.push(<>• Direction: &quot;{strategicText.slice(0, 80)}…&quot;</>);
     const regionList = regionInput.split(',').map((r) => r.trim().toUpperCase()).filter(Boolean);
     if (regionList.length) lines.push(<>• Regions: {regionList.join(', ')}</>);
@@ -634,24 +424,6 @@ Generate strategic campaign pillars to capture this demand.`;
 
   const intentSummary = intentSummaryContent();
 
-  const handleArchive = async (id: string) => {
-    await onAction(id, 'DISMISSED');
-  };
-  const handleMarkPossibility = async (id: string) => {
-    await onAction(id, 'REVIEWED');
-  };
-
-  const wrappedOnPromote = async (id: string) => {
-    try {
-      await onPromote(id);
-    } catch (e: unknown) {
-      const err = e as Error & { status?: number };
-      if (err?.status === 404) {
-        await refetchGetOnly(); // clear stale opportunity from list
-      }
-      throw e;
-    }
-  };
 
   if (!companyId) {
     return (
@@ -677,7 +449,13 @@ Generate strategic campaign pillars to capture this demand.`;
         </button>
       </header>
       <div className="rounded-lg border border-gray-200 p-4">
-        <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+        <EngineContextPanel
+          companyId={companyId}
+          fetchWithAuth={fetchWithAuth}
+          contextMode={contextMode}
+          focusedModules={focusedModules}
+          additionalDirection={additionalDirection}
+        />
       </div>
       <UnifiedContextModeSelector
         mode={contextMode}
@@ -699,6 +477,38 @@ Generate strategic campaign pillars to capture this demand.`;
         onChange={setSelectedFacets}
         mode={contextMode}
       />
+      <div className="rounded-lg border border-gray-200 p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-gray-800">Strategic Objectives</h3>
+        <p className="text-xs text-gray-500">
+          Select what this recommendation run should optimize for.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {STRATEGIC_INTENT_OPTIONS.map((intent) => {
+            const selected = selectedStrategicIntents.includes(intent);
+            return (
+              <button
+                key={intent}
+                type="button"
+                onClick={() =>
+                  setSelectedStrategicIntents((prev) =>
+                    prev.includes(intent)
+                      ? prev.filter((x) => x !== intent)
+                      : [...prev, intent]
+                  )
+                }
+                className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
+                  selected
+                    ? 'bg-indigo-600 border-indigo-600 text-white'
+                    : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+                aria-pressed={selected}
+              >
+                {intent}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <StrategicConsole
         value={strategicText}
         onChange={setStrategicText}
@@ -771,22 +581,21 @@ Generate strategic campaign pillars to capture this demand.`;
         <button
           type="button"
           onClick={handleRun}
-          disabled={loading || isSubmitting}
+          disabled={isSubmitting}
           className="px-6 py-3 text-base font-medium rounded-lg bg-indigo-600 text-white disabled:opacity-50"
         >
-          {loading || isSubmitting ? 'Generating…' : 'Generate Strategic Themes'}
+          {isSubmitting ? 'Generating…' : 'Generate Strategic Themes'}
         </button>
       </div>
       {validationError && <div className="text-sm text-red-600">{validationError}</div>}
-      {error && <div className="text-sm text-red-600">{error}</div>}
-      {!hasRun && !loading && (
+      {!hasRun && !isSubmitting && (
         <div className="flex justify-center py-12">
           <div className="max-w-md rounded-lg border border-gray-200 bg-gray-50/80 p-6 text-center text-sm text-gray-700">
             No strategic themes generated yet. Click &quot;Generate Strategic Themes&quot; to build campaign pillars aligned with your company direction.
           </div>
         </div>
       )}
-      {hasRun && !loading && (
+      {(hasRun || visibleEngineCards.length > 0) && !isSubmitting && (
         <>
           <div className="flex flex-col gap-4">
             <button
@@ -819,26 +628,6 @@ Generate strategic campaign pillars to capture this demand.`;
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Suggested Audience (optional)</label>
-                  <input
-                    type="text"
-                    value={customAudience}
-                    onChange={(e) => setCustomAudience(e.target.value)}
-                    placeholder="e.g. Decision makers, Influencers"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Messaging Hooks (optional)</label>
-                  <input
-                    type="text"
-                    value={customHooks}
-                    onChange={(e) => setCustomHooks(e.target.value)}
-                    placeholder="Comma-separated hooks"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  />
-                </div>
                 <div className="flex gap-2">
                   <button
                     type="button"
@@ -860,71 +649,145 @@ Generate strategic campaign pillars to capture this demand.`;
             )}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {(() => {
-              const combined = [...opportunities, ...customPillars];
-              const clusterInputs = lastStrategicPayload?.cluster_inputs;
-              if (!clusterInputs || clusterInputs.length === 0) {
-                return combined.map((opp) => (
-                  <ThemeCard
-                    key={opp.id}
-                    opportunity={opp}
-                    onPromote={wrappedOnPromote}
-                    onArchive={handleArchive}
-                    onMarkPossibility={handleMarkPossibility}
-                    onActionComplete={refetchGetOnly}
-                    lastStrategicPayload={lastStrategicPayload}
-                    isSelected={selectedThemeIds.includes(opp.id)}
-                    onToggleSelect={() => toggleThemeSelection(opp.id)}
+            {visibleEngineCards.length > 0
+              ? visibleEngineCards.map((card) => (
+                  <RecommendationBlueprintCard
+                    key={card.id}
+                    recommendation={card.recommendation}
+                    onBuildCampaignBlueprint={async () => {
+                      if (!companyId) {
+                        setValidationError('Select a company first.');
+                        return;
+                      }
+                      setValidationError(null);
+                      const recommendation = card.recommendation ?? {};
+                      const title =
+                        (typeof recommendation.polished_title === 'string'
+                          ? recommendation.polished_title
+                          : null) ??
+                        (typeof recommendation.topic === 'string'
+                          ? recommendation.topic
+                          : 'Campaign');
+                      const description =
+                        (typeof recommendation.summary === 'string' && recommendation.summary.trim()
+                          ? recommendation.summary
+                          : null) ??
+                        (typeof recommendation.narrative_direction === 'string' &&
+                        recommendation.narrative_direction.trim()
+                          ? recommendation.narrative_direction
+                          : null) ??
+                        undefined;
+
+                      const contextPayload: Record<string, unknown> = {};
+                      if (Array.isArray(recommendation.formats)) {
+                        contextPayload.formats = recommendation.formats;
+                      }
+                      if (typeof recommendation.estimated_reach === 'number') {
+                        contextPayload.reach_estimate = recommendation.estimated_reach;
+                      } else if (typeof recommendation.volume === 'number') {
+                        contextPayload.reach_estimate = recommendation.volume;
+                      }
+
+                      const regionsFromCard = Array.isArray(recommendation.regions)
+                        ? recommendation.regions
+                            .map((value) => String(value || '').trim().toUpperCase())
+                            .filter(Boolean)
+                        : [];
+                      const sourceOpportunityId =
+                        (typeof recommendation.id === 'string' && recommendation.id.trim()
+                          ? recommendation.id
+                          : null) ??
+                        (typeof recommendation.snapshot_hash === 'string' &&
+                        recommendation.snapshot_hash.trim()
+                          ? recommendation.snapshot_hash
+                          : null) ??
+                        `recommendation:${card.id}`;
+                      try {
+                        const campaignId = uuidv4();
+                        const response = await fetchWithAuth('/api/campaigns', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            id: campaignId,
+                            companyId,
+                            name: title,
+                            description,
+                            status: 'planning',
+                            current_stage: 'planning',
+                            build_mode: 'no_context',
+                            source_opportunity_id: sourceOpportunityId,
+                            recommendation_id:
+                              typeof recommendation.id === 'string' ? recommendation.id : null,
+                            target_regions: regionsFromCard.length > 0 ? regionsFromCard : undefined,
+                            context_payload:
+                              Object.keys(contextPayload).length > 0 ? contextPayload : undefined,
+                            planning_context: {
+                              context_mode: contextMode,
+                              focused_modules:
+                                contextMode === 'FOCUSED' && focusedModules.length > 0
+                                  ? focusedModules
+                                  : undefined,
+                              additional_direction: additionalDirection.trim() || undefined,
+                            },
+                          }),
+                        });
+                        if (!response.ok) {
+                          const err = await response.json().catch(() => ({}));
+                          throw new Error(err?.error || 'Failed to create campaign');
+                        }
+                        const data = await response.json().catch(() => ({}));
+                        const createdCampaignId =
+                          data?.campaign?.id && typeof data.campaign.id === 'string'
+                            ? data.campaign.id
+                            : campaignId;
+                        const qs = new URLSearchParams({
+                          companyId,
+                          fromRecommendation: '1',
+                        });
+                        if (typeof recommendation.id === 'string' && recommendation.id.trim()) {
+                          qs.set('recommendationId', recommendation.id);
+                        }
+                        router.push(`/campaign-details/${createdCampaignId}?${qs.toString()}`);
+                      } catch (error) {
+                        setValidationError(
+                          error instanceof Error
+                            ? error.message
+                            : 'Failed to open campaign pre-planning flow'
+                        );
+                      }
+                    }}
+                    onMarkLongTerm={() =>
+                      setLongTermEngineIds((prev) => {
+                        const next = new Set(prev);
+                        next.add(card.id);
+                        return next;
+                      })
+                    }
+                    onArchive={() =>
+                      setArchivedEngineIds((prev) => {
+                        const next = new Set(prev);
+                        next.add(card.id);
+                        return next;
+                      })
+                    }
                   />
-                ));
-              }
-              const keywords = clusterInputs.flatMap((c) =>
-                (c.problem_domain || '').split(/\s+/).filter((w) => w.length >= 3).map((w) => w.toLowerCase())
-              );
-              const score = (opp: ThemeCardOpportunity) => {
-                const text = `${opp.title || ''} ${opp.summary || ''}`.toLowerCase();
-                return keywords.filter((kw) => text.includes(kw)).length;
-              };
-              const sorted = [...combined].sort((a, b) => score(b) - score(a));
-              return sorted.map((opp) => (
-                <ThemeCard
-                  key={opp.id}
-                  opportunity={opp}
-                  onPromote={wrappedOnPromote}
-                  onArchive={handleArchive}
-                  onMarkPossibility={handleMarkPossibility}
-                  onActionComplete={refetchGetOnly}
-                  lastStrategicPayload={lastStrategicPayload}
-                  isSelected={selectedThemeIds.includes(opp.id)}
-                  onToggleSelect={() => toggleThemeSelection(opp.id)}
-                />
-              ));
-            })()}
+                ))
+              : null}
           </div>
-          {opportunities.length === 0 && customPillars.length === 0 && (
+          {visibleEngineCards.length === 0 && (
             <div className="text-sm text-gray-500 py-6 text-center">
-              No strategic themes generated. Try adjusting your direction and generate again.
+              No enriched recommendation cards available yet. Run the engine to load blueprint-ready cards.
             </div>
           )}
-          {selectedThemeIds.length > 0 && (
-            <div className="sticky bottom-4 left-0 right-0 flex items-center justify-between gap-4 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 shadow-md">
-              <span className="text-sm font-medium text-indigo-900">
-                {jobStatus === 'PENDING' || jobStatus === 'RUNNING'
-                  ? (jobRegionCount > 5 ? `Processing ${jobRegionCount} regions. This may take a moment.` : 'Processing…')
-                  : `${selectedThemeIds.length} Strategic Pillar${selectedThemeIds.length !== 1 ? 's' : ''} Selected`}
-              </span>
-              <button
-                type="button"
-                onClick={handleGenerateFromSelected}
-                disabled={jobStatus === 'PENDING' || jobStatus === 'RUNNING'}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                Generate Recommendations from Selected Pillars
-              </button>
+          {longTermEngineIds.size > 0 && (
+            <div className="text-xs text-gray-500">
+              Marked long-term: {longTermEngineIds.size}
             </div>
           )}
           {jobId && (
             <EngineJobStatusPanel
+              createdAt={(polledJob as { created_at?: string } | null)?.created_at}
+              durationHint="Typically 2–6 min depending on regions"
               status={jobStatus}
               progressStage={polledJob?.progress_stage}
               confidenceIndex={polledJob?.consolidated_result?.confidence_index ?? polledJob?.confidence_index}
@@ -1019,7 +882,7 @@ Generate strategic campaign pillars to capture this demand.`;
           )}
         </>
       )}
-      {loading && (
+      {isSubmitting && (
         <div className="text-sm text-gray-500 py-6 text-center">Generating strategic themes…</div>
       )}
 

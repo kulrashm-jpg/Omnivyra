@@ -414,6 +414,7 @@ export default function CampaignPlanningHierarchical() {
             <div>
               <h1 className="text-2xl font-bold text-gray-900">{overview.totalWeeks}-Week Campaign Plan</h1>
               <p className="text-gray-600">Campaign: {campaign?.name}</p>
+              {campaign?.id && <p className="text-xs text-gray-500 font-mono">ID: {campaign.id}</p>}
               <div className="flex items-center gap-4 mt-2">
                 <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStageColor(campaign?.current_stage || campaign?.status || 'planning')}`}>
                   {getStageLabel(campaign?.current_stage || campaign?.status || 'planning')}

@@ -39,6 +39,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Campaign ID is required' });
   }
 
+  if (req.method === 'GET') {
+    try {
+      const { data: campaign, error } = await supabase
+        .from('campaigns')
+        .select('id, name, description, status, current_stage, start_date, end_date')
+        .eq('id', id)
+        .maybeSingle();
+      if (error || !campaign) {
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+      const { data: ver } = await supabase
+        .from('campaign_versions')
+        .select('company_id')
+        .eq('campaign_id', id)
+        .limit(1)
+        .maybeSingle();
+      const out = { ...campaign, company_id: (campaign as any).company_id ?? ver?.company_id };
+      return res.status(200).json({ campaign: out });
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to fetch campaign' });
+    }
+  }
+
   if (req.method === 'DELETE') {
     try {
       // Delete campaign and all related data

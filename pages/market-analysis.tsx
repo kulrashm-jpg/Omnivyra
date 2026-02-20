@@ -42,9 +42,14 @@ export default function MarketAnalysis() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const existingCampaignId = urlParams.get('campaignId');
-    
+
     if (existingCampaignId) {
       loadCampaignData(existingCampaignId);
+    } else {
+      // No campaign flow: redirect to unified Market Pulse (Recommendations → Market Pulse)
+      // which has Charts & Stats aligned with company/focused/no-company context and regions
+      window.location.replace('/recommendations?tab=PULSE');
+      return;
     }
     // Don't generate campaign ID here - only use if passed from campaign flow
   }, []);

@@ -251,7 +251,13 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
 
   return (
     <div className="space-y-6">
-      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      <EngineContextPanel
+        companyId={companyId}
+        fetchWithAuth={fetchWithAuth}
+        contextMode={contextMode}
+        focusedModules={focusedModules}
+        additionalDirection={additionalDirection}
+      />
       <UnifiedContextModeSelector
         mode={contextMode}
         modules={focusedModules}
@@ -346,6 +352,8 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
           progressStage={polledJob?.progress_stage}
           confidenceIndex={polledJob?.confidence_index}
           error={polledJob?.error ?? jobError}
+          createdAt={(polledJob as { created_at?: string } | null)?.created_at}
+          durationHint="Typically 2–5 min depending on platforms and regions"
         />
       )}
       {(jobStatus === 'COMPLETED' || jobStatus === 'COMPLETED_WITH_WARNINGS') && (

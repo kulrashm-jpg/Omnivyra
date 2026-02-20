@@ -26,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: 'Failed to fetch daily plans' });
     }
 
-    // Transform the data to match the expected format
+    // Transform the data to match the expected format (include all fields for day detail modal)
     const transformedPlans = dailyPlans?.map(plan => ({
       id: plan.id,
       weekNumber: plan.week_number,
@@ -35,7 +35,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contentType: plan.content_type,
       title: plan.title,
       content: plan.content,
+      description: plan.description,
+      topic: plan.topic,
+      introObjective: plan.intro_objective,
+      summary: plan.summary,
+      objective: plan.objective,
+      keyPoints: (() => {
+        const k = plan.key_points ?? plan.main_points;
+        if (Array.isArray(k)) return k;
+        if (typeof k === 'string') { try { const p = JSON.parse(k); return Array.isArray(p) ? p : []; } catch { return []; } }
+        return [];
+      })(),
+      cta: plan.cta,
+      brandVoice: plan.brand_voice,
+      themeLinkage: plan.theme_linkage,
+      formatNotes: plan.format_notes,
+      weekTheme: plan.week_theme,
+      campaignTheme: plan.campaign_theme,
       hashtags: plan.hashtags || [],
+      scheduledTime: plan.scheduled_time || plan.optimal_posting_time,
       status: plan.status || 'planned'
     })) || [];
 

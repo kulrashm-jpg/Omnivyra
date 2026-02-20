@@ -11,7 +11,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { campaignId, mode, message, durationWeeks, targetDay, platforms, messages: conversationHistory, recommendationContext, optimizationContext, currentPlan } = req.body || {};
+    const { campaignId, mode, message, durationWeeks, targetDay, platforms, messages: conversationHistory, recommendationContext, optimizationContext, currentPlan, scopeWeeks, chatContext, vetScope, collectedPlanningContext } = req.body || {};
 
     if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'campaignId is required' });
@@ -39,6 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       mode,
       message,
       durationWeeks: typeof durationWeeks === 'number' ? durationWeeks : undefined,
+      collectedPlanningContext: collectedPlanningContext && typeof collectedPlanningContext === 'object' ? collectedPlanningContext : undefined,
       targetDay: typeof targetDay === 'string' ? targetDay : undefined,
       platforms: Array.isArray(platforms) ? platforms : undefined,
       conversationHistory: Array.isArray(conversationHistory) ? conversationHistory : undefined,
@@ -48,7 +49,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? { roiScore: Number(optimizationContext.roiScore) || 50, headlines: optimizationContext.headlines }
           : undefined,
       currentPlan: currentPlan && typeof currentPlan === 'object' ? currentPlan : undefined,
-      prefilledPlanning: reqPrefilled && typeof reqPrefilled === 'object' ? reqPrefilled : undefined,
+      scopeWeeks: Array.isArray(scopeWeeks) ? scopeWeeks : undefined,
+      chatContext: typeof chatContext === 'string' ? chatContext : undefined,
+      vetScope: vetScope && typeof vetScope === 'object' && Array.isArray(vetScope.selectedWeeks) ? vetScope : undefined,
     });
 
     if (typeof saveAiCampaignPlan === 'function') {

@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react';
+import { useCompanyContext } from '../components/CompanyContext';
+import { supabase } from '../utils/supabaseClient';
 
 type PlatformConfig = {
   id: string;
@@ -50,6 +52,7 @@ const promotionModeOptions = ['organic', 'paid', 'both'];
 const requiredMetadataOptions = ['hashtags', 'seo_keywords', 'hook', 'cta', 'best_time'];
 
 export default function SocialPlatformsPage() {
+  const { selectedCompanyId, hasPermission } = useCompanyContext();
   const [configs, setConfigs] = useState<PlatformConfig[]>([]);
   const [form, setForm] = useState<Partial<PlatformConfig>>(emptyForm);
   const [isLoading, setIsLoading] = useState(false);
@@ -58,32 +61,70 @@ export default function SocialPlatformsPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [constraintsText, setConstraintsText] = useState<string>('{}');
+  const canManage = isAdmin || hasPermission('MANAGE_EXTERNAL_APIS');
 
   const resetMessages = () => {
     setErrorMessage(null);
     setSuccessMessage(null);
   };
 
+  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+    const { data } = await supabase.auth.getSession();
+    let token = data.session?.access_token;
+    if (!token) {
+      const refreshed = await supabase.auth.refreshSession();
+      token = refreshed.data.session?.access_token;
+    }
+    if (!token) {
+      return new Response(JSON.stringify({ error: 'UNAUTHORIZED' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  };
+
+  const buildExternalApisUrl = (id?: string): string => {
+    if (isAdmin) {
+      return id ? `/api/external-apis/${id}?scope=platform` : '/api/external-apis?scope=platform';
+    }
+    if (!selectedCompanyId) {
+      throw new Error('Select a company to load platform configs.');
+    }
+    return id
+      ? `/api/external-apis/${id}?companyId=${encodeURIComponent(selectedCompanyId)}`
+      : `/api/external-apis?companyId=${encodeURIComponent(selectedCompanyId)}`;
+  };
+
   const loadConfigs = async () => {
     try {
+      if (!isAdmin && !selectedCompanyId) return;
       setIsLoading(true);
-      const response = await fetch('/api/external-apis?scope=platform');
-      if (!response.ok) throw new Error('Failed to load configs');
+      const response = await fetchWithAuth(buildExternalApisUrl());
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error || 'Failed to load configs');
+      }
       const data = await response.json();
       setConfigs(data.apis || []);
     } catch (error) {
       console.error('Error loading configs:', error);
-      setErrorMessage('Failed to load platform configs.');
+      setErrorMessage((error as Error).message || 'Failed to load platform configs.');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    loadConfigs();
     const loadAdminStatus = async () => {
       try {
-        const response = await fetch('/api/admin/check-super-admin');
+        const response = await fetchWithAuth('/api/admin/check-super-admin');
         if (!response.ok) return;
         const data = await response.json();
         setIsAdmin(!!data?.isSuperAdmin);
@@ -93,6 +134,10 @@ export default function SocialPlatformsPage() {
     };
     loadAdminStatus();
   }, []);
+
+  useEffect(() => {
+    loadConfigs();
+  }, [isAdmin, selectedCompanyId]);
 
   const saveConfig = async () => {
     try {
@@ -118,12 +163,15 @@ export default function SocialPlatformsPage() {
         auth_type: form.api_key_name ? 'header' : 'none',
       };
 
-      const response = await fetch('/api/external-apis?scope=platform', {
+      const response = await fetchWithAuth(buildExternalApisUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!response.ok) throw new Error('Failed to save config');
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error || 'Failed to save config');
+      }
       setForm(emptyForm);
       setConstraintsText('{}');
       setSuccessMessage('Platform config saved.');
@@ -139,12 +187,15 @@ export default function SocialPlatformsPage() {
   const updateConfig = async (config: PlatformConfig) => {
     try {
       resetMessages();
-      const response = await fetch(`/api/external-apis/${config.id}?scope=platform`, {
+      const response = await fetchWithAuth(buildExternalApisUrl(config.id), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
       });
-      if (!response.ok) throw new Error('Failed to update config');
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error || 'Failed to update config');
+      }
       setSuccessMessage('Platform config updated.');
       await loadConfigs();
     } catch (error) {
@@ -156,8 +207,13 @@ export default function SocialPlatformsPage() {
   const deleteConfig = async (id: string) => {
     try {
       resetMessages();
-      const response = await fetch(`/api/external-apis/${id}?scope=platform`, { method: 'DELETE' });
-      if (!response.ok) throw new Error('Failed to delete config');
+      const response = await fetchWithAuth(buildExternalApisUrl(id), {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error || 'Failed to delete config');
+      }
       setSuccessMessage('Platform config deleted.');
       await loadConfigs();
     } catch (error) {
@@ -321,7 +377,7 @@ export default function SocialPlatformsPage() {
           <div className="mt-4">
             <button
               onClick={saveConfig}
-              disabled={isSaving || !isAdmin}
+              disabled={isSaving || !canManage}
               className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
             >
               {isSaving ? 'Saving...' : 'Save Config'}
@@ -366,14 +422,14 @@ export default function SocialPlatformsPage() {
                       <input
                         type="checkbox"
                         checked={config.is_active}
-                        disabled={!isAdmin}
+                        disabled={!canManage}
                         onChange={(e) => updateConfig({ ...config, is_active: e.target.checked })}
                       />
                       Active
                     </label>
                     <button
                       onClick={() => deleteConfig(config.id)}
-                      disabled={!isAdmin}
+                      disabled={!canManage}
                       className="text-xs text-red-600 disabled:opacity-50"
                     >
                       Delete

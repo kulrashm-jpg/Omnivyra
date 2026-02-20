@@ -19,6 +19,7 @@ export type StrategicPayload = {
   selected_offerings: string[];
   selected_aspect: string | null;
   strategic_text: string;
+  strategic_intents?: string[];
   regions?: string[];
   cluster_inputs?: ClusterInput[];
   focused_modules?: FocusModule[];
@@ -144,6 +145,7 @@ Focus on execution-ready pillars, not exploratory themes.`;
     offerings,
     strategic_aspect: aspect,
     direction_notes: direction,
+    strategic_intents: strategicPayload?.strategic_intents ?? [],
     context_mode: contextMode,
     target_regions: regions,
     geography_instruction: geographyInstruction,
@@ -228,6 +230,7 @@ Consider cultural context, market sentiment, and seasonal timing for the region.
       context_mode: contextMode,
       problem_mission_context: missionBlock || null,
       strategic_direction: direction,
+      strategic_intents: strategicPayload?.strategic_intents ?? [],
       additional_direction: strategicPayload?.additional_direction || null,
       selected_pillars: pillarSummaries.map((p) => ({ title: p.title, summary: p.summary || '' })),
     },

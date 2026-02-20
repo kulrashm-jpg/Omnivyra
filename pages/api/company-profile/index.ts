@@ -2,7 +2,14 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import {
   getProfile,
   saveProfile,
+  calculateCompanyProfileCompleteness,
 } from '../../../backend/services/companyProfileService';
+import {
+  buildCompanyContext,
+  buildForcedCompanyContext,
+  computeCompanyContextCompletion,
+  FORCED_CONTEXT_FIELD_LABELS,
+} from '../../../backend/services/companyContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getUserRole, isSuperAdmin } from '../../../backend/services/rbacService';
@@ -37,6 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined);
   const mode = (req.query.mode as string | undefined) || (req.body?.mode as string | undefined);
+  const includeCompleteness = req.query.includeCompleteness !== '0' && req.query.includeCompleteness !== 'false';
 
   if (req.method === 'GET') {
     try {
@@ -77,11 +85,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!access) return;
 
       const profile = await getProfile(companyId, { autoRefine: false });
-      if (!profile) {
-        const created = await saveProfile({ company_id: companyId });
-        return res.status(200).json({ profile: created });
+      const resolvedProfile = profile || await saveProfile({ company_id: companyId });
+      const response: Record<string, unknown> = { profile: resolvedProfile };
+
+      let completeness = null;
+      if (includeCompleteness) {
+        try {
+          completeness = calculateCompanyProfileCompleteness(resolvedProfile);
+          response.problem_transformation_completion = completeness?.section_scores?.problem_transformation ?? 0;
+          response.overall_profile_completion = completeness?.score ?? 0;
+          response.section_scores = completeness?.section_scores ?? {};
+          response.completeness = completeness;
+          const companyContext = buildCompanyContext(resolvedProfile);
+          const { forced_context_enabled_fields } = buildForcedCompanyContext(
+            companyContext,
+            resolvedProfile?.forced_context_fields
+          );
+          response.company_context_completion = computeCompanyContextCompletion(companyContext);
+          response.forced_context_enabled_fields = forced_context_enabled_fields;
+          response.forced_context_active_labels = forced_context_enabled_fields.map(
+            (key: string) => FORCED_CONTEXT_FIELD_LABELS[key] || key.replace(/_/g, ' ')
+          );
+        } catch (e) {
+          response.problem_transformation_completion = 0;
+          response.overall_profile_completion = 0;
+          response.section_scores = {};
+        }
+      } else {
+        response.problem_transformation_completion = 0;
+        response.overall_profile_completion = 0;
+        response.section_scores = {};
       }
-      return res.status(200).json({ profile });
+      return res.status(200).json(response);
     } catch (error: any) {
       console.error('Error fetching company profile:', error);
       return res.status(500).json({ error: 'Failed to fetch company profile' });

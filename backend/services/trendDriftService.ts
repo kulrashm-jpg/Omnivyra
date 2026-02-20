@@ -21,6 +21,7 @@ const buildThemeTokens = (profile: CompanyProfile): Set<string> => {
     profile.content_themes,
     profile.industry,
     profile.goals,
+    profile.campaign_focus,
   ].filter(Boolean) as string[];
   return new Set(values.flatMap((value) => tokenize(value)));
 };

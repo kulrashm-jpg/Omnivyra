@@ -3,6 +3,9 @@ import type { StrategicPayload } from './opportunityGenerators';
 
 export const MAX_SLOTS_PER_TYPE = 10;
 
+const normalizeOpportunityTitle = (value: string): string =>
+  value.trim().toLowerCase().replace(/\s+/g, ' ');
+
 export type OpportunityInput = {
   title: string;
   summary?: string | null;
@@ -53,7 +56,18 @@ export async function listActiveOpportunities(
   if (error) {
     throw new Error(`Failed to list opportunities: ${error.message}`);
   }
-  return (data ?? []) as OpportunityItem[];
+  const rows = (data ?? []) as OpportunityItem[];
+  const deduped: OpportunityItem[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const titleKey = normalizeOpportunityTitle(String(row.title || ''));
+    const problemDomainKey = String(row.problem_domain || '').trim().toLowerCase();
+    const key = `${titleKey}::${problemDomainKey}`;
+    if (!titleKey || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+  return deduped;
 }
 
 /**
@@ -85,8 +99,17 @@ export async function upsertOpportunities(
   if (items.length === 0) return;
 
   const now = new Date().toISOString();
+  const seenInputKeys = new Set<string>();
+  const uniqueItems = items.filter((item) => {
+    const title = String(item.title || '').trim();
+    if (!title) return false;
+    const key = `${normalizeOpportunityTitle(title)}::${String(item.problem_domain || '').trim().toLowerCase()}`;
+    if (seenInputKeys.has(key)) return false;
+    seenInputKeys.add(key);
+    return true;
+  });
 
-  for (const item of items) {
+  for (const item of uniqueItems) {
     const title = (item.title ?? '').trim();
     if (!title) continue;
 
@@ -100,6 +123,8 @@ export async function upsertOpportunities(
       .eq('slot_state', 'ACTIVE')
       .eq('title', title)
       .eq('problem_domain', problemDomain)
+      .order('updated_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (existing) {

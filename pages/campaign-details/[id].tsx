@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { 
   ArrowLeft, 
@@ -28,6 +29,7 @@ import {
   Settings,
 } from 'lucide-react';
 import CampaignAIChat from '../../components/CampaignAIChat';
+import DayDetailModal, { DayPlanItem } from '../../components/DayDetailModal';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import { GovernanceStatusCard } from '../../components/governance/GovernanceStatusCard';
@@ -76,7 +78,18 @@ interface DailyPlan {
   contentType: string;
   title: string;
   content: string;
+  description?: string;
+  topic?: string;
+  introObjective?: string;
+  summary?: string;
+  objective?: string;
+  keyPoints?: string[];
+  cta?: string;
+  brandVoice?: string;
+  themeLinkage?: string;
+  formatNotes?: string;
   hashtags: string[];
+  scheduledTime?: string;
   status: string;
 }
 
@@ -153,6 +166,7 @@ export default function CampaignDetails() {
   const [viralityDiagnostics, setViralityDiagnostics] = useState<ViralityAssessmentResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(new Set());
+  const [selectedDayForDetail, setSelectedDayForDetail] = useState<{ day: string; weekNumber: number } | null>(null);
   const [isGeneratingWeek, setIsGeneratingWeek] = useState<number | null>(null);
   const [isViralityExpanded, setIsViralityExpanded] = useState(false);
   const [expandedDiagnostics, setExpandedDiagnostics] = useState<Set<string>>(new Set());
@@ -207,6 +221,8 @@ export default function CampaignDetails() {
   const [prePlanningLoading, setPrePlanningLoading] = useState(false);
   const [requestedWeeksForPreplan, setRequestedWeeksForPreplan] = useState(12);
   const [isRegeneratingBlueprint, setIsRegeneratingBlueprint] = useState(false);
+  const [blueprintRegenerateFailedMsg, setBlueprintRegenerateFailedMsg] = useState<string | null>(null);
+  const [blueprintGeneratedSuccess, setBlueprintGeneratedSuccess] = useState(false);
   const [negotiationMessage, setNegotiationMessage] = useState('');
   const [negotiationResult, setNegotiationResult] = useState<{
     status: string;
@@ -226,16 +242,24 @@ export default function CampaignDetails() {
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<{
     availableVideo: number;
     availablePost: number;
+    availableBlog: number;
+    availableSong: number;
     contentSuited: boolean | null;
     videoPerWeek: number;
     postPerWeek: number;
+    blogPerWeek: number;
+    songPerWeek: number;
     inHouseNotes: string;
   }>({
     availableVideo: 0,
     availablePost: 0,
+    availableBlog: 0,
+    availableSong: 0,
     contentSuited: null,
     videoPerWeek: 2,
     postPerWeek: 3,
+    blogPerWeek: 0,
+    songPerWeek: 0,
     inHouseNotes: '',
   });
 
@@ -280,6 +304,17 @@ export default function CampaignDetails() {
       })
       .catch(() => {});
   }, [id, effectiveCompanyId]);
+
+  useEffect(() => {
+    if (id && typeof window !== 'undefined') {
+      const key = `campaign_blueprint_failed_${id}`;
+      const msg = sessionStorage.getItem(key);
+      if (msg) {
+        setBlueprintRegenerateFailedMsg(msg);
+        sessionStorage.removeItem(key);
+      }
+    }
+  }, [id]);
 
   const loadGovernance = useCallback(async () => {
     if (!id || !effectiveCompanyId) return;
@@ -496,7 +531,7 @@ export default function CampaignDetails() {
 
   const enhanceWeekWithAI = async (weekNumber: number) => {
     if (!id) return;
-    
+    const weekPlan = weeklyPlans.find(w => w.weekNumber === weekNumber);
     setIsGeneratingWeek(weekNumber);
     try {
       const response = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
@@ -506,8 +541,8 @@ export default function CampaignDetails() {
           companyId: effectiveCompanyId,
           campaignId: id,
           week: weekNumber,
-          theme: `Week ${weekNumber} Theme`,
-          contentFocus: `Week ${weekNumber} Content Focus`,
+          theme: weekPlan?.theme || `Week ${weekNumber} Theme`,
+          contentFocus: weekPlan?.focusArea || `Week ${weekNumber} Content Focus`,
           targetAudience: 'General Audience'
         })
       });
@@ -543,15 +578,9 @@ export default function CampaignDetails() {
     };
     return m[stage] ?? 'bg-gray-100 text-gray-800';
   };
-  const getStageLabel = (stage: string) => {
-    const labels: Record<string, string> = {
-      planning: 'Planning',
-      twelve_week_plan: '12 Week Plan',
-      daily_plan: 'Daily Plan',
-      charting: 'Charting',
-      schedule: 'Schedule',
-    };
-    return labels[stage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
+  const getStageLabel = (stage: string, durationWeeks?: number | null) => {
+    const { getStageLabelWithDuration } = require('../../backend/types/CampaignStage');
+    return getStageLabelWithDuration(stage, durationWeeks);
   };
 
   const getPhaseColor = (phase: string) => {
@@ -730,11 +759,94 @@ export default function CampaignDetails() {
         const data = await res.json();
         if (data.status === 'REGENERATION_REQUIRED' || data.status === 'APPROVED') {
           setPrePlanningResult(null);
-          loadCampaignDetails(campaign.id);
+          try {
+            const q = questionnaireAnswers;
+            const planningContext: Record<string, unknown> = {
+              campaign_duration: weeks,
+              tentative_start: plannedStartDate || campaign?.start_date,
+              preplanning_form_completed: true,
+            };
+            const hasAvailable =
+              q.availableVideo > 0 || q.availablePost > 0 || q.availableBlog > 0 || q.availableSong > 0;
+            if (hasAvailable) {
+              const parts: string[] = [];
+              if (q.availableVideo > 0) parts.push(`${q.availableVideo} videos`);
+              if (q.availablePost > 0) parts.push(`${q.availablePost} posts`);
+              if (q.availableBlog > 0) parts.push(`${q.availableBlog} blogs`);
+              if (q.availableSong > 0) parts.push(`${q.availableSong} songs/audio`);
+              planningContext.available_content = parts.join(', ');
+            } else {
+              planningContext.available_content = 'No existing content';
+            }
+            const hasCapacity =
+              q.videoPerWeek > 0 || q.postPerWeek > 0 || q.blogPerWeek > 0 || q.songPerWeek > 0;
+            if (hasCapacity) {
+              const parts: string[] = [];
+              if (q.videoPerWeek > 0) parts.push(`${q.videoPerWeek} videos/week`);
+              if (q.postPerWeek > 0) parts.push(`${q.postPerWeek} posts/week`);
+              if (q.blogPerWeek > 0) parts.push(`${q.blogPerWeek} blogs/week`);
+              if (q.songPerWeek > 0) parts.push(`${q.songPerWeek} songs/audio per week`);
+              planningContext.content_capacity = parts.join(', ');
+            }
+            if (typeof window !== 'undefined') {
+              sessionStorage.setItem(`campaign_planning_context_${campaign.id}`, JSON.stringify(planningContext));
+            }
+            const regRes = await fetchWithAuth('/api/campaigns/regenerate-blueprint', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                campaignId: campaign.id,
+                companyId: effectiveCompanyId,
+                planningContext,
+              }),
+            });
+            if (!regRes.ok) {
+              const errData = await regRes.json().catch(() => ({}));
+              const msg = errData?.message || errData?.error || regRes.statusText || 'Blueprint generation failed';
+              setBlueprintRegenerateFailedMsg(msg);
+              if (typeof window !== 'undefined') {
+                sessionStorage.setItem(`campaign_blueprint_failed_${campaign.id}`, msg);
+              }
+            } else {
+              setBlueprintRegenerateFailedMsg(null);
+              setBlueprintGeneratedSuccess(true);
+              setTimeout(() => setBlueprintGeneratedSuccess(false), 6000);
+            }
+          } catch (regErr: unknown) {
+            console.error('Auto-regenerate blueprint failed', regErr);
+            const msg = regErr instanceof Error ? regErr.message : 'Blueprint generation failed';
+            setBlueprintRegenerateFailedMsg(msg);
+            if (typeof window !== 'undefined') {
+              sessionStorage.setItem(`campaign_blueprint_failed_${campaign.id}`, msg);
+            }
+          }
+          await loadCampaignDetails(campaign.id);
+        } else if (data?.status === 'NEGOTIATE' || data?.status === 'REJECTED') {
+          setPrePlanningResult(
+            prePlanningResult
+              ? {
+                  ...prePlanningResult,
+                  status: data.status,
+                  explanation_summary: data.message || prePlanningResult.explanation_summary,
+                  recommended_duration:
+                    data.min_weeks_required ?? data.max_weeks_allowed ?? prePlanningResult.recommended_duration,
+                  blocking_constraints: data.blocking_constraints ?? prePlanningResult.blocking_constraints ?? [],
+                  limiting_constraints: data.limiting_constraints ?? prePlanningResult.limiting_constraints ?? [],
+                  trade_off_options: data.trade_off_options ?? prePlanningResult.trade_off_options ?? [],
+                }
+              : null
+          );
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        const msg = errData?.message || errData?.error || 'Failed to update duration';
+        setBlueprintRegenerateFailedMsg(msg);
+        alert(msg);
       }
     } catch (err) {
       console.error('Update duration failed', err);
+      setBlueprintRegenerateFailedMsg(err instanceof Error ? err.message : 'Update duration failed');
+      alert(err instanceof Error ? err.message : 'Update duration failed');
     } finally {
       setPrePlanningLoading(false);
     }
@@ -755,10 +867,7 @@ export default function CampaignDetails() {
             <h1 className="text-2xl font-bold text-gray-900 mb-2">Campaign Not Initialized</h1>
             <p className="text-gray-600 mb-6">
               This campaign requires pre-planning before generating a campaign blueprint.
-              Fix start date and tentative duration first, then plan daily content per week.
-            </p>
-            <p className="text-sm text-indigo-600 mb-4">
-              Use the AI Assistant (bottom-right) to answer planning questions in chat instead of filling the form manually.
+              Choose how you want to provide planning details.
             </p>
             {blueprintFrozen && (
               <div className="mb-6 rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
@@ -822,14 +931,26 @@ export default function CampaignDetails() {
                           </p>
                         ) : null}
                       </div>
-                      <button
-                        onClick={() => setPrePlanningWizardStep(1)}
-                        disabled={blueprintImmutable || blueprintFrozen || governanceLocked}
-                        className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium disabled:opacity-50 flex items-center gap-2"
-                      >
-                        <Calendar className="h-5 w-5" />
-                        Start Pre-Planning
-                      </button>
+                      <p className="text-sm font-medium text-gray-700 mb-3">Choose how to plan</p>
+                      <div className="flex flex-col sm:flex-row gap-4">
+                        <button
+                          onClick={() => setPrePlanningWizardStep(1)}
+                          disabled={blueprintImmutable || blueprintFrozen || governanceLocked}
+                          className="flex-1 px-6 py-4 rounded-xl border-2 border-gray-200 hover:border-indigo-300 bg-white text-left disabled:opacity-50 transition-colors"
+                        >
+                          <Calendar className="h-6 w-6 text-indigo-600 mb-2" />
+                          <span className="font-semibold text-gray-900 block">Fill the form</span>
+                          <span className="text-sm text-gray-600">Step-by-step wizard: start date, duration, content capacity.</span>
+                        </button>
+                        <button
+                          onClick={() => setShowAIChat(true)}
+                          className="flex-1 px-6 py-4 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 text-left transition-colors"
+                        >
+                          <Sparkles className="h-6 w-6 text-indigo-600 mb-2" />
+                          <span className="font-semibold text-gray-900 block">Use AI</span>
+                          <span className="text-sm text-gray-600">Answer planning questions in chat; AI skips what you&apos;ve already provided.</span>
+                        </button>
+                      </div>
                     </>
                   ) : prePlanningWizardStep >= 1 && prePlanningWizardStep <= 6 ? (
                     <div className="space-y-6">
@@ -874,7 +995,7 @@ export default function CampaignDetails() {
                             <p className="text-sm text-gray-600 mb-4">
                               Content that fits this campaign topic. We&apos;ll use these as placeholders; the rest will be planned for creation.
                             </p>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                               <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Video (pieces)</label>
                                 <input
@@ -905,6 +1026,36 @@ export default function CampaignDetails() {
                                   className="w-full px-3 py-2 border rounded-lg"
                                 />
                               </div>
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Blog (pieces)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={questionnaireAnswers.availableBlog}
+                                  onChange={(e) =>
+                                    setQuestionnaireAnswers((q) => ({
+                                      ...q,
+                                      availableBlog: Math.max(0, Number(e.target.value) || 0),
+                                    }))
+                                  }
+                                  className="w-full px-3 py-2 border rounded-lg"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Song / Audio (pieces)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={questionnaireAnswers.availableSong}
+                                  onChange={(e) =>
+                                    setQuestionnaireAnswers((q) => ({
+                                      ...q,
+                                      availableSong: Math.max(0, Number(e.target.value) || 0),
+                                    }))
+                                  }
+                                  className="w-full px-3 py-2 border rounded-lg"
+                                />
+                              </div>
                             </div>
                           </div>
                             <div className="flex gap-2">
@@ -917,7 +1068,10 @@ export default function CampaignDetails() {
                             <button
                               onClick={() => {
                                 const hasContent =
-                                  questionnaireAnswers.availableVideo > 0 || questionnaireAnswers.availablePost > 0;
+                                  questionnaireAnswers.availableVideo > 0 ||
+                                  questionnaireAnswers.availablePost > 0 ||
+                                  questionnaireAnswers.availableBlog > 0 ||
+                                  questionnaireAnswers.availableSong > 0;
                                 setPrePlanningWizardStep(hasContent ? 3 : 4);
                               }}
                               className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
@@ -979,9 +1133,9 @@ export default function CampaignDetails() {
                           <div className="p-4 rounded-lg border border-gray-200 bg-gray-50">
                             <h3 className="font-medium text-gray-900 mb-2">How much more content can you create per week?</h3>
                             <p className="text-sm text-gray-600 mb-4">
-                              Based on in-house capability: videos and posts your team can produce weekly.
+                              Based on in-house capability: videos, posts, blogs, songs and other content your team can produce weekly.
                             </p>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                               <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Videos per week</label>
                                 <input
@@ -1012,13 +1166,46 @@ export default function CampaignDetails() {
                                   className="w-full px-3 py-2 border rounded-lg"
                                 />
                               </div>
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Blogs per week</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={questionnaireAnswers.blogPerWeek}
+                                  onChange={(e) =>
+                                    setQuestionnaireAnswers((q) => ({
+                                      ...q,
+                                      blogPerWeek: Math.max(0, Number(e.target.value) || 0),
+                                    }))
+                                  }
+                                  className="w-full px-3 py-2 border rounded-lg"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Songs / Audio per week</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={questionnaireAnswers.songPerWeek}
+                                  onChange={(e) =>
+                                    setQuestionnaireAnswers((q) => ({
+                                      ...q,
+                                      songPerWeek: Math.max(0, Number(e.target.value) || 0),
+                                    }))
+                                  }
+                                  className="w-full px-3 py-2 border rounded-lg"
+                                />
+                              </div>
                             </div>
                           </div>
                           <div className="flex gap-2">
                             <button
                               onClick={() => {
                                 const hasContent =
-                                  questionnaireAnswers.availableVideo > 0 || questionnaireAnswers.availablePost > 0;
+                                  questionnaireAnswers.availableVideo > 0 ||
+                                  questionnaireAnswers.availablePost > 0 ||
+                                  questionnaireAnswers.availableBlog > 0 ||
+                                  questionnaireAnswers.availableSong > 0;
                                 setPrePlanningWizardStep(hasContent ? 3 : 2);
                               }}
                               className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
@@ -1073,11 +1260,15 @@ export default function CampaignDetails() {
                                       availableContent: {
                                         video: questionnaireAnswers.availableVideo,
                                         post: questionnaireAnswers.availablePost,
+                                        blog: questionnaireAnswers.availableBlog,
+                                        song: questionnaireAnswers.availableSong,
                                       },
                                       contentSuited: questionnaireAnswers.contentSuited ?? undefined,
                                       creationCapacity: {
                                         video_per_week: questionnaireAnswers.videoPerWeek,
                                         post_per_week: questionnaireAnswers.postPerWeek,
+                                        blog_per_week: questionnaireAnswers.blogPerWeek,
+                                        song_per_week: questionnaireAnswers.songPerWeek,
                                       },
                                       inHouseNotes: questionnaireAnswers.inHouseNotes.trim() || undefined,
                                     }),
@@ -1155,7 +1346,7 @@ export default function CampaignDetails() {
                   ) : null
                 ) : (
                   <>
-                    <div className="mb-4">
+                    <div className="mb-6">
                       <label className="block text-sm font-medium text-gray-700 mb-1">Requested duration (weeks)</label>
                       <input
                         type="number"
@@ -1166,14 +1357,26 @@ export default function CampaignDetails() {
                         className="w-32 px-3 py-2 border rounded-lg"
                       />
                     </div>
-                    <button
-                      onClick={runPrePlanningFlow}
-                      disabled={prePlanningLoading || blueprintImmutable || blueprintFrozen || governanceLocked}
-                      className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium disabled:opacity-50 flex items-center gap-2"
-                    >
-                      {prePlanningLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Calendar className="h-5 w-5" />}
-                      Start Pre-Planning
-                    </button>
+                    <p className="text-sm font-medium text-gray-700 mb-3">Choose how to plan</p>
+                    <div className="flex flex-col sm:flex-row gap-4">
+                      <button
+                        onClick={runPrePlanningFlow}
+                        disabled={prePlanningLoading || blueprintImmutable || blueprintFrozen || governanceLocked}
+                        className="flex-1 px-6 py-4 rounded-xl border-2 border-gray-200 hover:border-indigo-300 bg-white text-left disabled:opacity-50 transition-colors"
+                      >
+                        <Calendar className="h-6 w-6 text-indigo-600 mb-2" />
+                        <span className="font-semibold text-gray-900 block">Fill the form</span>
+                        <span className="text-sm text-gray-600">Run pre-planning evaluation with your duration.</span>
+                      </button>
+                      <button
+                        onClick={() => setShowAIChat(true)}
+                        className="flex-1 px-6 py-4 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 text-left transition-colors"
+                      >
+                        <Sparkles className="h-6 w-6 text-indigo-600 mb-2" />
+                        <span className="font-semibold text-gray-900 block">Use AI</span>
+                        <span className="text-sm text-gray-600">Answer planning questions in chat; AI will gather details and create your blueprint.</span>
+                      </button>
+                    </div>
                   </>
                 )}
               </>
@@ -1207,9 +1410,10 @@ export default function CampaignDetails() {
                     <button
                       onClick={() => acceptDuration(prePlanningResult.recommended_duration)}
                       disabled={prePlanningLoading || blueprintImmutable || blueprintFrozen || governanceLocked}
-                      className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+                      className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
                     >
-                      Accept recommended ({prePlanningResult.recommended_duration} weeks)
+                      {prePlanningLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {prePlanningLoading ? 'Accepting & generating blueprint…' : `Accept & generate blueprint (${prePlanningResult.recommended_duration} weeks)`}
                     </button>
                   )}
                   {prePlanningResult.trade_off_options?.map((opt, i) =>
@@ -1225,6 +1429,13 @@ export default function CampaignDetails() {
                     ) : null
                   )}
                   <button
+                    onClick={() => setShowAIChat(true)}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-2"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    Ask AI
+                  </button>
+                  <button
                     onClick={() => setPrePlanningResult(null)}
                     className="px-4 py-2 text-gray-600 hover:text-gray-900"
                   >
@@ -1235,27 +1446,57 @@ export default function CampaignDetails() {
             )}
           </div>
         </div>
-        {/* AI Assistant during pre-planning - ask questions instead of filling manually */}
+        {/* AI Assistant during pre-planning — in-card only, no floating button */}
         {campaign && effectiveCompanyId && (
           <>
-            <button
-              onClick={() => setShowAIChat(true)}
-              className="fixed bottom-6 right-6 px-4 py-3 bg-indigo-600 text-white rounded-full shadow-lg hover:bg-indigo-700 flex items-center gap-2"
-            >
-              <Sparkles className="h-5 w-5" />
-              Ask AI (planning questions)
-            </button>
             <CampaignAIChat
               isOpen={showAIChat}
               onClose={() => setShowAIChat(false)}
               onMinimize={() => setShowAIChat(false)}
               context="campaign-planning"
+              forceFreshPlanningThread={Boolean(router.query.fromRecommendation)}
               companyId={effectiveCompanyId}
               campaignId={campaign.id}
               campaignData={campaign}
               recommendationContext={recommendationContext}
               prefilledPlanning={prefilledPlanning}
               governanceLocked={governanceLocked}
+              collectedPlanningContext={(() => {
+                const ctx: Record<string, unknown> = {};
+                // From form / pre-planning — AI must NOT re-ask these
+                if (campaign?.start_date) ctx.tentative_start = campaign.start_date;
+                else if (plannedStartDate) ctx.tentative_start = plannedStartDate;
+                if (campaign?.duration_weeks != null) ctx.campaign_duration = campaign.duration_weeks;
+                else if (prePlanningResult?.recommended_duration != null) ctx.campaign_duration = prePlanningResult.recommended_duration;
+                else if (requestedWeeksForPreplan != null) ctx.campaign_duration = requestedWeeksForPreplan;
+                const q = questionnaireAnswers;
+                const hasAvailable =
+                  q.availableVideo > 0 || q.availablePost > 0 || q.availableBlog > 0 || q.availableSong > 0;
+                if (hasAvailable) {
+                  const parts: string[] = [];
+                  if (q.availableVideo > 0) parts.push(`${q.availableVideo} videos`);
+                  if (q.availablePost > 0) parts.push(`${q.availablePost} posts`);
+                  if (q.availableBlog > 0) parts.push(`${q.availableBlog} blogs`);
+                  if (q.availableSong > 0) parts.push(`${q.availableSong} songs/audio`);
+                  ctx.available_content = parts.join(', ');
+                } else if (prePlanningWizardStep >= 2) {
+                  ctx.available_content = 'No existing content';
+                }
+                const hasCapacity =
+                  q.videoPerWeek > 0 || q.postPerWeek > 0 || q.blogPerWeek > 0 || q.songPerWeek > 0;
+                if (prePlanningWizardStep >= 4 && hasCapacity) {
+                  const parts: string[] = [];
+                  if (q.videoPerWeek > 0) parts.push(`${q.videoPerWeek} videos/week`);
+                  if (q.postPerWeek > 0) parts.push(`${q.postPerWeek} posts/week`);
+                  if (q.blogPerWeek > 0) parts.push(`${q.blogPerWeek} blogs/week`);
+                  if (q.songPerWeek > 0) parts.push(`${q.songPerWeek} songs/audio per week`);
+                  ctx.content_capacity = parts.join(', ');
+                }
+                if (prePlanningResult != null) {
+                  ctx.preplanning_form_completed = true;
+                }
+                return Object.keys(ctx).length > 0 ? ctx : undefined;
+              })()}
             />
           </>
         )}
@@ -1263,8 +1504,12 @@ export default function CampaignDetails() {
     );
   }
 
+  const durationWeeks = (campaign?.duration_weeks ?? weeklyPlans.length) || 12;
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
+      <Head>
+        <title>{campaign?.name ? `${durationWeeks}-Week Campaign Plan – ${campaign.name}` : 'Campaign Plan'}</title>
+      </Head>
       {router.query.fromRecommendation && recommendationId && (
         <div className="bg-indigo-50 border-b border-indigo-100">
           <div className="max-w-7xl mx-auto px-6 py-3 text-sm text-indigo-800">
@@ -1289,10 +1534,11 @@ export default function CampaignDetails() {
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
                   {campaign.name}
                 </h1>
+                <p className="text-xs text-gray-500 font-mono mt-0.5">ID: {campaign.id}</p>
                 <p className="text-gray-600 mt-1">Content Marketing Plan</p>
                 <div className="flex items-center gap-4 mt-2">
                   <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStageColor(campaign.current_stage || campaign.status)}`}>
-                    {getStageLabel(campaign.current_stage || campaign.status)}
+                    {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
                   </span>
                   <span className="text-sm text-gray-700">
                     Readiness: <span className="font-semibold">{readiness?.readiness_percentage ?? '--'}%</span>
@@ -1310,11 +1556,11 @@ export default function CampaignDetails() {
             
             <div className="flex items-center gap-3">
               <button
-                onClick={() => router.push(`/recommendations?campaignId=${campaign.id}`)}
+                onClick={() => router.push(`/campaigns/${campaign.id}/recommendations`)}
                 className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-2"
               >
                 <TrendingUp className="h-4 w-4" />
-                Get Recommendations
+                Expert Recommendations
               </button>
               {isAdmin && (
                 <button
@@ -1428,10 +1674,41 @@ export default function CampaignDetails() {
         )}
         {activeTab === 'overview' && (
           <>
+            {blueprintGeneratedSuccess && (
+              <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-3">
+                <p className="text-emerald-800 text-sm flex items-center gap-2">
+                  <CheckCircle className="h-5 w-5 flex-shrink-0" />
+                  Blueprint generated! Use the <strong>AI Assistant</strong> below to refine it.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setBlueprintGeneratedSuccess(false)}
+                  className="flex-shrink-0 p-1 text-emerald-700 hover:text-emerald-900"
+                  aria-label="Dismiss"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
             {/* Stage 11: Generate blueprint when duration set and blueprint invalidated */}
             {(campaign as Campaign & { blueprint_status?: string | null }).blueprint_status === 'INVALIDATED' && !blueprintImmutable && !blueprintFrozen && !governanceLocked && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 mb-8">
                 <h2 className="text-xl font-semibold text-amber-900 mb-2">Blueprint required</h2>
+                {blueprintRegenerateFailedMsg && (
+                  <div className="mb-4 p-3 bg-amber-100 border border-amber-300 rounded-lg flex items-center justify-between gap-2">
+                    <p className="text-amber-900 text-sm">
+                      Blueprint generation could not be completed automatically: {blueprintRegenerateFailedMsg}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setBlueprintRegenerateFailedMsg(null)}
+                      className="flex-shrink-0 p-1 text-amber-700 hover:text-amber-900"
+                      aria-label="Dismiss"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
                 <p className="text-amber-800 mb-4">
                   Duration is set. Generate a campaign blueprint to continue.
                 </p>
@@ -1439,15 +1716,40 @@ export default function CampaignDetails() {
                   onClick={async () => {
                     if (!campaign || !effectiveCompanyId) return;
                     setIsRegeneratingBlueprint(true);
+                    setBlueprintRegenerateFailedMsg(null);
                     try {
+                      let planningContext: Record<string, unknown> | undefined;
+                      if (typeof window !== 'undefined') {
+                        const stored = sessionStorage.getItem(`campaign_planning_context_${campaign.id}`);
+                        if (stored) {
+                          try {
+                            planningContext = JSON.parse(stored) as Record<string, unknown>;
+                          } catch {
+                            /* ignore */
+                          }
+                        }
+                      }
                       const res = await fetchWithAuth('/api/campaigns/regenerate-blueprint', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ campaignId: campaign.id, companyId: effectiveCompanyId }),
+                        body: JSON.stringify({
+                          campaignId: campaign.id,
+                          companyId: effectiveCompanyId,
+                          ...(planningContext && Object.keys(planningContext).length > 0 ? { planningContext } : {}),
+                        }),
                       });
-                      if (res.ok) loadCampaignDetails(campaign.id);
+                      if (res.ok) {
+                        if (typeof window !== 'undefined') {
+                          sessionStorage.removeItem(`campaign_planning_context_${campaign.id}`);
+                        }
+                        loadCampaignDetails(campaign.id);
+                      } else {
+                        const errData = await res.json().catch(() => ({}));
+                        setBlueprintRegenerateFailedMsg(errData?.message || errData?.error || 'Generation failed');
+                      }
                     } catch (err) {
                       console.error('Regenerate blueprint failed', err);
+                      setBlueprintRegenerateFailedMsg(err instanceof Error ? err.message : 'Generation failed');
                     } finally {
                       setIsRegeneratingBlueprint(false);
                     }
@@ -1460,6 +1762,64 @@ export default function CampaignDetails() {
                 </button>
               </div>
             )}
+
+            {/* Content Blueprint — your created plan; weekly content in weeks below */}
+            <div className="bg-white rounded-xl p-6 shadow-sm border mb-8" id="content-blueprint">
+              <h2 className="text-xl font-semibold mb-1">Content Blueprint</h2>
+              <p className="text-sm text-gray-500 mb-4">
+                Your committed plan; weekly content is listed in the weeks below.
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('weekly-content')?.scrollIntoView({ behavior: 'smooth' })}
+                  className="ml-2 text-indigo-600 hover:text-indigo-800 text-sm font-medium underline"
+                >
+                  Jump to Weekly Content ↓
+                </button>
+              </p>
+              {campaign?.description && <p className="text-gray-600 mb-4">{campaign.description}</p>}
+              {weeklyPlans.length > 0 ? (
+                <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-100">
+                  <span className="text-sm font-medium text-gray-700">Blueprint summary: </span>
+                  <span className="text-sm text-gray-600">
+                    {weeklyPlans
+                      .sort((a, b) => a.weekNumber - b.weekNumber)
+                      .map((w) => `Week ${w.weekNumber}: ${w.theme || w.phase || w.focusArea || '—'}`)
+                      .join(' • ')}
+                  </span>
+                </div>
+              ) : (
+                <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
+                  <p className="text-sm text-amber-800">
+                    No content blueprint yet. Use <strong>AI Assistant</strong> to generate a campaign plan, or go to campaign planning to create one.
+                  </p>
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-purple-600 mb-1">{durationWeeks}</div>
+                  <div className="text-sm text-gray-600">Total Weeks</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-green-600 mb-1">
+                    {weeklyPlans.filter(w => w.status === 'completed').length}
+                  </div>
+                  <div className="text-sm text-gray-600">Completed</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-blue-600 mb-1">
+                    {weeklyPlans.filter(w => w.status === 'in_progress').length}
+                  </div>
+                  <div className="text-sm text-gray-600">In Progress</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-yellow-600 mb-1">
+                    {weeklyPlans.filter(w => w.status === 'planned').length}
+                  </div>
+                  <div className="text-sm text-gray-600">Planned</div>
+                </div>
+              </div>
+            </div>
+
             {/* Virality Review */}
             <div className="bg-white rounded-xl p-6 shadow-sm border mb-8">
               <div className="flex items-center justify-between mb-4">
@@ -1576,7 +1936,7 @@ export default function CampaignDetails() {
                         {expandedDiagnostics.has(item.key) ? (
                           <ChevronDown className="h-4 w-4 text-gray-500" />
                         ) : (
-                          <ChevronRight className="h-4 w-4 text-gray-500" />
+                          <ChevronRight className="h-4 w-4 text-gray-400" />
                         )}
                       </button>
                       {expandedDiagnostics.has(item.key) && (
@@ -1590,39 +1950,8 @@ export default function CampaignDetails() {
               )}
             </div>
 
-            {/* Campaign Overview */}
-            <div className="bg-white rounded-xl p-6 shadow-sm border mb-8">
-              <h2 className="text-xl font-semibold mb-4">Campaign Overview</h2>
-              <p className="text-gray-600 mb-4">{campaign.description}</p>
-              
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-purple-600 mb-1">12</div>
-                  <div className="text-sm text-gray-600">Total Weeks</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600 mb-1">
-                    {weeklyPlans.filter(w => w.status === 'completed').length}
-                  </div>
-                  <div className="text-sm text-gray-600">Completed</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-blue-600 mb-1">
-                    {weeklyPlans.filter(w => w.status === 'in_progress').length}
-                  </div>
-                  <div className="text-sm text-gray-600">In Progress</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-yellow-600 mb-1">
-                    {weeklyPlans.filter(w => w.status === 'planned').length}
-                  </div>
-                  <div className="text-sm text-gray-600">Planned</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Campaign Plan */}
-            <div className="bg-white rounded-xl p-6 shadow-sm border">
+            {/* Weekly Content — blueprint per week, placed in weeks below */}
+            <div className="bg-white rounded-xl p-6 shadow-sm border mb-8" id="weekly-content">
               {(() => {
                 const hasStartDate = !!(campaign as { start_date?: string }).start_date;
                 const hasDuration = !!(campaign as { duration_weeks?: number }).duration_weeks;
@@ -1640,7 +1969,19 @@ export default function CampaignDetails() {
                 );
               })()}
               <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-                <h2 className="text-xl font-semibold">Content Plan</h2>
+                <div>
+                  <h2 className="text-xl font-semibold">Weekly Content</h2>
+                  <p className="text-sm text-gray-500 mt-0.5">
+                    Blueprint per week; expand each week for details.
+                    <button
+                      type="button"
+                      onClick={() => document.getElementById('content-blueprint')?.scrollIntoView({ behavior: 'smooth' })}
+                      className="ml-2 text-indigo-600 hover:text-indigo-800 text-sm font-medium underline"
+                    >
+                      ↑ Back to Content Blueprint
+                    </button>
+                  </p>
+                </div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => router.push(`/campaign-planning-hierarchical?campaignId=${campaign.id}`)}
@@ -1663,7 +2004,7 @@ export default function CampaignDetails() {
               </div>
 
               <div className="space-y-4">
-                {Array.from({ length: weeklyPlans.length > 0 ? weeklyPlans.length : 12 }, (_, i) => i + 1).map(weekNumber => {
+                {Array.from({ length: durationWeeks }, (_, i) => i + 1).map(weekNumber => {
                   const weekPlan = weeklyPlans.find(w => w.weekNumber === weekNumber);
                   const isExpanded = expandedWeeks.has(weekNumber);
                   const weekDailyPlans = dailyPlans.filter(d => d.weekNumber === weekNumber);
@@ -1829,29 +2170,47 @@ export default function CampaignDetails() {
                             </div>
                           </div>
 
-                          {/* Daily Plans */}
+                          {/* Daily Plans — clickable cards */}
                           <div className="mt-6">
                             <h4 className="font-semibold mb-3">Daily Content Plan</h4>
+                            <p className="text-xs text-gray-500 mb-2">Click a day to see full details (platforms, topic, intro, summary, objective)</p>
                             {weekDailyPlans.length > 0 ? (
                               <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
                                 {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(day => {
-                                  const dayPlan = weekDailyPlans.find(d => d.dayOfWeek === day);
+                                  const dayItems = weekDailyPlans.filter(d => d.dayOfWeek === day);
+                                  const hasPlans = dayItems.length > 0;
                                   return (
-                                    <div key={day} className="border rounded p-2 text-center">
+                                    <button
+                                      key={day}
+                                      type="button"
+                                      onClick={() => setSelectedDayForDetail({ day, weekNumber })}
+                                      className="border rounded p-2 text-center hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors cursor-pointer text-left w-full"
+                                    >
                                       <div className="text-xs font-medium text-gray-600 mb-1">{day}</div>
-                                      {dayPlan ? (
+                                      {hasPlans ? (
                                         <div className="space-y-1">
-                                          <div className="text-xs text-gray-800">{dayPlan.platform}</div>
-                                          <div className="text-xs text-gray-600">{dayPlan.contentType}</div>
-                                          <div className={`w-2 h-2 rounded-full mx-auto ${
-                                            dayPlan.status === 'completed' ? 'bg-green-500' :
-                                            dayPlan.status === 'in_progress' ? 'bg-blue-500' : 'bg-gray-300'
+                                          <div className="text-xs text-gray-800">
+                                            {dayItems.map((p, i) => (
+                                              <span key={p.id}>{i > 0 ? ', ' : ''}{p.platform}</span>
+                                            ))}
+                                          </div>
+                                          <div className="text-xs text-gray-600">
+                                            {dayItems.map((p, i) => (
+                                              <span key={p.id}>{i > 0 ? ', ' : ''}{p.contentType}</span>
+                                            ))}
+                                          </div>
+                                          <div className={`w-2 h-2 rounded-full mx-auto mt-1 ${
+                                            dayItems.some(d => d.status === 'completed') ? 'bg-green-500' :
+                                            dayItems.some(d => d.status === 'scheduled') ? 'bg-blue-500' : 'bg-gray-300'
                                           }`}></div>
+                                          {dayItems.length > 1 && (
+                                            <div className="text-[10px] text-indigo-600 mt-0.5">{dayItems.length} items</div>
+                                          )}
                                         </div>
                                       ) : (
                                         <div className="text-xs text-gray-400">No plan</div>
                                       )}
-                                    </div>
+                                    </button>
                                   );
                                 })}
                               </div>
@@ -2137,6 +2496,44 @@ export default function CampaignDetails() {
         )}
       </div>
 
+      {/* Day Detail Modal — click a daily card to see full content details */}
+      {selectedDayForDetail && (() => {
+        const weekPlan = weeklyPlans.find(w => w.weekNumber === selectedDayForDetail!.weekNumber);
+        return (
+          <DayDetailModal
+            day={selectedDayForDetail.day}
+            weekNumber={selectedDayForDetail.weekNumber}
+            items={(dailyPlans
+              .filter(d => d.weekNumber === selectedDayForDetail!.weekNumber && d.dayOfWeek === selectedDayForDetail!.day)
+              .map(d => ({
+                id: d.id,
+                platform: d.platform,
+                contentType: d.contentType,
+                title: d.title,
+                content: d.content,
+                description: d.description,
+                topic: d.topic,
+                introObjective: d.introObjective,
+                summary: d.summary,
+                objective: d.objective,
+                keyPoints: d.keyPoints,
+                cta: d.cta,
+                brandVoice: d.brandVoice,
+                themeLinkage: d.themeLinkage,
+                formatNotes: d.formatNotes,
+                hashtags: d.hashtags || [],
+                scheduledTime: d.scheduledTime,
+                status: d.status,
+              })) as DayPlanItem[])}
+            weekTheme={weekPlan?.theme}
+            weekFocus={weekPlan?.focusArea}
+            campaignTheme={campaign?.description || campaign?.name}
+            targetGeo={(recommendationContext as { target_regions?: string[] })?.target_regions?.join(', ')}
+            onClose={() => setSelectedDayForDetail(null)}
+          />
+        );
+      })()}
+
       {/* AI Assistant - Campaign Chat with recommendation context, linked to campaign plan */}
       {campaign && (
         <CampaignAIChat
@@ -2144,12 +2541,32 @@ export default function CampaignDetails() {
           onClose={() => setShowAIChat(false)}
           onMinimize={() => setShowAIChat(false)}
           context="campaign-planning"
+          forceFreshPlanningThread={Boolean(router.query.fromRecommendation)}
           companyId={effectiveCompanyId || undefined}
           campaignId={campaign.id}
           campaignData={campaign}
           recommendationContext={recommendationContext}
           prefilledPlanning={prefilledPlanning}
           governanceLocked={governanceLocked}
+          collectedPlanningContext={(() => {
+            const ctx: Record<string, unknown> = {};
+            if (campaign?.start_date) ctx.tentative_start = campaign.start_date;
+            if (campaign?.duration_weeks != null) ctx.campaign_duration = campaign.duration_weeks;
+            if (campaign?.duration_weeks != null) ctx.preplanning_form_completed = true;
+            if (typeof window !== 'undefined' && campaign?.id) {
+              try {
+                const stored = sessionStorage.getItem(`campaign_planning_context_${campaign.id}`);
+                if (stored) {
+                  const parsed = JSON.parse(stored) as Record<string, unknown>;
+                  if (parsed?.available_content) ctx.available_content = parsed.available_content;
+                  if (parsed?.content_capacity) ctx.content_capacity = parsed.content_capacity;
+                }
+              } catch {
+                /* ignore */
+              }
+            }
+            return Object.keys(ctx).length > 0 ? ctx : undefined;
+          })()}
           optimizationContext={
             governanceAnalytics
               ? {

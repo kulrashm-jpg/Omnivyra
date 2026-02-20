@@ -42,6 +42,8 @@ export async function generateContentForDay(input: {
   dayPlan: any;
   trend?: string | null;
   platform: string;
+  /** Forced context block (when profile.forced_context_fields is set). Must be respected. */
+  forcedContext?: string | null;
   campaignMemory?: {
     pastThemes: string[];
     pastTopics: string[];
@@ -66,6 +68,7 @@ Rules:
 
 Company Profile:
 ${JSON.stringify(input.companyProfile, null, 2)}
+${input.forcedContext ? `\n${input.forcedContext}\n` : ''}
 
 Campaign:
 ${JSON.stringify(input.campaign, null, 2)}

@@ -5,6 +5,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import {
   suggestDurationForOpportunity,
@@ -40,6 +41,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: true,
     });
     if (!access) return;
+
+    // DB first: if campaign already has duration (e.g. after restart), return it — never contradict
+    const { data: campRow } = await supabase
+      .from('campaigns')
+      .select('duration_weeks')
+      .eq('id', campaignId)
+      .maybeSingle();
+    const dbWeeks = typeof campRow?.duration_weeks === 'number' && campRow.duration_weeks >= 1 && campRow.duration_weeks <= 52
+      ? campRow.duration_weeks
+      : null;
+    if (dbWeeks != null) {
+      return res.status(200).json({
+        suggested_weeks: dbWeeks,
+        rationale: 'Campaign duration is already set. Use the existing value.',
+      });
+    }
 
     const version = await getLatestCampaignVersion(companyId, campaignId);
     const snapshot = version?.campaign_snapshot;

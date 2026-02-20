@@ -50,7 +50,8 @@ const tokenize = (value: string): string[] =>
     .map((token) => token.trim())
     .filter((token) => token.length > 2);
 
-const buildProfileKeywords = (profile: CompanyProfile): string[] => {
+/** Exported for unit testing; used by buildTrendAssessments. */
+export const buildProfileKeywords = (profile: CompanyProfile): string[] => {
   const list = [
     ...(profile.content_themes_list || []),
     ...(profile.industry_list || []),
@@ -58,9 +59,14 @@ const buildProfileKeywords = (profile: CompanyProfile): string[] => {
     profile.content_themes,
     profile.industry,
     profile.goals,
+    profile.campaign_focus,
+    profile.core_problem_statement,
+    profile.desired_transformation,
+    ...(Array.isArray(profile.pain_symptoms) ? profile.pain_symptoms : []),
+    ...(Array.isArray(profile.authority_domains) ? profile.authority_domains : []),
   ]
     .filter(Boolean)
-    .map((value) => value!.trim());
+    .map((value) => (typeof value === 'string' ? value : String(value)).trim());
   const tokens = list.flatMap((value) => tokenize(value));
   return Array.from(new Set(tokens));
 };
@@ -98,6 +104,14 @@ const assessTrend = (
   return { trend, relevance_score: relevance, novelty_score: novelty, status: 'ignore' };
 };
 
+const pickProfileCategory = (profile: CompanyProfile): string | undefined => {
+  if (typeof profile?.category === 'string') return profile.category;
+  if (Array.isArray(profile?.industry_list) && profile.industry_list.length > 0) {
+    return profile.industry_list[0];
+  }
+  return undefined;
+};
+
 export const buildTrendAssessments = async (input: {
   profile: CompanyProfile;
   weekly_plan: WeeklyPlan;
@@ -105,10 +119,11 @@ export const buildTrendAssessments = async (input: {
   let trendSignals: TrendSignal[] = [];
   try {
     const geoHint = input.profile.geography_list?.[0] ?? input.profile.geography ?? undefined;
+    const categoryHint = pickProfileCategory(input.profile);
     trendSignals = await fetchTrendsFromApis(
       input.profile.company_id,
       geoHint,
-      undefined,
+      categoryHint,
       { recordHealth: false }
     );
   } catch {

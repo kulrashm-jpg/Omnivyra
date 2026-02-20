@@ -5,8 +5,15 @@ import EngineOverridePanel from '../EngineOverridePanel';
 import UnifiedContextModeSelector, { type ContextMode, type FocusModule } from '../engine-framework/UnifiedContextModeSelector';
 import EngineJobStatusPanel from '../../engines/EngineJobStatusPanel';
 import { useEngineJobPolling } from '../../../hooks/useEngineJobPolling';
+import { TrendingUp, BarChart3, List } from 'lucide-react';
 
 const ENGINE_LABEL = 'Market Pulse';
+
+const CONTEXT_LABELS: Record<ContextMode, string> = {
+  FULL: 'Full Company Context',
+  FOCUSED: 'Focused Context',
+  NONE: 'No Company Context',
+};
 
 const NARRATIVE_PHASE_STYLES: Record<string, string> = {
   EMERGING: 'bg-purple-100 text-purple-800',
@@ -59,6 +66,7 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
   const [jobError, setJobError] = useState<string | null>(null);
   const [regionInput, setRegionInput] = useState('');
   const [archivedTopics, setArchivedTopics] = useState<Set<string>>(new Set());
+  const [resultsViewMode, setResultsViewMode] = useState<'list' | 'charts'>('charts');
 
   const { job: polledJob } = useEngineJobPolling<{
     status?: string;
@@ -89,6 +97,21 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
     if (typeof polledJob.confidence_index === 'number') setConfidenceIndex(polledJob.confidence_index);
     if (polledJob.error) setJobError(polledJob.error);
   }, [polledJob]);
+
+  const forceStopJob = async () => {
+    if (!jobId) return;
+    try {
+      const res = await fetchWithAuth(`/api/market-pulse/job/${jobId}/cancel`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        setJobStatus('FAILED');
+        setJobError('Cancelled by user');
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   const runMarketPulse = async () => {
     if (!companyId) return;
@@ -180,7 +203,13 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
 
   return (
     <div className="space-y-6">
-      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      <EngineContextPanel
+        companyId={companyId}
+        fetchWithAuth={fetchWithAuth}
+        contextMode={contextMode}
+        focusedModules={focusedModules}
+        additionalDirection={additionalDirection}
+      />
       <UnifiedContextModeSelector
         mode={contextMode}
         modules={focusedModules}
@@ -210,6 +239,15 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
           >
             {isRunning ? 'Running…' : `Run ${ENGINE_LABEL}`}
           </button>
+          {isRunning && (
+            <button
+              type="button"
+              onClick={forceStopJob}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700"
+            >
+              Force Stop
+            </button>
+          )}
         </div>
       </section>
 
@@ -219,6 +257,8 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
           progressStage={polledJob?.progress_stage}
           confidenceIndex={polledJob?.confidence_index}
           error={polledJob?.error ?? jobError}
+          createdAt={(polledJob as { created_at?: string } | null)?.created_at}
+          durationHint="Typically 1–5 min depending on regions"
         />
       )}
       {contextError && (
@@ -241,7 +281,37 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
 
       {(jobStatus === 'COMPLETED' || jobStatus === 'COMPLETED_WITH_WARNINGS') && consolidatedResult && (
         <section className="rounded-lg border border-gray-200 p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-gray-800">Global Strategic Pulse</h3>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <h3 className="text-sm font-semibold text-gray-800">Global Strategic Pulse</h3>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">
+                Context: {CONTEXT_LABELS[contextMode]}
+                {regionInput.trim() ? ` · Regions: ${regionInput}` : ' · GLOBAL'}
+              </span>
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setResultsViewMode('charts')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium ${
+                    resultsViewMode === 'charts' ? 'bg-indigo-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <BarChart3 className="h-4 w-4" />
+                  Charts & Stats
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultsViewMode('list')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium ${
+                    resultsViewMode === 'list' ? 'bg-indigo-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <List className="h-4 w-4" />
+                  List
+                </button>
+              </div>
+            </div>
+          </div>
 
           {typeof confidenceIndex === 'number' && (
             <div className="flex items-center gap-2">
@@ -308,6 +378,118 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
             </div>
           )}
 
+          {resultsViewMode === 'charts' ? (
+            (() => {
+              const visibleTopics = globalTopics.filter((t) => !archivedTopics.has(t.topic));
+              return visibleTopics.length === 0 ? (
+                <div className="text-sm text-gray-500 py-8">
+                  {globalTopics.length === 0
+                    ? 'No market pulse topics captured.'
+                    : 'All topics have been archived.'}
+                </div>
+              ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {visibleTopics.map((t, i) => {
+                  const narrativePhase = (t.narrative_phase ?? '').toUpperCase();
+                  const trendLabel =
+                    ['EMERGING', 'ACCELERATING'].includes(narrativePhase)
+                      ? 'rising'
+                      : narrativePhase === 'PEAKING'
+                        ? 'stable'
+                        : ['DECLINING'].includes(narrativePhase)
+                          ? 'falling'
+                          : t.momentum_score != null && t.momentum_score > 0.5
+                            ? 'rising'
+                            : 'stable';
+                  const growthPct =
+                    t.momentum_score != null
+                      ? `+${(t.momentum_score * 100).toFixed(0)}%`
+                      : t.effective_priority != null
+                        ? `+${(t.effective_priority * 100).toFixed(0)}%`
+                        : '+0%';
+                  const engagement =
+                    (t.risk_level ?? 'LOW').toUpperCase() === 'HIGH'
+                      ? 'High risk'
+                      : (t.risk_level ?? 'LOW').toUpperCase() === 'MEDIUM'
+                        ? 'Medium'
+                        : 'Low risk';
+                  const platforms = (t.regions ?? []).length > 0 ? t.regions : ['GLOBAL'];
+                  return (
+                    <div
+                      key={`${t.topic}-${i}`}
+                      className="bg-white rounded-xl p-5 border border-purple-200/50 hover:shadow-md transition-all"
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-semibold text-gray-900">{t.topic}</h4>
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                            trendLabel === 'rising'
+                              ? 'bg-green-100 text-green-800'
+                              : trendLabel === 'falling'
+                                ? 'bg-red-100 text-red-800'
+                                : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {trendLabel === 'rising' ? (
+                            <TrendingUp className="h-3.5 w-3.5" />
+                          ) : trendLabel === 'falling' ? (
+                            <span className="text-red-600">↓</span>
+                          ) : (
+                            <BarChart3 className="h-3.5 w-3.5" />
+                          )}
+                          {trendLabel}
+                        </span>
+                      </div>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Growth:</span>
+                          <span className="font-semibold text-green-600">{growthPct}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Engagement:</span>
+                          <span className="font-semibold text-gray-900">{engagement}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Regions:</span>
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {platforms.map((r) => (
+                              <span
+                                key={r}
+                                className="px-2 py-0.5 bg-gray-100 text-gray-700 text-xs rounded-md"
+                              >
+                                {r}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="text-xs text-gray-500 pt-1 border-t border-gray-100">
+                          Shelf life: {t.shelf_life_days} days · {t.spike_reason}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-100">
+                        <button
+                          type="button"
+                          onClick={() => handlePromote(t.topic)}
+                          className="px-2 py-1 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                        >
+                          Promote
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleArchiveTopic(t.topic)}
+                          className="px-2 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                        >
+                          Archive
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+              );
+            })()
+          ) : (
+          <>
           <div className="space-y-0 rounded-lg border border-gray-200 overflow-hidden">
             {globalTopics.map((t, i) => (
               <div
@@ -387,6 +569,8 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
 
           {globalTopics.length === 0 && (
             <div className="text-sm text-gray-500 py-4">No market pulse topics captured.</div>
+          )}
+          </>
           )}
         </section>
       )}

@@ -208,11 +208,57 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         source_signals_count: sourceSignalsCount,
         signals_source: signalsSource,
       }));
-      const { error: snapshotError } = await supabase
+      let { error: snapshotError } = await supabase
         .from('recommendation_snapshots')
         .insert(records);
+      // Backward compatibility: retry inserts for older schemas.
       if (snapshotError) {
-        return res.status(500).json({ error: 'Failed to persist recommendation snapshot' });
+        const baseRecords = records.map((row) => ({
+          company_id: row.company_id,
+          campaign_id: row.campaign_id,
+          trend_topic: row.trend_topic,
+          confidence: row.confidence,
+          explanation: row.explanation,
+          refresh_source: row.refresh_source,
+          refreshed_at: row.refreshed_at,
+          created_at: row.created_at,
+        }));
+        const retry = await supabase.from('recommendation_snapshots').insert(baseRecords);
+        snapshotError = retry.error;
+      }
+      // Oldest schema fallback: no campaign_id column.
+      if (snapshotError) {
+        const minimalRecords = records.map((row) => ({
+          company_id: row.company_id,
+          trend_topic: row.trend_topic,
+          confidence: row.confidence,
+          explanation: row.explanation,
+          refresh_source: row.refresh_source,
+          refreshed_at: row.refreshed_at,
+          created_at: row.created_at,
+        }));
+        const retryWithoutCampaignId = await supabase
+          .from('recommendation_snapshots')
+          .insert(minimalRecords);
+        snapshotError = retryWithoutCampaignId.error;
+      }
+      // Ultra-legacy schema fallback: keep only essential fields.
+      if (snapshotError) {
+        const essentialRecords = records.map((row) => ({
+          company_id: row.company_id,
+          trend_topic: row.trend_topic,
+          created_at: row.created_at,
+        }));
+        const retryEssential = await supabase
+          .from('recommendation_snapshots')
+          .insert(essentialRecords);
+        snapshotError = retryEssential.error;
+      }
+      if (snapshotError) {
+        return res.status(500).json({
+          error: 'Failed to persist recommendation snapshot',
+          detail: snapshotError.message,
+        });
       }
       try {
         const windowStart = new Date(new Date(createdAt).getTime() - 2 * 60 * 1000).toISOString();

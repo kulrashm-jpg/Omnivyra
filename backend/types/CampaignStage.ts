@@ -19,7 +19,7 @@ export const CAMPAIGN_STAGES: readonly CampaignStage[] = [
 
 export const STAGE_LABELS: Record<CampaignStage, string> = {
   planning: 'Planning',
-  twelve_week_plan: '12 Week Plan',
+  twelve_week_plan: 'Week Plan', // Base label; use getStageLabelWithDuration for "# Week Plan"
   daily_plan: 'Daily Plan',
   charting: 'Charting (Social Media Alignment)',
   schedule: 'Schedule',
@@ -40,4 +40,12 @@ export function getStageGradient(stage: string): string {
 
 export function getStageLabel(stage: string): string {
   return STAGE_LABELS[stage as CampaignStage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
+}
+
+/** Returns "# Week Plan" when stage is twelve_week_plan and duration is known; otherwise base label. */
+export function getStageLabelWithDuration(stage: string, durationWeeks?: number | null): string {
+  if (stage === 'twelve_week_plan' && typeof durationWeeks === 'number' && durationWeeks > 0) {
+    return `${durationWeeks} Week Plan`;
+  }
+  return getStageLabel(stage);
 }
