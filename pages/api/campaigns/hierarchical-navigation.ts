@@ -8,9 +8,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { campaignId, action } = req.query;
+    const { campaignId: campaignIdQuery, action } = req.query;
+    const campaignId = Array.isArray(campaignIdQuery) ? campaignIdQuery[0] : campaignIdQuery;
 
-    if (!campaignId) {
+    if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'Campaign ID required' });
     }
 
@@ -73,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             contentFocus: w.primary_objective || w.phase_label,
             targetAudience: 'General Audience',
             keyMessaging: w.topics_to_cover?.join('; ') || 'AI-generated messaging',
-            contentTypes: w.content_type_mix || w.content_types || ['post', 'video', 'story'],
+            contentTypes: w.content_type_mix || ['post', 'video', 'story'],
             platformStrategy: 'Multi-platform',
             callToAction: 'Engage with content',
             successMetrics: { reach: 1000, engagement: 50, conversions: 10 },

@@ -42,6 +42,14 @@ export default function QueueTestPage() {
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   const loadQueueStats = async () => {
     setIsLoading(true);
@@ -77,14 +85,14 @@ export default function QueueTestPage() {
       const data = await response.json();
       
       if (data.success) {
-        alert('Test post scheduled successfully!');
+        notify('success', 'Test post scheduled successfully.');
         loadQueueStats();
       } else {
-        alert(`Failed to schedule test post: ${data.error}`);
+        notify('error', `Failed to schedule: ${data.error}`);
       }
     } catch (error) {
       console.error('Error scheduling test post:', error);
-      alert('Failed to schedule test post');
+      notify('error', 'Failed to schedule test post.');
     }
   };
 
@@ -105,14 +113,14 @@ export default function QueueTestPage() {
       const data = await response.json();
       
       if (data.success) {
-        alert('Immediate test post created!');
+        notify('success', 'Immediate test post created.');
         loadQueueStats();
       } else {
-        alert(`Failed to create immediate test post: ${data.error}`);
+        notify('error', `Failed: ${data.error}`);
       }
     } catch (error) {
       console.error('Error creating immediate test post:', error);
-      alert('Failed to create immediate test post');
+      notify('error', 'Failed to create immediate test post.');
     }
   };
 
@@ -145,6 +153,9 @@ export default function QueueTestPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white p-8">
+      {notice && (
+        <div className={`mb-4 rounded-lg border px-3 py-2 text-sm ${notice.type === 'success' ? 'border-emerald-400/50 bg-emerald-500/20 text-emerald-200' : notice.type === 'error' ? 'border-red-400/50 bg-red-500/20 text-red-200' : 'border-indigo-400/50 bg-indigo-500/20 text-indigo-200'}`} role="status" aria-live="polite">{notice.message}</div>
+      )}
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">

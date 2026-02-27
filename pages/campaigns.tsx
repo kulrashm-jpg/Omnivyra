@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Edit, Trash2 } from 'lucide-react';
+import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Trash2 } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
@@ -29,14 +29,24 @@ export default function CampaignsList() {
   const [isLoading, setIsLoading] = useState(true);
   const [reapprovalMap, setReapprovalMap] = useState<Record<string, boolean>>({});
   const [stageFilter, setStageFilter] = useState<string>('all');
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [pendingDeleteCampaignId, setPendingDeleteCampaignId] = useState<string | null>(null);
   const filteredCampaigns = stageFilter === 'all'
     ? campaigns
     : campaigns.filter((c) => (c.current_stage || c.status) === stageFilter);
+
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
 
   useEffect(() => {
     if (!selectedCompanyId) return;
     fetchCampaigns();
   }, [selectedCompanyId]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
    const fetchCampaigns = async () => {
     setIsLoading(true);
@@ -92,50 +102,48 @@ export default function CampaignsList() {
     window.location.href = `/campaign-details/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
   };
 
-  const handleEditCampaign = (campaignId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const params = new URLSearchParams({ campaignId, mode: 'edit' });
-    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
-    window.location.href = `/campaign-planning?${params.toString()}`;
-  };
-
   const handleDeleteCampaign = async (campaignId: string, e: React.MouseEvent) => {
     e.stopPropagation();
 
     if (!selectedCompanyId) {
-      alert('Please select a company before deleting campaigns.');
+      notify('error', 'Please select a company before deleting campaigns.');
       return;
     }
 
-    if (confirm('Are you sure you want to delete this campaign? This action cannot be undone.')) {
-      try {
-        const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
-        const deleteResponse = await fetchWithAuth(deleteUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            campaignId,
-            companyId: selectedCompanyId,
-            ipAddress: '127.0.0.1',
-            userAgent: navigator.userAgent
-          })
-        });
+    setPendingDeleteCampaignId(campaignId);
+  };
 
-        if (deleteResponse.ok) {
-          const deleteResult = await deleteResponse.json();
-          if (deleteResult.success) {
-            alert('Campaign deleted successfully');
-            await fetchCampaigns();
-          } else {
-            alert(`Error: ${deleteResult.error}`);
-          }
+  const confirmDeleteCampaign = async () => {
+    if (!selectedCompanyId || !pendingDeleteCampaignId) return;
+    try {
+      const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
+      const deleteResponse = await fetchWithAuth(deleteUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId: pendingDeleteCampaignId,
+          companyId: selectedCompanyId,
+          ipAddress: '127.0.0.1',
+          userAgent: navigator.userAgent
+        })
+      });
+
+      if (deleteResponse.ok) {
+        const deleteResult = await deleteResponse.json();
+        if (deleteResult.success) {
+          notify('success', 'Campaign deleted successfully.');
+          await fetchCampaigns();
         } else {
-          alert('Failed to delete campaign');
+          notify('error', `Delete failed: ${deleteResult.error}`);
         }
-      } catch (error) {
-        console.error('Error deleting campaign:', error);
-        alert('Failed to delete campaign. Please try again.');
+      } else {
+        notify('error', 'Failed to delete campaign.');
       }
+    } catch (error) {
+      console.error('Error deleting campaign:', error);
+      notify('error', 'Failed to delete campaign. Please try again.');
+    } finally {
+      setPendingDeleteCampaignId(null);
     }
   };
 
@@ -157,6 +165,40 @@ export default function CampaignsList() {
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
       <Header />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {notice && (
+          <div
+            className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+              notice.type === 'success'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : notice.type === 'error'
+                  ? 'border-red-200 bg-red-50 text-red-800'
+                  : 'border-indigo-200 bg-indigo-50 text-indigo-800'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {notice.message}
+          </div>
+        )}
+        {pendingDeleteCampaignId && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-center justify-between gap-3">
+            <span>This campaign will be permanently deleted. Continue?</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPendingDeleteCampaignId(null)}
+                className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteCampaign}
+                className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        )}
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <div>
@@ -378,13 +420,6 @@ export default function CampaignsList() {
 
                     {/* Actions */}
                     <div className="col-span-1 flex justify-end gap-2">
-                      <button 
-                        onClick={(e) => handleEditCampaign(campaign.id, e)}
-                        className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50"
-                        title="Edit Campaign"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
                       <button 
                         onClick={(e) => handleDeleteCampaign(campaign.id, e)}
                         className="text-gray-400 hover:text-red-600 transition-colors p-1 rounded hover:bg-red-50"

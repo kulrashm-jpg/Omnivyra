@@ -137,8 +137,13 @@ export async function saveCampaignBlueprintFromRecommendation(input: {
     cta_type: w.cta_type,
     weekly_kpi_focus: w.weekly_kpi_focus,
     topics_to_cover: Array.isArray(w.topics_to_cover) ? w.topics_to_cover : undefined,
+    weeklyContextCapsule: w.weeklyContextCapsule ?? undefined,
+    topics: Array.isArray(w.topics) ? w.topics : undefined,
     platform_content_breakdown: w.platform_content_breakdown,
     platform_topics: w.platform_topics,
+    execution_items: Array.isArray((w as any).execution_items) ? (w as any).execution_items : undefined,
+    posting_execution_map: Array.isArray((w as any).posting_execution_map) ? (w as any).posting_execution_map : undefined,
+    resolved_postings: Array.isArray((w as any).resolved_postings) ? (w as any).resolved_postings : undefined,
     week_extras: w.week_extras ?? undefined,
   }));
   const { error } = await supabase.from('twelve_week_plan').insert({
@@ -168,8 +173,13 @@ function weeksForDbFromBlueprint(blueprint: CampaignBlueprint) {
     cta_type: w.cta_type,
     weekly_kpi_focus: w.weekly_kpi_focus,
     topics_to_cover: Array.isArray(w.topics_to_cover) ? w.topics_to_cover : undefined,
+    weeklyContextCapsule: w.weeklyContextCapsule ?? undefined,
+    topics: Array.isArray(w.topics) ? w.topics : undefined,
     platform_content_breakdown: w.platform_content_breakdown,
     platform_topics: w.platform_topics,
+    execution_items: Array.isArray((w as any).execution_items) ? (w as any).execution_items : undefined,
+    posting_execution_map: Array.isArray((w as any).posting_execution_map) ? (w as any).posting_execution_map : undefined,
+    resolved_postings: Array.isArray((w as any).resolved_postings) ? (w as any).resolved_postings : undefined,
     week_extras: w.week_extras ?? undefined,
   }));
 }

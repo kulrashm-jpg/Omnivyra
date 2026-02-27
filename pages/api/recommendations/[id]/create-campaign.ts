@@ -3,6 +3,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { runCampaignAiPlan } from '../../../../backend/services/campaignAiOrchestrator';
 import { Role } from '../../../../backend/services/rbacService';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import { getCampaignPlanningInputs } from '../../../../backend/services/campaignPlanningInputsService';
 import {
   DEFAULT_BUILD_MODE_RECOMMENDATION,
   normalizeCampaignTypes,
@@ -195,11 +196,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         opportunityAnalysis
       );
 
+    const planningInputs = await getCampaignPlanningInputs(campaign.id);
+    const deterministicPlanningContext = planningInputs
+      ? {
+          available_content: planningInputs.available_content,
+          content_capacity: planningInputs.weekly_capacity,
+          exclusive_campaigns: planningInputs.exclusive_campaigns,
+          platforms: planningInputs.selected_platforms,
+          platform_content_requests: planningInputs.platform_content_requests,
+        }
+      : {};
+    const existingCollectedPlanningContext: Record<string, unknown> | undefined = undefined;
+    const finalCollectedPlanningContext = {
+      ...(existingCollectedPlanningContext ?? {}),
+      ...deterministicPlanningContext,
+    };
+
+    console.log('[PLAN INPUT SOURCE]', JSON.stringify(finalCollectedPlanningContext, null, 2));
+
     const planResult = await runCampaignAiPlan({
       campaignId: campaign.id,
       mode: 'generate_plan',
       message,
       durationWeeks: typeof durationWeeks === 'number' ? durationWeeks : undefined,
+      collectedPlanningContext: finalCollectedPlanningContext,
     });
 
     const { error: linkError } = await supabase

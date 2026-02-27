@@ -59,6 +59,14 @@ export default function ComprehensivePlanEditor({
   const [activeTab, setActiveTab] = useState<'summary' | 'weeks' | 'existing'>('summary');
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   const marketingChannels = ['LinkedIn', 'Twitter', 'Facebook', 'Instagram', 'YouTube', 'TikTok', 'Email', 'Blog', 'Podcast'];
 
@@ -165,7 +173,7 @@ export default function ComprehensivePlanEditor({
 
   const generateWithAI = async () => {
     if (!aiPrompt.trim()) {
-      alert('Please enter a prompt for AI generation');
+      notify('info', 'Please enter a prompt for AI generation');
       return;
     }
 
@@ -195,13 +203,13 @@ export default function ComprehensivePlanEditor({
         }
         
         setAiPrompt('');
-        alert('✅ Plan generated successfully! Review and save when ready.');
+        notify('success', 'Plan generated successfully. Review and save when ready.');
       } else {
         throw new Error('Failed to generate plan');
       }
     } catch (error) {
       console.error('Error generating plan:', error);
-      alert('❌ Failed to generate plan. Please try again.');
+      notify('error', 'Failed to generate plan. Please try again.');
     } finally {
       setIsGenerating(false);
     }
@@ -223,14 +231,14 @@ export default function ComprehensivePlanEditor({
       if (response.ok) {
         const result = await response.json();
         onSave(result);
-        alert('✅ 12-Week plan saved successfully!');
+        notify('success', '12-Week plan saved successfully.');
         onClose();
       } else {
         throw new Error('Failed to save plan');
       }
     } catch (error) {
       console.error('Error saving plan:', error);
-      alert('❌ Failed to save plan. Please try again.');
+      notify('error', 'Failed to save plan. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -241,6 +249,9 @@ export default function ComprehensivePlanEditor({
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
+        {notice && (
+          <div className={`mx-6 mt-4 rounded-lg border px-3 py-2 text-sm ${notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`} role="status" aria-live="polite">{notice.message}</div>
+        )}
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b">
           <div className="flex items-center gap-3">

@@ -13,11 +13,20 @@ type TestResult = {
     }>;
   } | null;
   company_context?: {
+    brand?: {
+      brand_voice?: string | null;
+      brand_positioning?: string | null;
+    } | null;
     problem_transformation?: {
       core_problem_statement?: string | null;
       pain_symptoms?: string[] | null;
       desired_transformation?: string | null;
       authority_domains?: string[] | null;
+    } | null;
+    campaign?: {
+      reader_emotion_target?: string | null;
+      narrative_flow_seed?: unknown;
+      recommended_cta_style?: string | null;
     } | null;
   } | null;
 };
@@ -66,11 +75,20 @@ const buildBaseResult = (): TestResult => ({
     ],
   },
   company_context: {
+    brand: {
+      brand_voice: 'clear, practical, outcome-driven',
+      brand_positioning: 'The no-fluff execution partner for busy teams',
+    },
     problem_transformation: {
       core_problem_statement: 'Core issue',
       pain_symptoms: ['symptom-1'],
       desired_transformation: 'Desired future',
       authority_domains: ['domain-1'],
+    },
+    campaign: {
+      reader_emotion_target: 'confident',
+      narrative_flow_seed: { pattern: '3-step weekly arc', steps: ['clarity', 'proof', 'conversion'] },
+      recommended_cta_style: 'Direct',
     },
   },
 });
@@ -92,6 +110,26 @@ describe('recommendationCardEnrichmentService', () => {
 
   it('adds company context snapshot', () => {
     const result = enrichRecommendationCards(buildBaseResult());
+    expect(result.trends_used[0]).toHaveProperty(
+      'company_context_snapshot.brand_voice',
+      'clear, practical, outcome-driven'
+    );
+    expect(result.trends_used[0]).toHaveProperty(
+      'company_context_snapshot.brand_positioning',
+      'The no-fluff execution partner for busy teams'
+    );
+    expect(result.trends_used[0]).toHaveProperty(
+      'company_context_snapshot.reader_emotion_target',
+      'confident'
+    );
+    expect(result.trends_used[0]).toHaveProperty(
+      'company_context_snapshot.narrative_flow_seed',
+      JSON.stringify({ pattern: '3-step weekly arc', steps: ['clarity', 'proof', 'conversion'] })
+    );
+    expect(result.trends_used[0]).toHaveProperty(
+      'company_context_snapshot.recommended_cta_style',
+      'Direct'
+    );
     expect(result.trends_used[0]).toHaveProperty(
       'company_context_snapshot.core_problem_statement',
       'Core issue'
@@ -127,6 +165,11 @@ describe('recommendationCardEnrichmentService', () => {
     const input = buildBaseResult();
     input.company_context = undefined;
     const result = enrichRecommendationCards(input);
+    expect(result.trends_used[0]).toHaveProperty('company_context_snapshot.brand_voice', null);
+    expect(result.trends_used[0]).toHaveProperty('company_context_snapshot.brand_positioning', null);
+    expect(result.trends_used[0]).toHaveProperty('company_context_snapshot.reader_emotion_target', null);
+    expect(result.trends_used[0]).toHaveProperty('company_context_snapshot.narrative_flow_seed', null);
+    expect(result.trends_used[0]).toHaveProperty('company_context_snapshot.recommended_cta_style', null);
     expect(result.trends_used[0]).toHaveProperty('company_context_snapshot.core_problem_statement', null);
     expect(result.trends_used[0]).toHaveProperty('company_context_snapshot.pain_symptoms', null);
     expect(result.trends_used[0]).toHaveProperty('company_context_snapshot.desired_transformation', null);

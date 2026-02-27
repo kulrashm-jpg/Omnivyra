@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import AIGenerationProgress from '../components/AIGenerationProgress';
 import {
   Brain,
   Calendar,
@@ -274,6 +275,16 @@ export default function AIContentGenerator() {
               </div>
             </CardContent>
           </Card>
+
+          {isGenerating && (
+            <div className="mt-4">
+              <AIGenerationProgress
+                isActive={true}
+                message="Generating…"
+                expectedSeconds={35}
+              />
+            </div>
+          )}
 
           {topics.length > 0 && (
             <Card className="bg-gradient-to-br from-gray-800/50 to-black/50 border-white/10 shadow-lg backdrop-blur-xl">

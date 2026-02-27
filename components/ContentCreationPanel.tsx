@@ -26,6 +26,7 @@ import {
   X
 } from 'lucide-react';
 import VoiceNotesComponent from './VoiceNotesComponent';
+import AIGenerationProgress from './AIGenerationProgress';
 
 interface ContentItem {
   id: string;
@@ -67,6 +68,16 @@ export default function ContentCreationPanel({
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState('linkedin');
   const [selectedContentType, setSelectedContentType] = useState('post');
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [pendingDeleteContentId, setPendingDeleteContentId] = useState<string | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   const platforms = [
     { id: 'linkedin', name: 'LinkedIn', icon: '💼' },
@@ -137,53 +148,53 @@ export default function ContentCreationPanel({
   };
 
   const deleteContentItem = async (itemId: string) => {
-    // Check if user is super admin
     try {
       const response = await fetch('/api/admin/check-super-admin');
       const result = await response.json();
-      
       if (!result.isSuperAdmin) {
-        alert('Access Denied: Only super admins can delete content. Please contact your administrator.');
+        notify('error', 'Access denied. Only super admins can delete content.');
         return;
       }
+      setPendingDeleteContentId(itemId);
+      setDeleteReason('');
     } catch (error) {
       console.error('Error checking super admin status:', error);
-      alert('Error verifying permissions. Please try again.');
-      return;
+      notify('error', 'Error verifying permissions. Please try again.');
     }
+  };
 
-    if (confirm('Are you sure you want to delete this content item?')) {
-      try {
-        // Use the super admin delete API for content
-        const deleteResponse = await fetch('/api/admin/delete-content', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contentId: itemId,
-            reason: prompt('Please provide a reason for deleting this content:') || 'No reason provided',
-            ipAddress: '127.0.0.1',
-            userAgent: navigator.userAgent
-          })
-        });
-
-        if (deleteResponse.ok) {
-          const deleteResult = await deleteResponse.json();
-          if (deleteResult.success) {
-            setContentItems(prev => prev.filter(item => item.id !== itemId));
-            if (onContentSave) {
-              onContentSave(contentItems.filter(item => item.id !== itemId));
-            }
-            alert('Content deleted successfully');
-          } else {
-            alert(`Error: ${deleteResult.error}`);
+  const confirmDeleteContent = async () => {
+    if (!pendingDeleteContentId) return;
+    const itemId = pendingDeleteContentId;
+    setPendingDeleteContentId(null);
+    try {
+      const deleteResponse = await fetch('/api/admin/delete-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contentId: itemId,
+          reason: deleteReason.trim() || 'No reason provided',
+          ipAddress: '127.0.0.1',
+          userAgent: navigator.userAgent
+        })
+      });
+      if (deleteResponse.ok) {
+        const deleteResult = await deleteResponse.json();
+        if (deleteResult.success) {
+          setContentItems(prev => prev.filter(item => item.id !== itemId));
+          if (onContentSave) {
+            onContentSave(contentItems.filter(item => item.id !== itemId));
           }
+          notify('success', 'Content deleted successfully.');
         } else {
-          alert('Failed to delete content');
+          notify('error', String(deleteResult.error));
         }
-      } catch (error) {
-        console.error('Error deleting content:', error);
-        alert('Failed to delete content. Please try again.');
+      } else {
+        notify('error', 'Failed to delete content.');
       }
+    } catch (error) {
+      console.error('Error deleting content:', error);
+      notify('error', 'Failed to delete content. Please try again.');
     }
   };
 
@@ -309,6 +320,19 @@ export default function ContentCreationPanel({
 
   return (
     <div className="space-y-6">
+      {notice && (
+        <div className={`rounded-lg border px-3 py-2 text-sm ${notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`} role="status" aria-live="polite">{notice.message}</div>
+      )}
+      {pendingDeleteContentId && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm flex flex-wrap items-center gap-2">
+          <span className="text-amber-900">Delete this content? (Super admin only)</span>
+          <input type="text" value={deleteReason} onChange={(e) => setDeleteReason(e.target.value)} placeholder="Reason (optional)" className="flex-1 min-w-[120px] rounded border border-amber-300 px-2 py-1 text-gray-800" />
+          <div className="flex gap-2">
+            <button type="button" onClick={() => { setPendingDeleteContentId(null); setDeleteReason(''); }} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
+            <button type="button" onClick={confirmDeleteContent} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700">Delete</button>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -360,6 +384,15 @@ export default function ContentCreationPanel({
             New Content
           </button>
         </div>
+        {isGeneratingAI && (
+          <div className="mt-3">
+            <AIGenerationProgress
+              isActive={true}
+              message="Generating content…"
+              expectedSeconds={40}
+            />
+          </div>
+        )}
       </div>
 
       {/* Platform and Content Type Selection */}

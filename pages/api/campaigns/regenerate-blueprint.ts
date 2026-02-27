@@ -21,6 +21,17 @@ import { getProfile } from '../../../backend/services/companyProfileService';
 import { getLatestCampaignVersionByCampaignId } from '../../../backend/db/campaignVersionStore';
 import { generateTrendOpportunities } from '../../../backend/services/opportunityGenerators';
 import type { StrategicPayload } from '../../../backend/services/opportunityGenerators';
+import type { FocusModule } from '../../../backend/services/contextResolver';
+import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
+
+const FOCUS_MODULE_SET = new Set<FocusModule>([
+  'TARGET_CUSTOMER',
+  'PROBLEM_DOMAIN',
+  'CAMPAIGN_PURPOSE',
+  'OFFERINGS',
+  'GEOGRAPHY',
+  'PRICING',
+]);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -196,6 +207,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               : 'NONE';
         const targetRegions = (planCtx?.target_regions as string[]) ?? [];
         const focusedModules = (planCtx?.focused_modules as string[]) ?? [];
+        const normalizedFocusedModules: FocusModule[] = Array.isArray(focusedModules)
+          ? focusedModules
+              .map((m) => String(m ?? '').trim().toUpperCase())
+              .filter((m): m is FocusModule => FOCUS_MODULE_SET.has(m as FocusModule))
+          : [];
         const additionalDirection =
           (planCtx?.additional_direction as string) || (campRow?.description as string) || '';
         const companyContext: Record<string, unknown> = {};
@@ -222,7 +238,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           selected_aspect: null,
           strategic_text: strategicText,
           regions: targetRegions.length > 0 ? targetRegions : undefined,
-          focused_modules: focusedModules.length > 0 ? focusedModules : undefined,
+          focused_modules: normalizedFocusedModules.length > 0 ? normalizedFocusedModules : undefined,
           additional_direction: additionalDirection || undefined,
         };
         const themes = await generateTrendOpportunities(companyIdForTopics, payload);
@@ -256,8 +272,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       mergedPlanningContext.strategic_themes.length === 0;
     const useBlankBlueprint = hasNoContextOrTopic && hasNoStrategicThemes;
 
-    let result: { plan?: { weeks: any[] } };
+    let result: { plan?: { weeks: any[]; campaign_id?: string } };
     if (useBlankBlueprint) {
+      const planningInputs = await getCampaignPlanningInputs(campaignId);
+      if (planningInputs?.platform_content_requests) {
+        throw new Error('BLANK_BLUEPRINT_NOT_ALLOWED_WITH_DETERMINISTIC_INPUTS');
+      }
       // Name + geo only: create blank content blueprint with weeks as per selection
       const blankWeeks = Array.from({ length: durationWeeks }, (_, i) => ({
         week: i + 1,
@@ -272,13 +292,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }));
       result = { plan: { weeks: blankWeeks, campaign_id: campaignId } };
     } else {
+      const planningInputs = await getCampaignPlanningInputs(campaignId);
+      const deterministicPlanningContext = planningInputs
+        ? {
+            available_content: planningInputs.available_content,
+            content_capacity: planningInputs.weekly_capacity,
+            exclusive_campaigns: planningInputs.exclusive_campaigns,
+            platforms: planningInputs.selected_platforms,
+            platform_content_requests: planningInputs.platform_content_requests,
+          }
+        : {};
+      const existingCollectedPlanningContext =
+        Object.keys(mergedPlanningContext).length > 0 ? mergedPlanningContext : undefined;
+      const finalCollectedPlanningContext = {
+        ...(existingCollectedPlanningContext ?? {}),
+        ...deterministicPlanningContext,
+      };
+
+      console.log('[PLAN INPUT SOURCE]', JSON.stringify(finalCollectedPlanningContext, null, 2));
+
       const aiResult = await runCampaignAiPlan({
         campaignId,
         mode: 'generate_plan',
         message: `Regenerate campaign plan for ${durationWeeks} weeks.`,
         durationWeeks,
-        collectedPlanningContext:
-          Object.keys(mergedPlanningContext).length > 0 ? mergedPlanningContext : undefined,
+        collectedPlanningContext: finalCollectedPlanningContext,
       });
       result = { plan: aiResult.plan };
     }

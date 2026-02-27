@@ -54,10 +54,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       '1. Why are you using social media for this business?\n' +
       '2. What do you ultimately want to achieve through campaigns?\n' +
       '3. What kind of problems do you want to be known for solving?\n' +
-      '4. What type of campaigns do you intend to run consistently?\n\n' +
+      '4. What type of campaigns do you intend to run consistently? (examples: lead_generation, brand_awareness, authority_positioning, network_expansion, engagement_growth, product_promotion)\n\n' +
+      'Also capture (ask only if missing / not clear from answers):\n' +
+      '- reader_emotion_target: what should the reader feel after consuming the content (e.g. confident, curious, urgent, relieved).\n' +
+      '- narrative_flow_seed: a 3-step or 4-step weekly progression seed (pattern + steps).\n' +
+      '- recommended_cta_style: recommended CTA style aligned to campaign type (e.g. Soft, Direct, Engagement prompts, Light).\n\n' +
       'Response format (JSON only, no markdown, no explanation):\n' +
       '- If you need more information: { "nextQuestion": "your question here" }\n' +
-      '- When you have enough: { "done": true, "campaign_purpose_intent": { "primary_objective": "...", "campaign_intent": "...", "monetization_intent": "...", "dominant_problem_domains": ["...", "..."], "brand_positioning_angle": "..." } }\n' +
+      '- When you have enough: { "done": true, "campaign_purpose_intent": { "primary_objective": "...", "campaign_intent": "...", "monetization_intent": "...", "dominant_problem_domains": ["...", "..."], "brand_positioning_angle": "...", "reader_emotion_target": "...", "narrative_flow_seed": { "pattern": "...", "steps": ["...", "...", "..."] }, "recommended_cta_style": "..." } }\n' +
       'Map answers: primary_objective=why social media; campaign_intent=what to achieve; monetization_intent=how campaigns support revenue; dominant_problem_domains=array of problems to solve; brand_positioning_angle=how to be perceived. Always valid JSON.';
 
     const messages: OpenAI.ChatCompletionMessageParam[] = [
@@ -93,6 +97,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         monetization_intent?: string;
         dominant_problem_domains?: string[];
         brand_positioning_angle?: string;
+        reader_emotion_target?: string;
+        narrative_flow_seed?: unknown;
+        recommended_cta_style?: string;
       };
     };
     try {
@@ -103,14 +110,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (parsed.done && parsed.campaign_purpose_intent) {
       const cpi = parsed.campaign_purpose_intent;
+      const normalizeString = (value: unknown): string | null => {
+        const s = typeof value === 'string' ? value : String(value ?? '');
+        const t = s.trim();
+        return t ? t : null;
+      };
+      const normalizeStringArray = (value: unknown, max = 10): string[] => {
+        if (!Array.isArray(value)) return [];
+        return value
+          .map((v) => (typeof v === 'string' ? v.trim() : String(v ?? '').trim()))
+          .filter(Boolean)
+          .slice(0, max);
+      };
+      const normalizeNarrativeSeed = (value: unknown): { pattern?: string | null; steps?: string[] | null } | null => {
+        if (value == null) return null;
+        if (typeof value === 'string') {
+          const pattern = normalizeString(value);
+          return pattern ? { pattern } : null;
+        }
+        if (typeof value !== 'object') return null;
+        const pattern = normalizeString((value as any)?.pattern);
+        const steps = normalizeStringArray((value as any)?.steps, 8);
+        if (!pattern && steps.length === 0) return null;
+        return {
+          pattern: pattern ?? null,
+          steps: steps.length > 0 ? steps : null,
+        };
+      };
       const campaignPurposeIntent = {
-        primary_objective: String(cpi.primary_objective ?? '').trim() || null,
-        campaign_intent: String(cpi.campaign_intent ?? '').trim() || null,
-        monetization_intent: String(cpi.monetization_intent ?? '').trim() || null,
+        primary_objective: normalizeString(cpi.primary_objective) ?? null,
+        campaign_intent: normalizeString(cpi.campaign_intent) ?? null,
+        monetization_intent: normalizeString(cpi.monetization_intent) ?? null,
         dominant_problem_domains: Array.isArray(cpi.dominant_problem_domains)
           ? cpi.dominant_problem_domains.filter((d): d is string => typeof d === 'string').slice(0, 10)
           : [],
-        brand_positioning_angle: String(cpi.brand_positioning_angle ?? '').trim() || null,
+        brand_positioning_angle: normalizeString(cpi.brand_positioning_angle) ?? null,
+        reader_emotion_target: normalizeString(cpi.reader_emotion_target) ?? null,
+        narrative_flow_seed: normalizeNarrativeSeed(cpi.narrative_flow_seed),
+        recommended_cta_style: normalizeString(cpi.recommended_cta_style) ?? null,
       };
       return res.status(200).json({
         done: true,

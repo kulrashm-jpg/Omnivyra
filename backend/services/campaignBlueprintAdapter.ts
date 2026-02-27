@@ -32,6 +32,11 @@ export function fromStructuredPlan(plan: any): CampaignBlueprint {
     phase_label: String(w.phase_label ?? w.theme ?? `Week ${w.week ?? 0}`),
     primary_objective: String(w.primary_objective ?? w.theme ?? ''),
     topics_to_cover: Array.isArray(w.topics_to_cover) ? [...w.topics_to_cover] : undefined,
+    weeklyContextCapsule:
+      w.weeklyContextCapsule && typeof w.weeklyContextCapsule === 'object'
+        ? { ...w.weeklyContextCapsule }
+        : undefined,
+    topics: Array.isArray(w.topics) ? [...w.topics] : undefined,
     platform_allocation: typeof w.platform_allocation === 'object' && w.platform_allocation
       ? { ...w.platform_allocation }
       : {},
@@ -40,6 +45,9 @@ export function fromStructuredPlan(plan: any): CampaignBlueprint {
     weekly_kpi_focus: String(w.weekly_kpi_focus ?? 'Reach growth'),
     platform_content_breakdown: w.platform_content_breakdown,
     platform_topics: w.platform_topics,
+    execution_items: Array.isArray(w.execution_items) ? w.execution_items : undefined,
+    posting_execution_map: Array.isArray(w.posting_execution_map) ? w.posting_execution_map : undefined,
+    resolved_postings: Array.isArray(w.resolved_postings) ? w.resolved_postings : undefined,
     week_extras: (w.week_extras && typeof w.week_extras === 'object') ? { ...w.week_extras } : undefined,
   }));
 

@@ -264,7 +264,7 @@ export function TwelveWeekOverview({ campaignId, onWeekSelect }: TwelveWeekOverv
                   <ol className="text-sm text-blue-800 space-y-1">
                     <li>1. Chat with AI about your campaign goals</li>
                     <li>2. AI will suggest a 12-week content plan</li>
-                    <li>3. Review and commit to the plan</li>
+                    <li>3. Review and submit the plan</li>
                     <li>4. Select your campaign start date</li>
                     <li>5. Plan is created and ready to use</li>
                   </ol>
@@ -486,7 +486,7 @@ export function TwelveWeekOverview({ campaignId, onWeekSelect }: TwelveWeekOverv
                 <ol className="text-sm text-blue-800 space-y-1">
                   <li>1. Chat with AI about your campaign goals</li>
                   <li>2. AI will suggest a 12-week content plan</li>
-                  <li>3. Review and commit to the plan</li>
+                  <li>3. Review and submit the plan</li>
                   <li>4. Select your campaign start date</li>
                   <li>5. Plan is created and ready to use</li>
                 </ol>

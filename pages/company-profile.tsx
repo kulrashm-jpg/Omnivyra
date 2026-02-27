@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import ChatVoiceButton from '../components/ChatVoiceButton';
+import AIGenerationProgress from '../components/AIGenerationProgress';
 import { supabase } from '../utils/supabaseClient';
 
 type CompanyProfile = {
@@ -1809,6 +1810,15 @@ export default function CompanyProfilePage() {
                   {marketingIntelligenceLoading ? 'Generating...' : 'Generate Marketing Intelligence'}
                 </button>
               </div>
+              {marketingIntelligenceLoading && (
+                <div className="mb-4">
+                  <AIGenerationProgress
+                    isActive={true}
+                    message="Generating marketing intelligence…"
+                    expectedSeconds={50}
+                  />
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium text-gray-700">Marketing channels</label>

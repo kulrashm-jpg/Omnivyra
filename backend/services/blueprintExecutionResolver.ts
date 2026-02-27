@@ -89,12 +89,12 @@ export function resolveAndGuardExecutionBlueprint(
   | { ok: false; failure: ExecutionBlueprintGuardFailure } {
   const resolved = resolveExecutionBlueprint(result);
   const guard = checkExecutionBlueprintGuard(resolved);
-  if (guard.ok) {
-    return {
-      ok: true,
-      blueprint: guard.blueprint,
-      execution_source: EXECUTION_SOURCE_VALIDATED,
-    };
+  if (guard.ok === false) {
+    return { ok: false, failure: guard.failure };
   }
-  return { ok: false, failure: guard.failure };
+  return {
+    ok: true,
+    blueprint: guard.blueprint,
+    execution_source: EXECUTION_SOURCE_VALIDATED,
+  };
 }

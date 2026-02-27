@@ -3,9 +3,8 @@
  * Read-only analysis layer. No ranking, scoring, or filtering changes.
  */
 
-import type { CompanyStrategyDNA } from './companyStrategyDNAService';
+import { buildCompanyStrategyDNA, type CompanyStrategyDNA } from './companyStrategyDNAService';
 import {
-  buildCompanyStrategyDNA,
   buildWeightedAlignmentTokens,
   computeAlignmentScore,
   computeStrategyModifier,

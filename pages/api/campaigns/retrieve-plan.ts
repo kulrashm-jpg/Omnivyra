@@ -22,6 +22,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let savedPlan: { content: string; savedAt: string } | null = null;
     let committedPlan: { weeks: any[] } | null = null;
     let draftPlan: { weeks: any[]; savedAt: string } | null = null;
+    const normalizeWeekForClient = (w: any) => {
+      const raw = w && typeof w === 'object' ? w : {};
+      const weekNum = Number((raw as any).week ?? (raw as any).week_number ?? (raw as any).weekNumber ?? 0) || 0;
+      const phase = String((raw as any).phase_label ?? (raw as any).phaseLabel ?? (raw as any).theme ?? `Week ${weekNum}`) || `Week ${weekNum}`;
+      const primaryObjective = String((raw as any).primary_objective ?? (raw as any).primaryObjective ?? '') || '';
+      const platformAllocation =
+        (raw as any).platform_allocation && typeof (raw as any).platform_allocation === 'object'
+          ? (raw as any).platform_allocation
+          : ((raw as any).platform_allocation ?? {});
+      const contentTypeMix = Array.isArray((raw as any).content_type_mix)
+        ? (raw as any).content_type_mix
+        : (Array.isArray((raw as any).contentTypes) ? (raw as any).contentTypes : undefined);
+      const ctaType = String((raw as any).cta_type ?? (raw as any).ctaType ?? 'None');
+      const kpi = String((raw as any).weekly_kpi_focus ?? (raw as any).weeklyKpiFocus ?? 'Reach growth');
+      // Preserve all enriched/additive fields by spreading `raw` first.
+      return {
+        ...raw,
+        week: weekNum,
+        phase_label: phase,
+        theme: phase,
+        primary_objective: primaryObjective,
+        platform_allocation: platformAllocation,
+        content_type_mix: Array.isArray(contentTypeMix) ? contentTypeMix : ['post'],
+        cta_type: ctaType,
+        weekly_kpi_focus: kpi,
+        daily: Array.isArray((raw as any).daily) ? (raw as any).daily : [],
+      };
+    };
 
     // 1. Saved plan: content_plans (draft/ai_generated_plan) or ai_threads
     let contentRow: { description?: string; created_at?: string } | null = null;
@@ -80,20 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (draftRow?.weeks?.length || draftRow?.blueprint?.weeks?.length) {
         const weeks = (draftRow.blueprint as any)?.weeks ?? draftRow.weeks;
         draftPlan = {
-          weeks: weeks.map((w: any) => ({
-            week: w.week ?? w.week_number,
-            phase_label: w.phase_label,
-            theme: w.phase_label ?? w.theme,
-            primary_objective: w.primary_objective,
-            platform_allocation: w.platform_allocation || {},
-            content_type_mix: w.content_type_mix || ['post'],
-            cta_type: w.cta_type || 'None',
-            weekly_kpi_focus: w.weekly_kpi_focus || 'Reach growth',
-            topics_to_cover: w.topics_to_cover,
-            platform_content_breakdown: w.platform_content_breakdown,
-            platform_topics: w.platform_topics,
-            daily: [],
-          })),
+          weeks: (Array.isArray(weeks) ? weeks : []).map(normalizeWeekForClient),
           savedAt: draftRow.updated_at || new Date().toISOString(),
         };
       }
@@ -105,20 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const blueprint = await getUnifiedCampaignBlueprint(campaignId);
     if (blueprint?.weeks?.length) {
       committedPlan = {
-        weeks: blueprint.weeks.map((w: any) => ({
-          week: w.week_number,
-          phase_label: w.phase_label,
-          theme: w.phase_label,
-          primary_objective: w.primary_objective,
-          platform_allocation: w.platform_allocation || {},
-          content_type_mix: w.content_type_mix || ['post'],
-          cta_type: w.cta_type || 'None',
-          weekly_kpi_focus: w.weekly_kpi_focus || 'Reach growth',
-          topics_to_cover: w.topics_to_cover,
-          platform_content_breakdown: w.platform_content_breakdown,
-          platform_topics: w.platform_topics,
-          daily: [],
-        })),
+        weeks: (Array.isArray(blueprint.weeks) ? blueprint.weeks : []).map(normalizeWeekForClient),
       };
     }
 

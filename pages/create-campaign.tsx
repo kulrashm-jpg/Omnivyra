@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import {
   ArrowLeft,
@@ -68,6 +68,13 @@ export default function CreateCampaign() {
   });
   const [regionWarning, setRegionWarning] = useState<string | null>(null);
   const [countrySearch, setCountrySearch] = useState('');
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   const toggleCampaignType = (typeId: string) => {
     const current = campaignData.campaignTypes;
@@ -95,21 +102,21 @@ export default function CreateCampaign() {
 
   const createCampaign = async () => {
     if (!selectedCompanyId) {
-      alert('Select a company first.');
+      notify('info', 'Select a company first.');
       return;
     }
     if (!campaignData.name?.trim()) {
-      alert('Please enter a campaign name.');
+      notify('info', 'Please enter a campaign name.');
       return;
     }
     if (campaignData.contextMode === 'NONE' && !campaignData.additionalDirection.trim()) {
-      alert('Please provide research direction when using No Company Context.');
+      notify('info', 'Please provide research direction when using No Company Context.');
       return;
     }
     if (campaignData.campaignTypes.length > 1) {
       const total = Object.values(campaignData.campaignWeights).reduce((a, b) => a + b, 0);
       if (total !== 100) {
-        alert(`Campaign weights must sum to 100. Current total: ${total}%`);
+        notify('info', `Campaign weights must sum to 100. Current total: ${total}%`);
         return;
       }
     }
@@ -161,7 +168,7 @@ export default function CreateCampaign() {
       }
     } catch (error) {
       console.error('Create campaign error:', error);
-      alert(`${error instanceof Error ? error.message : 'Failed to create campaign'}`);
+      notify('error', error instanceof Error ? error.message : 'Failed to create campaign');
     } finally {
       setIsLoading(false);
     }
@@ -169,6 +176,11 @@ export default function CreateCampaign() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-50">
+      {notice && (
+        <div className="max-w-3xl mx-auto px-6 pt-4">
+          <div className={`rounded-lg border px-3 py-2 text-sm ${notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`} role="status" aria-live="polite">{notice.message}</div>
+        </div>
+      )}
       <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">

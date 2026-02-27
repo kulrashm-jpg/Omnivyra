@@ -6,7 +6,6 @@ import {
   Calendar, 
   Target, 
   Plus, 
-  Edit3, 
   Save, 
   CheckCircle,
   AlertCircle,
@@ -27,9 +26,11 @@ import {
   ChevronDown,
   ChevronRight,
   Settings,
+  GripVertical,
+  RotateCcw,
 } from 'lucide-react';
 import CampaignAIChat from '../../components/CampaignAIChat';
-import DayDetailModal, { DayPlanItem } from '../../components/DayDetailModal';
+import AIGenerationProgress from '../../components/AIGenerationProgress';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import { GovernanceStatusCard } from '../../components/governance/GovernanceStatusCard';
@@ -38,6 +39,7 @@ import { GovernanceExplanationPanel, deriveFromEvent } from '../../components/go
 import { GovernanceTimeline } from '../../components/governance/GovernanceTimeline';
 import { PreemptionHistory } from '../../components/governance/PreemptionHistory';
 import { TradeOffSuggestionList } from '../../components/governance/TradeOffSuggestionList';
+import { truncateMeaningfulTitle } from '../../lib/ui/truncateMeaningfulTitle';
 
 interface Campaign {
   id: string;
@@ -68,6 +70,42 @@ interface WeeklyPlan {
   };
   status: string;
   completionPercentage: number;
+  weeklyContextCapsule?: {
+    campaignTheme?: string;
+    primaryPainPoint?: string;
+    desiredTransformation?: string;
+    campaignStage?: string;
+    psychologicalGoal?: string;
+    momentum?: string;
+    audienceProfile?: string;
+    weeklyIntent?: string;
+    toneGuidance?: string;
+    successOutcome?: string;
+  } | null;
+  topics?: Array<{
+    topicTitle?: string;
+    topicContext?: {
+      writingIntent?: string;
+      topicTitle?: string;
+    };
+    contentTypeGuidance?: {
+      primaryFormat?: string;
+      maxWordTarget?: number;
+      platformWithHighestLimit?: string;
+      adaptationRequired?: boolean;
+    };
+    whoAreWeWritingFor?: string;
+    whatProblemAreWeAddressing?: string;
+    whatShouldReaderLearn?: string;
+    desiredAction?: string;
+    narrativeStyle?: string;
+    topicExecution?: {
+      platformTargets?: string[];
+      contentType?: string;
+      ctaType?: string;
+      kpiFocus?: string;
+    };
+  }>;
 }
 
 interface DailyPlan {
@@ -91,6 +129,7 @@ interface DailyPlan {
   hashtags: string[];
   scheduledTime?: string;
   status: string;
+  dailyObject?: Record<string, unknown>;
 }
 
 interface ReadinessResponse {
@@ -153,11 +192,20 @@ interface PerformanceSummary {
   last_collected_at?: string | null;
 }
 
+
 export default function CampaignDetails() {
   const router = useRouter();
   const { id, companyId: companyIdFromUrl } = router.query;
+  const focusQueryValue = Array.isArray(router.query.focus)
+    ? router.query.focus[0]
+    : router.query.focus;
+  const isWeeklyBlueprintFocus =
+    focusQueryValue === 'weekly-blueprint' ||
+    router.asPath.includes('focus=weekly-blueprint');
+  const shouldForceWeeklyBlueprintView = isWeeklyBlueprintFocus;
   const { selectedCompanyId, isLoading: isCompanyLoading, setSelectedCompanyId } = useCompanyContext();
-  const effectiveCompanyId = selectedCompanyId || (typeof companyIdFromUrl === 'string' ? companyIdFromUrl : '');
+  // Prefer URL companyId for deep links (prevents "Campaign not found" when a different company is currently selected).
+  const effectiveCompanyId = (typeof companyIdFromUrl === 'string' ? companyIdFromUrl : '') || selectedCompanyId || '';
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [weeklyPlans, setWeeklyPlans] = useState<WeeklyPlan[]>([]);
   const [dailyPlans, setDailyPlans] = useState<DailyPlan[]>([]);
@@ -166,9 +214,14 @@ export default function CampaignDetails() {
   const [viralityDiagnostics, setViralityDiagnostics] = useState<ViralityAssessmentResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(new Set());
-  const [selectedDayForDetail, setSelectedDayForDetail] = useState<{ day: string; weekNumber: number } | null>(null);
+  const [plannerQueryConsumed, setPlannerQueryConsumed] = useState(false);
   const [isGeneratingWeek, setIsGeneratingWeek] = useState<number | null>(null);
+  const [editedWeekDailyPlans, setEditedWeekDailyPlans] = useState<Record<number, DailyPlan[]>>({});
+  const [isSavingWeekPlan, setIsSavingWeekPlan] = useState<number | null>(null);
+  const [distributionMode, setDistributionMode] = useState<'staggered' | 'same_day_per_topic'>('staggered');
   const [isViralityExpanded, setIsViralityExpanded] = useState(false);
+  const [showRequiredActions, setShowRequiredActions] = useState(false);
+  const [showAdvisoryNotes, setShowAdvisoryNotes] = useState(false);
   const [expandedDiagnostics, setExpandedDiagnostics] = useState<Set<string>>(new Set());
   const [recommendationSummary, setRecommendationSummary] = useState<RecommendationSummary | null>(null);
   const [recommendationId, setRecommendationId] = useState<string | null>(null);
@@ -186,6 +239,35 @@ export default function CampaignDetails() {
     campaignId: string; executionState: string; totalEvents: number; negotiationCount: number; rejectionCount: number;
     preemptionCount: number; freezeBlocks: number; schedulerRuns: number; completionTimestamp?: string;
     totalScheduledPosts?: number; totalPublishedPosts?: number;
+    projectionStatus?: 'ACTIVE' | 'REBUILDING' | 'MISSING';
+    roiIntelligence?: {
+      roiScore: number;
+      performanceScore: number;
+      governanceStabilityScore: number;
+      executionReliabilityScore: number;
+      optimizationSignal: 'STABLE' | 'AT_RISK' | 'HIGH_POTENTIAL';
+      recommendation?: string;
+    } | null;
+    optimizationInsights?: Array<{
+      campaignId: string;
+      priority: 'LOW' | 'MEDIUM' | 'HIGH';
+      category: string;
+      headline: string;
+      explanation: string;
+      recommendedAction: string;
+    }> | null;
+    optimizationProposal?: {
+      campaignId: string;
+      summary: string;
+      proposedDurationWeeks?: number;
+      proposedPostsPerWeek?: number;
+      proposedContentMixAdjustment?: Record<string, number>;
+      proposedStartDateShift?: string;
+      reasoning: string[];
+      confidenceScore: number;
+    } | null;
+    autoOptimizeEnabled?: boolean;
+    autoOptimizationEligibility?: { eligible: boolean; reason?: string } | null;
   } | null>(null);
   const [governanceLoading, setGovernanceLoading] = useState(false);
   const [governanceAuditStatus, setGovernanceAuditStatus] = useState<'OK' | 'WARNING' | 'CRITICAL' | null>(null);
@@ -239,6 +321,8 @@ export default function CampaignDetails() {
     d.setDate(d.getDate() + 7);
     return d.toISOString().split('T')[0];
   });
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<{
     availableVideo: number;
     availablePost: number;
@@ -264,16 +348,217 @@ export default function CampaignDetails() {
   });
 
   useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  const displayWeeklyTitle = (value: string | undefined | null, fallback = 'Untitled Topic') => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return fallback;
+    return truncateMeaningfulTitle(raw);
+  };
+
+  const buildCampaignDetailsUrl = (campaignId: string, focus?: string) => {
+    const params = new URLSearchParams();
+    if (effectiveCompanyId) params.set('companyId', effectiveCompanyId);
+    if (focus) params.set('focus', focus);
+    return `/campaign-details/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
+  };
+
+  const buildPlanningWorkspaceUrl = (campaignId: string) => {
+    const params = new URLSearchParams();
+    params.set('campaignId', campaignId);
+    if (effectiveCompanyId) params.set('companyId', effectiveCompanyId);
+    return `/campaign-planning-hierarchical?${params.toString()}`;
+  };
+
+  const buildCampaignCalendarUrl = (campaignId: string, weekNumber?: number, day?: string) => {
+    const params = new URLSearchParams();
+    if (effectiveCompanyId) params.set('companyId', effectiveCompanyId);
+    if (Number.isFinite(weekNumber) && Number(weekNumber) > 0) params.set('week', String(weekNumber));
+    if (day) params.set('day', day);
+    return `/campaign-calendar/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
+  };
+
+  const openCampaignCalendar = (weekNumber?: number, day?: string) => {
+    if (typeof id !== 'string') return;
+    router.push(buildCampaignCalendarUrl(id, weekNumber, day));
+  };
+
+  const getWeekDatesFromCampaignStart = (weekNumber: number) => {
+    const startDateRaw = String(campaign?.start_date || '').trim();
+    const baseDate = startDateRaw ? new Date(startDateRaw) : new Date();
+    const safeBase = Number.isFinite(baseDate.getTime()) ? baseDate : new Date();
+    const weekStart = new Date(safeBase);
+    weekStart.setDate(safeBase.getDate() + (Math.max(1, weekNumber) - 1) * 7);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    return {
+      start: weekStart.toISOString().split('T')[0],
+      end: weekEnd.toISOString().split('T')[0],
+      startFormatted: weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      endFormatted: weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    };
+  };
+
+  const normalizeComparableText = (value: unknown): string =>
+    String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+
+  const openTopicWorkspaceFromWeeklyCard = (weekNumber: number, topic: any) => {
+    const topicTitle = String(topic?.topicTitle || '').trim();
+    if (!topicTitle) return;
+
+    const topicPlatforms = Array.isArray(topic?.topicExecution?.platformTargets)
+      ? topic.topicExecution.platformTargets.map((p: unknown) => String(p || '').trim().toLowerCase()).filter(Boolean)
+      : [];
+    const topicContentType = String(topic?.topicExecution?.contentType || 'post').trim().toLowerCase();
+    const normalizedTopicTitle = normalizeComparableText(topicTitle);
+
+    const matchedDailyRows = dailyPlans.filter((d) => {
+      if (Number(d.weekNumber) !== Number(weekNumber)) return false;
+      const dailyTopic =
+        normalizeComparableText(d.topic) ||
+        normalizeComparableText(d.title) ||
+        normalizeComparableText((d.dailyObject as any)?.topicTitle) ||
+        normalizeComparableText((d.dailyObject as any)?.topic);
+      return dailyTopic === normalizedTopicTitle;
+    });
+
+    const weekDates = getWeekDatesFromCampaignStart(weekNumber);
+    const schedulesFromDaily = matchedDailyRows.map((d) => ({
+      id: String(d.id),
+      platform: String(d.platform || '').trim().toLowerCase() || 'linkedin',
+      contentType: String(d.contentType || topicContentType || 'post').trim().toLowerCase(),
+      date: String((d as any).date || weekDates.start),
+      time: String(d.scheduledTime || '09:00'),
+      status: String(d.status || 'planned'),
+      description: String(d.description || d.summary || ''),
+      title: String(d.title || topicTitle),
+    }));
+
+    const schedulesFallback = topicPlatforms.map((platform, idx) => ({
+      id: `wk${weekNumber}-${platform}-${idx}-${Date.now()}`,
+      platform,
+      contentType: topicContentType || 'post',
+      date: weekDates.start,
+      time: '09:00',
+      status: 'planned',
+      description: String(topic?.topicContext?.writingIntent || ''),
+      title: topicTitle,
+    }));
+
+    const schedules = schedulesFromDaily.length > 0
+      ? schedulesFromDaily
+      : (schedulesFallback.length > 0 ? schedulesFallback : [{
+          id: `wk${weekNumber}-topic-${Date.now()}`,
+          platform: 'linkedin',
+          contentType: topicContentType || 'post',
+          date: weekDates.start,
+          time: '09:00',
+          status: 'planned',
+          description: String(topic?.topicContext?.writingIntent || ''),
+          title: topicTitle,
+        }]);
+
+    const firstDailyObject =
+      (matchedDailyRows[0]?.dailyObject && typeof matchedDailyRows[0].dailyObject === 'object')
+        ? (matchedDailyRows[0].dailyObject as Record<string, unknown>)
+        : {};
+    const dailyExecutionItem = {
+      ...firstDailyObject,
+      topic: topicTitle,
+      title: topicTitle,
+      platform: String(schedules[0]?.platform || 'linkedin'),
+      content_type: String(schedules[0]?.contentType || topicContentType || 'post'),
+      intent: {
+        ...(typeof (firstDailyObject as any)?.intent === 'object' ? ((firstDailyObject as any).intent as Record<string, unknown>) : {}),
+        objective: topic?.topicContext?.topicGoal || undefined,
+        cta_type: topic?.topicExecution?.ctaType || undefined,
+        pain_point: topic?.whatProblemAreWeAddressing || undefined,
+        outcome_promise: topic?.whatShouldReaderLearn || undefined,
+      },
+      writer_content_brief: {
+        ...(typeof (firstDailyObject as any)?.writer_content_brief === 'object'
+          ? ((firstDailyObject as any).writer_content_brief as Record<string, unknown>)
+          : {}),
+        topicTitle,
+        writingIntent: topic?.topicContext?.writingIntent || undefined,
+        whoAreWeWritingFor: topic?.whoAreWeWritingFor || undefined,
+        whatProblemAreWeAddressing: topic?.whatProblemAreWeAddressing || undefined,
+        whatShouldReaderLearn: topic?.whatShouldReaderLearn || undefined,
+        desiredAction: topic?.desiredAction || undefined,
+        narrativeStyle: topic?.narrativeStyle || undefined,
+        contentTypeGuidance: topic?.contentTypeGuidance || undefined,
+      },
+    };
+
+    const dayLabel = String((matchedDailyRows[0] as any)?.dayOfWeek || 'Monday');
+    const stableActivityId =
+      matchedDailyRows[0]?.id != null
+        ? String(matchedDailyRows[0].id)
+        : `w${weekNumber}-${dayLabel.toLowerCase()}-${topicTitle.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 40)}`;
+    const payload = {
+      campaignId: typeof id === 'string' ? id : null,
+      weekNumber,
+      day: dayLabel,
+      activityId: stableActivityId,
+      title: topicTitle,
+      topic: topicTitle,
+      description: String(topic?.topicContext?.writingIntent || ''),
+      dailyExecutionItem,
+      schedules,
+    };
+
+    const workspaceKey = `activity-workspace-${payload.campaignId ?? 'campaign'}-${stableActivityId}`;
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(workspaceKey, JSON.stringify(payload));
+        window.open(`/activity-workspace?workspaceKey=${encodeURIComponent(workspaceKey)}`, '_blank');
+      }
+    } catch (error) {
+      console.error('Failed to open topic workspace from weekly card:', error);
+    }
+  };
+
+  useEffect(() => {
     if (id && effectiveCompanyId) {
       loadCampaignDetails(id as string);
     }
   }, [id, effectiveCompanyId]);
 
   useEffect(() => {
-    if (typeof companyIdFromUrl === 'string' && companyIdFromUrl && !selectedCompanyId && setSelectedCompanyId) {
-      setSelectedCompanyId(companyIdFromUrl);
+    if (!setSelectedCompanyId) return;
+    if (typeof companyIdFromUrl !== 'string') return;
+    const fromUrl = companyIdFromUrl.trim();
+    if (!fromUrl) return;
+    if (selectedCompanyId !== fromUrl) {
+      setSelectedCompanyId(fromUrl);
     }
   }, [companyIdFromUrl, selectedCompanyId, setSelectedCompanyId]);
+
+  useEffect(() => {
+    if (!router.isReady || plannerQueryConsumed) return;
+    const rawWeek = Array.isArray(router.query.plannerWeek) ? router.query.plannerWeek[0] : router.query.plannerWeek;
+    const rawDay = Array.isArray(router.query.plannerDay) ? router.query.plannerDay[0] : router.query.plannerDay;
+    const weekNumber = Number(rawWeek);
+    if (!Number.isFinite(weekNumber) || weekNumber < 1) {
+      setPlannerQueryConsumed(true);
+      return;
+    }
+    const normalizedDay = String(rawDay || 'Monday').trim();
+    const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const selectedDay = validDays.includes(normalizedDay) ? normalizedDay : 'Monday';
+    setExpandedWeeks((prev) => new Set([...Array.from(prev), weekNumber]));
+    setActiveTab('overview');
+    setPlannerQueryConsumed(true);
+    if (typeof id === 'string') {
+      router.replace(buildCampaignCalendarUrl(id, weekNumber, selectedDay));
+    }
+  }, [router.isReady, router.query.plannerWeek, router.query.plannerDay, plannerQueryConsumed]);
 
   useEffect(() => {
     const recId =
@@ -289,6 +574,22 @@ export default function CampaignDetails() {
       }
     }
   }, [router.query.recommendationId]);
+
+  useEffect(() => {
+    if (!shouldForceWeeklyBlueprintView) return;
+
+    setShowAIChat(false);
+    setActiveTab('overview');
+    if (weeklyPlans.length > 0) {
+      setExpandedWeeks(new Set([1]));
+    }
+
+    if (typeof window === 'undefined') return;
+    const timer = window.setTimeout(() => {
+      document.getElementById('weekly-content')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [shouldForceWeeklyBlueprintView, weeklyPlans.length]);
 
   const [blueprintImmutable, setBlueprintImmutable] = useState(false);
   const [blueprintFrozen, setBlueprintFrozen] = useState(false);
@@ -463,7 +764,19 @@ export default function CampaignDetails() {
       );
       if (weeklyResponse.ok) {
         const weeklyData = await weeklyResponse.json();
-        setWeeklyPlans(weeklyData);
+        const normalizedWeeklyData = Array.isArray(weeklyData)
+          ? weeklyData.map((week: any) => ({
+              ...week,
+              topics: Array.isArray(week?.topics)
+                ? week.topics
+                : (Array.isArray(week?.week_extras?.topics) ? week.week_extras.topics : []),
+              weeklyContextCapsule:
+                week?.weeklyContextCapsule ??
+                week?.week_extras?.weeklyContextCapsule ??
+                null,
+            }))
+          : [];
+        setWeeklyPlans(normalizedWeeklyData);
       }
 
       // Load daily plans
@@ -543,21 +856,93 @@ export default function CampaignDetails() {
           week: weekNumber,
           theme: weekPlan?.theme || `Week ${weekNumber} Theme`,
           contentFocus: weekPlan?.focusArea || `Week ${weekNumber} Content Focus`,
-          targetAudience: 'General Audience'
+          targetAudience: 'General Audience',
+          distribution_mode: distributionMode,
         })
       });
 
       if (response.ok) {
-        // Reload the data to show enhanced content
         await loadCampaignDetails(id as string);
-        alert(`Week ${weekNumber} has been enhanced with AI!`);
+        setEditedWeekDailyPlans((prev) => {
+          const next = { ...prev };
+          delete next[weekNumber];
+          return next;
+        });
+        notify('success', `Week ${weekNumber} has been enhanced with AI.`);
       }
     } catch (error) {
       console.error('Error enhancing week:', error);
-      alert('Error enhancing week. Please try again.');
+      notify('error', 'Error enhancing week. Please try again.');
     } finally {
       setIsGeneratingWeek(null);
     }
+  };
+
+  const regenerateWeekDailyPlan = async (weekNumber: number) => {
+    await enhanceWeekWithAI(weekNumber);
+  };
+
+  const saveWeekDailyPlan = async (weekNumber: number) => {
+    if (!id) return;
+    const weekList = editedWeekDailyPlans[weekNumber] ?? dailyPlans.filter((d) => d.weekNumber === weekNumber);
+    if (weekList.length === 0) {
+      notify('info', 'No daily plan items to save.');
+      return;
+    }
+    setIsSavingWeekPlan(weekNumber);
+    try {
+      const response = await fetchWithAuth('/api/campaigns/save-week-daily-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId: id,
+          weekNumber,
+          items: weekList.map((p) => ({ id: p.id, dayOfWeek: p.dayOfWeek })),
+        }),
+      });
+      const data = response.ok ? await response.json() : null;
+      if (data?.success) {
+        await loadCampaignDetails(id as string);
+        setEditedWeekDailyPlans((prev) => {
+          const next = { ...prev };
+          delete next[weekNumber];
+          return next;
+        });
+        notify('success', 'Plan saved and set for the next stage.');
+      } else {
+        notify('error', data?.error || 'Failed to save plan.');
+      }
+    } catch (error) {
+      console.error('Error saving week daily plan:', error);
+      notify('error', 'Error saving plan. Please try again.');
+    } finally {
+      setIsSavingWeekPlan(null);
+    }
+  };
+
+  const handleDailyPlanDragStart = (e: React.DragEvent, planId: string, dayOfWeek: string) => {
+    e.dataTransfer.setData('application/json', JSON.stringify({ planId, dayOfWeek }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDailyPlanDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDailyPlanDrop = (weekNumber: number, targetDay: string, e: React.DragEvent) => {
+    e.preventDefault();
+    let payload: { planId: string; dayOfWeek: string };
+    try {
+      payload = JSON.parse(e.dataTransfer.getData('application/json') || '{}');
+    } catch {
+      return;
+    }
+    const { planId, dayOfWeek: sourceDay } = payload;
+    if (!planId || sourceDay === targetDay) return;
+    const weekList = editedWeekDailyPlans[weekNumber] ?? dailyPlans.filter((d) => d.weekNumber === weekNumber);
+    const newList = weekList.map((p) => (p.id === planId ? { ...p, dayOfWeek: targetDay } : p));
+    setEditedWeekDailyPlans((prev) => ({ ...prev, [weekNumber]: newList }));
   };
 
   const getStatusColor = (status: string) => {
@@ -591,6 +976,32 @@ export default function CampaignDetails() {
       case 'Sustain': return 'from-orange-500 to-red-600';
       default: return 'from-gray-500 to-slate-600';
     }
+  };
+
+  const getActivityColorClasses = (contentType?: string) => {
+    const t = String(contentType || '').toLowerCase();
+    if (t.includes('video') || t.includes('reel') || t.includes('short')) {
+      return {
+        card: 'border-red-200 bg-red-50/60',
+        badge: 'bg-red-100 text-red-700 border-red-200',
+      };
+    }
+    if (t.includes('blog') || t.includes('article')) {
+      return {
+        card: 'border-blue-200 bg-blue-50/60',
+        badge: 'bg-blue-100 text-blue-700 border-blue-200',
+      };
+    }
+    if (t.includes('story') || t.includes('thread')) {
+      return {
+        card: 'border-amber-200 bg-amber-50/60',
+        badge: 'bg-amber-100 text-amber-700 border-amber-200',
+      };
+    }
+    return {
+      card: 'border-emerald-200 bg-emerald-50/60',
+      badge: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+    };
   };
 
   const getGateBadgeColor = (decision?: GateResponse['gate_decision']) => {
@@ -659,12 +1070,30 @@ export default function CampaignDetails() {
     }
   }, [campaign, effectiveCompanyId, fetchWithAuth]);
 
+  useEffect(() => {
+    if (shouldForceWeeklyBlueprintView) return;
+    if (needsPrePlanning && !showAIChat) {
+      setShowAIChat(true);
+    }
+  }, [needsPrePlanning, showAIChat, shouldForceWeeklyBlueprintView]);
+
+  useEffect(() => {
+    if (shouldForceWeeklyBlueprintView) return;
+    const fromRecommendation = Boolean(router.query.fromRecommendation);
+    if (!fromRecommendation) return;
+    // Recommendation-driven production flow must open in AI Chat first.
+    if (!showAIChat) setShowAIChat(true);
+  }, [router.query.fromRecommendation, showAIChat, shouldForceWeeklyBlueprintView]);
+
   if (isCompanyLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-purple-600 mx-auto mb-4" />
-          <p className="text-gray-600">Loading company context...</p>
+      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-md">
+          <AIGenerationProgress
+            isActive={true}
+            message="Loading company context…"
+            expectedSeconds={8}
+          />
         </div>
       </div>
     );
@@ -689,10 +1118,13 @@ export default function CampaignDetails() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-purple-600 mx-auto mb-4" />
-          <p className="text-gray-600">Loading campaign details...</p>
+      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-md">
+          <AIGenerationProgress
+            isActive={true}
+            message="Creating weekly content…"
+            expectedSeconds={18}
+          />
         </div>
       </div>
     );
@@ -807,10 +1239,14 @@ export default function CampaignDetails() {
               if (typeof window !== 'undefined') {
                 sessionStorage.setItem(`campaign_blueprint_failed_${campaign.id}`, msg);
               }
+              // Fallback to AI chat so user can add missing context immediately.
+              setShowAIChat(true);
             } else {
               setBlueprintRegenerateFailedMsg(null);
               setBlueprintGeneratedSuccess(true);
               setTimeout(() => setBlueprintGeneratedSuccess(false), 6000);
+              // Keep behavior aligned with "Ask AI": open chat after generation.
+              setShowAIChat(true);
             }
           } catch (regErr: unknown) {
             console.error('Auto-regenerate blueprint failed', regErr);
@@ -819,6 +1255,7 @@ export default function CampaignDetails() {
             if (typeof window !== 'undefined') {
               sessionStorage.setItem(`campaign_blueprint_failed_${campaign.id}`, msg);
             }
+            setShowAIChat(true);
           }
           await loadCampaignDetails(campaign.id);
         } else if (data?.status === 'NEGOTIATE' || data?.status === 'REJECTED') {
@@ -841,18 +1278,19 @@ export default function CampaignDetails() {
         const errData = await res.json().catch(() => ({}));
         const msg = errData?.message || errData?.error || 'Failed to update duration';
         setBlueprintRegenerateFailedMsg(msg);
-        alert(msg);
+        notify('error', msg);
       }
     } catch (err) {
       console.error('Update duration failed', err);
       setBlueprintRegenerateFailedMsg(err instanceof Error ? err.message : 'Update duration failed');
-      alert(err instanceof Error ? err.message : 'Update duration failed');
+      notify('error', err instanceof Error ? err.message : 'Update duration failed');
     } finally {
       setPrePlanningLoading(false);
     }
   };
 
-  if (needsPrePlanning) {
+  // AI-first flow: keep users in chat instead of manual pre-planning screen.
+  if (false && needsPrePlanning) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
         <div className="max-w-3xl mx-auto px-6 py-12">
@@ -866,8 +1304,8 @@ export default function CampaignDetails() {
           <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-8">
             <h1 className="text-2xl font-bold text-gray-900 mb-2">Campaign Not Initialized</h1>
             <p className="text-gray-600 mb-6">
-              This campaign requires pre-planning before generating a campaign blueprint.
-              Choose how you want to provide planning details.
+              This campaign starts with AI-guided planning before generating a campaign blueprint.
+              Share details in chat and AI will build the weekly plan flow.
             </p>
             {blueprintFrozen && (
               <div className="mb-6 rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
@@ -1357,24 +1795,16 @@ export default function CampaignDetails() {
                         className="w-32 px-3 py-2 border rounded-lg"
                       />
                     </div>
-                    <p className="text-sm font-medium text-gray-700 mb-3">Choose how to plan</p>
-                    <div className="flex flex-col sm:flex-row gap-4">
-                      <button
-                        onClick={runPrePlanningFlow}
-                        disabled={prePlanningLoading || blueprintImmutable || blueprintFrozen || governanceLocked}
-                        className="flex-1 px-6 py-4 rounded-xl border-2 border-gray-200 hover:border-indigo-300 bg-white text-left disabled:opacity-50 transition-colors"
-                      >
-                        <Calendar className="h-6 w-6 text-indigo-600 mb-2" />
-                        <span className="font-semibold text-gray-900 block">Fill the form</span>
-                        <span className="text-sm text-gray-600">Run pre-planning evaluation with your duration.</span>
-                      </button>
+                    <p className="text-sm font-medium text-gray-700 mb-3">Start with AI planning</p>
+                    <div className="flex flex-col gap-4">
                       <button
                         onClick={() => setShowAIChat(true)}
-                        className="flex-1 px-6 py-4 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 text-left transition-colors"
+                        disabled={prePlanningLoading || blueprintImmutable || blueprintFrozen || governanceLocked}
+                        className="w-full px-6 py-4 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 text-left transition-colors disabled:opacity-50"
                       >
                         <Sparkles className="h-6 w-6 text-indigo-600 mb-2" />
-                        <span className="font-semibold text-gray-900 block">Use AI</span>
-                        <span className="text-sm text-gray-600">Answer planning questions in chat; AI will gather details and create your blueprint.</span>
+                        <span className="font-semibold text-gray-900 block">Start with AI</span>
+                        <span className="text-sm text-gray-600">AI asks planning questions, gathers missing context, and generates your blueprint-ready weekly plan.</span>
                       </button>
                     </div>
                   </>
@@ -1416,6 +1846,15 @@ export default function CampaignDetails() {
                       {prePlanningLoading ? 'Accepting & generating blueprint…' : `Accept & generate blueprint (${prePlanningResult.recommended_duration} weeks)`}
                     </button>
                   )}
+                  {prePlanningLoading && (
+                    <div className="w-full mt-4">
+                      <AIGenerationProgress
+                        isActive={true}
+                        message="Generating blueprint… Opening AI chat when ready."
+                        expectedSeconds={55}
+                      />
+                    </div>
+                  )}
                   {prePlanningResult.trade_off_options?.map((opt, i) =>
                     opt.newDurationWeeks != null ? (
                       <button
@@ -1446,60 +1885,7 @@ export default function CampaignDetails() {
             )}
           </div>
         </div>
-        {/* AI Assistant during pre-planning — in-card only, no floating button */}
-        {campaign && effectiveCompanyId && (
-          <>
-            <CampaignAIChat
-              isOpen={showAIChat}
-              onClose={() => setShowAIChat(false)}
-              onMinimize={() => setShowAIChat(false)}
-              context="campaign-planning"
-              forceFreshPlanningThread={Boolean(router.query.fromRecommendation)}
-              companyId={effectiveCompanyId}
-              campaignId={campaign.id}
-              campaignData={campaign}
-              recommendationContext={recommendationContext}
-              prefilledPlanning={prefilledPlanning}
-              governanceLocked={governanceLocked}
-              collectedPlanningContext={(() => {
-                const ctx: Record<string, unknown> = {};
-                // From form / pre-planning — AI must NOT re-ask these
-                if (campaign?.start_date) ctx.tentative_start = campaign.start_date;
-                else if (plannedStartDate) ctx.tentative_start = plannedStartDate;
-                if (campaign?.duration_weeks != null) ctx.campaign_duration = campaign.duration_weeks;
-                else if (prePlanningResult?.recommended_duration != null) ctx.campaign_duration = prePlanningResult.recommended_duration;
-                else if (requestedWeeksForPreplan != null) ctx.campaign_duration = requestedWeeksForPreplan;
-                const q = questionnaireAnswers;
-                const hasAvailable =
-                  q.availableVideo > 0 || q.availablePost > 0 || q.availableBlog > 0 || q.availableSong > 0;
-                if (hasAvailable) {
-                  const parts: string[] = [];
-                  if (q.availableVideo > 0) parts.push(`${q.availableVideo} videos`);
-                  if (q.availablePost > 0) parts.push(`${q.availablePost} posts`);
-                  if (q.availableBlog > 0) parts.push(`${q.availableBlog} blogs`);
-                  if (q.availableSong > 0) parts.push(`${q.availableSong} songs/audio`);
-                  ctx.available_content = parts.join(', ');
-                } else if (prePlanningWizardStep >= 2) {
-                  ctx.available_content = 'No existing content';
-                }
-                const hasCapacity =
-                  q.videoPerWeek > 0 || q.postPerWeek > 0 || q.blogPerWeek > 0 || q.songPerWeek > 0;
-                if (prePlanningWizardStep >= 4 && hasCapacity) {
-                  const parts: string[] = [];
-                  if (q.videoPerWeek > 0) parts.push(`${q.videoPerWeek} videos/week`);
-                  if (q.postPerWeek > 0) parts.push(`${q.postPerWeek} posts/week`);
-                  if (q.blogPerWeek > 0) parts.push(`${q.blogPerWeek} blogs/week`);
-                  if (q.songPerWeek > 0) parts.push(`${q.songPerWeek} songs/audio per week`);
-                  ctx.content_capacity = parts.join(', ');
-                }
-                if (prePlanningResult != null) {
-                  ctx.preplanning_form_completed = true;
-                }
-                return Object.keys(ctx).length > 0 ? ctx : undefined;
-              })()}
-            />
-          </>
-        )}
+        {/* AI Assistant during pre-planning is handled by the main chat below (single instance). */}
       </div>
     );
   }
@@ -1517,75 +1903,82 @@ export default function CampaignDetails() {
           </div>
         </div>
       )}
-      {/* Header */}
+      {notice && (
+        <div className="max-w-7xl mx-auto px-6 mt-4">
+          <div
+            className={`rounded-lg border px-3 py-2 text-sm ${
+              notice.type === 'success'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : notice.type === 'error'
+                  ? 'border-red-200 bg-red-50 text-red-800'
+                  : 'border-indigo-200 bg-indigo-50 text-indigo-800'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {notice.message}
+          </div>
+        </div>
+      )}
+      {/* Header — compact nav, title, status, actions */}
       <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <button 
-                onClick={() => router.push('/campaigns')}
-                className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                <ArrowLeft className="w-5 h-5" />
-                Back to Campaigns
-              </button>
-              
-              <div>
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
-                  {campaign.name}
-                </h1>
-                <p className="text-xs text-gray-500 font-mono mt-0.5">ID: {campaign.id}</p>
-                <p className="text-gray-600 mt-1">Content Marketing Plan</p>
-                <div className="flex items-center gap-4 mt-2">
-                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStageColor(campaign.current_stage || campaign.status)}`}>
-                    {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
-                  </span>
-                  <span className="text-sm text-gray-700">
-                    Readiness: <span className="font-semibold">{readiness?.readiness_percentage ?? '--'}%</span>
-                  </span>
-                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${getGateBadgeColor(viralityGate?.gate_decision)}`}>
-                    {getGateLabel(viralityGate?.gate_decision)}
-                  </span>
-                  <span className="text-sm text-gray-500">
-                    {campaign.start_date ? new Date(campaign.start_date).toLocaleDateString() : 'Not scheduled'} - 
-                    {campaign.end_date ? new Date(campaign.end_date).toLocaleDateString() : 'Not scheduled'}
-                  </span>
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <button
+              onClick={() => router.push('/campaigns')}
+              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Campaigns
+            </button>
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => router.push(`/campaigns/${campaign.id}/recommendations`)}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-2"
+                className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-1.5"
               >
-                <TrendingUp className="h-4 w-4" />
+                <TrendingUp className="h-3.5 w-3.5" />
                 Expert Recommendations
               </button>
               {isAdmin && (
                 <button
                   onClick={() => router.push(`/recommendations/policy?campaignId=${campaign.id}`)}
-                  className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-2"
+                  className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-1.5"
                 >
-                  <Settings className="h-4 w-4" />
-                  View Policy &amp; Simulation
+                  <Settings className="h-3.5 w-3.5" />
+                  Policy
                 </button>
               )}
-              <button 
-                onClick={() => router.push(`/campaign-planning?mode=edit&campaignId=${campaign.id}`)}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-              >
-                <Edit3 className="h-4 w-4" />
-                Edit Campaign
-              </button>
-              
-              <button 
+              <button
                 onClick={() => setShowAIChat(true)}
-                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg hover:from-purple-700 hover:to-pink-700 transition-colors flex items-center gap-2"
+                className="px-3 py-1.5 text-sm bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg hover:from-purple-700 hover:to-pink-700 transition-colors flex items-center gap-1.5"
               >
-                <Sparkles className="h-4 w-4" />
+                <Sparkles className="h-3.5 w-3.5" />
                 AI Assistant
               </button>
+            </div>
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 leading-tight max-w-4xl" title={campaign.name}>
+              {(() => {
+                const words = (campaign.name || '').trim().split(/\s+/).filter(Boolean);
+                return words.length > 8 ? words.slice(0, 8).join(' ') + '…' : campaign.name;
+              })()}
+            </h1>
+            <p className="text-xs text-gray-500 mt-1">Content Marketing Plan · ID: {campaign.id}</p>
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${getStageColor(campaign.current_stage || campaign.status)}`}>
+                {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
+              </span>
+              <span className="text-xs text-gray-600">
+                Readiness: <span className="font-semibold">{readiness?.readiness_percentage ?? '--'}%</span>
+              </span>
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${getGateBadgeColor(viralityGate?.gate_decision)}`}>
+                {getGateLabel(viralityGate?.gate_decision)}
+              </span>
+              <span className="text-xs text-gray-500">
+                {campaign.start_date ? new Date(campaign.start_date).toLocaleDateString() : 'Not scheduled'}
+                {campaign.end_date ? ` – ${new Date(campaign.end_date).toLocaleDateString()}` : ''}
+              </span>
             </div>
           </div>
         </div>
@@ -1624,7 +2017,6 @@ export default function CampaignDetails() {
             Governance
           </button>
         </div>
-
         {router.query.fromRecommendation && recommendationId && (
           <div className="bg-white rounded-xl p-6 shadow-sm border mb-8">
             <h2 className="text-xl font-semibold mb-4">Recommendation Summary</h2>
@@ -1760,6 +2152,15 @@ export default function CampaignDetails() {
                   {isRegeneratingBlueprint ? <Loader2 className="h-5 w-5 animate-spin" /> : <FileText className="h-5 w-5" />}
                   Generate Campaign Blueprint
                 </button>
+                {isRegeneratingBlueprint && (
+                  <div className="mt-4">
+                    <AIGenerationProgress
+                      isActive={true}
+                      message="Generating campaign blueprint…"
+                      expectedSeconds={50}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -1767,7 +2168,7 @@ export default function CampaignDetails() {
             <div className="bg-white rounded-xl p-6 shadow-sm border mb-8" id="content-blueprint">
               <h2 className="text-xl font-semibold mb-1">Content Blueprint</h2>
               <p className="text-sm text-gray-500 mb-4">
-                Your committed plan; weekly content is listed in the weeks below.
+                Your submitted plan; weekly content is listed in the weeks below.
                 <button
                   type="button"
                   onClick={() => document.getElementById('weekly-content')?.scrollIntoView({ behavior: 'smooth' })}
@@ -1783,7 +2184,7 @@ export default function CampaignDetails() {
                   <span className="text-sm text-gray-600">
                     {weeklyPlans
                       .sort((a, b) => a.weekNumber - b.weekNumber)
-                      .map((w) => `Week ${w.weekNumber}: ${w.theme || w.phase || w.focusArea || '—'}`)
+                      .map((w) => `Week ${w.weekNumber}: ${displayWeeklyTitle(w.theme || w.phase || w.focusArea, 'Untitled Topic')}`)
                       .join(' • ')}
                   </span>
                 </div>
@@ -1820,136 +2221,6 @@ export default function CampaignDetails() {
               </div>
             </div>
 
-            {/* Virality Review */}
-            <div className="bg-white rounded-xl p-6 shadow-sm border mb-8">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold">Virality Review</h2>
-                <button
-                  onClick={() => setIsViralityExpanded(!isViralityExpanded)}
-                  className="text-sm text-gray-600 hover:text-gray-900 flex items-center gap-2"
-                >
-                  {isViralityExpanded ? 'Hide details' : 'Show details'}
-                  {isViralityExpanded ? (
-                    <ChevronDown className="h-4 w-4" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4" />
-                  )}
-                </button>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 mb-4">
-                <span className={`px-3 py-1 rounded-full text-sm font-medium ${getGateBadgeColor(viralityGate?.gate_decision)}`}>
-                  {getGateLabel(viralityGate?.gate_decision)}
-                </span>
-                <span className="text-sm text-gray-700">
-                  Readiness: <span className="font-semibold">{readiness?.readiness_percentage ?? '--'}%</span>
-                </span>
-              </div>
-
-              {(viralityGate?.gate_decision === 'block' || viralityGate?.gate_decision === 'warn') && (viralityGate?.reasons?.length ?? 0) > 0 && (
-                <div className={`mb-4 rounded-lg border p-3 ${
-                  viralityGate.gate_decision === 'block'
-                    ? 'border-red-200 bg-red-50'
-                    : 'border-amber-200 bg-amber-50'
-                }`}>
-                  <div className={`flex items-center gap-2 font-medium mb-2 ${
-                    viralityGate.gate_decision === 'block' ? 'text-red-700' : 'text-amber-800'
-                  }`}>
-                    <AlertCircle className="h-4 w-4" />
-                    {viralityGate.gate_decision === 'block' ? 'Blocking reasons' : 'Next steps'}
-                  </div>
-                  <ul className={`text-sm space-y-1 ${
-                    viralityGate.gate_decision === 'block' ? 'text-red-700' : 'text-amber-800'
-                  }`}>
-                    {(viralityGate?.reasons || []).map((reason, index) => (
-                      <li key={`reason-${index}`} className="flex items-start gap-2">
-                        <span className="mt-0.5">•</span>
-                        <span>{reason}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              <div className="mb-4">
-                <h3 className="text-sm font-semibold text-gray-700 mb-2">Required actions</h3>
-                {viralityGate?.required_actions?.length ? (
-                  <div className="space-y-3">
-                    {viralityGate.required_actions.map((action, index) => (
-                      <div key={`action-${index}`} className="rounded-lg border p-3">
-                        <div className="flex items-start gap-2">
-                          <CheckCircle className="h-4 w-4 text-gray-400 mt-0.5" />
-                          <div>
-                            <div className="font-medium text-gray-900">{action.title}</div>
-                            <div className="text-sm text-gray-600 mt-1">{action.why}</div>
-                            <div className="text-sm text-gray-600 mt-2">{action.action}</div>
-                            {action.applies_to_platforms?.length ? (
-                              <div className="text-xs text-gray-500 mt-2">
-                                Platforms: {action.applies_to_platforms.join(', ')}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">No required actions at this time.</p>
-                )}
-              </div>
-
-              <div>
-                <h3 className="text-sm font-semibold text-gray-700 mb-2">Advisory notes</h3>
-                {viralityGate?.advisory_notes?.length ? (
-                  <ul className="text-sm text-gray-600 space-y-2">
-                    {viralityGate.advisory_notes.map((note, index) => (
-                      <li key={`note-${index}`} className="flex items-start gap-2">
-                        <span className="mt-0.5">•</span>
-                        <span>{note}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-sm text-gray-500">No advisory notes available.</p>
-                )}
-              </div>
-
-              {isViralityExpanded && (
-                <div className="mt-6 border-t pt-4">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">Diagnostics</h3>
-                  {[
-                    { key: 'asset_coverage', title: 'Asset Coverage', data: viralityDiagnostics?.diagnostics.asset_coverage },
-                    { key: 'platform_opportunity', title: 'Platform Opportunity', data: viralityDiagnostics?.diagnostics.platform_opportunity },
-                    { key: 'engagement_readiness', title: 'Engagement Readiness', data: viralityDiagnostics?.diagnostics.engagement_readiness },
-                  ].map((item) => (
-                    <div key={item.key} className="border rounded-lg mb-3">
-                      <button
-                        className="w-full text-left px-4 py-3 flex items-center justify-between hover:bg-gray-50"
-                        onClick={() => toggleDiagnostic(item.key)}
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="font-medium">{item.title}</span>
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getConfidenceBadgeColor(item.data?.diagnostic_confidence)}`}>
-                            {item.data?.diagnostic_confidence || 'unknown'}
-                          </span>
-                        </div>
-                        {expandedDiagnostics.has(item.key) ? (
-                          <ChevronDown className="h-4 w-4 text-gray-500" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4 text-gray-400" />
-                        )}
-                      </button>
-                      {expandedDiagnostics.has(item.key) && (
-                        <div className="px-4 pb-4 text-sm text-gray-600">
-                          {item.data?.diagnostic_summary || 'No diagnostic summary available.'}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
             {/* Weekly Content — blueprint per week, placed in weeks below */}
             <div className="bg-white rounded-xl p-6 shadow-sm border mb-8" id="weekly-content">
               {(() => {
@@ -1984,7 +2255,7 @@ export default function CampaignDetails() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => router.push(`/campaign-planning-hierarchical?campaignId=${campaign.id}`)}
+                    onClick={() => router.push(buildPlanningWorkspaceUrl(campaign.id))}
                     disabled={!campaign?.start_date || !(campaign as any).duration_weeks}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     title="View plan and work on daily content for each week"
@@ -2002,12 +2273,35 @@ export default function CampaignDetails() {
                   </button>
                 </div>
               </div>
-
               <div className="space-y-4">
                 {Array.from({ length: durationWeeks }, (_, i) => i + 1).map(weekNumber => {
                   const weekPlan = weeklyPlans.find(w => w.weekNumber === weekNumber);
                   const isExpanded = expandedWeeks.has(weekNumber);
                   const weekDailyPlans = dailyPlans.filter(d => d.weekNumber === weekNumber);
+                  const hasEnrichedTopics =
+                    Array.isArray((weekPlan as any)?.topics) && (weekPlan as any).topics.length > 0;
+                  const platformTargets = Object.entries((weekPlan as any)?.platform_allocation || {})
+                    .map(([platform, count]) => `${platform}: ${count}`)
+                    .filter(Boolean);
+                  const contentTypes = Array.isArray((weekPlan as any)?.contentTypes)
+                    ? (weekPlan as any).contentTypes
+                    : (Array.isArray((weekPlan as any)?.content_type_mix) ? (weekPlan as any).content_type_mix : []);
+                  const topicsWithExecution = hasEnrichedTopics
+                    ? (((weekPlan as any).topics as any[]).map((topic, idx) => ({
+                        ...topic,
+                        topicExecution: {
+                          platformTargets: platformTargets.length > 0
+                            ? [platformTargets[idx % platformTargets.length]]
+                            : ['—'],
+                          contentType: contentTypes[idx % Math.max(contentTypes.length, 1)] || '—',
+                          ctaType: (weekPlan as any)?.cta_type || '—',
+                          kpiFocus: (weekPlan as any)?.weekly_kpi_focus || '—',
+                        },
+                      })))
+                    : [];
+                  const topicsCount = hasEnrichedTopics
+                    ? ((weekPlan as any).topics as any[]).length
+                    : (((weekPlan as any)?.topics_to_cover as string[] | undefined)?.length ?? 0);
                   
                   return (
                     <div key={weekNumber} className="border rounded-lg overflow-hidden">
@@ -2023,15 +2317,15 @@ export default function CampaignDetails() {
                             </div>
                             <div>
                               <h3 className="font-semibold text-lg">Week {weekNumber}</h3>
-                              <p className="text-gray-600">{weekPlan?.theme || `Week ${weekNumber} Theme`}</p>
-                              <p className="text-sm text-gray-500">{weekPlan?.focusArea || `Week ${weekNumber} Focus Area`}</p>
+                              <p className="text-gray-600">{displayWeeklyTitle(weekPlan?.theme || `Week ${weekNumber} Theme`)}</p>
+                              <p className="text-sm text-gray-500">{displayWeeklyTitle(weekPlan?.focusArea || `Week ${weekNumber} Focus Area`)}</p>
                               {(weekPlan as any)?.platform_allocation && Object.keys((weekPlan as any).platform_allocation).length > 0 && (
                                 <p className="text-xs text-indigo-600 mt-1">
                                   {Object.entries((weekPlan as any).platform_allocation).map(([p, c]) => `${p}: ${c}`).join(' · ')}
                                 </p>
                               )}
-                              {(weekPlan as any)?.topics_to_cover?.length > 0 && (
-                                <p className="text-xs text-gray-500 mt-0.5">{((weekPlan as any).topics_to_cover as string[]).length} topics</p>
+                              {topicsCount > 0 && (
+                                <p className="text-xs text-gray-500 mt-0.5">{topicsCount} topics</p>
                               )}
                             </div>
                           </div>
@@ -2077,7 +2371,7 @@ export default function CampaignDetails() {
                       {/* Week Details (Expanded) — committed plan content */}
                       {isExpanded && (
                         <div className="border-t bg-gray-50 p-4">
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div className="grid grid-cols-1 gap-6">
                             {/* Week Overview — from committed plan */}
                             <div>
                               <h4 className="font-semibold mb-3">Week Overview</h4>
@@ -2088,59 +2382,126 @@ export default function CampaignDetails() {
                                 </div>
                                 <div>
                                   <span className="text-sm font-medium text-gray-600">Focus:</span>
-                                  <span className="ml-2 text-sm">{weekPlan?.focusArea || `Week ${weekNumber} Focus`}</span>
+                                  <span className="ml-2 text-sm">{displayWeeklyTitle(weekPlan?.focusArea || `Week ${weekNumber} Focus`)}</span>
                                 </div>
+                                {(weekPlan as any)?.platform_content_breakdown &&
+                                  typeof (weekPlan as any).platform_content_breakdown === 'object' &&
+                                  Object.keys((weekPlan as any).platform_content_breakdown).length > 0 && (
+                                    <div>
+                                      <span className="text-sm font-medium text-gray-600">Content types by platform:</span>
+                                      <div className="mt-1 text-sm text-gray-700 space-y-1">
+                                        {Object.entries((weekPlan as any).platform_content_breakdown as Record<string, any[]>).map(([platform, items]) => {
+                                          const safeItems = Array.isArray(items) ? items : [];
+                                          if (safeItems.length === 0) return null;
+                                          const label = safeItems
+                                            .map((it) => {
+                                              const c = Number((it as any)?.count ?? 0);
+                                              const t = String((it as any)?.type ?? '').trim();
+                                              if (!t) return '';
+                                              return Number.isFinite(c) && c > 0 ? `${c} ${t}` : t;
+                                            })
+                                            .filter(Boolean)
+                                            .join(', ');
+                                          if (!label) return null;
+                                          return (
+                                            <div key={platform} className="text-xs">
+                                              <span className="font-medium capitalize">{platform}:</span> {label}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )}
                                 {(weekPlan as any)?.keyMessaging && (weekPlan as any).keyMessaging !== 'AI-generated messaging' && (
                                   <div>
                                     <span className="text-sm font-medium text-gray-600">Key Messaging:</span>
                                     <span className="ml-2 text-sm">{(weekPlan as any).keyMessaging}</span>
                                   </div>
                                 )}
-                                {(weekPlan as any)?.platform_allocation && Object.keys((weekPlan as any).platform_allocation).length > 0 && (
-                                  <div>
-                                    <span className="text-sm font-medium text-gray-600">Platforms (items per week):</span>
-                                    <div className="flex flex-wrap gap-1 mt-1">
-                                      {Object.entries((weekPlan as any).platform_allocation).map(([p, c]) => (
-                                        <span key={p} className="px-2 py-0.5 bg-indigo-100 rounded text-xs font-medium">{p}: {c}</span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                                {(weekPlan as any)?.contentTypes?.length > 0 && (
-                                  <div>
-                                    <span className="text-sm font-medium text-gray-600">Content types:</span>
-                                    <span className="ml-2 text-sm">{(weekPlan as any).contentTypes.join(', ')}</span>
-                                  </div>
-                                )}
-                                {(weekPlan as any)?.topics_to_cover?.length > 0 && (
+                                {!hasEnrichedTopics && (weekPlan as any)?.topics_to_cover?.length > 0 && (
                                   <div>
                                     <span className="text-sm font-medium text-gray-600">Topics to cover:</span>
                                     <ul className="mt-1 list-disc list-inside text-sm text-gray-700">
                                       {((weekPlan as any).topics_to_cover as string[]).map((t, i) => (
-                                        <li key={i}>{t}</li>
+                                        <li key={i}>{displayWeeklyTitle(t)}</li>
                                       ))}
                                     </ul>
                                   </div>
                                 )}
-                                {(weekPlan as any)?.platform_content_breakdown && Object.keys((weekPlan as any).platform_content_breakdown).length > 0 && (
+                                {(((weekPlan as any)?.weeklyContextCapsule && typeof (weekPlan as any).weeklyContextCapsule === 'object') || hasEnrichedTopics) && (
                                   <div>
-                                    <span className="text-sm font-medium text-gray-600">Content to create:</span>
-                                    <div className="mt-2 space-y-2">
-                                      {Object.entries((weekPlan as any).platform_content_breakdown).map(([platform, items]: [string, any]) => (
-                                        <div key={platform} className="p-2 bg-white rounded border text-xs">
-                                          <span className="font-medium capitalize text-gray-800">{platform}:</span>
-                                          <ul className="mt-1 space-y-0.5 text-gray-700">
-                                            {(Array.isArray(items) ? items : []).map((it: any, idx: number) => (
-                                              <li key={idx}>
-                                                {it.count} {it.type || 'post'}
-                                                {it.topic ? ` — ${it.topic}` : ''}
-                                                {it.topics?.length ? ` (${it.topics.join(', ')})` : ''}
-                                              </li>
-                                            ))}
-                                          </ul>
-                                        </div>
-                                      ))}
-                                    </div>
+                                    <span className="text-sm font-medium text-gray-600">Writing Context:</span>
+                                    {(weekPlan as any)?.weeklyContextCapsule && (
+                                      <div className="mt-1 space-y-1 text-xs text-gray-700 bg-white rounded border p-2">
+                                        {(weekPlan as any).weeklyContextCapsule.audienceProfile && (
+                                          <div><span className="font-medium">Audience:</span> {(weekPlan as any).weeklyContextCapsule.audienceProfile}</div>
+                                        )}
+                                        {(weekPlan as any).weeklyContextCapsule.weeklyIntent && (
+                                          <div><span className="font-medium">Weekly intent:</span> {(weekPlan as any).weeklyContextCapsule.weeklyIntent}</div>
+                                        )}
+                                        {(weekPlan as any).weeklyContextCapsule.toneGuidance && (
+                                          <div><span className="font-medium">Tone:</span> {(weekPlan as any).weeklyContextCapsule.toneGuidance}</div>
+                                        )}
+                                        {(weekPlan as any).weeklyContextCapsule.campaignStage && (
+                                          <div><span className="font-medium">Campaign stage:</span> {(weekPlan as any).weeklyContextCapsule.campaignStage}</div>
+                                        )}
+                                        {(weekPlan as any).weeklyContextCapsule.psychologicalGoal && (
+                                          <div><span className="font-medium">Psychological goal:</span> {(weekPlan as any).weeklyContextCapsule.psychologicalGoal}</div>
+                                        )}
+                                      </div>
+                                    )}
+                                    {hasEnrichedTopics && (
+                                      <div className="mt-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                                        {topicsWithExecution.map((topic, idx) => (
+                                          <button
+                                            key={`${topic?.topicTitle || 'topic'}-${idx}`}
+                                            type="button"
+                                            onClick={() => openTopicWorkspaceFromWeeklyCard(weekNumber, topic)}
+                                            className={`text-xs text-gray-700 rounded border p-2 text-left hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors cursor-pointer ${getActivityColorClasses(topic?.topicExecution?.contentType).card}`}
+                                          >
+                                            <div className="flex items-center justify-between gap-2">
+                                              <div className="font-medium">{displayWeeklyTitle(topic?.topicTitle, 'Untitled Topic')}</div>
+                                              <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${getActivityColorClasses(topic?.topicExecution?.contentType).badge}`}>
+                                                {topic?.topicExecution?.contentType || 'activity'}
+                                              </span>
+                                            </div>
+                                            {topic?.topicContext?.writingIntent && (
+                                              <div className="mt-0.5"><span className="font-medium">Writing intent:</span> {topic.topicContext.writingIntent}</div>
+                                            )}
+                                            <div className="mt-1 pt-1 border-t border-gray-100">
+                                              <div className="font-medium text-gray-800">Execution details</div>
+                                              <div className="mt-0.5"><span className="font-medium">Platform(s):</span> {(topic?.topicExecution?.platformTargets || ['—']).join(', ')}</div>
+                                              <div className="mt-0.5"><span className="font-medium">Content type:</span> {topic?.topicExecution?.contentType || '—'}</div>
+                                              <div className="mt-0.5"><span className="font-medium">CTA:</span> {topic?.topicExecution?.ctaType || '—'}</div>
+                                              <div className="mt-0.5"><span className="font-medium">KPI target:</span> {topic?.topicExecution?.kpiFocus || '—'}</div>
+                                            </div>
+                                            {topic?.whoAreWeWritingFor && (
+                                              <div className="mt-0.5"><span className="font-medium">Who we write for:</span> {topic.whoAreWeWritingFor}</div>
+                                            )}
+                                            {topic?.whatProblemAreWeAddressing && (
+                                              <div className="mt-0.5"><span className="font-medium">Problem:</span> {topic.whatProblemAreWeAddressing}</div>
+                                            )}
+                                            {topic?.whatShouldReaderLearn && (
+                                              <div className="mt-0.5"><span className="font-medium">Reader learns:</span> {topic.whatShouldReaderLearn}</div>
+                                            )}
+                                            {topic?.desiredAction && (
+                                              <div className="mt-0.5"><span className="font-medium">Desired action:</span> {topic.desiredAction}</div>
+                                            )}
+                                            {topic?.narrativeStyle && (
+                                              <div className="mt-0.5"><span className="font-medium">Narrative style:</span> {topic.narrativeStyle}</div>
+                                            )}
+                                            {(topic?.contentTypeGuidance?.primaryFormat || topic?.contentTypeGuidance?.maxWordTarget || topic?.contentTypeGuidance?.platformWithHighestLimit) && (
+                                              <div className="mt-0.5">
+                                                <span className="font-medium">Format:</span> {topic?.contentTypeGuidance?.primaryFormat || '—'}
+                                                {topic?.contentTypeGuidance?.maxWordTarget ? ` · Max words: ${topic.contentTypeGuidance.maxWordTarget}` : ''}
+                                                {topic?.contentTypeGuidance?.platformWithHighestLimit ? ` · Highest-limit platform: ${topic.contentTypeGuidance.platformWithHighestLimit}` : ''}
+                                              </div>
+                                            )}
+                                            <div className="mt-1 text-[10px] text-indigo-600">Click to open topic workspace</div>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -2170,39 +2531,121 @@ export default function CampaignDetails() {
                             </div>
                           </div>
 
-                          {/* Daily Plans — clickable cards */}
+                          {/* Daily Plans — drag-and-drop by day; regenerate or save & freeze */}
                           <div className="mt-6">
-                            <h4 className="font-semibold mb-3">Daily Content Plan</h4>
-                            <p className="text-xs text-gray-500 mb-2">Click a day to see full details (platforms, topic, intro, summary, objective)</p>
+                            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                              <h4 className="font-semibold">Daily Content Plan</h4>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {weekDailyPlans.length > 0 && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => regenerateWeekDailyPlan(weekNumber)}
+                                      disabled={isGeneratingWeek === weekNumber}
+                                      className="text-xs px-3 py-1.5 rounded-lg border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors flex items-center gap-1 disabled:opacity-50"
+                                      title="Regenerate daily plan with AI"
+                                    >
+                                      {isGeneratingWeek === weekNumber ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                                      Regenerate
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => saveWeekDailyPlan(weekNumber)}
+                                      disabled={isSavingWeekPlan === weekNumber}
+                                      className="text-xs px-3 py-1.5 rounded-lg border border-green-200 text-green-700 bg-green-50 hover:bg-green-100 transition-colors flex items-center gap-1 disabled:opacity-50"
+                                      title="Save order and set plan for next stage"
+                                    >
+                                      {isSavingWeekPlan === weekNumber ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                      Save & freeze
+                                    </button>
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => openCampaignCalendar(weekNumber)}
+                                  className="text-xs px-3 py-1.5 rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                                >
+                                  ➡ Open Campaign Calendar
+                                </button>
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-4 mb-2">
+                              <span className="text-xs font-medium text-gray-600">Distribution:</span>
+                              <label className="flex items-center gap-1.5 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name={`distribution-${weekNumber}`}
+                                  checked={distributionMode === 'staggered'}
+                                  onChange={() => setDistributionMode('staggered')}
+                                  className="rounded border-gray-300"
+                                />
+                                <span className="text-xs text-gray-700">Staggered</span>
+                                <span className="text-[10px] text-gray-500">(topic spread across days)</span>
+                              </label>
+                              <label className="flex items-center gap-1.5 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name={`distribution-${weekNumber}`}
+                                  checked={distributionMode === 'same_day_per_topic'}
+                                  onChange={() => setDistributionMode('same_day_per_topic')}
+                                  className="rounded border-gray-300"
+                                />
+                                <span className="text-xs text-gray-700">Same day per topic</span>
+                                <span className="text-[10px] text-gray-500">(all content for that topic on one day)</span>
+                              </label>
+                            </div>
+                            <p className="text-xs text-gray-500 mb-2">Distribution controls how the weekly plan is turned into the daily plan. Applied when you Regenerate or first generate. Drag items between days to reorder. Save & freeze to lock the plan for the next stage.</p>
                             {weekDailyPlans.length > 0 ? (
                               <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
                                 {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(day => {
-                                  const dayItems = weekDailyPlans.filter(d => d.dayOfWeek === day);
+                                  const dayItems = (editedWeekDailyPlans[weekNumber] ?? weekDailyPlans).filter(d => d.dayOfWeek === day);
                                   const hasPlans = dayItems.length > 0;
                                   return (
-                                    <button
+                                    <div
                                       key={day}
-                                      type="button"
-                                      onClick={() => setSelectedDayForDetail({ day, weekNumber })}
-                                      className="border rounded p-2 text-center hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors cursor-pointer text-left w-full"
+                                      onDragOver={handleDailyPlanDragOver}
+                                      onDrop={(e) => handleDailyPlanDrop(weekNumber, day, e)}
+                                      className="border rounded p-2 min-h-[80px] hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors text-left"
                                     >
-                                      <div className="text-xs font-medium text-gray-600 mb-1">{day}</div>
+                                      <button
+                                        type="button"
+                                        onClick={() => openCampaignCalendar(weekNumber, day)}
+                                        className="w-full text-left"
+                                      >
+                                        <div className="text-xs font-medium text-gray-600 mb-1">{day}</div>
+                                      </button>
                                       {hasPlans ? (
                                         <div className="space-y-1">
-                                          <div className="text-xs text-gray-800">
-                                            {dayItems.map((p, i) => (
-                                              <span key={p.id}>{i > 0 ? ', ' : ''}{p.platform}</span>
-                                            ))}
+                                          <div className="flex flex-wrap gap-1">
+                                            {dayItems.map((p) => {
+                                              const colors = getActivityColorClasses(p.contentType);
+                                              const topicLabel = (p.title || p.topic || '').trim().slice(0, 32);
+                                              return (
+                                                <div
+                                                  key={p.id}
+                                                  draggable
+                                                  onDragStart={(e) => handleDailyPlanDragStart(e, p.id, p.dayOfWeek)}
+                                                  className="flex items-start gap-1 cursor-grab active:cursor-grabbing group rounded border border-transparent hover:border-gray-300 p-0.5 -m-0.5"
+                                                >
+                                                  <GripVertical className="h-3 w-3 text-gray-400 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100" aria-hidden />
+                                                  <div className="min-w-0 flex-1">
+                                                    {topicLabel ? (
+                                                      <div className="text-[10px] text-gray-700 truncate" title={p.title || p.topic}>{topicLabel}{topicLabel.length >= 32 ? '…' : ''}</div>
+                                                    ) : null}
+                                                    <span
+                                                      className={`text-[10px] px-1.5 py-0.5 rounded border font-medium capitalize ${colors.badge}`}
+                                                    >
+                                                      {p.platform} • {p.contentType}
+                                                    </span>
+                                                  </div>
+                                                </div>
+                                              );
+                                            })}
                                           </div>
-                                          <div className="text-xs text-gray-600">
-                                            {dayItems.map((p, i) => (
-                                              <span key={p.id}>{i > 0 ? ', ' : ''}{p.contentType}</span>
-                                            ))}
-                                          </div>
-                                          <div className={`w-2 h-2 rounded-full mx-auto mt-1 ${
+                                          <div className={`w-2 h-2 rounded-full mt-1 ${
                                             dayItems.some(d => d.status === 'completed') ? 'bg-green-500' :
                                             dayItems.some(d => d.status === 'scheduled') ? 'bg-blue-500' : 'bg-gray-300'
-                                          }`}></div>
+                                          }`} />
                                           {dayItems.length > 1 && (
                                             <div className="text-[10px] text-indigo-600 mt-0.5">{dayItems.length} items</div>
                                           )}
@@ -2210,7 +2653,7 @@ export default function CampaignDetails() {
                                       ) : (
                                         <div className="text-xs text-gray-400">No plan</div>
                                       )}
-                                    </button>
+                                    </div>
                                   );
                                 })}
                               </div>
@@ -2234,6 +2677,160 @@ export default function CampaignDetails() {
                   );
                 })}
               </div>
+            </div>
+
+            {/* Virality Review — readiness check (assets, platforms, engagement); fix blocking issues before scheduling */}
+            <div className="bg-white rounded-xl p-6 shadow-sm border mb-8">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-xl font-semibold">Virality Review</h2>
+                <button
+                  onClick={() => setIsViralityExpanded(!isViralityExpanded)}
+                  className="text-sm text-gray-600 hover:text-gray-900 flex items-center gap-2"
+                >
+                  {isViralityExpanded ? 'Hide details' : 'Show details'}
+                  {isViralityExpanded ? (
+                    <ChevronDown className="h-4 w-4" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+              <p className="text-sm text-gray-500 mb-4">
+                Checks readiness to run this campaign (assets, platforms, engagement). Fix any blocking issues before scheduling.
+              </p>
+
+              <div className="flex flex-wrap items-center gap-3 mb-4">
+                <span className={`px-3 py-1 rounded-full text-sm font-medium ${getGateBadgeColor(viralityGate?.gate_decision)}`}>
+                  {getGateLabel(viralityGate?.gate_decision)}
+                </span>
+                <span className="text-sm text-gray-700">
+                  Readiness: <span className="font-semibold">{readiness?.readiness_percentage ?? '--'}%</span>
+                </span>
+              </div>
+
+              {(viralityGate?.gate_decision === 'block' || viralityGate?.gate_decision === 'warn') && (viralityGate?.reasons?.length ?? 0) > 0 && (
+                <div className={`mb-4 rounded-lg border p-3 ${
+                  viralityGate.gate_decision === 'block'
+                    ? 'border-red-200 bg-red-50'
+                    : 'border-amber-200 bg-amber-50'
+                }`}>
+                  <div className={`flex items-center gap-2 font-medium mb-2 ${
+                    viralityGate.gate_decision === 'block' ? 'text-red-700' : 'text-amber-800'
+                  }`}>
+                    <AlertCircle className="h-4 w-4" />
+                    {viralityGate.gate_decision === 'block' ? 'Blocking reasons' : 'Next steps'}
+                  </div>
+                  <ul className={`text-sm space-y-1 ${
+                    viralityGate.gate_decision === 'block' ? 'text-red-700' : 'text-amber-800'
+                  }`}>
+                    {(viralityGate?.reasons || []).map((reason, index) => (
+                      <li key={`reason-${index}`} className="flex items-start gap-2">
+                        <span className="mt-0.5">•</span>
+                        <span>{reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="mb-3">
+                <button
+                  onClick={() => setShowRequiredActions(!showRequiredActions)}
+                  className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900"
+                >
+                  {showRequiredActions ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  Required actions
+                  {viralityGate?.required_actions?.length ? (
+                    <span className="text-gray-500 font-normal">({viralityGate.required_actions.length})</span>
+                  ) : null}
+                </button>
+                {showRequiredActions && (
+                  <div className="mt-2 pl-4 border-l-2 border-gray-200">
+                    {viralityGate?.required_actions?.length ? (
+                      <div className="space-y-2">
+                        {viralityGate.required_actions.map((action, index) => (
+                          <div key={`action-${index}`} className="rounded-lg border p-2.5 text-sm">
+                            <div className="font-medium text-gray-900">{action.title}</div>
+                            {action.why && <div className="text-gray-600 mt-0.5">{action.why}</div>}
+                            <div className="text-gray-600 mt-1">{action.action}</div>
+                            {action.applies_to_platforms?.length ? (
+                              <div className="text-xs text-gray-500 mt-1">
+                                Platforms: {action.applies_to_platforms.join(', ')}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">No required actions at this time.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <button
+                  onClick={() => setShowAdvisoryNotes(!showAdvisoryNotes)}
+                  className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900"
+                >
+                  {showAdvisoryNotes ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  Advisory notes
+                  {viralityGate?.advisory_notes?.length ? (
+                    <span className="text-gray-500 font-normal">({viralityGate.advisory_notes.length})</span>
+                  ) : null}
+                </button>
+                {showAdvisoryNotes && (
+                  <div className="mt-2 pl-4 border-l-2 border-gray-200">
+                    {viralityGate?.advisory_notes?.length ? (
+                      <ul className="text-sm text-gray-600 space-y-1">
+                        {viralityGate.advisory_notes.map((note, index) => (
+                          <li key={`note-${index}`} className="flex items-start gap-2">
+                            <span className="mt-0.5">•</span>
+                            <span>{note}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-gray-500">No advisory notes available.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {isViralityExpanded && (
+                <div className="mt-6 border-t pt-4">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">Diagnostics</h3>
+                  {[
+                    { key: 'asset_coverage', title: 'Asset Coverage', data: viralityDiagnostics?.diagnostics.asset_coverage },
+                    { key: 'platform_opportunity', title: 'Platform Opportunity', data: viralityDiagnostics?.diagnostics.platform_opportunity },
+                    { key: 'engagement_readiness', title: 'Engagement Readiness', data: viralityDiagnostics?.diagnostics.engagement_readiness },
+                  ].map((item) => (
+                    <div key={item.key} className="border rounded-lg mb-3">
+                      <button
+                        className="w-full text-left px-4 py-3 flex items-center justify-between hover:bg-gray-50"
+                        onClick={() => toggleDiagnostic(item.key)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="font-medium">{item.title}</span>
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getConfidenceBadgeColor(item.data?.diagnostic_confidence)}`}>
+                            {item.data?.diagnostic_confidence || 'unknown'}
+                          </span>
+                        </div>
+                        {expandedDiagnostics.has(item.key) ? (
+                          <ChevronDown className="h-4 w-4 text-gray-500" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-gray-400" />
+                        )}
+                      </button>
+                      {expandedDiagnostics.has(item.key) && (
+                        <div className="px-4 pb-4 text-sm text-gray-600">
+                          {item.data?.diagnostic_summary || 'No diagnostic summary available.'}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}
@@ -2496,52 +3093,14 @@ export default function CampaignDetails() {
         )}
       </div>
 
-      {/* Day Detail Modal — click a daily card to see full content details */}
-      {selectedDayForDetail && (() => {
-        const weekPlan = weeklyPlans.find(w => w.weekNumber === selectedDayForDetail!.weekNumber);
-        return (
-          <DayDetailModal
-            day={selectedDayForDetail.day}
-            weekNumber={selectedDayForDetail.weekNumber}
-            items={(dailyPlans
-              .filter(d => d.weekNumber === selectedDayForDetail!.weekNumber && d.dayOfWeek === selectedDayForDetail!.day)
-              .map(d => ({
-                id: d.id,
-                platform: d.platform,
-                contentType: d.contentType,
-                title: d.title,
-                content: d.content,
-                description: d.description,
-                topic: d.topic,
-                introObjective: d.introObjective,
-                summary: d.summary,
-                objective: d.objective,
-                keyPoints: d.keyPoints,
-                cta: d.cta,
-                brandVoice: d.brandVoice,
-                themeLinkage: d.themeLinkage,
-                formatNotes: d.formatNotes,
-                hashtags: d.hashtags || [],
-                scheduledTime: d.scheduledTime,
-                status: d.status,
-              })) as DayPlanItem[])}
-            weekTheme={weekPlan?.theme}
-            weekFocus={weekPlan?.focusArea}
-            campaignTheme={campaign?.description || campaign?.name}
-            targetGeo={(recommendationContext as { target_regions?: string[] })?.target_regions?.join(', ')}
-            onClose={() => setSelectedDayForDetail(null)}
-          />
-        );
-      })()}
-
       {/* AI Assistant - Campaign Chat with recommendation context, linked to campaign plan */}
-      {campaign && (
+      {campaign && !shouldForceWeeklyBlueprintView && (
         <CampaignAIChat
           isOpen={showAIChat}
           onClose={() => setShowAIChat(false)}
           onMinimize={() => setShowAIChat(false)}
           context="campaign-planning"
-          forceFreshPlanningThread={Boolean(router.query.fromRecommendation)}
+          forceFreshPlanningThread={false}
           companyId={effectiveCompanyId || undefined}
           campaignId={campaign.id}
           campaignData={campaign}
@@ -2575,32 +3134,6 @@ export default function CampaignDetails() {
                 }
               : undefined
           }
-          onProgramGenerated={async (program) => {
-            if (!campaign?.id || !effectiveCompanyId || !program?.weeks) return;
-            const campaignSummary = {
-              objective: campaign.description || campaign.name,
-              targetAudience: '',
-              keyMessages: [],
-              successMetrics: [],
-            };
-            const weeklyPlans = program.weeks.map((w: any) => ({
-              weekNumber: w.weekNumber || 0,
-              theme: w.theme || `Week ${w.weekNumber} Theme`,
-              focusArea: w.theme || '',
-              marketingChannels: [...new Set((w.content || []).map((c: any) => (c.platform || 'linkedin').charAt(0).toUpperCase() + (c.platform || 'linkedin').slice(1)))],
-              existingContent: '',
-              contentNotes: (w.content || []).map((c: any) => c.description).filter(Boolean).join('\n') || '',
-            }));
-            const res = await fetchWithAuth('/api/campaigns/save-comprehensive-plan', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ campaignId: campaign.id, campaignSummary, weeklyPlans }),
-            });
-            if (res.ok) {
-              loadCampaignDetails(campaign.id);
-              setShowAIChat(false);
-            }
-          }}
         />
       )}
     </div>

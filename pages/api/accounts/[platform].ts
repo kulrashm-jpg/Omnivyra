@@ -1,6 +1,42 @@
 // API Endpoint for Platform Account Management
 import { NextApiRequest, NextApiResponse } from 'next';
-import { PostingServiceFactory } from '@/lib/services/posting';
+import { supabase } from '@/backend/db/supabaseClient';
+import { getPlatformRules } from '@/backend/services/platformIntelligenceService';
+
+const extractAccessToken = (req: NextApiRequest): string | null => {
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice('Bearer '.length).trim();
+    if (token) return token;
+  }
+  const cookieEntries = Object.entries(req.cookies || {});
+  const directToken = req.cookies?.['sb-access-token'];
+  if (directToken) return directToken;
+  for (const [name, value] of cookieEntries) {
+    if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
+    try {
+      const parsed = JSON.parse(value as any);
+      if (parsed?.access_token) return String(parsed.access_token);
+    } catch {
+      // ignore malformed cookie
+    }
+  }
+  return null;
+};
+
+async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
+  const token = extractAccessToken(req);
+  if (!token) {
+    res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
+    return null;
+  }
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user?.id) {
+    res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
+    return null;
+  }
+  return data.user.id;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { platform } = req.query;
@@ -13,19 +49,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    const bundle = await getPlatformRules(platform);
+    if (!bundle) {
+      return res.status(400).json({
+        success: false,
+        error: `Platform ${platform} not supported`,
+      });
+    }
+    const canonical = String(bundle.platform.canonical_key || '').toLowerCase().trim();
+    const platformCandidates = canonical === 'x' ? ['twitter', 'x'] : [canonical];
+
     switch (req.method) {
       case 'GET':
-        // Get account info for platform
-        const postingService = PostingServiceFactory.getService(platform);
-        
-        if (!postingService) {
-          return res.status(400).json({
-            success: false,
-            error: `Platform ${platform} not supported`,
-          });
+        // Get account info for platform (DB-backed)
+        const userId = await requireUserId(req, res);
+        if (!userId) return;
+
+        const { data: accounts, error } = await supabase
+          .from('social_accounts')
+          .select('id, account_name, username, follower_count, is_active, last_sync_at, platform')
+          .eq('user_id', userId)
+          .eq('is_active', true)
+          .in('platform', platformCandidates)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (error) {
+          return res.status(500).json({ success: false, error: error.message });
         }
 
-        const accountInfo = await postingService.getAccountInfo();
+        const account = (accounts || [])[0] as any;
+        const accountInfo = account
+          ? {
+              id: String(account.id),
+              name: String(account.account_name || `Your ${canonical} Account`),
+              username: account.username ? String(account.username) : null,
+              followers: Number(account.follower_count ?? 0),
+              isActive: Boolean(account.is_active),
+              lastPosted: account.last_sync_at ? new Date(account.last_sync_at).toISOString() : null,
+            }
+          : null;
         
         res.status(200).json({
           success: true,
@@ -38,13 +101,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const { code, state } = req.body;
         
         // Mock OAuth flow - in production, implement real OAuth
-        console.log(`Connecting ${platform} account with code:`, code);
+        console.log(`Connecting ${canonical} account with code:`, code);
         
         // Simulate account connection
         const mockAccountInfo = {
-          id: `${platform}_account_${Date.now()}`,
-          name: `Your ${platform.charAt(0).toUpperCase() + platform.slice(1)} Account`,
-          username: `@your-${platform}-username`,
+          id: `${canonical}_account_${Date.now()}`,
+          name: `Your ${canonical.charAt(0).toUpperCase() + canonical.slice(1)} Account`,
+          username: `@your-${canonical}-username`,
           followers: Math.floor(Math.random() * 10000),
           isActive: true,
           lastPosted: null,
@@ -53,17 +116,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         res.status(200).json({
           success: true,
           data: mockAccountInfo,
-          message: `${platform.charAt(0).toUpperCase() + platform.slice(1)} account connected successfully`,
+          message: `${canonical.charAt(0).toUpperCase() + canonical.slice(1)} account connected successfully`,
         });
         break;
 
       case 'DELETE':
         // Disconnect account
-        console.log(`Disconnecting ${platform} account`);
+        console.log(`Disconnecting ${canonical} account`);
         
         res.status(200).json({
           success: true,
-          message: `${platform.charAt(0).toUpperCase() + platform.slice(1)} account disconnected successfully`,
+          message: `${canonical.charAt(0).toUpperCase() + canonical.slice(1)} account disconnected successfully`,
         });
         break;
 

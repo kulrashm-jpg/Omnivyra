@@ -62,11 +62,13 @@ export default function ChatVoiceButton({
   className = '',
   title,
 }: ChatVoiceButtonProps) {
+  const SILENCE_TIMEOUT_MS = 3500;
   const [isRecording, setIsRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const onTranscriptionRef = useRef(onTranscription);
-  const transcriptRef = useRef('');
+  const finalTranscriptRef = useRef('');
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   onTranscriptionRef.current = onTranscription;
 
@@ -109,7 +111,7 @@ export default function ChatVoiceButton({
 
   const startRecording = async () => {
     setError(null);
-    transcriptRef.current = '';
+    finalTranscriptRef.current = '';
     if (!SpeechRecognitionCtor) {
       setError('Voice input not supported in this browser. Try Chrome or Edge.');
       return;
@@ -122,18 +124,46 @@ export default function ChatVoiceButton({
       recognition.interimResults = true;
       recognition.lang = 'en-US';
 
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
-        const parts: string[] = [];
-        for (let i = 0; i < event.results.length; i++) {
-          const t = event.results[i][0]?.transcript?.trim();
-          if (t) parts.push(t);
+      const clearSilenceTimer = () => {
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
         }
-        const full = parts.join(' ');
-        transcriptRef.current = full;
+      };
+
+      const resetSilenceTimer = () => {
+        clearSilenceTimer();
+        silenceTimerRef.current = setTimeout(() => {
+          if (recognitionRef.current === recognition) {
+            try {
+              recognition.stop();
+            } catch (_) {}
+          }
+        }, SILENCE_TIMEOUT_MS);
+      };
+
+      resetSilenceTimer();
+
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const t = event.results[i][0]?.transcript?.trim();
+          if (!t) continue;
+          if (event.results[i].isFinal) {
+            finalTranscriptRef.current = finalTranscriptRef.current
+              ? `${finalTranscriptRef.current} ${t}`
+              : t;
+          } else {
+            interim = interim ? `${interim} ${t}` : t;
+          }
+        }
+        const full = `${finalTranscriptRef.current} ${interim}`.trim();
         onTranscriptionRef.current(full);
+        resetSilenceTimer();
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        clearSilenceTimer();
         if (event.error === 'not-allowed') {
           setError('Microphone access denied. Enable mic permission in browser site settings.');
         } else if (event.error !== 'aborted') {
@@ -142,6 +172,7 @@ export default function ChatVoiceButton({
       };
 
       recognition.onend = () => {
+        clearSilenceTimer();
         recognitionRef.current = null;
         setIsRecording(false);
       };
@@ -157,6 +188,10 @@ export default function ChatVoiceButton({
   };
 
   const stopRecording = () => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     if (recognitionRef.current && isRecording) {
       try {
         recognitionRef.current.stop();
@@ -168,6 +203,10 @@ export default function ChatVoiceButton({
 
   useEffect(() => {
     return () => {
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
@@ -185,7 +224,9 @@ export default function ChatVoiceButton({
 
   const effectiveTitle =
     title ??
-    (isRecording ? 'Stop voice input' : 'Start voice input (real-time)');
+    (isRecording
+      ? 'Stop voice input'
+      : `Start voice input (auto-stops after ${Math.round(SILENCE_TIMEOUT_MS / 1000)}s pause)`);
 
   return (
     <span className="inline-flex flex-col items-center gap-0.5">

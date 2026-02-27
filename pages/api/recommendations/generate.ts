@@ -382,7 +382,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(403).json({ error: 'CAMPAIGN_NOT_IN_COMPANY' });
     }
     console.error('Error generating recommendations:', error);
-    return res.status(500).json({ error: 'Failed to generate recommendations' });
+    const message = error?.message ?? (typeof error === 'string' ? error : 'Unknown error');
+    return res.status(500).json({
+      error: 'Failed to generate recommendations',
+      detail: message,
+    });
   }
 }
 

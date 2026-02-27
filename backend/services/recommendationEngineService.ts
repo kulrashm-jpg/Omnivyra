@@ -481,7 +481,6 @@ const scoreByAlignmentThenPopularity = (
 
 /** @internal Exported for unit testing weighted alignment scoring and diamond scoring guard */
 export {
-  buildWeightedAlignmentTokens,
   computeAlignmentScore,
   computeStrategyModifier,
   scoreByAlignmentThenPopularity,
@@ -1399,11 +1398,11 @@ export const generateRecommendations = async (
   trendsUsed = applyPersonaPlatformBias(trendsUsed, personaSummary, profile);
   const polished = polishRecommendations(trendsUsed, profile);
   if (polished.length > 0) {
-    trendsUsed = polished as TrendSignalNormalized[];
+    trendsUsed = polished as unknown as TrendSignalNormalized[];
   }
   const enriched = enrichRecommendationIntelligence(trendsUsed, profile);
   if (enriched.length > 0) {
-    trendsUsed = enriched as TrendSignalNormalized[];
+    trendsUsed = enriched as unknown as TrendSignalNormalized[];
   }
   const strategyDNA = profile ? buildCompanyStrategyDNA(profile) : null;
   const strategySequence =
@@ -1538,7 +1537,7 @@ export const generateRecommendations = async (
     },
     novelty_score: noveltyScore,
     global_disclaimer: effectiveRegions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
-    signals_source: (usedFallbackContextSignals ? 'PROFILE_ONLY' : 'EXTERNAL') as const,
+    signals_source: (usedFallbackContextSignals ? 'PROFILE_ONLY' : 'EXTERNAL') as 'PROFILE_ONLY' | 'EXTERNAL',
     company_context: profile ? buildCompanyContext(profile) : undefined,
     strategy_dna: profile ? buildCompanyStrategyDNA(profile) : undefined,
     strategy_feedback:

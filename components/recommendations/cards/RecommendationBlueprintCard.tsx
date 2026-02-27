@@ -105,6 +105,11 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
     pain_symptoms: readList(snapshot, 'pain_symptoms'),
     desired_transformation: readText(snapshot, 'desired_transformation'),
     authority_domains: readList(snapshot, 'authority_domains'),
+    brand_voice: readText(snapshot, 'brand_voice'),
+    brand_positioning: readText(snapshot, 'brand_positioning'),
+    reader_emotion_target: readText(snapshot, 'reader_emotion_target'),
+    narrative_flow_seed: readText(snapshot, 'narrative_flow_seed'),
+    recommended_cta_style: readText(snapshot, 'recommended_cta_style'),
   };
 
   const blueprint = {
@@ -145,7 +150,12 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
     !!snapshotBlock.core_problem_statement ||
     snapshotBlock.pain_symptoms.length > 0 ||
     !!snapshotBlock.desired_transformation ||
-    snapshotBlock.authority_domains.length > 0;
+    snapshotBlock.authority_domains.length > 0 ||
+    !!snapshotBlock.brand_voice ||
+    !!snapshotBlock.brand_positioning ||
+    !!snapshotBlock.reader_emotion_target ||
+    !!snapshotBlock.narrative_flow_seed ||
+    !!snapshotBlock.recommended_cta_style;
   const hasExecution =
     !!executionBlock.execution_stage ||
     !!executionBlock.stage_objective ||
@@ -226,6 +236,11 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
         <section className="mt-4 pt-4 border-t border-gray-200">
           <h4 className="text-sm font-semibold text-gray-800 mb-2">Company Context Snapshot</h4>
           <div className="text-sm text-gray-700 space-y-1">
+            {snapshotBlock.brand_voice ? <div><span className="text-gray-500 font-medium">Brand Voice:</span> <span className="whitespace-pre-wrap break-words">{snapshotBlock.brand_voice}</span></div> : null}
+            {snapshotBlock.brand_positioning ? <div><span className="text-gray-500 font-medium">Positioning:</span> <span className="whitespace-pre-wrap break-words">{snapshotBlock.brand_positioning}</span></div> : null}
+            {snapshotBlock.reader_emotion_target ? <div><span className="text-gray-500 font-medium">Reader Emotion Target:</span> <span className="whitespace-pre-wrap break-words">{snapshotBlock.reader_emotion_target}</span></div> : null}
+            {snapshotBlock.narrative_flow_seed ? <div><span className="text-gray-500 font-medium">Narrative Flow Seed:</span> <span className="whitespace-pre-wrap break-words">{snapshotBlock.narrative_flow_seed}</span></div> : null}
+            {snapshotBlock.recommended_cta_style ? <div><span className="text-gray-500 font-medium">Recommended CTA Style:</span> <span className="whitespace-pre-wrap break-words">{snapshotBlock.recommended_cta_style}</span></div> : null}
             {snapshotBlock.core_problem_statement ? <div><span className="text-gray-500 font-medium">Core Problem:</span> <span className="whitespace-pre-wrap break-words">{snapshotBlock.core_problem_statement}</span></div> : null}
             {snapshotBlock.pain_symptoms.length > 0 ? <div><span className="text-gray-500 font-medium">Pain Symptoms:</span> <span className="whitespace-pre-wrap break-words">{snapshotBlock.pain_symptoms.join(', ')}</span></div> : null}
             {snapshotBlock.desired_transformation ? <div><span className="text-gray-500 font-medium">Desired Transformation:</span> <span className="whitespace-pre-wrap break-words">{snapshotBlock.desired_transformation}</span></div> : null}

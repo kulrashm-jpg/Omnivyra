@@ -253,14 +253,14 @@ export default function CampaignRecommendationsPage() {
 
           {durationWeeks < 1 && !isGenerating ? (
             <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-              <p className="text-gray-600">No campaign plan yet. Create a committed plan first.</p>
+              <p className="text-gray-600">No campaign plan yet. Create a submitted plan first.</p>
             </div>
           ) : recommendations.length === 0 && committedWeeks.length === 0 && !isGenerating ? (
             <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
               <TrendingUp className="w-16 h-16 text-gray-300 mx-auto mb-4" />
               <h2 className="text-xl font-semibold text-gray-900 mb-2">No plan or recommendations yet</h2>
               <p className="text-gray-600 mb-6">
-                Create a committed plan first, then click &quot;Generate Recommendations&quot; for AI suggestions.
+                Create a submitted plan first, then click &quot;Generate Recommendations&quot; for AI suggestions.
               </p>
               <button
                 onClick={handleGenerate}
@@ -326,9 +326,9 @@ export default function CampaignRecommendationsPage() {
 
                     return (
                       <div className="space-y-4">
-                        {/* Committed plan (base) */}
+                        {/* Submitted plan (base) */}
                         <div className="space-y-3 text-sm">
-                          <h3 className="font-semibold text-gray-900">From committed plan</h3>
+                          <h3 className="font-semibold text-gray-900">From submitted plan</h3>
                           {committed ? (
                             <>
                               {(committed.primary_objective || committed.phase_label) && (
@@ -349,7 +349,7 @@ export default function CampaignRecommendationsPage() {
                               ) : null}
                             </>
                           ) : (
-                            <p className="text-gray-500 italic">No committed data for this week yet.</p>
+                            <p className="text-gray-500 italic">No submitted data for this week yet.</p>
                           )}
                         </div>
 

@@ -222,7 +222,7 @@ const TWELVE_WEEK_PROGRESSION: WeekTemplate[] = [
   { intent: 'Demonstrate expertise', psychological_movement: 'Authority', content_objective: 'Establish credibility and depth' },
   { intent: 'Foster trust', psychological_movement: 'Trust', content_objective: 'Invite dialogue and address concerns' },
   { intent: 'Show application', psychological_movement: 'Application', content_objective: 'How-to, practical examples' },
-  { intent: 'Reinforce value', psychological_movement: 'Trust / Application', content_objective: 'Differentiate and consolidate learning' },
+  { intent: 'Reinforce value', psychological_movement: 'Application', content_objective: 'Differentiate and consolidate learning' },
   { intent: 'Set up decision', psychological_movement: 'Decision preparation', content_objective: 'Clarify options and next steps' },
   { intent: 'Reduce friction', psychological_movement: 'Conversion preparation', content_objective: 'Overcome objections, create urgency' },
   { intent: 'Drive action', psychological_movement: 'Action / Consolidation', content_objective: 'Clear CTA and recap' },

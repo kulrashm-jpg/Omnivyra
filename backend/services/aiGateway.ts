@@ -50,6 +50,20 @@ const buildMetadata = (model: string, usage: any): GatewayMetadata => ({
 const runCompletion = async (
   request: GatewayRequest & { operation: string }
 ): Promise<GatewayResponse<string>> => {
+  const environment = process.env.NODE_ENV || 'development';
+  const modelName = request.model;
+  const isMock = environment === 'test' || !!process.env.JEST_WORKER_ID;
+  console.info('[campaign-ai][model-mode]', {
+    provider: 'direct-openai',
+    isMock,
+    environment,
+    modelName,
+  });
+  console.info('[campaign-ai][llm-provider-call]', {
+    operation: request.operation,
+    provider: 'direct-openai',
+    modelName,
+  });
   const client = getOpenAiClient();
   const completion = await client.chat.completions.create({
     model: request.model,
@@ -67,6 +81,8 @@ const runCompletion = async (
     prePlanningExplanation: 'pre_planning',
     suggestDuration: 'duration_suggestion',
     chatModeration: 'chat_moderation',
+    generateDailyPlan: 'daily_plan',
+    generateDailyDistributionPlan: 'daily_distribution_plan',
   };
   try {
     await supabase.from('audit_logs').insert({
@@ -118,6 +134,38 @@ export const generateCampaignPlan = async (
   request: GatewayRequest
 ): Promise<GatewayResponse<string>> => {
   return runCompletion({ ...request, operation: 'generateCampaignPlan' });
+};
+
+/**
+ * Daily plan refinement.
+ * IMPORTANT: Use for narrow edits only (e.g. dailyObjective refinement) — caller must enforce allowed fields.
+ */
+export const generateDailyPlan = async (
+  request: GatewayRequest
+): Promise<GatewayResponse<any>> => {
+  const result = await runCompletion({ ...request, operation: 'generateDailyPlan' });
+  const parsed = result.output ? JSON.parse(result.output) : {};
+  return {
+    output: parsed,
+    metadata: result.metadata,
+  };
+};
+
+/**
+ * AI Content Distribution Planner: generates day-wise content distribution from weekly campaign plan.
+ * Returns structured daily plan (short_topic, full_topic, content_type, platform, day, reasoning, festival_consideration).
+ */
+export const generateDailyDistributionPlan = async (
+  request: GatewayRequest
+): Promise<GatewayResponse<any>> => {
+  const result = await runCompletion({ ...request, operation: 'generateDailyDistributionPlan' });
+  let toParse = (typeof result.output === 'string' ? result.output : '') || '';
+  toParse = toParse.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const parsed = toParse ? JSON.parse(toParse) : {};
+  return {
+    output: parsed,
+    metadata: result.metadata,
+  };
 };
 
 export const optimizeWeek = async (request: GatewayRequest): Promise<GatewayResponse<any>> => {
@@ -323,7 +371,7 @@ DEFAULT: ALLOW. Only reject if the message is clearly one of the 4 cases below.
 • Campaign/marketing vocabulary: pain points, stress, anxiety, self-doubt, mental health, wellness, audience problems, key messages, topics to address, target audience, lead gen, conversions, reach, engagement
 • Short affirmations: ok, sure, yes, yeah, please, go ahead, create it, do it, none
 • Deferrals: you define it, you make it, you decide, up to you, your choice
-• Questions/answers about: platforms, dates (YY-MM-DD), content types, metrics, campaign duration, start date
+• Questions/answers about: platforms, dates (YYYY-MM-DD), content types, metrics, campaign duration, start date
 • User frustration: "this is frustrating", "why so many questions" — allow
 • Partial or informal answers — allow
 

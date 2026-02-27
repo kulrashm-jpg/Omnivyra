@@ -20,11 +20,20 @@ type ResultLike = {
   strategy_dna?: { mode?: string | null } | null;
   strategy_sequence?: SequenceLike;
   company_context?: {
+    brand?: {
+      brand_voice?: string | null;
+      brand_positioning?: string | null;
+    } | null;
     problem_transformation?: {
       core_problem_statement?: string | null;
       pain_symptoms?: string[] | null;
       desired_transformation?: string | null;
       authority_domains?: string[] | null;
+    } | null;
+    campaign?: {
+      reader_emotion_target?: string | null;
+      narrative_flow_seed?: unknown;
+      recommended_cta_style?: string | null;
     } | null;
   } | null;
   campaign_blueprint_validated?: {
@@ -78,12 +87,37 @@ export function enrichRecommendationCards<T extends ResultLike>(result: T): T {
 
   const stageByTopic = toStageMetaByTopic(result.strategy_sequence);
   const pt = result.company_context?.problem_transformation ?? null;
+  const brand = result.company_context?.brand ?? null;
+  const campaign = result.company_context?.campaign ?? null;
+
+  const toCompactString = (value: unknown): string | null => {
+    if (value == null) return null;
+    if (typeof value === 'string') {
+      const t = value.trim();
+      return t ? t : null;
+    }
+    if (typeof value === 'object') {
+      try {
+        const s = JSON.stringify(value);
+        return s && s !== '{}' ? s : null;
+      } catch {
+        return null;
+      }
+    }
+    const t = String(value).trim();
+    return t ? t : null;
+  };
 
   const company_context_snapshot = {
     core_problem_statement: pt?.core_problem_statement ?? null,
     pain_symptoms: pt?.pain_symptoms ?? null,
     desired_transformation: pt?.desired_transformation ?? null,
     authority_domains: pt?.authority_domains ?? null,
+    brand_voice: brand?.brand_voice ?? null,
+    brand_positioning: brand?.brand_positioning ?? null,
+    reader_emotion_target: campaign?.reader_emotion_target ?? null,
+    narrative_flow_seed: toCompactString((campaign as any)?.narrative_flow_seed ?? null),
+    recommended_cta_style: campaign?.recommended_cta_style ?? null,
   };
   const blueprintByTopic = new Map<
     string,

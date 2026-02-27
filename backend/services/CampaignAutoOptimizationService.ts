@@ -112,7 +112,6 @@ export async function runAutoOptimization(campaignId: string): Promise<AutoOptim
       },
       evaluationContext: {
         requested_weeks: weeksToApply,
-        proposalSnapshot: proposal,
       },
     });
 

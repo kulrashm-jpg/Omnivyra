@@ -28,6 +28,10 @@ jest.mock('../../services/viralitySnapshotBuilder', () => ({
   canonicalJsonStringify: jest.fn((v) => JSON.stringify(v)),
 }));
 
+jest.mock('../../services/campaignPlanningInputsService', () => ({
+  getCampaignPlanningInputs: jest.fn().mockResolvedValue(null),
+}));
+
 jest.mock('../../services/campaignPlanParser', () => ({
   parseAiPlatformCustomization: jest.fn(),
 }));

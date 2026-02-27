@@ -1,7 +1,6 @@
 // API Endpoint for Content Validation
 import { NextApiRequest, NextApiResponse } from 'next';
-import { PostingServiceFactory } from '@/lib/services/posting';
-import { ScheduledPost } from '@/lib/types/scheduling';
+import { getPlatformRules } from '@/backend/services/platformIntelligenceService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -19,34 +18,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Get posting service for the platform
-    const postingService = PostingServiceFactory.getService(platform);
-    
-    if (!postingService) {
+    const bundle = await getPlatformRules(platform);
+    if (!bundle) {
       return res.status(400).json({
         success: false,
         error: `Platform ${platform} not supported`,
       });
     }
 
-    // Create a mock scheduled post for validation
-    const mockPost: ScheduledPost = {
-      id: 'validation_post',
-      platform,
-      contentType,
-      content,
-      mediaUrls,
-      hashtags,
-      scheduledFor: new Date(),
-      status: 'draft',
-      retryCount: 0,
-      maxRetries: 3,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+    const normalizedType = String(contentType || 'post').toLowerCase().trim();
+    const rules = bundle.content_rules || [];
+    const rule =
+      rules.find((r: any) => String(r?.content_type || '').toLowerCase().trim() === normalizedType) || rules[0];
 
-    // Validate the content
-    const validation = await postingService.validate(mockPost);
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    const maxChars = rule?.max_characters != null ? Number(rule.max_characters) : null;
+    if (maxChars && String(content).length > maxChars) {
+      errors.push(`Content exceeds character limit of ${maxChars}`);
+    }
+
+    const hashtagLimit =
+      rule?.formatting_rules && typeof rule.formatting_rules === 'object'
+        ? Number((rule.formatting_rules as any).hashtag_limit ?? 0)
+        : 0;
+    const hashtagCount = Array.isArray(hashtags) ? hashtags.length : 0;
+    if (hashtagLimit > 0 && hashtagCount > hashtagLimit) {
+      errors.push(`Too many hashtags. Maximum allowed: ${hashtagLimit}`);
+    }
+
+    const mediaCount = Array.isArray(mediaUrls) ? mediaUrls.length : 0;
+    const mediaFormat = String(rule?.media_format || 'text').toLowerCase();
+    if (mediaFormat === 'text' && mediaCount > 0) {
+      warnings.push('This content type is typically text-only; media may be ignored');
+    }
+    if (mediaFormat !== 'text' && mediaCount === 0) {
+      warnings.push('This content type typically performs better with media');
+    }
+
+    const validation = { valid: errors.length === 0, errors, warnings };
 
     res.status(200).json({
       success: true,
@@ -57,8 +68,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         platform,
         contentType,
         characterCount: content.length,
-        hashtagCount: hashtags.length,
-        mediaCount: mediaUrls.length,
+        hashtagCount,
+        mediaCount,
       },
     });
   } catch (error: any) {

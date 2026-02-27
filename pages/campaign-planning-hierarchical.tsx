@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
 import { supabase } from '../utils/supabaseClient';
 import { 
@@ -28,9 +28,30 @@ import {
   X,
   Edit,
   Trash2,
-  MoreHorizontal
+  MoreHorizontal,
+  GripVertical,
+  RefreshCw,
+  ExternalLink
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
+
+const CALENDAR_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+type GridActivity = {
+  id: string;
+  execution_id: string;
+  week_number: number;
+  day: string;
+  title: string;
+  platform: string;
+  content_type: string;
+  raw_item: Record<string, unknown>;
+  planId?: string;
+};
+
+function nonEmptyGrid(v: unknown): string {
+  return String(v ?? '').trim();
+}
 
 const CampaignAIChat = dynamic(() => import('../components/CampaignAIChat'), { ssr: false });
 
@@ -42,6 +63,7 @@ interface Campaign {
   createdAt: string;
   progress: number;
   company_id?: string;
+  current_stage?: string;
 }
 
 interface WeekPlan {
@@ -61,6 +83,12 @@ interface WeekPlan {
   dailyContent?: any;
   platforms?: string[];
   aiSuggestions?: string[];
+  /** Blueprint-derived (committed) execution context */
+  weekNumber?: number;
+  platform_allocation?: Record<string, number>;
+  platform_content_breakdown?: Record<string, any>;
+  topics_to_cover?: string[];
+  week_extras?: Record<string, unknown>;
 }
 
 interface CampaignOverview {
@@ -76,17 +104,20 @@ export default function CampaignPlanningHierarchical() {
   const [campaignId, setCampaignId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedWeek, setSelectedWeek] = useState<WeekPlan | null>(null);
-  const [selectedDay, setSelectedDay] = useState<any>(null);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [showWeekDetail, setShowWeekDetail] = useState(false);
-  const [showDayDetail, setShowDayDetail] = useState(false);
   const [weeklyPlans, setWeeklyPlans] = useState<any[]>([]);
   const [showAIEnhancement, setShowAIEnhancement] = useState(false);
   const [selectedWeekForAI, setSelectedWeekForAI] = useState<number | null>(null);
-  const [showDailyPlanCreation, setShowDailyPlanCreation] = useState(false);
-  const [selectedWeekForDaily, setSelectedWeekForDaily] = useState<number | null>(null);
   const [isExpanding, setIsExpanding] = useState(false);
   const [showAIChat, setShowAIChat] = useState(false);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [dailyActivities, setDailyActivities] = useState<GridActivity[]>([]);
+  const [regeneratingWeek, setRegeneratingWeek] = useState<number | null>(null);
+  const [draggedActivity, setDraggedActivity] = useState<GridActivity | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ week: number; day: string } | null>(null);
+
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
 
   // Prefer overview.plans (committed blueprint) — it has full platform_content_breakdown, topics_to_cover.
   // Fall back to weeklyPlans only when overview has no plans.
@@ -144,6 +175,12 @@ export default function CampaignPlanningHierarchical() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const fetchCampaignOverview = async (id: string) => {
     setIsLoading(true);
     try {
@@ -152,7 +189,7 @@ export default function CampaignPlanningHierarchical() {
         const data = await response.json();
         setOverview(data.overview);
       } else {
-        // Fallback: committed plan may exist in blueprint even if campaign metadata lookup failed
+        // Fallback: submitted plan may exist in blueprint even if campaign metadata lookup failed
         const plansRes = await fetchWithAuth(`/api/campaigns/get-weekly-plans?campaignId=${id}`);
         if (plansRes.ok) {
           const weeks = await plansRes.json();
@@ -174,10 +211,16 @@ export default function CampaignPlanningHierarchical() {
               status: 'ai-enhanced',
               theme: w.theme || `Week ${w.weekNumber}`,
               contentFocus: w.focusArea || w.theme,
+              targetAudience: w.targetAudience || 'General Audience',
+              keyMessaging: w.keyMessaging || '',
               platform_allocation: w.platform_allocation ?? {},
               platform_content_breakdown: w.platform_content_breakdown ?? {},
               topics_to_cover: w.topics_to_cover ?? [],
               contentTypes: w.contentTypes ?? [],
+              platformStrategy: w.platformStrategy || 'Multi-platform',
+              callToAction: w.callToAction || 'Engage with content',
+              successMetrics: w.successMetrics || {},
+              createdAt: w.createdAt || new Date().toISOString(),
               aiSuggestions: w.topics_to_cover ?? [],
             }));
             const totalScore = plans.reduce((sum: number, p: any) => sum + getWeekScore(p), 0);
@@ -187,7 +230,7 @@ export default function CampaignPlanningHierarchical() {
               totalWeeks: plans.length,
               completedWeeks,
               progressPercentage,
-              campaigns: [{ id, name: 'Your Campaign', status: 'planning', progress: progressPercentage, userId: '', createdAt: '', description: '' }],
+              campaigns: [{ id, name: 'Your Campaign', status: 'planning', progress: progressPercentage, userId: '', createdAt: '' }],
               plans,
             });
           }
@@ -205,24 +248,193 @@ export default function CampaignPlanningHierarchical() {
       const response = await fetchWithAuth(`/api/campaigns/get-weekly-plans?campaignId=${campaignId}`);
       if (response.ok) {
         const data = await response.json();
-        console.log('Weekly plans loaded:', data);
         setWeeklyPlans(data);
-      } else {
-        console.error('Failed to fetch weekly plans');
       }
     } catch (error) {
       console.error('Error fetching weekly plans:', error);
     }
   };
 
+  const loadDailyActivities = useCallback(async () => {
+    if (!campaignId) return;
+    const companyId = (overview?.campaigns?.[0] as any)?.company_id ?? (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('companyId') : null) ?? '';
+    try {
+      const planRes = await fetchWithAuth(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`);
+      const payload = planRes.ok ? await planRes.json().catch(() => ({})) : {};
+      const planWeeks = (Array.isArray(payload?.draftPlan?.weeks) && payload.draftPlan.weeks.length > 0 ? payload.draftPlan.weeks : (Array.isArray(payload?.committedPlan?.weeks) ? payload.committedPlan.weeks : [])) || [];
+      const mapped: GridActivity[] = [];
+      for (const week of planWeeks) {
+        const weekNumber = Number((week as any)?.week ?? (week as any)?.week_number ?? 0) || 0;
+        const items = Array.isArray((week as any)?.daily_execution_items) ? (week as any).daily_execution_items : [];
+        items.forEach((item: any, itemIndex: number) => {
+          const execution_id = nonEmptyGrid(item?.execution_id) || `execution-${weekNumber}-${itemIndex}`;
+          const dayRaw = nonEmptyGrid((item as any)?.day);
+          const day = dayRaw || CALENDAR_DAYS[itemIndex % 7];
+          const title = nonEmptyGrid(item?.title ?? item?.topic ?? item?.writer_content_brief?.topicTitle) || 'Untitled';
+          mapped.push({
+            id: execution_id,
+            execution_id,
+            week_number: weekNumber,
+            day,
+            title,
+            platform: nonEmptyGrid(item?.platform).toLowerCase() || 'linkedin',
+            content_type: nonEmptyGrid(item?.content_type).toLowerCase() || 'post',
+            raw_item: item && typeof item === 'object' ? item : {},
+          });
+        });
+      }
+      if (mapped.length === 0) {
+        const dailyRes = await fetchWithAuth(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(campaignId)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`);
+        if (dailyRes.ok) {
+          const dailyPlans: any[] = await dailyRes.json().catch(() => []);
+          dailyPlans.forEach((plan: any, idx: number) => {
+            const weekNumber = Number(plan.weekNumber ?? plan.week_number ?? 1) || 1;
+            const dayOfWeek = nonEmptyGrid(plan.dayOfWeek ?? plan.day_of_week) || 'Monday';
+            const title = nonEmptyGrid(plan.title ?? plan.topic ?? (plan.dailyObject as any)?.topicTitle) || 'Untitled';
+            const raw = (plan.dailyObject && typeof plan.dailyObject === 'object') ? plan.dailyObject : plan;
+            mapped.push({
+              id: String(plan.id ?? `daily-${weekNumber}-${idx}`),
+              execution_id: String(plan.id ?? `daily-${weekNumber}-${idx}`),
+              week_number: weekNumber,
+              day: dayOfWeek,
+              title,
+              platform: nonEmptyGrid(plan.platform).toLowerCase() || 'linkedin',
+              content_type: String(plan.content_type ?? (plan.dailyObject as any)?.contentType ?? 'post').toLowerCase(),
+              raw_item: raw,
+              planId: plan.id,
+            });
+          });
+        }
+      }
+      setDailyActivities(mapped);
+    } catch {
+      setDailyActivities([]);
+    }
+  }, [campaignId, overview?.campaigns]);
+
+  useEffect(() => {
+    if (campaignId && (overview || weeklyPlans.length > 0)) loadDailyActivities();
+  }, [campaignId, overview, weeklyPlans.length, loadDailyActivities]);
+
+  const openActivityWorkspace = (activity: GridActivity) => {
+    const raw = activity.raw_item;
+    const hasNested = (raw as any)?.writer_content_brief != null || (raw as any)?.intent != null;
+    const dailyExecutionItem = hasNested
+      ? { ...raw }
+      : {
+          ...raw,
+          topic: activity.title,
+          title: activity.title,
+          platform: activity.platform,
+          content_type: activity.content_type,
+          intent: {
+            objective: (raw as any)?.dailyObjective ?? (raw as any)?.objective,
+            pain_point: (raw as any)?.whatProblemAreWeAddressing ?? (raw as any)?.summary,
+            outcome_promise: (raw as any)?.whatShouldReaderLearn ?? (raw as any)?.introObjective,
+            cta_type: (raw as any)?.desiredAction ?? (raw as any)?.cta,
+          },
+          writer_content_brief: {
+            topicTitle: (raw as any)?.topicTitle ?? (raw as any)?.topic ?? activity.title,
+            writingIntent: (raw as any)?.writingIntent ?? (raw as any)?.description,
+            whatShouldReaderLearn: (raw as any)?.whatShouldReaderLearn ?? (raw as any)?.introObjective,
+            whatProblemAreWeAddressing: (raw as any)?.whatProblemAreWeAddressing ?? (raw as any)?.summary,
+            desiredAction: (raw as any)?.desiredAction ?? (raw as any)?.cta,
+            narrativeStyle: (raw as any)?.narrativeStyle ?? (raw as any)?.brandVoice,
+            topicGoal: (raw as any)?.dailyObjective ?? (raw as any)?.objective,
+          },
+        };
+    const workspaceKey = `activity-workspace-${campaignId}-${activity.execution_id}`;
+    const payload = {
+      campaignId,
+      weekNumber: activity.week_number,
+      day: activity.day,
+      activityId: activity.execution_id,
+      title: activity.title,
+      topic: activity.title,
+      description: String((raw as any)?.writingIntent ?? (raw as any)?.description ?? ''),
+      dailyExecutionItem,
+      schedules: [],
+    };
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(workspaceKey, JSON.stringify(payload));
+        window.open(`/activity-workspace?workspaceKey=${encodeURIComponent(workspaceKey)}`, '_blank');
+      }
+    } catch (e) {
+      console.error('Failed to open Activity Content Workspace', e);
+    }
+  };
+
+  const handleRegenerateWeek = async (weekNumber: number) => {
+    setRegeneratingWeek(weekNumber);
+    try {
+      const plan = displayPlans.find((p: any) => (p.weekNumber ?? p.week) === weekNumber);
+      const res = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId,
+          companyId: (overview?.campaigns?.[0] as any)?.company_id ?? undefined,
+          week: weekNumber,
+          theme: plan?.theme || `Week ${weekNumber} Theme`,
+          contentFocus: plan?.contentFocus ?? '',
+          targetAudience: 'General Audience',
+          distribution_mode: 'staggered',
+        }),
+      });
+      if (res.ok) {
+        await fetchCampaignOverview(campaignId!);
+        await fetchWeeklyPlans(campaignId!);
+        await loadDailyActivities();
+        notify('success', `Week ${weekNumber} daily plan updated.`);
+      } else throw new Error('Regenerate failed');
+    } catch {
+      notify('error', 'Failed to regenerate week. Try again.');
+    } finally {
+      setRegeneratingWeek(null);
+    }
+  };
+
+  const handleActivityDrop = async (targetWeek: number, targetDay: string) => {
+    if (!draggedActivity || !campaignId) return;
+    setDropTarget(null);
+    setDraggedActivity(null);
+    if (draggedActivity.week_number === targetWeek && draggedActivity.day === targetDay) return;
+    if (draggedActivity.week_number !== targetWeek) return;
+    if (!draggedActivity.planId) return;
+    const res = await fetchWithAuth('/api/campaigns/save-week-daily-plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        campaignId,
+        weekNumber: targetWeek,
+        items: [{ id: draggedActivity.planId, dayOfWeek: targetDay }],
+      }),
+    });
+    if (res.ok) {
+      setDailyActivities((prev) =>
+        prev.map((a) => (a.id === draggedActivity.id ? { ...a, day: targetDay } : a))
+      );
+      notify('success', 'Activity moved.');
+    }
+  };
+
+  const getActivitiesForDay = (weekNumber: number, day: string) =>
+    dailyActivities.filter((a) => a.week_number === weekNumber && a.day === day);
+
   const handleAIEnhancement = (weekNumber: number) => {
     setSelectedWeekForAI(weekNumber);
     setShowAIEnhancement(true);
   };
 
-  const handleDailyPlanCreation = (weekNumber: number) => {
-    setSelectedWeekForDaily(weekNumber);
-    setShowDailyPlanCreation(true);
+  const buildDailyPlanGridUrl = () => {
+    const params = new URLSearchParams();
+    if (campaign?.company_id) params.set('companyId', String(campaign.company_id));
+    return `/campaign-daily-plan/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
+  };
+
+  const openDailyPlanGrid = () => {
+    window.location.href = buildDailyPlanGridUrl();
   };
 
   const getStatusColor = (status: string) => {
@@ -251,7 +463,11 @@ export default function CampaignPlanningHierarchical() {
       charting: 'Charting',
       schedule: 'Schedule',
     };
-    return labels[stage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
+    const known = labels[stage];
+    if (known) return known;
+    const s = String(stage || '').trim();
+    if (!s) return 'Planning';
+    return s.charAt(0).toUpperCase() + s.slice(1);
   };
 
   const getWeekIcon = (week: number) => {
@@ -283,10 +499,10 @@ export default function CampaignPlanningHierarchical() {
         fetchWeeklyPlans(campaignId);
         fetchCampaignOverview(campaignId);
       } else {
-        alert(data.hint || data.error || 'Could not expand. Create a 12-week plan first.');
+        notify('error', data.hint || data.error || 'Could not expand. Create a 12-week plan first.');
       }
     } catch {
-      alert('Failed to expand to week plans.');
+      notify('error', 'Failed to expand to week plans.');
     } finally {
       setIsExpanding(false);
     }
@@ -315,7 +531,7 @@ export default function CampaignPlanningHierarchical() {
         console.log('Generated weekly structure:', result);
         
         // Show success and refresh
-        alert(`✅ Generated 7-day content structure for Week ${weekPlan.week}!`);
+        notify('success', `Generated 7-day content structure for Week ${weekPlan.week}.`);
         fetchCampaignOverview(campaignId!);
         setShowWeekDetail(false);
       } else {
@@ -323,17 +539,12 @@ export default function CampaignPlanningHierarchical() {
       }
     } catch (error) {
       console.error('Error generating weekly structure:', error);
-      alert('❌ Failed to generate daily content structure. Please try again.');
+      notify('error', 'Failed to generate daily content structure. Please try again.');
     }
   };
 
   const handleDailyPlanning = (weekPlan: WeekPlan) => {
-    // Open daily planning interface for this specific week
-    const dailyPlanningUrl = `/daily-planning?campaignId=${campaignId}&week=${weekPlan.week}`;
-    
-    // Check if daily planning page exists, if not navigate to campaign planning with parameters
-    window.open(dailyPlanningUrl, '_blank') || (window.location.href = `/campaign-planning?campaignId=${campaignId}&week=${weekPlan.week}&tab=daily`);
-    
+    openDailyPlanGrid();
     setShowWeekDetail(false);
   };
 
@@ -400,6 +611,21 @@ export default function CampaignPlanningHierarchical() {
       </Head>
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {notice && (
+          <div
+            className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+              notice.type === 'success'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : notice.type === 'error'
+                  ? 'border-red-200 bg-red-50 text-red-800'
+                  : 'border-indigo-200 bg-indigo-50 text-indigo-800'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {notice.message}
+          </div>
+        )}
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <div className="flex items-center gap-4">
@@ -491,31 +717,31 @@ export default function CampaignPlanningHierarchical() {
           </div>
         </div>
 
-        {/* 12-Week Grid */}
+        {/* Calendar view: week × day grid with daily activities */}
         <div className="mb-8">
-          <div className="flex justify-between items-center mb-6">
+          <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-gray-900">{overview.totalWeeks}-Week Content Plan</h2>
-            
-            <div className="flex gap-2">
-              <select 
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              >
-                <option value="all">All Weeks</option>
-                <option value="completed">Completed</option>
-                <option value="pending">Pending</option>
-                <option value="in-progress">In Progress</option>
-              </select>
-            </div>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="all">All Weeks</option>
+              <option value="completed">Completed</option>
+              <option value="pending">Pending</option>
+              <option value="in-progress">In Progress</option>
+            </select>
           </div>
+          <p className="text-sm text-gray-600 mb-4">
+            Drag activities between days to reorder (same week). Click an activity to open the Activity Content Workspace.
+          </p>
 
           {displayPlans.length === 0 ? (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
               <Calendar className="w-16 h-16 text-gray-300 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-gray-900 mb-2">No Weekly Plans Created</h3>
               <p className="text-gray-600 mb-6">Start building your campaign content strategy</p>
-              <button 
+              <button
                 onClick={handleCreateNewPlan}
                 className="bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 mx-auto"
               >
@@ -524,294 +750,97 @@ export default function CampaignPlanningHierarchical() {
               </button>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-6">
               {Array.from({ length: (overview?.totalWeeks ?? displayPlans.length) || 12 }, (_, index) => {
                 const weekNumber = index + 1;
                 const plan = displayPlans.find((p: any) => (p.weekNumber ?? p.week) === weekNumber);
-                const isSelected = selectedWeek?.week === weekNumber;
-                
+                const theme = plan?.theme || `Week ${weekNumber} Theme`;
+                const isRegenerating = regeneratingWeek === weekNumber;
                 return (
-                  <div
-                    key={weekNumber}
-                    className={`bg-white rounded-lg shadow-sm border transition-all duration-200 ${
-                      isSelected ? 'border-purple-300 shadow-md' : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    {/* Week Header */}
-                    <div 
-                      className="p-4 cursor-pointer"
-                      onClick={() => {
-                        if (plan) {
-                          setSelectedWeek(plan);
-                          setShowWeekDetail(true);
-                        }
-                      }}
-                    >
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-3">
-                          {getWeekIcon(weekNumber)}
-                          <div>
-                            <span className="font-semibold text-gray-900">Week {weekNumber}</span>
-                            {plan ? (
-                              <>
-                                <div className="text-sm font-medium text-gray-700 mt-1">
-                                  {plan.theme || `Week ${weekNumber} Theme`}
-                                </div>
-                                <div className="text-xs text-gray-500 mt-1">
-                                  {plan.focusArea || plan.contentFocus || 'Setup weekly content focus...'}
-                                </div>
-                                {plan.aiContent && (Array.isArray(plan.aiContent) ? plan.aiContent.length > 0 : Object.keys(plan.aiContent).length > 0) && (
-                                  <div className="text-xs text-blue-600 mt-1">
-                                    ✓ AI Content Generated
-                                  </div>
-                                )}
-                                {plan.aiSuggestions && plan.aiSuggestions.length > 0 && (
-                                  <div className="text-xs text-purple-600 mt-1">
-                                    ✓ {plan.aiSuggestions.length} AI Suggestions
-                                  </div>
-                                )}
-                                {plan.dailyContent && Object.keys(plan.dailyContent).length > 0 && (
-                                  <div className="text-xs text-green-600 mt-1">
-                                    ✓ Daily Structure Ready
-                                  </div>
-                                )}
-                              </>
-                            ) : (
-                              <>
-                                <div className="text-sm font-medium text-gray-700 mt-1">
-                                  Week {weekNumber} Theme
-                                </div>
-                                <div className="text-xs text-gray-500 mt-1">
-                                  To be planned
-                                </div>
-                                <div className="text-xs text-orange-600 mt-1">
-                                  Click "Plan Week" to get started
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center gap-2">
-                          {plan ? (
-                            <>
-                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(plan.status)}`}>
-                                {plan.status}
-                              </span>
-                              
-                              {/* AI Enhancement Button */}
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleAIEnhancement(weekNumber);
-                                }}
-                                className="flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors text-xs"
-                                title="AI Enhance Week"
-                              >
-                                <Sparkles className="w-3 h-3" />
-                                [+]
-                              </button>
-                              
-                              {/* Daily Plan Creation Button */}
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDailyPlanCreation(weekNumber);
-                                }}
-                                className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors text-xs"
-                                title="Create Daily Plan"
-                              >
-                                <Calendar className="w-3 h-3" />
-                                Daily
-                              </button>
-                              
-                              {/* View Days Button */}
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setShowWeekDetail(true);
-                                  setSelectedWeek(plan);
-                                }}
-                                className="flex items-center gap-1 text-sm text-gray-600 hover:text-purple-700"
-                              >
-                                <ChevronRight className="w-3 h-3" />
-                              </button>
-                            </>
-                          ) : (
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (campaignId) {
-                                  window.location.href = `/campaign-planning?campaignId=${campaignId}&week=${weekNumber}&openAI=true`;
-                                }
-                              }}
-                              className="flex items-center gap-1 text-sm text-gray-500 hover:text-purple-600"
-                            >
-                              <Plus className="w-4 h-4" />
-                              Plan Week
-                            </button>
-                          )}
-                        </div>
+                  <div key={weekNumber} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-200">
+                      <h3 className="font-semibold text-gray-900">Week {weekNumber}: {theme}</h3>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleAIEnhancement(weekNumber)}
+                          className="flex items-center gap-1 px-2 py-1.5 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-xs font-medium"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          [+]
+                        </button>
+                        <button
+                          onClick={() => handleRegenerateWeek(weekNumber)}
+                          disabled={isRegenerating}
+                          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-100 text-indigo-700 hover:bg-indigo-200 text-sm font-medium disabled:opacity-50"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${isRegenerating ? 'animate-spin' : ''}`} />
+                          Regenerate
+                        </button>
                       </div>
                     </div>
-
-                    {/* Week Days (shows when expanded) */}
-                    {isSelected && selectedWeek && (
-                      <div className="border-t border-gray-100">
-                        <div className="p-4">
-                          {/* Week context from committed plan: platforms, content types, topics */}
-                          {(selectedWeek.platform_allocation && Object.keys(selectedWeek.platform_allocation).length > 0) ||
-                           (selectedWeek.platform_content_breakdown && Object.keys(selectedWeek.platform_content_breakdown).length > 0) ||
-                           (selectedWeek.topics_to_cover && selectedWeek.topics_to_cover.length > 0) ? (
-                            <div className="mb-4 p-4 rounded-lg bg-indigo-50/80 border border-indigo-100">
-                              <h4 className="text-sm font-semibold text-indigo-900 mb-3">Week context (from committed plan)</h4>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                                {selectedWeek.platform_allocation && Object.keys(selectedWeek.platform_allocation).length > 0 && (
-                                  <div>
-                                    <span className="font-medium text-gray-700">Platforms & volume:</span>
-                                    <div className="flex flex-wrap gap-2 mt-1">
-                                      {Object.entries(selectedWeek.platform_allocation).map(([platform, count]) => (
-                                        <span key={platform} className="px-2 py-0.5 bg-white rounded text-gray-800 border">
-                                          {platform}: {count} posts
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                                {selectedWeek.platform_content_breakdown && Object.keys(selectedWeek.platform_content_breakdown).length > 0 && (
-                                  <div>
-                                    <span className="font-medium text-gray-700">Per-platform content:</span>
-                                    <div className="mt-1 space-y-1">
-                                      {Object.entries(selectedWeek.platform_content_breakdown).map(([platform, items]: [string, any]) => (
-                                        <div key={platform} className="text-xs">
-                                          <span className="font-medium capitalize">{platform}:</span>{' '}
-                                          {(Array.isArray(items) ? items : []).map((it: any) =>
-                                            `${it.type || 'post'}${it.count > 1 ? ` ×${it.count}` : ''}${it.topic ? ` (${it.topic})` : ''}`
-                                          ).join(', ')}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                                {selectedWeek.contentTypes && selectedWeek.contentTypes.length > 0 && (
-                                  <div>
-                                    <span className="font-medium text-gray-700">Content types:</span>
-                                    <div className="flex flex-wrap gap-1 mt-1">
-                                      {selectedWeek.contentTypes.map((ct: string) => (
-                                        <span key={ct} className="px-2 py-0.5 bg-white rounded text-gray-700 border text-xs">
-                                          {ct}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                                {selectedWeek.topics_to_cover && selectedWeek.topics_to_cover.length > 0 && (
-                                  <div>
-                                    <span className="font-medium text-gray-700">Topics to cover:</span>
-                                    <ul className="mt-1 list-disc list-inside text-gray-600 text-xs">
-                                      {selectedWeek.topics_to_cover.slice(0, 6).map((t: string, i: number) => (
-                                        <li key={i}>{t}</li>
-                                      ))}
-                                      {selectedWeek.topics_to_cover.length > 6 && (
-                                        <li className="text-gray-500">+{selectedWeek.topics_to_cover.length - 6} more</li>
-                                      )}
-                                    </ul>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          ) : null}
-                          {/* Dynamic week extras: summary, objectives, days_to_post, etc. */}
-                          {selectedWeek.week_extras && typeof selectedWeek.week_extras === 'object' && Object.keys(selectedWeek.week_extras).length > 0 && (
-                            <div className="mb-4 p-4 rounded-lg bg-amber-50/80 border border-amber-100">
-                              <h4 className="text-sm font-semibold text-amber-900 mb-3">Week extras (AI-enriched)</h4>
-                              <div className="space-y-3 text-sm">
-                                {Object.entries(selectedWeek.week_extras).map(([key, val]) => {
-                                  const label = key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-                                  const display = Array.isArray(val)
-                                    ? val.map((v: any) => (typeof v === 'object' ? JSON.stringify(v) : String(v))).join(', ')
-                                    : typeof val === 'object' && val !== null
-                                      ? JSON.stringify(val)
-                                      : String(val ?? '');
-                                  return (
-                                    <div key={key}>
-                                      <span className="font-medium text-gray-700">{label}:</span>
-                                      <p className="mt-0.5 text-gray-600 text-xs whitespace-pre-wrap">{display}</p>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                          {/* Refine this week with AI chat */}
-                          <div className="mb-4 flex items-center gap-2">
-                            <button
-                              onClick={() => setShowAIChat(true)}
-                              className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors"
-                            >
-                              <MessageCircle className="w-4 h-4" />
-                              Refine Week {weekNumber} with AI Chat
-                            </button>
-                          </div>
-                          <h4 className="text-sm font-medium text-gray-700 mb-3">7-Day Content Plan</h4>
-                          <div className="grid grid-cols-7 gap-2">
-                            {Array.from({ length: 7 }, (_, dayIndex) => {
-                              const dayNumber = dayIndex + 1;
-                              const dayData = selectedWeek.contentTypes || [];
-                              const hasContent = dayNumber <= dayData.length;
-                              
-                              return (
-                                <button
-                                  key={dayNumber}
-                                  onClick={() => {
-                                    setSelectedDay({
-                                      week: weekNumber,
-                                      day: dayNumber,
-                                      content: dayData[dayIndex - 1] || null,
-                                      theme: selectedWeek.theme
-                                    });
-                                    setShowDayDetail(true);
-                                  }}
-                                  className={`p-3 rounded-lg border text-center transition-all ${
-                                    hasContent 
-                                      ? 'bg-purple-50 border-purple-200 hover:bg-purple-100' 
-                                      : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
-                                  }`}
+                    <div className="grid grid-cols-7 gap-px bg-gray-200">
+                      {CALENDAR_DAYS.map((day) => {
+                        const cellActivities = getActivitiesForDay(weekNumber, day);
+                        const isDropTarget = dropTarget?.week === weekNumber && dropTarget?.day === day;
+                        return (
+                          <div
+                            key={day}
+                            onDragOver={(e) => { e.preventDefault(); setDropTarget({ week: weekNumber, day }); }}
+                            onDragLeave={() => setDropTarget((t) => (t?.week === weekNumber && t?.day === day ? null : t))}
+                            onDrop={(e) => { e.preventDefault(); handleActivityDrop(weekNumber, day); }}
+                            className={`min-h-[100px] bg-white p-2 ${isDropTarget ? 'ring-2 ring-indigo-400 bg-indigo-50/50' : ''}`}
+                          >
+                            <div className="text-xs font-medium text-gray-500 mb-1">{day.slice(0, 3)}</div>
+                            <div className="space-y-1">
+                              {cellActivities.map((act) => (
+                                <div
+                                  key={act.id}
+                                  draggable
+                                  onDragStart={() => setDraggedActivity(act)}
+                                  onDragEnd={() => setDraggedActivity(null)}
+                                  onClick={() => openActivityWorkspace(act)}
+                                  className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 hover:bg-indigo-50 hover:border-indigo-200 p-1.5 cursor-pointer group"
                                 >
-                                  <div className="text-xs font-medium text-gray-600">Day {dayNumber}</div>
-                                  <div className="text-xs mt-1 text-gray-500">
-                                    {hasContent ? (
-                                      <span className="text-purple-600">●</span>
-                                    ) : (
-                                      <span className="text-gray-400">○</span>
-                                    )}
-                                  </div>
-                                </button>
-                              );
-                            })}
+                                  <GripVertical className="w-3 h-3 text-gray-400 shrink-0 opacity-0 group-hover:opacity-100" />
+                                  <span className="text-xs text-gray-800 truncate flex-1" title={act.title}>
+                                    {act.title.slice(0, 24)}{act.title.length > 24 ? '…' : ''}
+                                  </span>
+                                  <span className="text-[10px] text-gray-500 capitalize">{act.platform}</span>
+                                  <ExternalLink className="w-3 h-3 text-gray-400 shrink-0" />
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                          
-                          <div className="flex justify-end mt-3">
-                            <button className="text-sm text-purple-600 hover:text-purple-700 flex items-center gap-1">
-                              <Sparkles className="w-3 h-3" />
-                              AI Enhance Week
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })}
             </div>
+          )}
+          {displayPlans.length > 0 && (
+            <p className="text-xs text-gray-500 mt-4">And so on… Add more weeks from the main plan.</p>
           )}
         </div>
 
         {/* Quick Actions */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <button 
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <button
+              onClick={() => window.location.href = `/campaign-daily-plan/${campaignId}${campaign?.company_id ? `?companyId=${encodeURIComponent(String(campaign.company_id))}` : ''}`}
+              className="flex items-center gap-3 p-4 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors bg-indigo-50/50"
+            >
+              <div className="p-2 bg-indigo-100 rounded-lg">
+                <Calendar className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div>
+                <div className="font-medium text-gray-900">View plan & Work on Daily</div>
+                <div className="text-sm text-gray-600">Open daily plan page — all weeks (including unworked) shown there</div>
+              </div>
+            </button>
+            <button
               onClick={() => window.open(`/analytics?campaignId=${campaignId}`, '_blank')}
               className="flex items-center gap-3 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
             >
@@ -823,8 +852,7 @@ export default function CampaignPlanningHierarchical() {
                 <div className="text-sm text-gray-600">Performance metrics</div>
               </div>
             </button>
-            
-            <button 
+            <button
               onClick={() => window.open(`/audience-insights?campaignId=${campaignId}`, '_blank')}
               className="flex items-center gap-3 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
             >
@@ -836,8 +864,7 @@ export default function CampaignPlanningHierarchical() {
                 <div className="text-sm text-gray-600">Audience insights</div>
               </div>
             </button>
-            
-            <button 
+            <button
               onClick={() => window.open(`/content-calendar?campaignId=${campaignId}`, '_blank')}
               className="flex items-center gap-3 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
             >
@@ -992,83 +1019,7 @@ export default function CampaignPlanningHierarchical() {
           </div>
         )}
 
-        {/* Day Detail Modal */}
-        {showDayDetail && selectedDay && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full mx-4">
-              <div className="p-6">
-                <div className="flex justify-between items-center mb-6">
-                  <div>
-                    <h2 className="text-xl font-semibold text-gray-900">Week {selectedDay.week}, Day {selectedDay.day}</h2>
-                    <p className="text-gray-600 mt-1">{selectedDay.theme}</p>
-                  </div>
-                  <button 
-                    onClick={() => setShowDayDetail(false)}
-                    className="text-gray-400 hover:text-gray-600"
-                  >
-                    <X className="w-6 h-6" />
-                  </button>
-                </div>
-
-                <div className="mb-6">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Content Type</label>
-                      <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                        <p className="text-sm text-blue-800 font-medium">{selectedDay.content?.contentType || 'Educational Content'}</p>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Platforms</label>
-                      <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                        <div className="flex gap-2 flex-wrap">
-                          {['LinkedIn', 'Twitter', 'Facebook', 'Instagram'].map((platform, index) => (
-                            <span key={index} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">
-                              {platform}
-                            </span>
-                          ))}
-                        </div>
-                        <p className="text-xs text-gray-500 mt-2">Platforms will be configured in daily planning</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Content Plan</label>
-                    {selectedDay.content ? (
-                      <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
-                        <h4 className="font-medium text-purple-900 mb-2">{selectedDay.content.title}</h4>
-                        <p className="text-sm text-purple-800 mb-2">{selectedDay.content.description}</p>
-                        <div className="flex gap-2 mt-2">
-                          {selectedDay.content.keywords?.map((keyword: string, index: number) => (
-                            <span key={index} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">
-                              #{keyword}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="p-4 border-2 border-dashed border-gray-300 rounded-lg text-center">
-                        <p className="text-gray-500">No detailed plan for this day</p>
-                        <p className="text-xs text-gray-400 mt-1">Use "AI Generate Content" to create a plan</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex gap-3">
-                  <button className="flex-1 bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2">
-                    <Sparkles className="w-4 h-4" />
-                    AI Generate Content
-                  </button>
-                  <button className="flex-1 border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg font-semibold transition-all duration-200">
-                    Schedule Post
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        
 
         {/* AI Enhancement Modal */}
         {showAIEnhancement && selectedWeekForAI && (
@@ -1128,157 +1079,7 @@ export default function CampaignPlanningHierarchical() {
           </div>
         )}
 
-        {/* Daily Plan Creation Modal */}
-        {showDailyPlanCreation && selectedWeekForDaily && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-xl p-6 w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-semibold">Create Daily Plan for Week {selectedWeekForDaily}</h3>
-                <button 
-                  onClick={() => setShowDailyPlanCreation(false)}
-                  className="text-gray-500 hover:text-gray-700"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              
-              <div className="space-y-6">
-                {/* Week Overview — from committed plan */}
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <h4 className="font-medium mb-2">Week {selectedWeekForDaily} Overview (from committed plan)</h4>
-                  {(() => {
-                    const plan = displayPlans.find((p: any) => (p.weekNumber ?? p.week) === selectedWeekForDaily);
-                    if (!plan) return <p className="text-gray-500">No plan data available</p>;
-                    return (
-                      <div className="space-y-2 text-sm">
-                        <p><strong>Theme:</strong> {plan.theme}</p>
-                        <p><strong>Focus:</strong> {plan.focusArea}</p>
-                        {plan.contentTypes?.length > 0 && (
-                          <p><strong>Content types:</strong> {plan.contentTypes.join(', ')}</p>
-                        )}
-                        {plan.platform_allocation && Object.keys(plan.platform_allocation).length > 0 && (
-                          <div>
-                            <strong>Platforms & volume:</strong>
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {Object.entries(plan.platform_allocation).map(([p, c]) => (
-                                <span key={p} className="px-2 py-0.5 bg-indigo-100 rounded text-xs">{p}: {c} posts</span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                        {plan.platform_content_breakdown && Object.keys(plan.platform_content_breakdown).length > 0 && (
-                          <div>
-                            <strong>Per-platform content:</strong>
-                            <div className="mt-1 space-y-1 text-xs">
-                              {Object.entries(plan.platform_content_breakdown).map(([platform, items]: [string, any]) => (
-                                <div key={platform}><span className="font-medium capitalize">{platform}:</span>{' '}
-                                  {(Array.isArray(items) ? items : []).map((it: any) =>
-                                    `${it.type || 'post'}${it.count > 1 ? ` ×${it.count}` : ''}${it.topic ? ` (${it.topic})` : ''}`
-                                  ).join(', ')}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                        {plan.topics_to_cover?.length > 0 && (
-                          <div>
-                            <strong>Topics to cover:</strong>
-                            <ul className="mt-1 list-disc list-inside text-xs">{plan.topics_to_cover.slice(0, 6).map((t: string, i: number) => (
-                              <li key={i}>{t}</li>
-                            ))}</ul>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* Daily Planning Form */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Content Types */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Content Types</label>
-                    <div className="space-y-2">
-                      {['Post', 'Story', 'Video', 'Article', 'Live Stream', 'Reel', 'Carousel'].map(type => (
-                        <label key={type} className="flex items-center">
-                          <input type="checkbox" className="mr-2" />
-                          <span className="text-sm">{type}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Social Platforms */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Social Platforms</label>
-                    <div className="space-y-2">
-                      {['LinkedIn', 'Twitter', 'Facebook', 'Instagram', 'YouTube', 'TikTok'].map(platform => (
-                        <label key={platform} className="flex items-center">
-                          <input type="checkbox" className="mr-2" />
-                          <span className="text-sm">{platform}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Frequency Settings */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Posting Frequency</label>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Posts per day</label>
-                      <input type="number" min="1" max="10" defaultValue="2" className="w-full p-2 border border-gray-300 rounded" />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Stories per day</label>
-                      <input type="number" min="0" max="20" defaultValue="3" className="w-full p-2 border border-gray-300 rounded" />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Videos per week</label>
-                      <input type="number" min="0" max="7" defaultValue="2" className="w-full p-2 border border-gray-300 rounded" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Daily Schedule Preview */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Daily Schedule Preview</label>
-                  <div className="bg-gray-50 p-4 rounded-lg">
-                    <div className="grid grid-cols-7 gap-2 text-xs">
-                      {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
-                        <div key={day} className="text-center">
-                          <div className="font-medium mb-1">{day}</div>
-                          <div className="space-y-1">
-                            <div className="bg-blue-100 text-blue-800 px-1 py-0.5 rounded">Post</div>
-                            <div className="bg-purple-100 text-purple-800 px-1 py-0.5 rounded">Story</div>
-                            <div className="bg-green-100 text-green-800 px-1 py-0.5 rounded">Video</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="flex justify-end gap-3">
-                  <button 
-                    onClick={() => setShowDailyPlanCreation(false)}
-                    className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button 
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-                  >
-                    <Calendar className="w-4 h-4" />
-                    Generate Daily Plan
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        
 
         {/* AI Chat for refining plan / week content */}
         {campaignId && campaign && (

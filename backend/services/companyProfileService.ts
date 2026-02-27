@@ -70,6 +70,21 @@ export type CompanyProfile = {
     monetization_intent?: string | null;
     dominant_problem_domains?: string[];
     brand_positioning_angle?: string | null;
+    /** Target emotional state we want the reader to feel (e.g. "confident", "curious", "urgent"). */
+    reader_emotion_target?: string | null;
+    /**
+     * Narrative progression seed for weekly planning.
+     * Can be a string (legacy/freeform) or a structured object.
+     */
+    narrative_flow_seed?:
+      | string
+      | {
+          pattern?: string | null;
+          steps?: string[] | null;
+        }
+      | null;
+    /** Recommended CTA style aligned to campaign type (e.g. "Soft", "Direct", "Engagement", "Light"). */
+    recommended_cta_style?: string | null;
   } | null;
   // Problem & Transformation Intelligence
   core_problem_statement?: string | null;

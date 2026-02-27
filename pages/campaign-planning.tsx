@@ -19,12 +19,10 @@ import {
   Video,
   Mic,
   Loader2,
-  X,
   Sparkles
 } from 'lucide-react';
 import CampaignAIChat from '../components/CampaignAIChat';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
-import DailyPlanningInterface from '../components/DailyPlanningInterface';
 import AIContentIntegration from '../components/AIContentIntegration';
 import ContentCreationPanel from '../components/ContentCreationPanel';
 import VoiceNotesComponent from '../components/VoiceNotesComponent';
@@ -56,8 +54,6 @@ export default function CampaignPlanning() {
   const [aiProgram, setAiProgram] = useState<any>(null);
   const [showProgramCapture, setShowProgramCapture] = useState(false);
   const [programStartDate, setProgramStartDate] = useState('');
-  const [selectedWeek, setSelectedWeek] = useState<any>(null);
-  const [showDailyPlanning, setShowDailyPlanning] = useState(false);
   const [activePlanningTab, setActivePlanningTab] = useState<'overview' | 'content' | 'voice' | 'refinement'>('overview');
   const [showWeeklyRefinement, setShowWeeklyRefinement] = useState(false);
   const [hasExistingPlan, setHasExistingPlan] = useState(false);
@@ -110,13 +106,20 @@ export default function CampaignPlanning() {
   const [alignedPreview, setAlignedPreview] = useState<any | null>(null);
   const [alignedPreviewError, setAlignedPreviewError] = useState<string | null>(null);
   const [groupedContext, setGroupedContext] = useState<any | null>(null);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   const isStrategyLocked = strategyStatus === 'approved';
   const isStrategyProposed = strategyStatus === 'proposed';
   const isDraftMode =
     typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'draft';
-  const isEditMode =
-    (router.query?.mode === 'edit') || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'edit');
+  const isEditMode = false;
   const forecastDelta = (() => {
     const variance = forecastVsActual?.variance || {};
     const candidates = [
@@ -237,13 +240,13 @@ export default function CampaignPlanning() {
         description: '',
         goals: []
       });
-    } else if (mode === 'edit' && existingCampaignId) {
-      console.log('Edit mode - loading campaign with ID:', existingCampaignId);
-      loadCampaign(existingCampaignId);
-    } else if (mode === 'edit' && !existingCampaignId) {
-      // Edit mode without campaignId: redirect to campaigns list
-      console.warn('Edit mode without campaignId, redirecting to campaigns');
-      if (typeof window !== 'undefined') window.location.href = '/campaigns';
+    } else if (mode === 'edit') {
+      // Edit mode entrypoint removed; send users to campaign details page instead.
+      console.warn('Edit mode entrypoint removed, redirecting to campaign details/campaigns');
+      if (typeof window !== 'undefined') {
+        window.location.href = existingCampaignId ? `/campaign-details/${existingCampaignId}` : '/campaigns';
+      }
+      return;
     } else if (existingCampaignId) {
       console.log('Loading campaign with ID:', existingCampaignId);
       loadCampaign(existingCampaignId);
@@ -338,11 +341,11 @@ export default function CampaignPlanning() {
       console.log('Campaign created successfully:', newCampaignId);
       
       // Show success message
-      alert('New campaign created! You can now start planning your content strategy.');
+      notify('success', 'New campaign created! You can now start planning your content strategy.');
       
     } catch (error) {
       console.error('Error creating campaign:', error);
-      alert('Error creating campaign. Please try again.');
+      notify('error', 'Error creating campaign. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -350,11 +353,11 @@ export default function CampaignPlanning() {
 
   const generate12WeekPlan = async () => {
     if (isStrategyLocked) {
-      alert('Strategy approved. Editing locked by Company Admin.');
+      notify('success', 'Strategy approved. Editing locked by Company Admin.');
       return;
     }
     if (!campaignId) {
-      alert('Please create a campaign first');
+      notify('info', 'Please create a campaign first');
       return;
     }
 
@@ -387,7 +390,7 @@ export default function CampaignPlanning() {
       }
     } catch (error) {
       console.error('Error generating campaign plan:', error);
-      alert('Error generating campaign plan. Please try again.');
+      notify('error', 'Error generating campaign plan. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -706,7 +709,7 @@ export default function CampaignPlanning() {
   const reviseStrategyFromSuggestions = async () => {
     if (!campaignId) return;
     if (selectedSuggestionIds.size === 0) {
-      alert('Select at least one suggestion to revise the strategy.');
+      notify('info', 'Select at least one suggestion to revise the strategy.');
       return;
     }
     setIsRevisingStrategy(true);
@@ -1159,61 +1162,11 @@ export default function CampaignPlanning() {
     setShowProgramCapture(false);
   };
 
-  const calculateWeekDates = (startDate: string, weekNumber: number) => {
-    const start = new Date(startDate);
-    const weekStart = new Date(start);
-    weekStart.setDate(start.getDate() + (weekNumber - 1) * 7);
-    
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
-    
-    return {
-      start: weekStart.toISOString().split('T')[0],
-      end: weekEnd.toISOString().split('T')[0],
-      startFormatted: weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      endFormatted: weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    };
-  };
-
   const openDailyPlanning = (week: any) => {
-    setSelectedWeek(week);
-    setShowDailyPlanning(true);
-  };
-
-  const saveDailyPlan = async (weekData: any) => {
     if (!campaignId) return;
-    
-    try {
-      const response = await fetch('/api/campaigns', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'daily-plan',
-          data: {
-            campaignId,
-            weekNumber: weekData.weekNumber,
-            weekDates: calculateWeekDates(programStartDate, weekData.weekNumber),
-            dailyActivities: weekData.dailyActivities,
-            programStartDate
-          }
-        })
-      });
-
-      if (response.ok) {
-        setShowDailyPlanning(false);
-        // Update the week in aiProgram to show it's planned
-        setAiProgram(prev => ({
-          ...prev,
-          weeks: prev.weeks.map((w: any) => 
-            w.weekNumber === weekData.weekNumber 
-              ? { ...w, dailyPlanned: true, dailyActivities: weekData.dailyActivities }
-              : w
-          )
-        }));
-      }
-    } catch (error) {
-      console.error('Error saving daily plan:', error);
-    }
+    const params = new URLSearchParams();
+    params.set('week', String(week?.weekNumber || '1'));
+    router.push(`/campaign-calendar/${campaignId}?${params.toString()}`);
   };
 
   const getContentTypeIcon = (type: string) => {
@@ -1238,6 +1191,21 @@ export default function CampaignPlanning() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50">
+      {notice && (
+        <div className="max-w-7xl mx-auto px-6 pt-4">
+          <div
+            className={`rounded-lg border px-3 py-2 text-sm ${
+              notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800'
+                : 'border-indigo-200 bg-indigo-50 text-indigo-800'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {notice.message}
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
@@ -1306,34 +1274,6 @@ export default function CampaignPlanning() {
                           </button>
                         </>
                       )}
-                    </>
-                  );
-                } else if (mode === 'edit') {
-                  // Edit mode buttons
-                  return (
-                    <>
-                      <button 
-                        onClick={saveCampaign}
-                        disabled={isLoading}
-                        className="px-4 py-2 text-gray-600 hover:text-gray-900 font-medium transition-colors disabled:opacity-50"
-                      >
-                        {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save Changes'}
-                      </button>
-                      
-                      <button 
-                        onClick={() => window.location.href = `/campaign-details/${campaignId}`}
-                        className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-md flex items-center gap-2"
-                      >
-                        <Calendar className="h-4 w-4" />
-                        View Campaign Plan
-                      </button>
-                      
-                      <button 
-                        onClick={() => window.location.href = campaignId ? `/campaign-details/${campaignId}` : '/campaigns'}
-                        className="px-4 py-2 text-gray-600 hover:text-gray-900 font-medium transition-colors"
-                      >
-                        {campaignId ? 'View Campaign Details' : 'Back to Campaigns'}
-                      </button>
                     </>
                   );
                 } else {
@@ -2504,7 +2444,7 @@ export default function CampaignPlanning() {
                               if (campaignId) {
                                 window.location.href = `/campaign-planning-hierarchical?campaignId=${campaignId}`;
                               } else {
-                                alert('Please create a campaign first');
+                                notify('info', 'Please create a campaign first');
                               }
                             }
                           }}
@@ -2961,39 +2901,6 @@ export default function CampaignPlanning() {
             campaignData={campaignData}
             onProgramGenerated={captureAIProgram}
           />
-
-          {/* Daily Planning Modal */}
-          {showDailyPlanning && selectedWeek && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-              <div className="bg-white rounded-2xl shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden">
-                <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h2 className="text-2xl font-bold">Daily Planning - Week {selectedWeek.weekNumber}</h2>
-                      <p className="text-purple-100 mt-1">
-                        {selectedWeek.dates?.startFormatted} - {selectedWeek.dates?.endFormatted}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setShowDailyPlanning(false)}
-                      className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-                    >
-                      <X className="h-6 w-6" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
-                  <DailyPlanningInterface 
-                    week={selectedWeek}
-                    onSave={saveDailyPlan}
-                    campaignId={campaignId}
-                    campaignData={campaignData}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
     </div>
   );
 }

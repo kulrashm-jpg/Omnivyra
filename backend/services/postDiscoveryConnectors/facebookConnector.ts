@@ -21,3 +21,4 @@ export async function searchPosts(params: SearchPostsParams): Promise<RawPost[]>
     },
   ];
 }
+

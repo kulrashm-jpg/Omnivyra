@@ -34,6 +34,15 @@ export default function Templates() {
   const [filterPlatform, setFilterPlatform] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
   const [userId, setUserId] = useState<string>('');
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   useEffect(() => {
     // Get user ID
@@ -80,22 +89,25 @@ export default function Templates() {
     }
   };
 
-  const handleDelete = async (templateId: string) => {
-    if (!confirm('Are you sure you want to delete this template?')) return;
+  const handleDelete = (templateId: string) => {
+    setPendingDeleteId(templateId);
+  };
 
+  const confirmDeleteTemplate = async () => {
+    if (!pendingDeleteId) return;
+    const templateId = pendingDeleteId;
+    setPendingDeleteId(null);
     try {
-      const response = await fetch(`/api/templates/${templateId}`, {
-        method: 'DELETE',
-      });
-
+      const response = await fetch(`/api/templates/${templateId}`, { method: 'DELETE' });
       if (response.ok) {
         setTemplates((prev) => prev.filter((t) => t.id !== templateId));
+        notify('success', 'Template deleted.');
       } else {
-        alert('Failed to delete template');
+        notify('error', 'Failed to delete template.');
       }
     } catch (error) {
       console.error('Delete error:', error);
-      alert('Failed to delete template');
+      notify('error', 'Failed to delete template.');
     }
   };
 
@@ -152,6 +164,18 @@ export default function Templates() {
   return (
     <div className="min-h-screen bg-gray-50 p-8">
       <div className="max-w-7xl mx-auto">
+        {notice && (
+          <div className={`mb-4 rounded-lg border px-3 py-2 text-sm ${notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`} role="status" aria-live="polite">{notice.message}</div>
+        )}
+        {pendingDeleteId && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm flex items-center justify-between">
+            <span className="text-amber-900">Delete this template?</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setPendingDeleteId(null)} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
+              <button type="button" onClick={confirmDeleteTemplate} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700">Delete</button>
+            </div>
+          </div>
+        )}
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">

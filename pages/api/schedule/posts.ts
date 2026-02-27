@@ -1,35 +1,74 @@
+// LEGACY ENGINE - DO NOT EXTEND
+// Scheduled for removal after DB-platform intelligence cutover.
 // API Endpoints for Scheduling and Posting
 import { NextApiRequest, NextApiResponse } from 'next';
-import { SchedulingService } from '@/lib/services/scheduling';
-import { PostingServiceFactory } from '@/lib/services/posting';
-import { ScheduledPost } from '@/lib/types/scheduling';
+import { supabase } from '@/backend/db/supabaseClient';
+import { createLegacyScheduledPost, listLegacyScheduledPosts } from '@/backend/services/structuredPlanScheduler';
 
-const schedulingService = new SchedulingService();
+const extractAccessToken = (req: NextApiRequest): string | null => {
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice('Bearer '.length).trim();
+    if (token) return token;
+  }
+  const cookieEntries = Object.entries(req.cookies || {});
+  const directToken = req.cookies?.['sb-access-token'];
+  if (directToken) return directToken;
+  for (const [name, value] of cookieEntries) {
+    if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
+    try {
+      const parsed = JSON.parse(value as any);
+      if (parsed?.access_token) return String(parsed.access_token);
+    } catch {
+      // ignore malformed cookie
+    }
+  }
+  return null;
+};
+
+async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
+  const token = extractAccessToken(req);
+  if (!token) {
+    res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
+    return null;
+  }
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user?.id) {
+    res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
+    return null;
+  }
+  return data.user.id;
+}
 
 // GET /api/schedule/posts - Get all scheduled posts
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  console.log(`[NEW SCHEDULER ACTIVE] invoked pages/api/schedule/posts.ts handler (${req.method || 'unknown'})`);
+  const userId = await requireUserId(req, res);
+  if (!userId) return;
+
   if (req.method === 'GET') {
     try {
       const { platform, status, limit = '50', offset = '0' } = req.query;
-      
-      const posts = await schedulingService.getScheduledPosts(
-        platform as string,
-        status as string
-      );
-      
-      // Apply pagination
-      const start = parseInt(offset as string);
-      const end = start + parseInt(limit as string);
-      const paginatedPosts = posts.slice(start, end);
-      
+
+      const limitNum = parseInt(String(limit), 10) || 50;
+      const offsetNum = parseInt(String(offset), 10) || 0;
+
+      const result = await listLegacyScheduledPosts({
+        userId,
+        platform: platform as string,
+        status: status as string,
+        limit: limitNum,
+        offset: offsetNum,
+      });
+
       res.status(200).json({
         success: true,
-        data: paginatedPosts,
+        data: result.posts,
         pagination: {
-          total: posts.length,
-          limit: parseInt(limit as string),
-          offset: parseInt(offset as string),
-          hasMore: end < posts.length,
+          total: result.total,
+          limit: limitNum,
+          offset: offsetNum,
+          hasMore: offsetNum + limitNum < result.total,
         },
       });
     } catch (error: any) {
@@ -51,14 +90,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // Create scheduled post
-      const scheduledPost = await schedulingService.schedulePost({
+      const scheduledPost = await createLegacyScheduledPost({
+        userId,
         platform: postData.platform,
         contentType: postData.contentType || 'post',
         content: postData.content,
         mediaUrls: postData.mediaUrls || [],
         hashtags: postData.hashtags || [],
-        scheduledFor: new Date(postData.scheduledFor),
-        status: 'draft',
+        scheduledFor: postData.scheduledFor,
+        title: postData.title,
       });
 
       res.status(201).json({

@@ -290,8 +290,6 @@ async function doRestore(
       snapshotType,
     },
   });
-
-  return { restored: true };
 }
 
 /**

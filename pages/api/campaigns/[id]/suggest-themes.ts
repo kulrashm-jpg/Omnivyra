@@ -9,9 +9,19 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { generateTrendOpportunities } from '../../../../backend/services/opportunityGenerators';
 import type { StrategicPayload } from '../../../../backend/services/opportunityGenerators';
+import type { FocusModule } from '../../../../backend/services/contextResolver';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { getProfile } from '../../../../backend/services/companyProfileService';
 import { getLatestCampaignVersionByCampaignId } from '../../../../backend/db/campaignVersionStore';
+
+const FOCUS_MODULE_SET = new Set<FocusModule>([
+  'TARGET_CUSTOMER',
+  'PROBLEM_DOMAIN',
+  'CAMPAIGN_PURPOSE',
+  'OFFERINGS',
+  'GEOGRAPHY',
+  'PRICING',
+]);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -68,6 +78,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const targetRegions =
       ctx?.target_regions ?? (planningContext?.target_regions as string[] | undefined) ?? [];
     const focusedModules = ctx?.focused_modules ?? [];
+    const normalizedFocusedModules: FocusModule[] = Array.isArray(focusedModules)
+      ? focusedModules
+          .map((m) => String(m ?? '').trim().toUpperCase())
+          .filter((m): m is FocusModule => FOCUS_MODULE_SET.has(m as FocusModule))
+      : [];
     const additionalDirection = ctx?.additional_direction ?? (campaign.description as string) ?? '';
 
     const profile = await getProfile(companyId, { autoRefine: false });
@@ -97,7 +112,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       selected_aspect: null,
       strategic_text: strategicText,
       regions: targetRegions.length > 0 ? targetRegions : undefined,
-      focused_modules: focusedModules.length > 0 ? focusedModules : undefined,
+      focused_modules: normalizedFocusedModules.length > 0 ? normalizedFocusedModules : undefined,
       additional_direction: additionalDirection || undefined,
     };
 

@@ -48,6 +48,12 @@ export type CompanyContextCampaign = {
   growth_priorities?: string | null;
   goals?: string | null;
   campaign_purpose_intent?: CompanyProfile['campaign_purpose_intent'];
+  /** Target emotional state we want the reader to feel (from profile.campaign_purpose_intent). */
+  reader_emotion_target?: string | null;
+  /** Narrative progression seed for weekly planning (from profile.campaign_purpose_intent). */
+  narrative_flow_seed?: NonNullable<CompanyProfile['campaign_purpose_intent']>['narrative_flow_seed'];
+  /** Recommended CTA style aligned to campaign type (from profile.campaign_purpose_intent or derived). */
+  recommended_cta_style?: string | null;
 };
 
 export type CompanyContextCommercial = {
@@ -77,6 +83,47 @@ export function buildCompanyContext(
   options?: BuildCompanyContextOptions
 ): CompanyContext {
   const includeEmpty = options?.includeEmpty !== false;
+  const cpi = (profile?.campaign_purpose_intent ?? null) as
+    | (NonNullable<CompanyProfile['campaign_purpose_intent']> & Record<string, unknown>)
+    | null;
+
+  const coerceNonEmptyString = (value: unknown): string | null => {
+    if (value == null) return null;
+    const s = typeof value === 'string' ? value : String(value);
+    const t = s.trim();
+    return t ? t : null;
+  };
+
+  const hasMeaningfulNarrativeSeed = (value: unknown): boolean => {
+    if (value == null) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (typeof value !== 'object') return false;
+    const pattern = coerceNonEmptyString((value as any)?.pattern);
+    const steps = Array.isArray((value as any)?.steps)
+      ? (value as any).steps.map((s: any) => String(s ?? '').trim()).filter(Boolean)
+      : [];
+    return !!pattern || steps.length > 0;
+  };
+
+  const deriveRecommendedCtaStyle = (): string | null => {
+    const raw = [
+      coerceNonEmptyString((cpi as any)?.primary_objective),
+      coerceNonEmptyString((cpi as any)?.campaign_intent),
+      coerceNonEmptyString((cpi as any)?.monetization_intent),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    if (!raw) return null;
+    if (raw.includes('lead') || raw.includes('conversion') || raw.includes('book') || raw.includes('demo') || raw.includes('sign up') || raw.includes('download')) {
+      return 'Direct';
+    }
+    if (raw.includes('awareness') || raw.includes('brand')) return 'Soft';
+    if (raw.includes('authority') || raw.includes('thought leadership') || raw.includes('credibility')) return 'Light';
+    if (raw.includes('engagement') || raw.includes('network') || raw.includes('community') || raw.includes('connect')) return 'Engagement';
+    if (raw.includes('product') || raw.includes('promotion') || raw.includes('launch')) return 'Direct promotional push';
+    return null;
+  };
 
   const identity: CompanyContextIdentity = {
     name: includeEmpty || profile?.name ? (profile?.name ?? null) : undefined,
@@ -130,6 +177,23 @@ export function buildCompanyContext(
     growth_priorities: includeEmpty || profile?.growth_priorities ? (profile?.growth_priorities ?? null) : undefined,
     goals: includeEmpty || profile?.goals ? (profile?.goals ?? null) : undefined,
     campaign_purpose_intent: includeEmpty || profile?.campaign_purpose_intent ? (profile?.campaign_purpose_intent ?? null) : undefined,
+    reader_emotion_target:
+      includeEmpty || coerceNonEmptyString((cpi as any)?.reader_emotion_target)
+        ? (coerceNonEmptyString((cpi as any)?.reader_emotion_target) ?? null)
+        : undefined,
+    narrative_flow_seed:
+      includeEmpty || hasMeaningfulNarrativeSeed((cpi as any)?.narrative_flow_seed)
+        ? (((cpi as any)?.narrative_flow_seed ?? null) as any)
+        : undefined,
+    recommended_cta_style: (() => {
+      const explicit =
+        coerceNonEmptyString((cpi as any)?.recommended_cta_style) ??
+        coerceNonEmptyString((profile as any)?.recommended_cta_style);
+      const derived = deriveRecommendedCtaStyle();
+      const value = explicit ?? derived;
+      if (includeEmpty) return value ?? null;
+      return value ? value : undefined;
+    })(),
   };
 
   const commercial: CompanyContextCommercial = {

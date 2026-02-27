@@ -120,20 +120,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Persist the committed plan to twelve_week_plan so it appears in "Load committed plan" and retrieve-plan
     const blueprint = fromStructuredPlan({ weeks: plan.weeks, campaign_id: id });
-    await saveCampaignBlueprintFromLegacy({ campaignId: id, blueprint, source: 'schedule-structured-plan' });
+    try {
+      await saveCampaignBlueprintFromLegacy({ campaignId: id, blueprint, source: 'schedule-structured-plan' });
+    } catch (persistErr) {
+      // Scheduling should still proceed even if the "committed plan" persistence fails.
+      console.warn('[schedule-structured-plan] Failed to persist committed blueprint, continuing:', persistErr);
+    }
 
     const result = await scheduleStructuredPlan(plan, id);
 
     // Update campaign status to reflect committed/scheduled state
-    await supabase
-      .from('campaigns')
-      .update({
-        status: 'active',
-        current_stage: 'schedule',
-        blueprint_status: 'ACTIVE',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id);
+    try {
+      await supabase
+        .from('campaigns')
+        .update({
+          status: 'active',
+          current_stage: 'schedule',
+          blueprint_status: 'ACTIVE',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id);
+    } catch (updateErr) {
+      console.warn('[schedule-structured-plan] Failed to update campaign row, continuing:', updateErr);
+    }
 
     void checkAndCompleteCampaignIfEligible(id).catch(() => {});
     void syncCampaignVersionStage(id, 'schedule', companyId).catch(() => {});

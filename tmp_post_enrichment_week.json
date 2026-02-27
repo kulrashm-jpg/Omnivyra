@@ -1,0 +1,301 @@
+{
+  "week": 1,
+  "phase_label": "Conversion Acceleration",
+  "primary_objective": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility.",
+  "platform_allocation": {
+    "linkedin": 2,
+    "facebook": 2,
+    "instagram": 1,
+    "youtube": 2,
+    "blog": 1
+  },
+  "content_type_mix": [
+    "1 educational post",
+    "1 engagement poll",
+    "1 short-form video",
+    "1 long-form article",
+    "1 promotional video",
+    "1 behind-the-scenes video"
+  ],
+  "cta_type": "Direct Conversion CTA",
+  "total_weekly_content_count": 8,
+  "weekly_kpi_focus": "Leads generated",
+  "theme": "Kickstart Your Journey: Understanding Our Brand Values",
+  "topics_to_cover": [
+    "Overview of brand values and mission",
+    "Importance of community engagement",
+    "How our services can benefit you",
+    "Poll: What topics interest you most?",
+    "Introduction to our team and their expertise"
+  ],
+  "weekNumber": 1,
+  "objective": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility.",
+  "topicFocus": "Kickstart Your Journey: Understanding Our Brand Values",
+  "deliverables": {
+    "videos": 2,
+    "posts": 5,
+    "blogs": 1,
+    "stories": 0
+  },
+  "platformHints": [
+    "linkedin",
+    "facebook",
+    "instagram",
+    "youtube",
+    "blog"
+  ],
+  "week_extras": {
+    "weekNumber": 1,
+    "objective": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility.",
+    "topic_focus": "Kickstart Your Journey: Understanding Our Brand Values",
+    "topicFocus": "Kickstart Your Journey: Understanding Our Brand Values",
+    "deliverables": {
+      "videos": 2,
+      "posts": 5,
+      "blogs": 1,
+      "stories": 0
+    },
+    "deliverables_list": [
+      {
+        "type": "video",
+        "count": 2
+      },
+      {
+        "type": "post",
+        "count": 5
+      },
+      {
+        "type": "blog",
+        "count": 1
+      }
+    ],
+    "platform_hints": [
+      "linkedin",
+      "facebook",
+      "instagram",
+      "youtube",
+      "blog"
+    ],
+    "platformHints": [
+      "linkedin",
+      "facebook",
+      "instagram",
+      "youtube",
+      "blog"
+    ]
+  },
+  "weeklyContextCapsule": {
+    "campaignTheme": "Campaign theme",
+    "primaryPainPoint": "Primary audience pain point",
+    "desiredTransformation": "Desired transformation outcome",
+    "campaignStage": "early_stage",
+    "psychologicalGoal": "Audience progression",
+    "momentum": "Conversion Acceleration",
+    "audienceProfile": "Target audience from campaign context",
+    "weeklyIntent": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility.",
+    "toneGuidance": "clear, practical, outcome-driven; alignment score 8/100",
+    "successOutcome": "Leads generated"
+  },
+  "topics": [
+    {
+      "topicTitle": "Overview of brand values and mission",
+      "topicContext": {
+        "topicTitle": "Overview of brand values and mission",
+        "topicGoal": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility.",
+        "audienceAngle": "Target audience from campaign context",
+        "painPointFocus": "Primary audience pain point",
+        "transformationIntent": "Desired transformation outcome",
+        "messagingAngle": "Kickstart Your Journey: Understanding Our Brand Values",
+        "expectedOutcome": "Leads generated",
+        "recommendedContentTypes": [
+          "1 educational post",
+          "1 engagement poll",
+          "1 short-form video",
+          "1 long-form article",
+          "1 promotional video",
+          "1 behind-the-scenes video"
+        ],
+        "platformPriority": [
+          "linkedin",
+          "facebook",
+          "youtube",
+          "instagram",
+          "blog"
+        ],
+        "writingIntent": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility. through \"Overview of brand values and mission\""
+      },
+      "whoAreWeWritingFor": "Target audience from campaign context",
+      "whatProblemAreWeAddressing": "Primary audience pain point",
+      "whatShouldReaderLearn": "Desired transformation outcome",
+      "desiredAction": "Take the conversion step now (book, sign up, or request demo).",
+      "approximateDepth": "Comprehensive",
+      "narrativeStyle": "clear, practical, outcome-driven",
+      "contentTypeGuidance": {
+        "primaryFormat": "long-form social post",
+        "maxWordTarget": 1300,
+        "platformWithHighestLimit": "linkedin",
+        "adaptationRequired": true
+      }
+    },
+    {
+      "topicTitle": "Importance of community engagement",
+      "topicContext": {
+        "topicTitle": "Importance of community engagement",
+        "topicGoal": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility.",
+        "audienceAngle": "Target audience from campaign context",
+        "painPointFocus": "Primary audience pain point",
+        "transformationIntent": "Desired transformation outcome",
+        "messagingAngle": "Kickstart Your Journey: Understanding Our Brand Values",
+        "expectedOutcome": "Leads generated",
+        "recommendedContentTypes": [
+          "1 educational post",
+          "1 engagement poll",
+          "1 short-form video",
+          "1 long-form article",
+          "1 promotional video",
+          "1 behind-the-scenes video"
+        ],
+        "platformPriority": [
+          "linkedin",
+          "facebook",
+          "youtube",
+          "instagram",
+          "blog"
+        ],
+        "writingIntent": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility. through \"Importance of community engagement\""
+      },
+      "whoAreWeWritingFor": "Target audience from campaign context",
+      "whatProblemAreWeAddressing": "Primary audience pain point",
+      "whatShouldReaderLearn": "Desired transformation outcome",
+      "desiredAction": "Take the conversion step now (book, sign up, or request demo).",
+      "approximateDepth": "Comprehensive",
+      "narrativeStyle": "clear, practical, outcome-driven",
+      "contentTypeGuidance": {
+        "primaryFormat": "long-form social post",
+        "maxWordTarget": 1300,
+        "platformWithHighestLimit": "linkedin",
+        "adaptationRequired": true
+      }
+    },
+    {
+      "topicTitle": "How our services can benefit you",
+      "topicContext": {
+        "topicTitle": "How our services can benefit you",
+        "topicGoal": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility.",
+        "audienceAngle": "Target audience from campaign context",
+        "painPointFocus": "Primary audience pain point",
+        "transformationIntent": "Desired transformation outcome",
+        "messagingAngle": "Kickstart Your Journey: Understanding Our Brand Values",
+        "expectedOutcome": "Leads generated",
+        "recommendedContentTypes": [
+          "1 educational post",
+          "1 engagement poll",
+          "1 short-form video",
+          "1 long-form article",
+          "1 promotional video",
+          "1 behind-the-scenes video"
+        ],
+        "platformPriority": [
+          "linkedin",
+          "facebook",
+          "youtube",
+          "instagram",
+          "blog"
+        ],
+        "writingIntent": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility. through \"How our services can benefit you\""
+      },
+      "whoAreWeWritingFor": "Target audience from campaign context",
+      "whatProblemAreWeAddressing": "Primary audience pain point",
+      "whatShouldReaderLearn": "Desired transformation outcome",
+      "desiredAction": "Take the conversion step now (book, sign up, or request demo).",
+      "approximateDepth": "Comprehensive",
+      "narrativeStyle": "clear, practical, outcome-driven",
+      "contentTypeGuidance": {
+        "primaryFormat": "long-form social post",
+        "maxWordTarget": 1300,
+        "platformWithHighestLimit": "linkedin",
+        "adaptationRequired": true
+      }
+    },
+    {
+      "topicTitle": "Poll: What topics interest you most?",
+      "topicContext": {
+        "topicTitle": "Poll: What topics interest you most?",
+        "topicGoal": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility.",
+        "audienceAngle": "Target audience from campaign context",
+        "painPointFocus": "Primary audience pain point",
+        "transformationIntent": "Desired transformation outcome",
+        "messagingAngle": "Kickstart Your Journey: Understanding Our Brand Values",
+        "expectedOutcome": "Leads generated",
+        "recommendedContentTypes": [
+          "1 educational post",
+          "1 engagement poll",
+          "1 short-form video",
+          "1 long-form article",
+          "1 promotional video",
+          "1 behind-the-scenes video"
+        ],
+        "platformPriority": [
+          "linkedin",
+          "facebook",
+          "youtube",
+          "instagram",
+          "blog"
+        ],
+        "writingIntent": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility. through \"Poll: What topics interest you most?\""
+      },
+      "whoAreWeWritingFor": "Target audience from campaign context",
+      "whatProblemAreWeAddressing": "Primary audience pain point",
+      "whatShouldReaderLearn": "Desired transformation outcome",
+      "desiredAction": "Take the conversion step now (book, sign up, or request demo).",
+      "approximateDepth": "Comprehensive",
+      "narrativeStyle": "clear, practical, outcome-driven",
+      "contentTypeGuidance": {
+        "primaryFormat": "long-form social post",
+        "maxWordTarget": 1300,
+        "platformWithHighestLimit": "linkedin",
+        "adaptationRequired": true
+      }
+    },
+    {
+      "topicTitle": "Introduction to our team and their expertise",
+      "topicContext": {
+        "topicTitle": "Introduction to our team and their expertise",
+        "topicGoal": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility.",
+        "audienceAngle": "Target audience from campaign context",
+        "painPointFocus": "Primary audience pain point",
+        "transformationIntent": "Desired transformation outcome",
+        "messagingAngle": "Kickstart Your Journey: Understanding Our Brand Values",
+        "expectedOutcome": "Leads generated",
+        "recommendedContentTypes": [
+          "1 educational post",
+          "1 engagement poll",
+          "1 short-form video",
+          "1 long-form article",
+          "1 promotional video",
+          "1 behind-the-scenes video"
+        ],
+        "platformPriority": [
+          "linkedin",
+          "facebook",
+          "youtube",
+          "instagram",
+          "blog"
+        ],
+        "writingIntent": "Initiate brand awareness through direct engagement and soft conversion tactics to expand reach and visibility. through \"Introduction to our team and their expertise\""
+      },
+      "whoAreWeWritingFor": "Target audience from campaign context",
+      "whatProblemAreWeAddressing": "Primary audience pain point",
+      "whatShouldReaderLearn": "Desired transformation outcome",
+      "desiredAction": "Take the conversion step now (book, sign up, or request demo).",
+      "approximateDepth": "Comprehensive",
+      "narrativeStyle": "clear, practical, outcome-driven",
+      "contentTypeGuidance": {
+        "primaryFormat": "long-form social post",
+        "maxWordTarget": 1300,
+        "platformWithHighestLimit": "linkedin",
+        "adaptationRequired": true
+      }
+    }
+  ]
+}

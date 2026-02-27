@@ -8,7 +8,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { campaignId } = req.query;
+    const { campaignId, raw } = req.query;
 
     if (!campaignId) {
       return res.status(400).json({ error: 'Campaign ID is required' });
@@ -16,6 +16,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Blueprint (twelve_week_plan) is source of truth for committed plans — check first
     const blueprint = await getUnifiedCampaignBlueprint(campaignId as string);
+    const rawFlag = Array.isArray(raw) ? raw[0] : raw;
+    const wantsRawBlueprint =
+      rawFlag === '1' || rawFlag === 'true' || rawFlag === 'yes' || rawFlag === 'blueprint';
+    if (wantsRawBlueprint) {
+      return res.status(200).json({
+        source: blueprint?.weeks?.length ? 'unified_blueprint' : 'legacy_or_empty',
+        campaignId,
+        blueprint: blueprint ?? null,
+      });
+    }
     let source: any[] = [];
     if (blueprint?.weeks && blueprint.weeks.length > 0) {
       source = blueprint.weeks.map((w) => ({
@@ -24,13 +34,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         theme: w.phase_label,
         focus_area: w.primary_objective || w.phase_label,
         key_messaging: w.topics_to_cover?.join('; ') ?? null,
-        content_types: w.content_type_mix ?? w.content_types ?? [],
+        content_types: w.content_type_mix ?? [],
         platform_strategy: null,
         refinement_status: 'ai_enhanced',
         completion_percentage: 0,
         platform_allocation: w.platform_allocation ?? {},
         platform_content_breakdown: w.platform_content_breakdown ?? {},
         topics_to_cover: w.topics_to_cover ?? [],
+        weeklyContextCapsule: (w as any).weeklyContextCapsule ?? null,
+        topics: Array.isArray((w as any).topics) ? (w as any).topics : [],
+        // Additive: expose deterministic execution units when present (backward-compatible).
+        execution_items: Array.isArray((w as any).execution_items) ? (w as any).execution_items : [],
+        posting_execution_map: Array.isArray((w as any).posting_execution_map) ? (w as any).posting_execution_map : [],
+        resolved_postings: Array.isArray((w as any).resolved_postings) ? (w as any).resolved_postings : [],
+        week_extras: (w as any).week_extras ?? null,
       }));
     }
     // Fallback to legacy tables when no committed blueprint
@@ -72,7 +89,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       platform_allocation: plan.platform_allocation ?? {},
       platform_content_breakdown: plan.platform_content_breakdown ?? {},
       topics_to_cover: plan.topics_to_cover ?? [],
+      weeklyContextCapsule: plan.weeklyContextCapsule ?? null,
+      topics: Array.isArray(plan.topics) ? plan.topics : [],
+      // Additive passthrough for unified-blueprint enriched fields (no-ops for legacy rows).
+      execution_items: Array.isArray((plan as any).execution_items) ? (plan as any).execution_items : [],
+      posting_execution_map: Array.isArray((plan as any).posting_execution_map) ? (plan as any).posting_execution_map : [],
+      resolved_postings: Array.isArray((plan as any).resolved_postings) ? (plan as any).resolved_postings : [],
+      week_extras: (plan as any).week_extras ?? null,
     }));
+
+    try {
+      console.log('[weekly-debug][api-response-week]', JSON.stringify(response[0] ?? null, null, 2));
+    } catch {
+      console.log('[weekly-debug][api-response-week]', response[0] ?? null);
+    }
 
     res.status(200).json(response);
 

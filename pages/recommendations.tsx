@@ -510,7 +510,11 @@ export default function RecommendationsPage() {
           ...(manualContext ? { manual_context: manualContext } : {}),
         }),
       });
-      if (!response.ok) throw new Error('Failed to generate recommendations');
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}));
+        const detail = errBody?.detail ?? errBody?.error;
+        throw new Error(typeof detail === 'string' ? detail : 'Failed to generate recommendations');
+      }
       const data = await response.json();
       setEngineResult(data);
       setLastRefresh(new Date().toLocaleString());
@@ -524,7 +528,7 @@ export default function RecommendationsPage() {
       return data;
     } catch (error) {
       console.error('Error generating recommendations:', error);
-      setErrorMessage('Failed to generate recommendations.');
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to generate recommendations.');
       return null;
     } finally {
       setIsLoading(false);
@@ -832,8 +836,11 @@ export default function RecommendationsPage() {
       }
       const data = await response.json();
       if (data?.campaign_id) {
-        const params = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : '';
-        window.location.href = `/campaign-details/${data.campaign_id}${params}`;
+        const qs = new URLSearchParams();
+        if (selectedCompanyId) qs.set('companyId', selectedCompanyId);
+        qs.set('fromRecommendation', '1');
+        qs.set('recommendationId', recommendationId);
+        window.location.href = `/campaign-details/${data.campaign_id}?${qs.toString()}`;
       }
     } catch (error) {
       console.error('Error creating campaign:', error);
@@ -868,8 +875,11 @@ export default function RecommendationsPage() {
       }
       const data = await response.json();
       if (data?.campaign_id) {
-        const params = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : '';
-        window.location.href = `/campaign-details/${data.campaign_id}${params}`;
+        const qs = new URLSearchParams();
+        if (selectedCompanyId) qs.set('companyId', selectedCompanyId);
+        qs.set('fromRecommendation', '1');
+        qs.set('recommendationId', recommendationId);
+        window.location.href = `/campaign-details/${data.campaign_id}?${qs.toString()}`;
       }
     } catch (error) {
       console.error('Error creating plan from recommendation:', error);

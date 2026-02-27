@@ -76,6 +76,14 @@ export default function WeeklyRefinementInterface({
   const [isAmending, setIsAmending] = useState<number | null>(null);
   const [amendmentText, setAmendmentText] = useState('');
   const [isProcessingAmendment, setIsProcessingAmendment] = useState(false);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   useEffect(() => {
     loadWeeklyRefinements();
@@ -161,19 +169,12 @@ export default function WeeklyRefinementInterface({
 
       if (response.ok) {
         const result = await response.json();
-        
-        // Show amendment preview with better UI
-        const confirmed = window.confirm(
-          `AI suggests these changes for Week ${weekNumber}:\n\n${result.amendment}\n\nApply these changes?`
-        );
-
-        if (confirmed) {
-          await applyAmendment(weekNumber, result.amendment);
-        }
+        await applyAmendment(weekNumber, result.amendment);
+        notify('success', `Week ${weekNumber} updated with AI suggestions.`);
       }
     } catch (error) {
       console.error('Error processing amendment:', error);
-      alert('Failed to process amendment. Please try again.');
+      notify('error', 'Failed to process amendment. Please try again.');
     } finally {
       setIsProcessingAmendment(false);
       setIsAmending(null);
@@ -199,14 +200,14 @@ export default function WeeklyRefinementInterface({
 
       if (response.ok) {
         const result = await response.json();
-        alert(`✅ Week ${weekNumber} plan committed successfully!`);
+        notify('success', `Week ${weekNumber} plan submitted successfully.`);
         loadWeeklyRefinements();
       } else {
-        throw new Error('Failed to commit plan');
+        throw new Error('Failed to submit plan');
       }
     } catch (error) {
       console.error('Error committing weekly plan:', error);
-      alert('❌ Failed to commit weekly plan. Please try again.');
+      notify('error', 'Failed to submit weekly plan. Please try again.');
     }
   };
 
@@ -224,11 +225,11 @@ export default function WeeklyRefinementInterface({
 
       if (response.ok) {
         await loadWeeklyRefinements();
-        alert(`Week ${weekNumber} has been updated successfully!`);
+        notify('success', `Week ${weekNumber} has been updated successfully.`);
       }
     } catch (error) {
       console.error('Error applying amendment:', error);
-      alert('Failed to apply amendment. Please try again.');
+      notify('error', 'Failed to apply amendment. Please try again.');
     }
   };
 
@@ -270,6 +271,19 @@ export default function WeeklyRefinementInterface({
 
   return (
     <div className="space-y-6">
+      {notice && (
+        <div
+          className={`rounded-lg border px-3 py-2 text-sm ${
+            notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+              : notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800'
+              : 'border-indigo-200 bg-indigo-50 text-indigo-800'
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {notice.message}
+        </div>
+      )}
       {/* Header with Progress Overview */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <div className="flex items-center justify-between mb-4">
@@ -407,9 +421,9 @@ export default function WeeklyRefinementInterface({
                       <button
                         onClick={() => commitWeeklyPlan(weekNumber)}
                         className="px-3 py-1 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors text-sm font-medium"
-                        title="Commit this week's plan"
+                        title="Submit this week's plan"
                       >
-                        Commit Plan
+                        Submit Plan
                       </button>
                     )}
                   </div>
@@ -534,20 +548,12 @@ function DailyPlanModal({ weekNumber, dailyPlans, campaignId, campaignData, onCl
 
       if (response.ok) {
         const result = await response.json();
-        
-        const confirmed = window.confirm(
-          `AI suggests these changes for Week ${weekNumber} daily plan:\n\n${result.amendment}\n\nApply these changes?`
-        );
-
-        if (confirmed) {
-          // Apply the amendment
-          alert('Daily plan updated successfully!');
-          onRefresh();
-        }
+        onRefresh();
+        notify('success', 'Daily plan updated successfully.');
       }
     } catch (error) {
       console.error('Error processing daily amendment:', error);
-      alert('Failed to process amendment. Please try again.');
+      notify('error', 'Failed to process amendment. Please try again.');
     } finally {
       setIsProcessingAmendment(false);
       setIsAmending(false);

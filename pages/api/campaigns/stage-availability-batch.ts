@@ -54,9 +54,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .select('id', { count: 'exact', head: true })
           .eq('campaign_id', campaignId);
         const hasDailyPlans = (dailyPlansCount ?? 0) > 0;
+        let contentReadyDailyPlansCount = 0;
+        try {
+          const { count: readyCount } = await supabase
+            .from('daily_content_plans')
+            .select('id', { count: 'exact', head: true })
+            .eq('campaign_id', campaignId)
+            .not('content', 'is', null);
+          contentReadyDailyPlansCount = readyCount ?? 0;
+        } catch { /* ignore */ }
 
         let hasCharting = false;
         let scheduledPostsCount = 0;
+        let publishedPostsCount = 0;
         try {
           const { count: p } = await supabase
             .from('platform_execution_plans')
@@ -70,6 +80,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             .select('id', { count: 'exact', head: true })
             .eq('campaign_id', campaignId);
           scheduledPostsCount = s ?? 0;
+          const { count: publishedCount } = await supabase
+            .from('scheduled_posts')
+            .select('id', { count: 'exact', head: true })
+            .eq('campaign_id', campaignId)
+            .eq('status', 'published');
+          publishedPostsCount = publishedCount ?? 0;
         } catch { /* ignore */ }
 
         availability[campaignId] = {
@@ -85,7 +101,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             weekPlans: weekPlansCount ?? 0,
             aiEnrichedWeeks: aiEnrichedCount ?? 0,
             dailyPlans: dailyPlansCount ?? 0,
+            contentReadyDailyPlans: contentReadyDailyPlansCount,
             scheduledPosts: scheduledPostsCount,
+            publishedPosts: publishedPostsCount,
           },
         };
       } catch (e) {

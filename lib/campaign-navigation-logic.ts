@@ -44,11 +44,11 @@ const CampaignListButtons = {
     style: "secondary-purple"
   }),
   
-  // Tertiary action - Edit campaign
+  // Tertiary action - open campaign details (edit entrypoint removed)
   editCampaign: (campaignId) => ({
-    text: "Edit Campaign", 
-    action: () => window.location.href = `/campaign-planning?mode=edit&campaignId=${campaignId}`,
-    style: "tertiary-blue"
+    text: "View Campaign", 
+    action: () => window.location.href = `/campaign-details/${campaignId}`,
+    style: "tertiary-purple"
   })
 };
 
@@ -132,11 +132,10 @@ const CampaignDetailsButtons = {
 STEP 1: Fix Campaign List Page (/campaigns)
 - "Create Campaign" → Opens /campaign-planning?mode=create
 - "View Campaign" → Opens /campaign-details/[id]
-- "Edit Campaign" → Opens /campaign-planning?mode=edit&campaignId=[id]
+- Edit entrypoint removed from campaign list actions
 
 STEP 2: Fix Campaign Planning Page (/campaign-planning)
 - Mode=create: Show creation buttons (Save Draft, Generate Campaign Plan, View Details)
-- Mode=edit: Show editing buttons (Save Changes, View Campaign Plan, Back to Campaigns)
 - Generate Campaign Plan → Creates campaign structure and links to campaign
 
 STEP 3: Create Campaign Details Page (/campaign-details/[id])
@@ -161,7 +160,7 @@ const Routes = {
   
   // Campaign management
   createCampaign: '/campaign-planning?mode=create',
-  editCampaign: (id) => `/campaign-planning?mode=edit&campaignId=${id}`,
+  editCampaign: (id) => `/campaign-details/${id}`,
   viewCampaign: (id) => `/campaign-details/${id}`,
   
   // Week-specific planning

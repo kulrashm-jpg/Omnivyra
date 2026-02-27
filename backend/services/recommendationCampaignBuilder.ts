@@ -1,6 +1,7 @@
 import { supabase } from '../db/supabaseClient';
 import { runCampaignAiPlan } from './campaignAiOrchestrator';
 import { getProfile } from './companyProfileService';
+import { getCampaignPlanningInputs } from './campaignPlanningInputsService';
 
 type RecommendationSnapshot = {
   id: string;
@@ -88,11 +89,30 @@ export async function buildCampaignFromRecommendation(input: {
     'After proposing, ask for confirmation one field at a time. For each field, provide two suggested options and accept user-provided alternatives.\n' +
     stringifyContext(recommendation as RecommendationSnapshot, profile);
 
+  const planningInputs = await getCampaignPlanningInputs(campaign.id);
+  const deterministicPlanningContext = planningInputs
+    ? {
+        available_content: planningInputs.available_content,
+        content_capacity: planningInputs.weekly_capacity,
+        exclusive_campaigns: planningInputs.exclusive_campaigns,
+        platforms: planningInputs.selected_platforms,
+        platform_content_requests: planningInputs.platform_content_requests,
+      }
+    : {};
+  const existingCollectedPlanningContext: Record<string, unknown> | undefined = undefined;
+  const finalCollectedPlanningContext = {
+    ...(existingCollectedPlanningContext ?? {}),
+    ...deterministicPlanningContext,
+  };
+
+  console.log('[PLAN INPUT SOURCE]', JSON.stringify(finalCollectedPlanningContext, null, 2));
+
   const planResult = await runCampaignAiPlan({
     campaignId: campaign.id,
     mode: 'generate_plan',
     message,
     durationWeeks: durationWeeks ?? 12,
+    collectedPlanningContext: finalCollectedPlanningContext,
   });
 
   const { error: linkError } = await supabase

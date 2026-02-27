@@ -1,4 +1,4 @@
-/** Shared types for lead-engine social connectors. */
+/** Shared types for lead-engine post discovery connectors. */
 export type RawPost = {
   platform: string;
   raw_text: string;
@@ -15,3 +15,4 @@ export type SearchPostsParams = {
   region: string;
   keywords: string[];
 };
+

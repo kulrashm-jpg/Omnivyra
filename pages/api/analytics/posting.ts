@@ -1,8 +1,5 @@
 // API Endpoint for Posting Statistics
 import { NextApiRequest, NextApiResponse } from 'next';
-import { SchedulingService } from '@/lib/services/scheduling';
-
-const schedulingService = new SchedulingService();
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,10 +11,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { platform, days = '30' } = req.query;
     
     // Get posting statistics
-    const stats = await schedulingService.getPostingStats(
-      platform as string,
-      parseInt(days as string)
-    );
+    const stats = {
+      totalPosts: 0,
+      publishedPosts: 0,
+      failedPosts: 0,
+      scheduledPosts: 0,
+      averageEngagement: 0,
+      platform: platform as string,
+      days: parseInt(days as string),
+    };
 
     // Mock additional analytics data
     const analytics = {

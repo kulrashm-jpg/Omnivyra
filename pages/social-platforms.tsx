@@ -38,7 +38,7 @@ const emptyForm: Partial<PlatformConfig> = {
   requires_admin: true,
 };
 
-const contentTypeOptions = [
+const FALLBACK_CONTENT_TYPE_OPTIONS = [
   'video',
   'shorts',
   'text',
@@ -55,6 +55,7 @@ export default function SocialPlatformsPage() {
   const { selectedCompanyId, hasPermission } = useCompanyContext();
   const [configs, setConfigs] = useState<PlatformConfig[]>([]);
   const [form, setForm] = useState<Partial<PlatformConfig>>(emptyForm);
+  const [contentTypeOptions, setContentTypeOptions] = useState<string[]>(FALLBACK_CONTENT_TYPE_OPTIONS);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -138,6 +139,30 @@ export default function SocialPlatformsPage() {
   useEffect(() => {
     loadConfigs();
   }, [isAdmin, selectedCompanyId]);
+
+  useEffect(() => {
+    const loadContentTypes = async () => {
+      try {
+        const response = await fetchWithAuth('/api/platform-intelligence/catalog');
+        if (!response.ok) return;
+        const data = await response.json().catch(() => ({}));
+        const platforms = Array.isArray(data?.platforms) ? data.platforms : [];
+        const union = new Set<string>();
+        platforms.forEach((p: any) => {
+          (Array.isArray(p?.supported_content_types) ? p.supported_content_types : []).forEach((t: any) => {
+            const v = String(t || '').trim().toLowerCase();
+            if (v) union.add(v);
+          });
+        });
+        // Keep existing options as fallback and superset (some configs use broader categories like "newsletter")
+        const merged = Array.from(new Set([...FALLBACK_CONTENT_TYPE_OPTIONS, ...Array.from(union)])).sort();
+        setContentTypeOptions(merged);
+      } catch {
+        // ignore
+      }
+    };
+    loadContentTypes();
+  }, []);
 
   const saveConfig = async () => {
     try {

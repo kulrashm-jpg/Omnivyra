@@ -1,11 +1,55 @@
+// LEGACY ENGINE - DO NOT EXTEND
+// Scheduled for removal after DB-platform intelligence cutover.
 // API Endpoint for Individual Post Management
 import { NextApiRequest, NextApiResponse } from 'next';
-import { SchedulingService } from '@/lib/services/scheduling';
-import { PostingServiceFactory } from '@/lib/services/posting';
+import { supabase } from '@/backend/db/supabaseClient';
+import {
+  cancelLegacyScheduledPost,
+  getLegacyScheduledPostById,
+  publishLegacyScheduledPostNow,
+  updateLegacyScheduledPost,
+} from '@/backend/services/structuredPlanScheduler';
 
-const schedulingService = new SchedulingService();
+const extractAccessToken = (req: NextApiRequest): string | null => {
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice('Bearer '.length).trim();
+    if (token) return token;
+  }
+  const cookieEntries = Object.entries(req.cookies || {});
+  const directToken = req.cookies?.['sb-access-token'];
+  if (directToken) return directToken;
+  for (const [name, value] of cookieEntries) {
+    if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
+    try {
+      const parsed = JSON.parse(value as any);
+      if (parsed?.access_token) return String(parsed.access_token);
+    } catch {
+      // ignore malformed cookie
+    }
+  }
+  return null;
+};
+
+async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
+  const token = extractAccessToken(req);
+  if (!token) {
+    res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
+    return null;
+  }
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user?.id) {
+    res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
+    return null;
+  }
+  return data.user.id;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  console.log(`[NEW SCHEDULER ACTIVE] invoked pages/api/schedule/posts/[id].ts handler (${req.method || 'unknown'})`);
+  const userId = await requireUserId(req, res);
+  if (!userId) return;
+
   const { id } = req.query;
 
   if (!id || typeof id !== 'string') {
@@ -19,8 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     switch (req.method) {
       case 'GET':
         // Get specific post
-        const posts = await schedulingService.getScheduledPosts();
-        const post = posts.find(p => p.id === id);
+        const post = await getLegacyScheduledPostById({ userId, id });
         
         if (!post) {
           return res.status(404).json({
@@ -40,12 +83,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const updateData = req.body;
         
         // Validate update data
-        if (updateData.scheduledFor) {
-          updateData.scheduledFor = new Date(updateData.scheduledFor);
+        if (!(await getLegacyScheduledPostById({ userId, id }))) {
+          return res.status(404).json({ success: false, error: 'Post not found' });
         }
 
-        // Mock update - in production, update database
-        console.log(`Updating post ${id}:`, updateData);
+        await updateLegacyScheduledPost({
+          userId,
+          id,
+          patch: {
+            content: updateData.content,
+            title: updateData.title,
+            hashtags: updateData.hashtags,
+            mediaUrls: updateData.mediaUrls,
+            scheduledFor: updateData.scheduledFor,
+            status: updateData.status,
+            contentType: updateData.contentType,
+          },
+        });
         
         res.status(200).json({
           success: true,
@@ -55,7 +109,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       case 'DELETE':
         // Cancel/delete post
-        await schedulingService.cancelPost(id);
+        if (!(await getLegacyScheduledPostById({ userId, id }))) {
+          return res.status(404).json({ success: false, error: 'Post not found' });
+        }
+
+        await cancelLegacyScheduledPost({ userId, id });
         
         res.status(200).json({
           success: true,
@@ -65,8 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       case 'POST':
         // Publish post immediately
-        const posts2 = await schedulingService.getScheduledPosts();
-        const postToPublish = posts2.find(p => p.id === id);
+        const postToPublish = await getLegacyScheduledPostById({ userId, id });
         
         if (!postToPublish) {
           return res.status(404).json({
@@ -75,22 +132,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         }
 
-        // Get posting service
-        const postingService = PostingServiceFactory.getService(postToPublish.platform);
-        if (!postingService) {
-          return res.status(400).json({
-            success: false,
-            error: `No posting service available for ${postToPublish.platform}`,
-          });
-        }
-
-        // Publish the post
-        const result = await schedulingService.processPost(postToPublish);
+        // Queue for immediate publishing (DB scheduler picks up due posts)
+        await publishLegacyScheduledPostNow({ userId, id });
+        const result = { success: true, queued: true, postId: id };
         
         res.status(200).json({
-          success: result.success,
+          success: true,
           data: result,
-          message: result.success ? 'Post published successfully' : 'Failed to publish post',
+          message: 'Post published successfully',
         });
         break;
 

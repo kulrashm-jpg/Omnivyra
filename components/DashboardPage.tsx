@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Edit, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText } from 'lucide-react';
+import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import Header from './Header';
 import { supabase } from '../utils/supabaseClient';
@@ -33,6 +33,22 @@ interface DashboardStats {
   publishedContent: number;
 }
 
+type CalendarExecutionStage =
+  | 'weekly_planning'
+  | 'daily_cards'
+  | 'content_created'
+  | 'content_scheduled'
+  | 'content_shared'
+  | 'overdue';
+
+type CalendarActivity = {
+  campaign: Campaign;
+  stage: CalendarExecutionStage;
+  label: string;
+  weekNumber?: number;
+};
+
+
 export default function DashboardPage() {
   const router = useRouter();
   const { selectedCompanyId, isAdmin, isLoading, hasPermission, userRole } = useCompanyContext();
@@ -53,7 +69,23 @@ export default function DashboardPage() {
   const [leadCaptureToast, setLeadCaptureToast] = useState<string | null>(null);
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [stageAvailability, setStageAvailability] = useState<Record<string, { stages: Record<string, boolean>; counts: Record<string, number> }>>({});
+  const [calendarCurrentDate, setCalendarCurrentDate] = useState(new Date());
+  const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
+  const [calendarView, setCalendarView] = useState<'month' | 'week'>('month');
+  const [calendarActivityMode, setCalendarActivityMode] = useState<'daily' | 'weekly'>('daily');
+  const [calendarCampaignFilter, setCalendarCampaignFilter] = useState<string>('all');
+  const [calendarStatusFilter, setCalendarStatusFilter] = useState<string>('all');
+  const [calendarWeekFilter, setCalendarWeekFilter] = useState<string>('all');
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [pendingDeleteCampaignId, setPendingDeleteCampaignId] = useState<string | null>(null);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
   const isCompanyAdmin = (userRole || '').toString() === 'COMPANY_ADMIN';
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   const CAMPAIGN_STAGES = [
     { id: 'all', label: 'All' },
@@ -88,8 +120,199 @@ export default function DashboardPage() {
     console.log('DASHBOARD_SELECTED_COMPANY', selectedCompanyId, { isAdmin });
   }, [selectedCompanyId, isAdmin]);
 
+  useEffect(() => {
+    if (activeTab !== 'calendar') return;
+    if (calendarSelectedDate) return;
+    setCalendarSelectedDate(formatDateKey(new Date()));
+  }, [activeTab, calendarSelectedDate]);
+  useEffect(() => {
+    setCalendarWeekFilter('all');
+  }, [calendarCampaignFilter, calendarActivityMode]);
+
   const campaignIds = campaigns.map((c) => c.id).filter(Boolean).join(',');
   const [expandingCampaignId, setExpandingCampaignId] = useState<string | null>(null);
+
+  const formatDateKey = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+  const parseDateKey = (key: string): Date => {
+    const [y, m, d] = key.split('-').map((value) => Number(value));
+    return new Date(y, (m || 1) - 1, d || 1);
+  };
+  const parseCalendarDate = (rawInput: unknown): Date | null => {
+    const raw = String(rawInput || '').trim();
+    if (!raw) return null;
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    if (dateOnly) {
+      const year = Number(dateOnly[1]);
+      const month = Number(dateOnly[2]);
+      const day = Number(dateOnly[3]);
+      const localDate = new Date(year, month - 1, day);
+      return Number.isFinite(localDate.getTime()) ? localDate : null;
+    }
+    const parsed = new Date(raw);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+  };
+  const getCampaignStatusCategory = (campaign: Campaign): 'active' | 'completed' | 'on_hold' | 'planned' | 'other' => {
+    const raw = String(campaign.status || campaign.current_stage || '').toLowerCase();
+    if (raw.includes('complete') || raw.includes('done') || raw.includes('closed')) return 'completed';
+    if (raw.includes('hold') || raw.includes('pause')) return 'on_hold';
+    if (raw.includes('active') || raw.includes('running')) return 'active';
+    if (raw.includes('draft') || raw.includes('plan') || raw.includes('pending')) return 'planned';
+    return 'other';
+  };
+  const getCalendarStageAppearance = (stage: CalendarExecutionStage): { badge: string; dot: string; label: string } => {
+    switch (stage) {
+      case 'daily_cards':
+        return {
+          badge: 'bg-green-100 text-green-800 border border-green-200',
+          dot: 'bg-green-300',
+          label: 'Daily Cards',
+        };
+      case 'content_created':
+        return {
+          badge: 'bg-sky-100 text-sky-800 border border-sky-200',
+          dot: 'bg-sky-300',
+          label: 'Content Created',
+        };
+      case 'content_scheduled':
+        return {
+          badge: 'bg-emerald-600 text-white border border-emerald-700',
+          dot: 'bg-emerald-600',
+          label: 'Content Scheduled',
+        };
+      case 'content_shared':
+        return {
+          badge: 'bg-blue-700 text-white border border-blue-800',
+          dot: 'bg-blue-700',
+          label: 'Content Shared',
+        };
+      case 'overdue':
+        return {
+          badge: 'bg-red-600 text-white border border-red-700',
+          dot: 'bg-red-500',
+          label: 'Overdue',
+        };
+      case 'weekly_planning':
+      default:
+        return {
+          badge: 'bg-white text-gray-800 border border-gray-300',
+          dot: 'bg-gray-300',
+          label: 'Weekly Planning',
+        };
+    }
+  };
+  const getCampaignTotalWeeks = (campaign: Campaign): number => {
+    if (typeof campaign.duration_weeks === 'number' && campaign.duration_weeks > 0) {
+      return Math.max(1, Math.floor(campaign.duration_weeks));
+    }
+    const start = parseCalendarDate(campaign.start_date);
+    const end = parseCalendarDate(campaign.end_date);
+    if (!start || !end) return 1;
+    start.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+    const diff = Math.max(0, end.getTime() - start.getTime());
+    return Math.max(1, Math.ceil((diff + 1) / (1000 * 60 * 60 * 24 * 7)));
+  };
+  const getCampaignExecutionStage = (campaign: Campaign): CalendarExecutionStage => {
+    const counts = stageAvailability[campaign.id]?.counts || {};
+    const dailyPlans = Number(counts.dailyPlans || 0);
+    const contentReadyDailyPlans = Number(counts.contentReadyDailyPlans || 0);
+    const scheduledPosts = Number(counts.scheduledPosts || 0);
+    const publishedPosts = Number(counts.publishedPosts || 0);
+    const end = parseCalendarDate(campaign.end_date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (end) {
+      end.setHours(0, 0, 0, 0);
+      const incompleteAfterEnd = end < today && (dailyPlans === 0 || scheduledPosts === 0 || publishedPosts === 0);
+      if (incompleteAfterEnd) return 'overdue';
+    }
+    if (publishedPosts > 0) return 'content_shared';
+    if (scheduledPosts > 0) return 'content_scheduled';
+    if (contentReadyDailyPlans > 0) return 'content_created';
+    if (dailyPlans > 0) return 'daily_cards';
+    return 'weekly_planning';
+  };
+  const getDaysInMonth = (date: Date): Array<Date | null> => {
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const leading = firstDay.getDay();
+    const cells: Array<Date | null> = [];
+    for (let i = 0; i < leading; i += 1) cells.push(null);
+    for (let day = 1; day <= daysInMonth; day += 1) cells.push(new Date(year, month, day));
+    return cells;
+  };
+  const getWeekDays = (anchorDate: Date): Date[] => {
+    const start = new Date(anchorDate);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - start.getDay());
+    return Array.from({ length: 7 }, (_, idx) => {
+      const day = new Date(start);
+      day.setDate(start.getDate() + idx);
+      return day;
+    });
+  };
+  const getWeekLabel = (anchorDate: Date) => {
+    const weekDays = getWeekDays(anchorDate);
+    const first = weekDays[0];
+    const last = weekDays[6];
+    const firstLabel = first.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const lastLabel = last.toLocaleDateString('en-US', {
+      month: first.getMonth() === last.getMonth() ? undefined : 'short',
+      day: 'numeric',
+      year: first.getFullYear() === last.getFullYear() ? undefined : 'numeric',
+    });
+    const yearLabel = last.getFullYear();
+    return `${firstLabel} - ${lastLabel}, ${yearLabel}`;
+  };
+  const calendarFilteredCampaigns = campaigns.filter((campaign) => {
+    const campaignMatch = calendarCampaignFilter === 'all' || campaign.id === calendarCampaignFilter;
+    const statusCategory = getCampaignStatusCategory(campaign);
+    const statusMatch = calendarStatusFilter === 'all' || statusCategory === calendarStatusFilter;
+    return campaignMatch && statusMatch;
+  });
+  const getCalendarActivitiesForDate = (date: Date): CalendarActivity[] => {
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    const activities: CalendarActivity[] = [];
+    calendarFilteredCampaigns.forEach((campaign) => {
+      const start = parseCalendarDate(campaign.start_date);
+      if (!start) return;
+      start.setHours(0, 0, 0, 0);
+      const rawEnd = parseCalendarDate(campaign.end_date);
+      const end = rawEnd ? new Date(rawEnd) : new Date(start);
+      end.setHours(0, 0, 0, 0);
+      if (dayStart < start || dayStart > end) return;
+      const stage = getCampaignExecutionStage(campaign);
+      if (calendarActivityMode === 'weekly') {
+        const elapsedDays = Math.floor((dayStart.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+        const weekNumber = Math.floor(elapsedDays / 7) + 1;
+        const totalWeeks = getCampaignTotalWeeks(campaign);
+        if (weekNumber < 1 || weekNumber > totalWeeks) return;
+        if (calendarWeekFilter !== 'all' && Number(calendarWeekFilter) !== weekNumber) return;
+        activities.push({
+          campaign,
+          stage,
+          weekNumber,
+          label: `Week ${weekNumber} - ${campaign.name}`,
+        });
+        return;
+      }
+      activities.push({
+        campaign,
+        stage,
+        label: campaign.name,
+      });
+    });
+    return activities;
+  };
+  const selectedCalendarCampaign = campaigns.find((campaign) => campaign.id === calendarCampaignFilter) || null;
 
   useEffect(() => {
     if (!campaignIds) {
@@ -241,58 +464,49 @@ export default function DashboardPage() {
   };
 
   // Handler functions
-  const handleEditCampaign = (campaignId: string) => {
-    const params = new URLSearchParams({ campaignId, mode: 'edit' });
-    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
-    window.location.href = `/campaign-planning?${params.toString()}`;
-  };
-
   const handleDeleteCampaign = async (campaignId: string) => {
     if (!selectedCompanyId) {
-      alert('Please select a company before deleting campaigns.');
+      notify('error', 'Please select a company before deleting campaigns.');
       return;
     }
-
     try {
       const { data } = await supabase.auth.getSession();
       if (!data?.session?.access_token) {
-        alert('Your session may have expired. Please refresh the page and try again.');
+        notify('error', 'Your session may have expired. Please refresh the page and try again.');
         return;
       }
+      setPendingDeleteCampaignId(campaignId);
     } catch {
-      alert('Unable to verify session. Please sign in again.');
-      return;
+      notify('error', 'Unable to verify session. Please sign in again.');
     }
+  };
 
-    if (confirm('Are you sure you want to delete this campaign?')) {
-      try {
-        const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
-        const deleteResponse = await fetchWithAuth(deleteUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            campaignId,
-            companyId: selectedCompanyId,
-            ipAddress: '127.0.0.1',
-            userAgent: navigator.userAgent
-          })
-        });
-        
-        console.log('Delete response status:', deleteResponse.status);
-        const result = await deleteResponse.json();
-        console.log('Delete response:', result);
-        
-        if (deleteResponse.ok && result.success) {
-          // Reload data after deletion
-          loadDashboardData();
-          alert('Campaign deleted successfully');
-        } else {
-          alert(`Failed to delete campaign: ${result.error || 'Unknown error'}`);
-        }
-      } catch (error) {
-        console.error('Error deleting campaign:', error);
-        alert(`Error deleting campaign: ${error.message}`);
+  const confirmDeleteCampaign = async () => {
+    if (!selectedCompanyId || !pendingDeleteCampaignId) return;
+    try {
+      const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
+      const deleteResponse = await fetchWithAuth(deleteUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId: pendingDeleteCampaignId,
+          companyId: selectedCompanyId,
+          ipAddress: '127.0.0.1',
+          userAgent: navigator.userAgent
+        })
+      });
+      const result = await deleteResponse.json();
+      if (deleteResponse.ok && result.success) {
+        loadDashboardData();
+        notify('success', 'Campaign deleted successfully.');
+      } else {
+        notify('error', `Failed to delete campaign: ${result.error || 'Unknown error'}`);
       }
+    } catch (error) {
+      console.error('Error deleting campaign:', error);
+      notify('error', `Error deleting campaign: ${error.message}`);
+    } finally {
+      setPendingDeleteCampaignId(null);
     }
   };
 
@@ -302,6 +516,12 @@ export default function DashboardPage() {
     window.location.href = `/campaign-details/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
   };
 
+  const buildPlanningWorkspaceUrl = (campaignId: string) => {
+    const params = new URLSearchParams();
+    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
+    params.set('campaignId', campaignId);
+    return `/campaign-planning-hierarchical?${params.toString()}`;
+  };
 
   const getStageColor = (stage: string) => {
     const stageMap: Record<string, string> = {
@@ -338,6 +558,32 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50">
       <Header />
+      {notice && (
+        <div className="max-w-7xl mx-auto px-6 pt-4">
+          <div
+            className={`rounded-lg border px-3 py-2 text-sm ${
+              notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800'
+                : 'border-indigo-200 bg-indigo-50 text-indigo-800'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {notice.message}
+          </div>
+        </div>
+      )}
+      {pendingDeleteCampaignId && (
+        <div className="max-w-7xl mx-auto px-6 pt-2">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-center justify-between gap-3">
+            <span>Delete this campaign? This cannot be undone.</span>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setPendingDeleteCampaignId(null)} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
+              <button type="button" onClick={confirmDeleteCampaign} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -594,22 +840,12 @@ export default function DashboardPage() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                window.location.href = `/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`;
+                                window.location.href = buildPlanningWorkspaceUrl(campaign.id);
                               }}
                               className="p-2 hover:bg-indigo-100 rounded-lg transition-colors"
-                              title="View committed plan"
+                              title="View submitted plan"
                             >
                               <FileText className="h-4 w-4 text-indigo-600" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEditCampaign(campaign.id);
-                              }}
-                              className="p-2 hover:bg-blue-100 rounded-lg transition-colors"
-                              title="Edit Campaign"
-                            >
-                              <Edit className="h-4 w-4 text-blue-600" />
                             </button>
                             <button
                               onClick={(e) => {
@@ -646,7 +882,7 @@ export default function DashboardPage() {
                           <div className="flex flex-wrap gap-1.5 mb-4">
                             {stageAvailability[campaign.id].stages.twelveWeekPlan && (
                               <a
-                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                href={buildPlanningWorkspaceUrl(campaign.id)}
                                 onClick={(e) => e.stopPropagation()}
                                 className="text-xs px-2 py-1 rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
                               >
@@ -662,26 +898,17 @@ export default function DashboardPage() {
                                 {expandingCampaignId === campaign.id ? 'Expanding…' : 'Expand to Week Plans'}
                               </button>
                             )}
-                            {stageAvailability[campaign.id].stages.detailedWeekPlans && (
+                            {(stageAvailability[campaign.id].stages.detailedWeekPlans || stageAvailability[campaign.id].stages.dailyPlans) && (
                               <a
-                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                href={buildPlanningWorkspaceUrl(campaign.id)}
                                 onClick={(e) => e.stopPropagation()}
                                 className="text-xs px-2 py-1 rounded bg-purple-100 text-purple-700 hover:bg-purple-200"
                               >
-                                Week Plans
+                                Weekly & Daily
                               </a>
                             )}
                             {stageAvailability[campaign.id].stages.aiEnrichedWeeks && (
                               <span className="text-xs px-2 py-1 rounded bg-violet-100 text-violet-700">AI Enriched</span>
-                            )}
-                            {stageAvailability[campaign.id].stages.dailyPlans && (
-                              <a
-                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200"
-                              >
-                                Daily
-                              </a>
                             )}
                             {stageAvailability[campaign.id].stages.charting && (
                               <a
@@ -724,7 +951,7 @@ export default function DashboardPage() {
                   <div className="p-2 bg-white/20 rounded-lg">
                     <Users className="h-6 w-6" />
                   </div>
-                  <h3 className="text-xl font-bold">Company Profile</h3>
+                  <h3 className="text-lg font-semibold leading-snug">Company Profile</h3>
                 </div>
                 <p className="text-indigo-100 mb-4">
                   Start here to define your company intelligence profile
@@ -741,7 +968,7 @@ export default function DashboardPage() {
                   <div className="p-2 bg-white/20 rounded-lg">
                     <Settings className="h-6 w-6" />
                   </div>
-                  <h3 className="text-xl font-bold">External APIs</h3>
+                  <h3 className="text-lg font-semibold leading-snug">External APIs</h3>
                 </div>
                 <p className="text-gray-100 mb-4">
                   Configure external sources for trend signals
@@ -753,29 +980,12 @@ export default function DashboardPage() {
                   Manage APIs
                 </button>
               </div>
-              <div className="bg-gradient-to-br from-slate-600 to-slate-800 rounded-2xl p-6 text-white">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <Settings className="h-6 w-6" />
-                  </div>
-                  <h3 className="text-xl font-bold">Social Platform Settings</h3>
-                </div>
-                <p className="text-slate-100 mb-4">
-                  Define publishing rules per platform
-                </p>
-                <button
-                  onClick={() => window.location.href = '/social-platforms'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-                >
-                  Configure Platforms
-                </button>
-              </div>
               <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl p-6 text-white">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="p-2 bg-white/20 rounded-lg">
                     <TrendingUp className="h-6 w-6" />
                   </div>
-                  <h3 className="text-xl font-bold">Recommendations</h3>
+                  <h3 className="text-lg font-semibold leading-snug">Recommendations</h3>
                 </div>
                 <p className="text-emerald-100 mb-4">
                   Generate trend-based campaign recommendations
@@ -787,15 +997,33 @@ export default function DashboardPage() {
                   View Recommendations
                 </button>
               </div>
+              <div className="bg-gradient-to-br from-slate-600 to-slate-800 rounded-2xl p-6 text-white">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-white/20 rounded-lg">
+                    <Settings className="h-6 w-6" />
+                  </div>
+                  <h3 className="text-lg font-semibold leading-snug">Social Platform Settings</h3>
+                </div>
+                <p className="text-slate-100 mb-4">
+                  Define publishing rules per platform
+                </p>
+                <button
+                  onClick={() => window.location.href = '/social-platforms'}
+                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                >
+                  Configure Platforms
+                </button>
+              </div>
               <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl p-6 text-white">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="p-2 bg-white/20 rounded-lg">
                     <Calendar className="h-6 w-6" />
                   </div>
-                  <h3 className="text-xl font-bold">Schedule Content</h3>
+                  <h3 className="text-lg font-semibold leading-snug">Schedule Content</h3>
                 </div>
                 <p className="text-green-100 mb-4">Plan and schedule your content calendar</p>
                 <button
+                  onClick={() => setActiveTab('calendar')}
                   disabled={!canScheduleContent}
                   title={
                     canScheduleContent ? '' : 'You do not have permission to schedule content.'
@@ -916,22 +1144,12 @@ export default function DashboardPage() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                window.location.href = `/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`;
+                                window.location.href = buildPlanningWorkspaceUrl(campaign.id);
                               }}
                               className="p-2 hover:bg-indigo-100 rounded-lg transition-colors"
-                              title="View committed plan"
+                              title="View submitted plan"
                             >
                               <FileText className="h-4 w-4 text-indigo-600" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEditCampaign(campaign.id);
-                              }}
-                              className="p-2 hover:bg-blue-100 rounded-lg transition-colors"
-                              title="Edit Campaign"
-                            >
-                              <Edit className="h-4 w-4 text-blue-600" />
                             </button>
                             <button
                               onClick={(e) => {
@@ -968,7 +1186,7 @@ export default function DashboardPage() {
                           <div className="flex flex-wrap gap-1.5 mb-4">
                             {stageAvailability[campaign.id].stages.twelveWeekPlan && (
                               <a
-                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                href={buildPlanningWorkspaceUrl(campaign.id)}
                                 onClick={(e) => e.stopPropagation()}
                                 className="text-xs px-2 py-1 rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
                               >
@@ -984,26 +1202,17 @@ export default function DashboardPage() {
                                 {expandingCampaignId === campaign.id ? 'Expanding…' : 'Expand to Week Plans'}
                               </button>
                             )}
-                            {stageAvailability[campaign.id].stages.detailedWeekPlans && (
+                            {(stageAvailability[campaign.id].stages.detailedWeekPlans || stageAvailability[campaign.id].stages.dailyPlans) && (
                               <a
-                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                                href={buildPlanningWorkspaceUrl(campaign.id)}
                                 onClick={(e) => e.stopPropagation()}
                                 className="text-xs px-2 py-1 rounded bg-purple-100 text-purple-700 hover:bg-purple-200"
                               >
-                                Week Plans
+                                Weekly & Daily
                               </a>
                             )}
                             {stageAvailability[campaign.id].stages.aiEnrichedWeeks && (
                               <span className="text-xs px-2 py-1 rounded bg-violet-100 text-violet-700">AI Enriched</span>
-                            )}
-                            {stageAvailability[campaign.id].stages.dailyPlans && (
-                              <a
-                                href={`/campaign-planning-hierarchical?campaignId=${campaign.id}${selectedCompanyId ? `&companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200"
-                              >
-                                Daily
-                              </a>
                             )}
                             {stageAvailability[campaign.id].stages.charting && (
                               <a
@@ -1128,6 +1337,311 @@ export default function DashboardPage() {
                   Generate Report
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Calendar Tab */}
+        {activeTab === 'calendar' && (
+          <div className="space-y-6">
+            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">Execution Calendar</h2>
+                  <p className="text-sm text-gray-600">Switch between daily and weekly campaign activity views.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center rounded-lg border border-gray-200 p-1 bg-white">
+                    <button
+                      onClick={() => setCalendarActivityMode('daily')}
+                      className={`px-3 py-1 text-xs rounded ${
+                        calendarActivityMode === 'daily' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      Daily Activities
+                    </button>
+                    <button
+                      onClick={() => setCalendarActivityMode('weekly')}
+                      className={`px-3 py-1 text-xs rounded ${
+                        calendarActivityMode === 'weekly' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      Weekly Activities
+                    </button>
+                  </div>
+                  <select
+                    value={calendarCampaignFilter}
+                    onChange={(e) => setCalendarCampaignFilter(e.target.value)}
+                    className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-700"
+                  >
+                    <option value="all">All Campaigns</option>
+                    {campaigns.map((campaign) => (
+                      <option key={`calendar-campaign-${campaign.id}`} value={campaign.id}>
+                        {campaign.name}
+                      </option>
+                    ))}
+                  </select>
+                  {calendarActivityMode === 'weekly' && calendarCampaignFilter !== 'all' && (
+                    <select
+                      value={calendarWeekFilter}
+                      onChange={(e) => setCalendarWeekFilter(e.target.value)}
+                      className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-700"
+                    >
+                      <option value="all">All Weeks</option>
+                      {Array.from(
+                        {
+                          length: selectedCalendarCampaign ? getCampaignTotalWeeks(selectedCalendarCampaign) : 1,
+                        },
+                        (_, idx) => idx + 1
+                      ).map((week) => (
+                        <option key={`calendar-week-${week}`} value={String(week)}>
+                          Week {week}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <select
+                    value={calendarStatusFilter}
+                    onChange={(e) => setCalendarStatusFilter(e.target.value)}
+                    className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-700"
+                  >
+                    <option value="all">All Categories</option>
+                    <option value="active">Active</option>
+                    <option value="completed">Completed</option>
+                    <option value="on_hold">On Hold</option>
+                    <option value="planned">Planned</option>
+                    <option value="other">Other</option>
+                  </select>
+                  <button
+                    onClick={() =>
+                      setCalendarCurrentDate((prev) => {
+                        const next = new Date(prev);
+                        if (calendarView === 'week') {
+                          next.setDate(prev.getDate() - 7);
+                        } else {
+                          next.setMonth(prev.getMonth() - 1);
+                        }
+                        return next;
+                      })
+                    }
+                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    aria-label="Previous month"
+                  >
+                    <ChevronLeft className="h-4 w-4 text-gray-600" />
+                  </button>
+                  <span className="text-sm font-semibold text-gray-800 min-w-[170px] text-center">
+                    {calendarView === 'week'
+                      ? getWeekLabel(calendarCurrentDate)
+                      : calendarCurrentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                  </span>
+                  <button
+                    onClick={() =>
+                      setCalendarCurrentDate((prev) => {
+                        const next = new Date(prev);
+                        if (calendarView === 'week') {
+                          next.setDate(prev.getDate() + 7);
+                        } else {
+                          next.setMonth(prev.getMonth() + 1);
+                        }
+                        return next;
+                      })
+                    }
+                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    aria-label="Next month"
+                  >
+                    <ChevronRight className="h-4 w-4 text-gray-600" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      const today = new Date();
+                      setCalendarCurrentDate(today);
+                      setCalendarSelectedDate(formatDateKey(today));
+                    }}
+                    className="ml-2 px-3 py-2 text-sm rounded-lg border border-gray-200 hover:bg-gray-50"
+                  >
+                    Today
+                  </button>
+                  <button
+                    onClick={() => window.location.href = '/content-calendar'}
+                    className="ml-1 px-3 py-2 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
+                  >
+                    Open Full Calendar
+                  </button>
+                  <div className="ml-1 flex items-center rounded-lg border border-gray-200 p-1">
+                    <button
+                      onClick={() => setCalendarView('month')}
+                      className={`px-2 py-1 text-xs rounded ${
+                        calendarView === 'month' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      Month
+                    </button>
+                    <button
+                      onClick={() => setCalendarView('week')}
+                      className={`px-2 py-1 text-xs rounded ${
+                        calendarView === 'week' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      Week
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-7 gap-2 text-xs font-medium text-gray-500 mb-2">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+                  <div key={day} className="px-2 py-1 text-center">{day}</div>
+                ))}
+              </div>
+
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                {([
+                  'weekly_planning',
+                  'daily_cards',
+                  'content_created',
+                  'content_scheduled',
+                  'content_shared',
+                  'overdue',
+                ] as CalendarExecutionStage[]).map((stage) => {
+                  const appearance = getCalendarStageAppearance(stage);
+                  return (
+                    <span key={`calendar-stage-${stage}`} className={`px-2 py-1 text-xs rounded-full ${appearance.badge}`}>
+                      {appearance.label}
+                    </span>
+                  );
+                })}
+              </div>
+
+              {calendarView === 'month' ? (
+                <div className="grid grid-cols-7 gap-2">
+                  {getDaysInMonth(calendarCurrentDate).map((day, idx) => {
+                    if (!day) return <div key={`empty-${idx}`} className="h-28 rounded-lg bg-gray-50 border border-gray-100" />;
+                    const dateKey = formatDateKey(day);
+                    const dayActivities = getCalendarActivitiesForDate(day);
+                    const isToday = dateKey === formatDateKey(new Date());
+                    const isSelected = calendarSelectedDate === dateKey;
+                    return (
+                      <button
+                        key={dateKey}
+                        onClick={() => setCalendarSelectedDate(dateKey)}
+                        className={`h-28 text-left p-2 rounded-lg border transition-colors ${
+                          isSelected
+                            ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200'
+                            : isToday
+                              ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200'
+                              : 'border-gray-200 bg-white hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="text-xs font-semibold text-gray-800">{day.getDate()}</div>
+                        <div className="mt-1 space-y-1">
+                          {dayActivities.slice(0, 2).map((activity, index) => {
+                            const appearance = getCalendarStageAppearance(activity.stage);
+                            return (
+                              <div key={`${dateKey}-${activity.campaign.id}-${index}`} className={`text-[11px] px-1.5 py-0.5 rounded truncate ${appearance.badge}`}>
+                                {activity.label}
+                              </div>
+                            );
+                          })}
+                          {dayActivities.length > 2 && (
+                            <div className="text-[11px] text-gray-500">+{dayActivities.length - 2} more</div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="grid grid-cols-7 gap-2">
+                  {getWeekDays(calendarCurrentDate).map((day) => {
+                    const dateKey = formatDateKey(day);
+                    const dayActivities = getCalendarActivitiesForDate(day);
+                    const isToday = dateKey === formatDateKey(new Date());
+                    const isSelected = calendarSelectedDate === dateKey;
+                    return (
+                      <button
+                        key={`week-${dateKey}`}
+                        onClick={() => setCalendarSelectedDate(dateKey)}
+                        className={`h-36 text-left p-2 rounded-lg border transition-colors ${
+                          isSelected
+                            ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200'
+                            : isToday
+                              ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200'
+                              : 'border-gray-200 bg-white hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="text-xs font-semibold text-gray-800">
+                          {day.toLocaleDateString('en-US', { weekday: 'short' })} {day.getDate()}
+                        </div>
+                        <div className="mt-1 space-y-1">
+                          {dayActivities.slice(0, 4).map((activity, index) => {
+                            const appearance = getCalendarStageAppearance(activity.stage);
+                            return (
+                              <div key={`week-item-${dateKey}-${activity.campaign.id}-${index}`} className={`text-[11px] px-1.5 py-0.5 rounded truncate ${appearance.badge}`}>
+                                {activity.label}
+                              </div>
+                            );
+                          })}
+                          {dayActivities.length > 4 && (
+                            <div className="text-[11px] text-gray-500">+{dayActivities.length - 4} more</div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">
+                {calendarSelectedDate
+                  ? `${calendarActivityMode === 'weekly' ? 'Weekly activities around' : 'Activities on'} ${parseDateKey(calendarSelectedDate).toLocaleDateString('en-US', {
+                      weekday: 'long',
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                    })}`
+                  : 'Select a day to view activities'}
+              </h3>
+              {calendarSelectedDate ? (
+                (() => {
+                  const day = parseDateKey(calendarSelectedDate);
+                  const dayActivities = getCalendarActivitiesForDate(day);
+                  if (dayActivities.length === 0) {
+                    return <p className="text-sm text-gray-600">No campaign activities scheduled for this day.</p>;
+                  }
+                  return (
+                    <div className="space-y-3">
+                      {dayActivities.map((activity, index) => {
+                        const appearance = getCalendarStageAppearance(activity.stage);
+                        return (
+                          <div key={`detail-${activity.campaign.id}-${calendarSelectedDate}-${index}`} className="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-3">
+                            <div>
+                              <p className="font-medium text-gray-900">{activity.label}</p>
+                              <p className="text-xs text-gray-500">
+                                {activity.campaign.start_date ? new Date(activity.campaign.start_date).toLocaleDateString() : 'Not scheduled'}
+                                {' - '}
+                                {activity.campaign.end_date ? new Date(activity.campaign.end_date).toLocaleDateString() : 'Not scheduled'}
+                              </p>
+                              <span className={`mt-1 inline-flex px-2 py-0.5 rounded text-xs ${appearance.badge}`}>
+                                {appearance.label}
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => handleViewCampaign(activity.campaign.id)}
+                              className="text-sm text-indigo-600 hover:text-indigo-800"
+                            >
+                              Open Campaign
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()
+              ) : (
+                <p className="text-sm text-gray-600">Use the month view above to pick a date.</p>
+              )}
             </div>
           </div>
         )}

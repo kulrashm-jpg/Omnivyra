@@ -39,7 +39,11 @@ export function getStageGradient(stage: string): string {
 }
 
 export function getStageLabel(stage: string): string {
-  return STAGE_LABELS[stage as CampaignStage] ?? (stage?.charAt(0)?.toUpperCase() + (stage ?? '').slice(1)) ?? 'Planning';
+  const known = STAGE_LABELS[stage as CampaignStage];
+  if (known) return known;
+  const s = String(stage || '').trim();
+  if (!s) return 'Planning';
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /** Returns "# Week Plan" when stage is twelve_week_plan and duration is known; otherwise base label. */

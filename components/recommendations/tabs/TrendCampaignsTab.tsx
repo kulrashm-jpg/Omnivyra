@@ -10,6 +10,7 @@ import { useEngineJobPolling } from '../../../hooks/useEngineJobPolling';
 import OfferingFacetSelector from '../engine-framework/OfferingFacetSelector';
 import StrategicConsole from '../engine-framework/StrategicConsole';
 import RecommendationBlueprintCard from '../cards/RecommendationBlueprintCard';
+import AIGenerationProgress from '../../AIGenerationProgress';
 
 const TYPE = 'TREND';
 
@@ -66,6 +67,7 @@ const STRATEGIC_INTENT_OPTIONS = [
   'Product promotion',
 ] as const;
 
+/** Country name → ISO 2-letter code for autocomplete and resolution. */
 const ISO_COUNTRIES = [
   { name: 'India', code: 'IN' },
   { name: 'United States', code: 'US' },
@@ -77,7 +79,79 @@ const ISO_COUNTRIES = [
   { name: 'Singapore', code: 'SG' },
   { name: 'UAE', code: 'AE' },
   { name: 'Japan', code: 'JP' },
+  { name: 'Indonesia', code: 'ID' },
+  { name: 'Italy', code: 'IT' },
+  { name: 'Spain', code: 'ES' },
+  { name: 'Brazil', code: 'BR' },
+  { name: 'Mexico', code: 'MX' },
+  { name: 'Netherlands', code: 'NL' },
+  { name: 'South Korea', code: 'KR' },
+  { name: 'China', code: 'CN' },
+  { name: 'Hong Kong', code: 'HK' },
+  { name: 'Ireland', code: 'IE' },
+  { name: 'New Zealand', code: 'NZ' },
+  { name: 'South Africa', code: 'ZA' },
+  { name: 'Sweden', code: 'SE' },
+  { name: 'Norway', code: 'NO' },
+  { name: 'Denmark', code: 'DK' },
+  { name: 'Finland', code: 'FI' },
+  { name: 'Poland', code: 'PL' },
+  { name: 'Belgium', code: 'BE' },
+  { name: 'Switzerland', code: 'CH' },
+  { name: 'Austria', code: 'AT' },
+  { name: 'Portugal', code: 'PT' },
+  { name: 'Greece', code: 'GR' },
+  { name: 'Turkey', code: 'TR' },
+  { name: 'Israel', code: 'IL' },
+  { name: 'Saudi Arabia', code: 'SA' },
+  { name: 'Malaysia', code: 'MY' },
+  { name: 'Thailand', code: 'TH' },
+  { name: 'Philippines', code: 'PH' },
+  { name: 'Vietnam', code: 'VN' },
+  { name: 'Argentina', code: 'AR' },
+  { name: 'Chile', code: 'CL' },
+  { name: 'Colombia', code: 'CO' },
+  { name: 'Egypt', code: 'EG' },
+  { name: 'Nigeria', code: 'NG' },
+  { name: 'Kenya', code: 'KE' },
+  { name: 'Pakistan', code: 'PK' },
+  { name: 'Bangladesh', code: 'BD' },
+  { name: 'Sri Lanka', code: 'LK' },
+  { name: 'Russia', code: 'RU' },
+  { name: 'Ukraine', code: 'UA' },
+  { name: 'Czech Republic', code: 'CZ' },
+  { name: 'Romania', code: 'RO' },
+  { name: 'Hungary', code: 'HU' },
 ];
+
+function matchCountry(query: string, country: { name: string; code: string }): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  return (
+    country.name.toLowerCase().includes(q) ||
+    country.code.toLowerCase() === q
+  );
+}
+
+/** Resolve a single token (code or country name) to ISO code. */
+function tokenToIsoCode(token: string): string {
+  const t = token.trim();
+  if (t.length === 2) {
+    const byCode = ISO_COUNTRIES.find((c) => c.code.toLowerCase() === t.toLowerCase());
+    if (byCode) return byCode.code.toUpperCase();
+  }
+  const byName = ISO_COUNTRIES.find((c) => c.name.toLowerCase() === t.toLowerCase());
+  if (byName) return byName.code.toUpperCase();
+  const startsWith = ISO_COUNTRIES.find((c) => c.name.toLowerCase().startsWith(t.toLowerCase()));
+  if (startsWith) return startsWith.code.toUpperCase();
+  return t.toUpperCase();
+}
+
+/** Parse region input and return list of ISO codes (resolve country names to codes). */
+function regionInputToIsoCodes(regionInput: string): string[] {
+  const parts = regionInput.split(',').map((r) => r.trim()).filter(Boolean);
+  return parts.map(tokenToIsoCode);
+}
 
 export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const { companyId, regions, engineRecommendations, fetchWithAuth } = props;
@@ -100,7 +174,6 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [regionInput, setRegionInput] = useState('');
   const [regionWarning, setRegionWarning] = useState<string | null>(null);
-  const [countrySearch, setCountrySearch] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<'idle' | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'COMPLETED_WITH_WARNINGS' | 'FAILED'>('idle');
   const [jobError, setJobError] = useState<string | null>(null);
@@ -119,6 +192,8 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const clusterBridgeConsumedRef = useRef(false);
   const pulseBridgeConsumedRef = useRef(false);
+  const regionInputRef = useRef<HTMLInputElement>(null);
+  const [regionDropdownOpen, setRegionDropdownOpen] = useState(false);
   const [generatedEngineRecommendations, setGeneratedEngineRecommendations] = useState<
     Array<Record<string, unknown>>
   >([]);
@@ -289,10 +364,7 @@ Generate strategic campaign pillars to capture this demand.`;
       companyContext.geography = profile.geography;
     }
 
-    const regions = regionInput
-      .split(',')
-      .map((r) => r.trim().toUpperCase())
-      .filter(Boolean);
+    const regions = regionInputToIsoCodes(regionInput);
 
     return {
       context_mode: contextMode,
@@ -328,10 +400,7 @@ Generate strategic campaign pillars to capture this demand.`;
     try {
       const payload = await buildStrategicPayload();
       setLastStrategicPayload(payload);
-      const regionList = regionInput
-        .split(',')
-        .map((r) => r.trim().toUpperCase())
-        .filter(Boolean);
+      const regionList = regionInputToIsoCodes(regionInput);
       const objective =
         selectedStrategicIntents[0]?.toLowerCase().replace(/\s+/g, '_') || 'awareness';
       const recRes = await fetchWithAuth('/api/recommendations/generate', {
@@ -407,7 +476,7 @@ Generate strategic campaign pillars to capture this demand.`;
       if (selectedFacets.length > 0) parts.push(<>• Offerings: {selectedFacets.map((id) => id.split(':').slice(1).join(':') || id).join(', ')}</>);
       if (selectedStrategicIntents.length > 0) parts.push(<>• Objectives: {selectedStrategicIntents.join(', ')}</>);
       if (strategicText.trim()) parts.push(<>• Strategic text: &quot;{strategicText.slice(0, 60)}…&quot;</>);
-      const regionList = regionInput.split(',').map((r) => r.trim().toUpperCase()).filter(Boolean);
+      const regionList = regionInputToIsoCodes(regionInput);
       if (regionList.length) parts.push(<>• Regions: {regionList.join(', ')}</>);
       return { type: 'summary', text: <>No company context:<div className="mt-1 space-y-0.5">{parts}</div></> };
     }
@@ -417,7 +486,7 @@ Generate strategic campaign pillars to capture this demand.`;
     if (selectedAspect) lines.push(<>• Aspect: {selectedAspect}</>);
     if (selectedStrategicIntents.length > 0) lines.push(<>• Objectives: {selectedStrategicIntents.join(', ')}</>);
     if (strategicText.trim()) lines.push(<>• Direction: &quot;{strategicText.slice(0, 80)}…&quot;</>);
-    const regionList = regionInput.split(',').map((r) => r.trim().toUpperCase()).filter(Boolean);
+    const regionList = regionInputToIsoCodes(regionInput);
     if (regionList.length) lines.push(<>• Regions: {regionList.join(', ')}</>);
     return { type: 'summary', text: <div className="space-y-0.5">{lines}</div> };
   };
@@ -516,57 +585,69 @@ Generate strategic campaign pillars to capture this demand.`;
       />
       <div className="rounded-lg border border-gray-200 p-4 space-y-3">
         <h3 className="text-sm font-semibold text-gray-800">Geographic Targeting (Optional)</h3>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Target Regions (ISO country codes, comma separated)</label>
+        <div className="relative">
+          <label className="block text-xs text-gray-500 mb-1">Target Regions (type country name or ISO code, comma separated)</label>
           <input
+            ref={regionInputRef}
             type="text"
             value={regionInput}
             onChange={(e) => {
               setRegionInput(e.target.value);
+              setRegionDropdownOpen(true);
               const parts = e.target.value.split(',').map((r) => r.trim()).filter(Boolean);
-              const invalid = parts.filter((p) => p.length !== 2);
+              const invalid = parts.filter((p) => p.length !== 2 && !ISO_COUNTRIES.some((c) => matchCountry(p, c)));
               setRegionWarning(invalid.length > 0 ? 'Some codes are not 2-letter ISO codes; generation will still run.' : null);
             }}
-            placeholder="IN,US,GB"
+            onFocus={() => {
+              const parts = regionInput.split(',').map((r) => r.trim()).filter(Boolean);
+              const last = parts[parts.length - 1] ?? '';
+              if (last.length >= 2 && ISO_COUNTRIES.some((c) => matchCountry(last, c))) setRegionDropdownOpen(true);
+            }}
+            onBlur={() => {
+              setTimeout(() => setRegionDropdownOpen(false), 150);
+            }}
+            placeholder="e.g. India, US, Germany or IN, US, DE"
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            autoComplete="off"
           />
+          {regionDropdownOpen && (() => {
+            const parts = regionInput.split(',').map((r) => r.trim()).filter(Boolean);
+            const lastToken = (parts[parts.length - 1] ?? '').trim();
+            const isAlreadyCode = lastToken.length === 2 && ISO_COUNTRIES.some((c) => c.code.toLowerCase() === lastToken.toLowerCase());
+            const matches = lastToken.length >= 2 && !isAlreadyCode
+              ? ISO_COUNTRIES.filter((c) => matchCountry(lastToken, c)).slice(0, 8)
+              : [];
+            if (matches.length === 0) return null;
+            return (
+              <ul
+                className="absolute z-10 mt-1 w-full border border-gray-200 rounded-lg bg-white shadow-lg divide-y divide-gray-100 max-h-48 overflow-auto"
+                role="listbox"
+              >
+                {matches.map((c) => (
+                  <li key={c.code}>
+                    <button
+                      type="button"
+                      role="option"
+                      onClick={() => {
+                        const prev = parts.slice(0, -1);
+                        const next = [...prev, c.code];
+                        setRegionInput(next.join(', '));
+                        setRegionDropdownOpen(false);
+                        setRegionWarning(null);
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 text-gray-800"
+                    >
+                      {c.name} → <span className="font-medium text-indigo-600">{c.code}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            );
+          })()}
           <p className="mt-1 text-xs text-gray-500">
-            Use 2-letter ISO country codes. Example: IN (India), US (United States), GB (United Kingdom).
-            Leave empty to use company default geography.
+            Type a country name (e.g. India, United States) and pick from the list to get the ISO code, or enter codes directly (IN, US, GB). Leave empty to use company default geography.
           </p>
           {regionWarning && <p className="mt-1 text-xs text-red-600">{regionWarning}</p>}
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Find Country Code</label>
-          <input
-            type="text"
-            value={countrySearch}
-            onChange={(e) => setCountrySearch(e.target.value)}
-            placeholder="Type country name..."
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-2"
-          />
-          {countrySearch.trim() && (
-            <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-40 overflow-auto">
-              {ISO_COUNTRIES.filter(
-                (c) => c.name.toLowerCase().includes(countrySearch.trim().toLowerCase())
-              ).map((c) => (
-                <li key={c.code}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const current = regionInput.split(',').map((r) => r.trim()).filter(Boolean);
-                      const next = current.includes(c.code) ? current : [...current, c.code];
-                      setRegionInput(next.join(', '));
-                      setCountrySearch('');
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                  >
-                    {c.name} ({c.code})
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       </div>
       <div className="rounded-lg border border-gray-200 bg-gray-50/50 px-4 py-3">
@@ -883,7 +964,13 @@ Generate strategic campaign pillars to capture this demand.`;
         </>
       )}
       {isSubmitting && (
-        <div className="text-sm text-gray-500 py-6 text-center">Generating strategic themes…</div>
+        <div className="py-6">
+          <AIGenerationProgress
+            isActive={true}
+            message="Generating strategic themes…"
+            expectedSeconds={50}
+          />
+        </div>
       )}
 
       {historyDrawerOpen && (

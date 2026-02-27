@@ -15,11 +15,13 @@ const CONNECTORS: Record<string, (params: SearchPostsParams) => Promise<RawPost[
 };
 
 export type { RawPost, SearchPostsParams };
+
 export function getConnector(platform: string): ((params: SearchPostsParams) => Promise<RawPost[]>) | null {
-  const key = platform.toLowerCase();
+  const key = String(platform || '').toLowerCase().trim();
   return CONNECTORS[key] ?? null;
 }
 
 export function getSupportedPlatforms(): string[] {
-  return ['instagram', 'facebook', 'twitter', 'x', 'reddit', 'linkedin'];
+  return Object.keys(CONNECTORS);
 }
+

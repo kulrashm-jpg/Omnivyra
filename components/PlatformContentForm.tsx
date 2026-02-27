@@ -24,13 +24,28 @@ import {
   MessageCircle,
   Share
 } from 'lucide-react';
-import { 
-  PLATFORM_GUIDELINES, 
-  getPlatformGuidelines, 
-  getContentTypeGuidelines, 
-  validateContent,
-  ValidationResult 
-} from '@/lib/platform-guidelines';
+import { getPlatformGuidelines, type PlatformContentGuidelines } from '@/lib/platform-guidelines';
+
+type PlatformRulesResponse = {
+  platform: { canonical_key: string; name: string };
+  content_rules: Array<{
+    content_type: string;
+    max_characters: number | null;
+    max_words: number | null;
+    media_format: string | null;
+    supports_hashtags: boolean;
+    supports_mentions: boolean;
+    supports_links: boolean;
+    formatting_rules: any;
+  }>;
+};
+
+type ValidationResult = {
+  isValid: boolean;
+  errors: string[];
+  warnings: string[];
+  score: number;
+};
 
 interface PlatformContentFormProps {
   platform: string;
@@ -52,10 +67,82 @@ export default function PlatformContentForm({
   const [scheduledTime, setScheduledTime] = useState<string>('');
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [showGuidelines, setShowGuidelines] = useState<boolean>(false);
+  const [platformRules, setPlatformRules] = useState<PlatformRulesResponse | null>(null);
 
-  const guidelines = getPlatformGuidelines(platform);
-  const contentTypeGuidelines = selectedContentType ? 
-    getContentTypeGuidelines(platform, selectedContentType) : null;
+  const fallbackPlatformKey = platform === 'x' ? 'twitter' : platform;
+  const fallbackGuidelines: PlatformContentGuidelines = getPlatformGuidelines(fallbackPlatformKey);
+
+  const guidelines: PlatformContentGuidelines = React.useMemo(() => {
+    if (!platformRules?.content_rules?.length) return fallbackGuidelines;
+    const contentTypes = platformRules.content_rules
+      .map((rule) => {
+        const type = String(rule.content_type || '').trim();
+        if (!type) return null;
+        const maxChars = typeof rule.max_characters === 'number' ? rule.max_characters : 280;
+        const hashtagLimit =
+          typeof rule.formatting_rules?.hashtag_limit === 'number'
+            ? rule.formatting_rules.hashtag_limit
+            : rule.supports_hashtags
+              ? 10
+              : 0;
+        const mediaRequired = rule.media_format && rule.media_format !== 'text';
+        return {
+          type,
+          name: type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+          description: 'Database-driven content type rule',
+          characterLimit: maxChars,
+          hashtagLimit,
+          mediaRequired,
+          marketingTips: [],
+        };
+      })
+      .filter(Boolean) as any[];
+
+    const suggestedTimes = Array.from(
+      new Set(
+        platformRules.content_rules
+          .flatMap((r) => (Array.isArray(r?.formatting_rules?.suggested_times) ? r.formatting_rules.suggested_times : []))
+          .map((t) => String(t || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    return {
+      platform,
+      contentTypes: contentTypes.length > 0 ? contentTypes : fallbackGuidelines.contentTypes,
+      hashtagLimits: fallbackGuidelines.hashtagLimits,
+      characterLimits: fallbackGuidelines.characterLimits,
+      mediaRequirements: fallbackGuidelines.mediaRequirements,
+      postingTimes: suggestedTimes.length > 0 ? suggestedTimes.map((t) => `Suggested: ${t}`) : fallbackGuidelines.postingTimes,
+      engagementTips: fallbackGuidelines.engagementTips,
+      algorithmPreferences: fallbackGuidelines.algorithmPreferences,
+    };
+  }, [platformRules, fallbackGuidelines, platform]);
+
+  const contentTypeGuidelines = React.useMemo(() => {
+    return guidelines.contentTypes.find((t) => t.type === selectedContentType) || null;
+  }, [guidelines, selectedContentType]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadRules = async () => {
+      try {
+        const response = await fetch(`/api/platform-intelligence/rules?platformKey=${encodeURIComponent(platform)}`);
+        if (!response.ok) {
+          if (!cancelled) setPlatformRules(null);
+          return;
+        }
+        const data = (await response.json().catch(() => null)) as PlatformRulesResponse | null;
+        if (!cancelled) setPlatformRules(data);
+      } catch {
+        if (!cancelled) setPlatformRules(null);
+      }
+    };
+    loadRules();
+    return () => {
+      cancelled = true;
+    };
+  }, [platform]);
 
   // Initialize with default content type
   useEffect(() => {
@@ -67,10 +154,35 @@ export default function PlatformContentForm({
   // Validate content whenever it changes
   useEffect(() => {
     if (selectedContentType && content) {
-      const validationResult = validateContent(platform, selectedContentType, content, hashtags);
-      setValidation(validationResult);
+      const errors: string[] = [];
+      const warnings: string[] = [];
+
+      if (contentTypeGuidelines?.characterLimit && content.length > contentTypeGuidelines.characterLimit) {
+        errors.push(`Content exceeds character limit of ${contentTypeGuidelines.characterLimit}`);
+      } else if (contentTypeGuidelines?.characterLimit && content.length < contentTypeGuidelines.characterLimit * 0.1) {
+        warnings.push('Content is very short - consider adding more detail');
+      }
+
+      if (typeof contentTypeGuidelines?.hashtagLimit === 'number' && hashtags.length > contentTypeGuidelines.hashtagLimit) {
+        errors.push(`Too many hashtags. Maximum allowed: ${contentTypeGuidelines.hashtagLimit}`);
+      }
+
+      const score = Math.min(
+        100,
+        Math.max(
+          0,
+          (contentTypeGuidelines?.characterLimit
+            ? Math.min(content.length / (contentTypeGuidelines.characterLimit * 0.3), 1) * 60
+            : 30) +
+            (contentTypeGuidelines?.hashtagLimit
+              ? Math.min(hashtags.length / Math.max(contentTypeGuidelines.hashtagLimit, 1), 1) * 40
+              : 0)
+        )
+      );
+
+      setValidation({ isValid: errors.length === 0, errors, warnings, score });
     }
-  }, [platform, selectedContentType, content, hashtags]);
+  }, [platform, selectedContentType, content, hashtags, contentTypeGuidelines]);
 
   // Notify parent component of content changes
   useEffect(() => {
@@ -139,7 +251,7 @@ export default function PlatformContentForm({
             <div className="flex items-center gap-3">
               <div className="p-2 bg-white/20 rounded-lg">
                 {platform === 'linkedin' && <Users className="h-6 w-6" />}
-                {platform === 'twitter' && <MessageCircle className="h-6 w-6" />}
+                {(platform === 'twitter' || platform === 'x') && <MessageCircle className="h-6 w-6" />}
                 {platform === 'instagram' && <Image className="h-6 w-6" />}
                 {platform === 'youtube' && <Video className="h-6 w-6" />}
                 {platform === 'facebook' && <Users className="h-6 w-6" />}

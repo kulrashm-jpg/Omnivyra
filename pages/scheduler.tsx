@@ -52,6 +52,14 @@ export default function SchedulerPage() {
     scheduledDate: "",
     scheduledTime: "",
   });
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   // Dropdown options
   const mediaTypeOptions = [
@@ -130,7 +138,7 @@ export default function SchedulerPage() {
   const handleSchedulePost = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.body || !formData.platforms.length || !formData.scheduledDate || !formData.scheduledTime) {
-      alert('Please fill in all required fields');
+      notify('info', 'Please fill in all required fields');
       return;
     }
 
@@ -181,10 +189,9 @@ export default function SchedulerPage() {
       
       // Reload posts
       loadScheduledPosts();
-      
-      alert('Posts scheduled successfully!');
+      notify('success', 'Posts scheduled successfully.');
     } catch (error: any) {
-      alert(`Error: ${error.message}`);
+      notify('error', error?.message || 'Failed to schedule posts');
     } finally {
       setIsLoading(false);
     }
@@ -228,6 +235,11 @@ export default function SchedulerPage() {
       </div>
       
       <div className="relative flex min-h-screen">
+        {notice && (
+          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-10 max-w-md w-full mx-4">
+            <div className={`rounded-lg border px-3 py-2 text-sm shadow ${notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`} role="status" aria-live="polite">{notice.message}</div>
+          </div>
+        )}
         {/* Modern Sidebar */}
         <aside className="w-72 bg-white/80 backdrop-blur-xl border-r border-white/20 shadow-xl">
           <div className="p-6">

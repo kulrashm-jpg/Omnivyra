@@ -132,6 +132,47 @@ export type PlatformContentItem = {
   topics?: string[];
   platforms?: string[];
 };
+export type WeeklyContextCapsule = {
+  campaignTheme: string;
+  primaryPainPoint: string;
+  desiredTransformation: string;
+  campaignStage: string;
+  psychologicalGoal: string;
+  momentum: string;
+  audienceProfile: string;
+  weeklyIntent: string;
+  toneGuidance: string;
+  successOutcome: string;
+};
+export type TopicContext = {
+  topicTitle: string;
+  topicGoal: string;
+  audienceAngle: string;
+  painPointFocus: string;
+  transformationIntent: string;
+  messagingAngle: string;
+  expectedOutcome: string;
+  recommendedContentTypes: string[];
+  platformPriority: string[];
+  writingIntent: string;
+};
+export type TopicContentTypeGuidance = {
+  primaryFormat: string;
+  maxWordTarget: number;
+  platformWithHighestLimit: string;
+  adaptationRequired: true;
+};
+export type WeeklyTopicWritingBrief = {
+  topicTitle: string;
+  topicContext: TopicContext;
+  whoAreWeWritingFor: string;
+  whatProblemAreWeAddressing: string;
+  whatShouldReaderLearn: string;
+  desiredAction: string;
+  approximateDepth: string;
+  narrativeStyle: string;
+  contentTypeGuidance: TopicContentTypeGuidance;
+};
 export type WeeklyBlueprintWeek = {
   week: number;
   phase_label: string;
@@ -145,6 +186,8 @@ export type WeeklyBlueprintWeek = {
   topics_to_cover?: string[];
   platform_content_breakdown?: Record<string, PlatformContentItem[]>;
   platform_topics?: Record<string, string[]>;
+  weeklyContextCapsule?: WeeklyContextCapsule;
+  topics?: WeeklyTopicWritingBrief[];
   daily?: Array<{
     day: string;
     objective: string;
@@ -168,6 +211,70 @@ export type ParsedPlan = {
   weeks: WeeklyBlueprintWeek[];
   format: 'blueprint' | 'legacy';
 };
+
+function extractWeekNumbersLoose(planText: string): number[] {
+  const weekSet = new Set<number>();
+  const rx = /(?:^\s*\*{0,2}\s*Week\s*(\d+)\s*\*{0,2}\s*:?\s*$)|(?:^\s*Week\s*(\d+)\s*:)|(?:^\s*\d+\.\s*Week Number:\s*Week\s*(\d+))/gmi;
+  let match: RegExpExecArray | null = null;
+  while ((match = rx.exec(planText)) !== null) {
+    const n = Number(match[1] || match[2] || match[3] || 0);
+    if (Number.isFinite(n) && n > 0) weekSet.add(n);
+  }
+  return Array.from(weekSet).sort((a, b) => a - b);
+}
+
+function extractWeekBlocksLoose(planText: string): Array<{ week: number; block: string }> {
+  const lines = planText.split(/\r?\n/);
+  const starts: Array<{ idx: number; week: number }> = [];
+  const headerRx = /^\s*(?:\*{0,2}\s*Week\s*(\d+)\s*\*{0,2}\s*:?|(?:\d+\.\s*)?Week Number:\s*Week\s*(\d+))\s*$/i;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(headerRx);
+    if (!m) continue;
+    const week = Number(m[1] || m[2] || 0);
+    if (Number.isFinite(week) && week > 0) starts.push({ idx: i, week });
+  }
+  const blocks: Array<{ week: number; block: string }> = [];
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i].idx;
+    const end = i + 1 < starts.length ? starts[i + 1].idx : lines.length;
+    blocks.push({ week: starts[i].week, block: lines.slice(start, end).join('\n') });
+  }
+  return blocks;
+}
+
+function buildLooseWeeksFromText(planText: string): WeeklyBlueprintWeek[] {
+  const blocks = extractWeekBlocksLoose(planText);
+  const weeks: WeeklyBlueprintWeek[] = blocks.map(({ week, block }) => {
+    const objective =
+      block.match(/(?:Primary Strategic Objective|Primary Objective|Objective)\s*:\s*(.+)/i)?.[1]?.trim() || '';
+    const theme =
+      block.match(/(?:Weekly Theme|Theme)\s*:\s*(.+)/i)?.[1]?.trim() ||
+      block.match(/(?:topics?\s*to\s*cover)\s*:\s*(.+)/i)?.[1]?.trim() ||
+      '';
+    const allocation: Record<string, number> = {};
+    const allocRx = /-\s*(LinkedIn|Facebook|Instagram|YouTube|Blog|X|Twitter|TikTok)\s*:\s*(\d+)/gi;
+    let allocMatch: RegExpExecArray | null = null;
+    while ((allocMatch = allocRx.exec(block)) !== null) {
+      const platform = String(allocMatch[1]).toLowerCase().replace('twitter', 'x');
+      const count = Number(allocMatch[2]);
+      if (Number.isFinite(count) && count > 0) allocation[platform] = (allocation[platform] ?? 0) + count;
+    }
+    const total = Object.values(allocation).reduce((a, b) => a + b, 0);
+    return {
+      week,
+      phase_label: 'Audience Activation',
+      primary_objective: objective,
+      platform_allocation: allocation,
+      content_type_mix: [],
+      cta_type: 'None',
+      total_weekly_content_count: total,
+      weekly_kpi_focus: 'Reach growth',
+      theme,
+      topics_to_cover: theme ? [theme] : [],
+    };
+  });
+  return weeks;
+}
 
 export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> {
   const client = getOpenAiClient();
@@ -196,20 +303,23 @@ export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> 
   const blueprintValidation = blueprintPlanSchema.safeParse(parsed);
   if (blueprintValidation.success) {
     const weeks = blueprintValidation.data.weeks;
-    const bad = weeks.find(
-      (w) =>
-        Object.values(w.platform_allocation).reduce((a, b) => a + b, 0) !== w.total_weekly_content_count
+    const badWeeks = weeks.filter(
+      (w) => Object.values(w.platform_allocation).reduce((a, b) => a + b, 0) !== w.total_weekly_content_count
     );
-    if (!bad) {
-      // Schema output matches WeeklyBlueprintWeek at runtime; Zod's inference widens optionality
-      return {
-        weeks: weeks as WeeklyBlueprintWeek[],
-        format: 'blueprint' as const,
-      };
+    if (badWeeks.length > 0) {
+      console.warn('[campaign-ai][parse-debug]', {
+        rawLength: planText.length,
+        parserStage: 'blueprint-sum-mismatch',
+        detectedWeeks: weeks.length,
+        parseError: `Allocation/total mismatch in ${badWeeks.length} week(s)`,
+        missingSections: [],
+      });
     }
-    console.error(
-      `Week ${bad.week}: platform_allocation sum must equal total_weekly_content_count (${bad.total_weekly_content_count})`
-    );
+    // Tolerate numeric mismatch here; deterministic validator decides whether regeneration is required.
+    return {
+      weeks: weeks as WeeklyBlueprintWeek[],
+      format: 'blueprint' as const,
+    };
   }
 
   const legacyValidation = legacyPlanSchema.safeParse(parsed);
@@ -229,9 +339,30 @@ export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> 
     return { weeks: weeks as WeeklyBlueprintWeek[], format: 'legacy' };
   }
 
+  const looseWeeks = buildLooseWeeksFromText(planText);
+  if (looseWeeks.length > 0) {
+    console.warn('[campaign-ai][parse-debug]', {
+      rawLength: planText.length,
+      parserStage: 'loose-week-extraction',
+      detectedWeeks: looseWeeks.length,
+      parseError: 'Structured schema validation failed; using loose extraction fallback.',
+      missingSections: [],
+    });
+    return { weeks: looseWeeks, format: 'legacy' };
+  }
+
+  const detectedWeekHeaders = extractWeekNumbersLoose(planText).length;
+
   console.error('Structured plan schema validation failed', {
     blueprintIssues: blueprintValidation.error?.issues,
     legacyIssues: legacyValidation.error?.issues,
+  });
+  console.warn('[campaign-ai][parse-debug]', {
+    rawLength: planText.length,
+    parserStage: 'schema-failed-zero-weeks',
+    detectedWeeks: detectedWeekHeaders,
+    parseError: 'Invalid structured plan schema',
+    missingSections: detectedWeekHeaders === 0 ? ['week headers'] : [],
   });
   throw new Error('Invalid structured plan schema');
 }

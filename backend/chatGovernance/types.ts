@@ -28,4 +28,10 @@ export interface QAState {
   nextQuestion: { key: string; question: string } | null;
   /** Whether we have enough to generate (all required answered or deferred) */
   readyToGenerate: boolean;
+  /** Required keys still missing */
+  missingRequiredKeys?: string[];
+  /** Required fields complete, waiting only for user confirmation */
+  allRequiredAnswered?: boolean;
+  /** Parsed boolean for contingent available-content branching */
+  hasExistingContent?: boolean | null;
 }

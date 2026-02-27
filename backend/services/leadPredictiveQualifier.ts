@@ -1,5 +1,5 @@
 import { runDiagnosticPrompt } from './llm/openaiAdapter';
-import type { RawPost } from './socialConnectors/types';
+import type { RawPost } from './postDiscoveryConnectors/types';
 import type { CompanyProfile } from './companyProfileService';
 import type { CompanyMissionContext } from './companyMissionContext';
 import { formatMissionContextForPrompt } from './companyMissionContext';
