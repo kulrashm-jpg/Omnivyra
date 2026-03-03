@@ -183,7 +183,7 @@ export default function ExternalApisPage() {
   const [headerJson, setHeaderJson] = useState('{}');
   const [testResult, setTestResult] = useState<any>(null);
   const [isSavingPreset, setIsSavingPreset] = useState(false);
-  const [activeTab, setActiveTab] = useState<'global' | 'queue' | 'usage'>('global');
+  const [activeTab, setActiveTab] = useState<'global' | 'request-new' | 'queue' | 'usage'>('global');
   const [runtime, setRuntime] = useState<any>(null);
   const [apiTestResults, setApiTestResults] = useState<Record<string, any>>({});
   const [hiddenPresetIds, setHiddenPresetIds] = useState<Set<string>>(new Set());
@@ -200,6 +200,17 @@ export default function ExternalApisPage() {
   const [testAllSummary, setTestAllSummary] = useState<{ healthy: number; warning: number; failed: number } | null>(null);
   const [expandedCardIds, setExpandedCardIds] = useState<Set<string>>(new Set());
   const [actionsOpenId, setActionsOpenId] = useState<string | null>(null);
+  const [requestForm, setRequestForm] = useState({
+    name: '',
+    base_url: '',
+    purpose: 'trends',
+    category: '',
+    method: 'GET' as 'GET' | 'POST',
+    auth_type: 'none',
+    api_key_env_name: '',
+    description: '',
+  });
+  const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
   const isSuperAdmin = userRole === 'SUPER_ADMIN';
   const modeParam = Array.isArray(router.query?.mode)
     ? router.query?.mode[0]
@@ -304,7 +315,10 @@ export default function ExternalApisPage() {
         if (isPlatformCatalogMode && [401, 403].includes(response.status)) {
           setPlatformAccessDenied(true);
         }
-        setErrorMessage(errorBody?.error || 'Failed to load presets');
+        const msg = errorBody?.error === 'FORBIDDEN_ROLE'
+          ? 'You don’t have permission to access external APIs for this company. Check your company role or ask an admin to enable access.'
+          : (errorBody?.error || 'Failed to load presets');
+        setErrorMessage(msg);
         return null;
       }
       const data = await response.json();
@@ -739,6 +753,73 @@ export default function ExternalApisPage() {
     }
   };
 
+  const submitNewApiRequest = async () => {
+    if (!companyContextId) {
+      setErrorMessage('Select a company first.');
+      return;
+    }
+    const { name, base_url, purpose, category, method, auth_type, api_key_env_name } = requestForm;
+    if (!name?.trim() || !base_url?.trim()) {
+      setErrorMessage('Name and Base URL are required.');
+      return;
+    }
+    const requiresKey = ['api_key', 'bearer', 'query', 'header'].includes(auth_type);
+    if (requiresKey && !api_key_env_name?.trim()) {
+      setErrorMessage('API key env var name is required for the selected auth type.');
+      return;
+    }
+    try {
+      resetMessages();
+      setIsSubmittingRequest(true);
+      const url = `/api/external-apis/requests?companyId=${encodeURIComponent(companyContextId)}`;
+      const response = await fetchWithAuth(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: companyContextId,
+          name: name.trim(),
+          base_url: base_url.trim(),
+          purpose: purpose || 'trends',
+          category: category?.trim() || null,
+          method: method || 'GET',
+          auth_type: auth_type || 'none',
+          api_key_env_name: api_key_env_name?.trim() || null,
+          headers: {},
+          query_params: {},
+          platform_type: 'social',
+          supported_content_types: [],
+          promotion_modes: [],
+          required_metadata: {},
+          posting_constraints: {},
+          is_active: true,
+          requires_admin: true,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to submit request');
+      }
+      setSuccessMessage('Request submitted. Super Admin will review and approve or reject.');
+      setRequestForm({
+        name: '',
+        base_url: '',
+        purpose: 'trends',
+        category: '',
+        method: 'GET',
+        auth_type: 'none',
+        api_key_env_name: '',
+        description: '',
+      });
+      await loadRequests();
+      setActiveTab('queue');
+    } catch (error) {
+      console.error('Error submitting API request:', error);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to submit request.');
+    } finally {
+      setIsSubmittingRequest(false);
+    }
+  };
+
   const testFetch = async () => {
     try {
       resetMessages();
@@ -1045,9 +1126,10 @@ export default function ExternalApisPage() {
           </div>
         )}
 
-        <div className="bg-white rounded-lg shadow p-2 flex gap-2 text-sm">
+        <div className="bg-white rounded-lg shadow p-2 flex gap-2 text-sm flex-wrap">
           {[
             { id: 'global', label: 'Global APIs' },
+            ...(!isPlatformAdminView ? [{ id: 'request-new', label: 'Request New APIs' }] : []),
             { id: 'queue', label: 'Approval Queue' },
             { id: 'usage', label: 'Usage Analytics' },
           ].map((tab) => (
@@ -1710,6 +1792,122 @@ export default function ExternalApisPage() {
             </div>
           )}
         </div>
+        )}
+
+        {activeTab === 'request-new' && (
+          <div className="bg-white rounded-lg shadow p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Request New APIs</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Submit a request for a new external API to be added. Super Admin will review and approve or reject.
+              Payment and commercial terms for the requested API are the responsibility of your company.
+            </p>
+            <div className="space-y-4 max-w-2xl">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                <input
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="e.g. Twitter Trends API"
+                  value={requestForm.name}
+                  onChange={(e) => setRequestForm((p) => ({ ...p, name: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Base URL *</label>
+                <input
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="https://api.example.com/v1/trends"
+                  value={requestForm.base_url}
+                  onChange={(e) => setRequestForm((p) => ({ ...p, base_url: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Purpose</label>
+                  <select
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    value={requestForm.purpose}
+                    onChange={(e) => setRequestForm((p) => ({ ...p, purpose: e.target.value }))}
+                  >
+                    <option value="trends">Trends</option>
+                    <option value="keywords">Keywords</option>
+                    <option value="hashtags">Hashtags</option>
+                    <option value="news">News</option>
+                    <option value="demographics">Demographics</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Category (optional)</label>
+                  <input
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    placeholder="e.g. social, analytics"
+                    value={requestForm.category}
+                    onChange={(e) => setRequestForm((p) => ({ ...p, category: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Method</label>
+                  <select
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    value={requestForm.method}
+                    onChange={(e) => setRequestForm((p) => ({ ...p, method: e.target.value as 'GET' | 'POST' }))}
+                  >
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Auth type</label>
+                  <select
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    value={requestForm.auth_type}
+                    onChange={(e) => setRequestForm((p) => ({ ...p, auth_type: e.target.value }))}
+                  >
+                    <option value="none">None</option>
+                    <option value="api_key">API Key</option>
+                    <option value="bearer">Bearer</option>
+                    <option value="query">Query param</option>
+                    <option value="header">Header</option>
+                  </select>
+                </div>
+              </div>
+              {['api_key', 'bearer', 'query', 'header'].includes(requestForm.auth_type) && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">API key env var name *</label>
+                  <input
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    placeholder="e.g. TWITTER_API_KEY"
+                    value={requestForm.api_key_env_name}
+                    onChange={(e) => setRequestForm((p) => ({ ...p, api_key_env_name: e.target.value }))}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Server-side env var name; key value is not stored.</p>
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description / notes (optional)</label>
+                <textarea
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm min-h-[80px]"
+                  placeholder="Why your company needs this API, use case, etc."
+                  value={requestForm.description}
+                  onChange={(e) => setRequestForm((p) => ({ ...p, description: e.target.value }))}
+                />
+              </div>
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={submitNewApiRequest}
+                  disabled={isSubmittingRequest}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSubmittingRequest ? 'Submitting…' : 'Submit for approval'}
+                </button>
+                <span className="text-xs text-gray-500">
+                  Request will appear in Approval Queue for Super Admin.
+                </span>
+              </div>
+            </div>
+          </div>
         )}
 
         {activeTab === 'queue' && (

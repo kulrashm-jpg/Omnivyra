@@ -27,8 +27,8 @@ export function fromStructuredPlan(plan: any): CampaignBlueprint {
   const weeks = plan?.weeks ?? [];
   const campaignId = typeof plan?.campaign_id === 'string' ? plan.campaign_id : '';
 
-  const blueprintWeeks: CampaignBlueprintWeek[] = weeks.map((w: any) => ({
-    week_number: w.week ?? 0,
+  const blueprintWeeks: CampaignBlueprintWeek[] = weeks.map((w: any, idx: number) => ({
+    week_number: Number(w.week ?? w.week_number ?? idx + 1) || (idx + 1),
     phase_label: String(w.phase_label ?? w.theme ?? `Week ${w.week ?? 0}`),
     primary_objective: String(w.primary_objective ?? w.theme ?? ''),
     topics_to_cover: Array.isArray(w.topics_to_cover) ? [...w.topics_to_cover] : undefined,

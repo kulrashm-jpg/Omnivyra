@@ -80,6 +80,7 @@ export interface CampaignBlueprintWeek {
   platform_topics?: Record<string, string[]>;
   /**
    * Deterministic execution units (additive).
+   * Each execution_item has topic_slots; each slot may have optional master_content_id (one slot = one logical content piece).
    * Kept as `any` here to avoid tight coupling across services.
    */
   execution_items?: any[];

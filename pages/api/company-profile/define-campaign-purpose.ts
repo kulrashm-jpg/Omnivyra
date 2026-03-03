@@ -7,8 +7,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getUserRole, isSuperAdmin } from '../../../backend/services/rbacService';
+import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 
 function getOpenAiClient(): OpenAI {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -27,20 +26,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (req.body?.company_id as string);
   const conversation = Array.isArray(req.body?.conversation) ? req.body.conversation : [];
 
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    return res.status(401).json({ error: 'UNAUTHORIZED' });
-  }
   if (!companyId) {
     return res.status(400).json({ error: 'companyId required' });
   }
-  const isAdmin = await isSuperAdmin(user.id);
-  if (!isAdmin) {
-    const { role, error: roleError } = await getUserRole(user.id, companyId);
-    if (roleError || !role) {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    }
-  }
+  const access = await resolveCompanyAccess(req, res, companyId);
+  if (!access) return;
 
   try {
     const profile = await getProfile(companyId, { autoRefine: false });
@@ -115,12 +105,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const t = s.trim();
         return t ? t : null;
       };
-      const normalizeStringArray = (value: unknown, max = 10): string[] => {
+      const normalizeStringArray = (value: unknown, max?: number): string[] => {
         if (!Array.isArray(value)) return [];
-        return value
+        const out = value
           .map((v) => (typeof v === 'string' ? v.trim() : String(v ?? '').trim()))
-          .filter(Boolean)
-          .slice(0, max);
+          .filter(Boolean);
+        return max != null ? out.slice(0, max) : out;
       };
       const normalizeNarrativeSeed = (value: unknown): { pattern?: string | null; steps?: string[] | null } | null => {
         if (value == null) return null;
@@ -142,7 +132,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         campaign_intent: normalizeString(cpi.campaign_intent) ?? null,
         monetization_intent: normalizeString(cpi.monetization_intent) ?? null,
         dominant_problem_domains: Array.isArray(cpi.dominant_problem_domains)
-          ? cpi.dominant_problem_domains.filter((d): d is string => typeof d === 'string').slice(0, 10)
+          ? cpi.dominant_problem_domains.filter((d): d is string => typeof d === 'string')
           : [],
         brand_positioning_angle: normalizeString(cpi.brand_positioning_angle) ?? null,
         reader_emotion_target: normalizeString(cpi.reader_emotion_target) ?? null,

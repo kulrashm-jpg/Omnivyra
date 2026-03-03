@@ -23,6 +23,7 @@ import { generateTrendOpportunities } from '../../../backend/services/opportunit
 import type { StrategicPayload } from '../../../backend/services/opportunityGenerators';
 import type { FocusModule } from '../../../backend/services/contextResolver';
 import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
+import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 
 const FOCUS_MODULE_SET = new Set<FocusModule>([
   'TARGET_CUSTOMER',
@@ -141,11 +142,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    if (campaign.blueprint_status !== 'INVALIDATED') {
+    const existingBlueprint = await getUnifiedCampaignBlueprint(campaignId);
+    const hasNoPlan =
+      !existingBlueprint ||
+      !existingBlueprint.weeks ||
+      existingBlueprint.weeks.length === 0;
+    const allowFromStoredContext =
+      hasNoPlan &&
+      (campaign.blueprint_status == null ||
+        campaign.blueprint_status === 'draft' ||
+        campaign.blueprint_status === '');
+    const allowInvalidated = campaign.blueprint_status === 'INVALIDATED';
+
+    if (!allowInvalidated && !allowFromStoredContext) {
       return res.status(400).json({
         error: 'INVALID_STATE',
-        message: 'Blueprint can only be regenerated when status is INVALIDATED.',
-        current_status: campaign.blueprint_status,
+        message:
+          'Blueprint can only be regenerated when status is INVALIDATED, or when no plan exists yet (create from stored strategic theme/context).',
+        current_status: campaign.blueprint_status ?? 'unknown',
       });
     }
 
@@ -168,10 +182,60 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       try {
         profile = await getProfile(companyIdForTopics, { autoRefine: false });
 
-        // 1. Card first: if campaign originated from Trend recommendation, use its topic
-        const snapshot = (version?.campaign_snapshot ?? {}) as { source_recommendation_id?: string };
+        const snapshot = (version?.campaign_snapshot ?? {}) as {
+          source_recommendation_id?: string;
+          source_strategic_theme?: {
+            topic?: string;
+            polished_title?: string;
+            summary?: string;
+            intelligence?: { problem_being_solved?: string; gap_being_filled?: string; why_now?: string; expected_transformation?: string; campaign_angle?: string };
+            execution?: { execution_stage?: string; stage_objective?: string; psychological_goal?: string; momentum_level?: string };
+            company_context_snapshot?: Record<string, unknown>;
+            duration_weeks?: number;
+            progression_summary?: string;
+            primary_recommendations?: string[] | Array<{ topic?: string }>;
+            supporting_recommendations?: string[] | Array<{ topic?: string }>;
+          };
+        };
         const sourceRecId = snapshot?.source_recommendation_id;
-        if (sourceRecId) {
+        const sourceTheme = snapshot?.source_strategic_theme;
+
+        // 0. Strategic theme from selected recommendation card (Build Campaign Blueprint): use this first
+        if (sourceTheme && typeof sourceTheme === 'object') {
+          const themeTopic = [sourceTheme.polished_title, sourceTheme.topic].filter(Boolean).map((t) => String(t).trim())[0];
+          if (themeTopic) topicSet.add(themeTopic);
+          const primary = Array.isArray(sourceTheme.primary_recommendations)
+            ? sourceTheme.primary_recommendations.map((p) => (typeof p === 'string' ? p : (p as { topic?: string })?.topic ?? '')).filter(Boolean)
+            : [];
+          const supporting = Array.isArray(sourceTheme.supporting_recommendations)
+            ? sourceTheme.supporting_recommendations.map((s) => (typeof s === 'string' ? s : (s as { topic?: string })?.topic ?? '')).filter(Boolean)
+            : [];
+          primary.forEach((t) => topicSet.add(t.trim()));
+          supporting.forEach((t) => topicSet.add(t.trim()));
+          if (sourceTheme.progression_summary?.trim()) {
+            mergedPlanningContext.strategic_theme_progression = sourceTheme.progression_summary.trim();
+          }
+          if (sourceTheme.duration_weeks != null && Number.isFinite(Number(sourceTheme.duration_weeks))) {
+            mergedPlanningContext.strategic_theme_duration_weeks = Number(sourceTheme.duration_weeks);
+          }
+          const intel = sourceTheme.intelligence;
+          if (intel && typeof intel === 'object') {
+            const parts: string[] = [];
+            if (intel.problem_being_solved?.trim()) parts.push(`Problem: ${intel.problem_being_solved.slice(0, 400)}`);
+            if (intel.expected_transformation?.trim()) parts.push(`Transformation: ${intel.expected_transformation.slice(0, 300)}`);
+            if (intel.campaign_angle?.trim()) parts.push(`Campaign angle: ${intel.campaign_angle}`);
+            if (parts.length > 0) {
+              mergedPlanningContext.strategic_theme_intelligence = parts.join('\n');
+            }
+          }
+          const themeList = [themeTopic, ...primary, ...supporting].filter(Boolean).map((t) => String(t).trim());
+          if (themeList.length > 0) {
+            mergedPlanningContext.strategic_themes = themeList;
+          }
+        }
+
+        // 1. Card next: if campaign originated from Trend recommendation (DB row), use its topic
+        if (sourceRecId && topicSet.size === 0) {
           const { data: rec } = await supabase
             .from('recommendation_snapshots')
             .select('trend_topic, category')
@@ -272,6 +336,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       mergedPlanningContext.strategic_themes.length === 0;
     const useBlankBlueprint = hasNoContextOrTopic && hasNoStrategicThemes;
 
+    const effectiveDurationWeeks =
+      (mergedPlanningContext.strategic_theme_duration_weeks as number | undefined) ?? durationWeeks;
+
     let result: { plan?: { weeks: any[]; campaign_id?: string } };
     if (useBlankBlueprint) {
       const planningInputs = await getCampaignPlanningInputs(campaignId);
@@ -279,7 +346,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         throw new Error('BLANK_BLUEPRINT_NOT_ALLOWED_WITH_DETERMINISTIC_INPUTS');
       }
       // Name + geo only: create blank content blueprint with weeks as per selection
-      const blankWeeks = Array.from({ length: durationWeeks }, (_, i) => ({
+      const blankWeeks = Array.from({ length: effectiveDurationWeeks }, (_, i) => ({
         week: i + 1,
         phase_label: `Week ${i + 1}`,
         theme: `Week ${i + 1}`,
@@ -314,8 +381,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const aiResult = await runCampaignAiPlan({
         campaignId,
         mode: 'generate_plan',
-        message: `Regenerate campaign plan for ${durationWeeks} weeks.`,
-        durationWeeks,
+        message: `Regenerate campaign plan for ${effectiveDurationWeeks} weeks. Use the strategic theme from the selected recommendation card when present.`,
+        durationWeeks: effectiveDurationWeeks,
         collectedPlanningContext: finalCollectedPlanningContext,
       });
       result = { plan: aiResult.plan };

@@ -8,7 +8,12 @@ export const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     token = refreshed.session?.access_token;
   }
   if (!token) {
-    throw new Error('Not authenticated');
+    // Content Architect uses cookie auth (content_architect_session); send request with credentials only
+    return fetch(input, {
+      ...init,
+      credentials: 'include',
+      headers: init?.headers || {},
+    });
   }
   if (typeof document !== 'undefined') {
     document.cookie = `sb-access-token=${encodeURIComponent(token)}; path=/; max-age=3600; samesite=lax`;

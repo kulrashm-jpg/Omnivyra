@@ -299,18 +299,31 @@ async function storeAssessment(
   }
 }
 
-export async function assessVirality(campaignId: string): Promise<ViralityAssessment> {
-  const { snapshot, snapshot_hash } = await buildCampaignSnapshotWithHash(campaignId);
+export type AssessViralityOptions = {
+  snapshot: ViralitySnapshot;
+  snapshot_hash: string;
+};
+
+export async function assessVirality(
+  campaignId: string,
+  prebuilt?: AssessViralityOptions
+): Promise<ViralityAssessment> {
+  const { snapshot, snapshot_hash } = prebuilt ?? await buildCampaignSnapshotWithHash(campaignId);
 
   const cached = await getCachedAssessment(campaignId, snapshot_hash);
   if (cached) {
     return cached;
   }
 
+  const [assetCoverage, platformOpportunity, engagementReadiness] = await Promise.all([
+    runDiagnostic('asset_coverage', snapshot),
+    runDiagnostic('platform_opportunity', snapshot),
+    runDiagnostic('engagement_readiness', snapshot),
+  ]);
   const diagnostics: DiagnosticsByType = {
-    asset_coverage: await runDiagnostic('asset_coverage', snapshot),
-    platform_opportunity: await runDiagnostic('platform_opportunity', snapshot),
-    engagement_readiness: await runDiagnostic('engagement_readiness', snapshot),
+    asset_coverage: assetCoverage,
+    platform_opportunity: platformOpportunity,
+    engagement_readiness: engagementReadiness,
   };
 
   const comparisons = await runComparisons(snapshot);

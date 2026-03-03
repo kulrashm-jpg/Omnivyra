@@ -1,10 +1,14 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runCampaignAiPlan, CampaignAiMode } from '../../../../backend/services/campaignAiOrchestrator';
-import { saveAiCampaignPlan, saveDraftBlueprint } from '../../../../backend/db/campaignPlanStore';
+import { saveAiCampaignPlan, saveDraftBlueprint, getLatestDraftPlan } from '../../../../backend/db/campaignPlanStore';
 import { validateAndModerateUserMessage } from '../../../../backend/chatGovernance';
 import { getCampaignPlanningInputs, saveCampaignPlanningInputs } from '../../../../backend/services/campaignPlanningInputsService';
 import { normalizeCapacityCounts, normalizeCapacityCountsWithBreakdown } from '../../../../backend/services/campaignAiOrchestrator';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
+import { detectCampaignConflicts, suggestAvailableDateRange } from '../../../../backend/services/schedulingService';
+import { supabase } from '../../../../backend/db/supabaseClient';
+import { getUserCompanyRole, getCompanyRoleIncludingInvited } from '../../../../backend/services/rbacService';
+import { resolveEffectiveCampaignRole, isCompanyOverrideRole } from '../../../../backend/services/campaignRoleService';
 
 const MODES: CampaignAiMode[] = ['generate_plan', 'refine_day', 'platform_customize'];
 
@@ -35,6 +39,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({
         error: 'Your message couldn\'t be processed. Please rephrase and try again.',
       });
+    }
+
+    // Multi-tenant: verify user has access to this campaign (company + campaign role). Align with RBAC used by list/other campaign APIs.
+    const { data: versionForAccess } = await supabase
+      .from('campaign_versions')
+      .select('company_id')
+      .eq('campaign_id', campaignId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!versionForAccess?.company_id) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    const resolvedCompanyId = String(versionForAccess.company_id);
+    let { role, userId } = await getUserCompanyRole(req, resolvedCompanyId);
+    if (!userId) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
+    if (!role) {
+      // Plan API: allow invited users with any company role (getUserCompanyRole only uses invited for ADMIN/COMPANY_ADMIN/SUPER_ADMIN)
+      const invitedRole = await getCompanyRoleIncludingInvited(userId, resolvedCompanyId);
+      if (invitedRole) role = invitedRole;
+    }
+    if (!role) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    }
+
+    // Company override roles (e.g. COMPANY_ADMIN, SUPER_ADMIN, Content Architect) have full access; skip campaign-level check.
+    if (!isCompanyOverrideRole(role)) {
+      const campaignAuthResult = await resolveEffectiveCampaignRole(userId, campaignId, resolvedCompanyId);
+      if (campaignAuthResult.error === 'CAMPAIGN_ROLE_REQUIRED') {
+        return res.status(403).json({ error: 'CAMPAIGN_ROLE_REQUIRED' });
+      }
     }
 
     const planningInputs = await getCampaignPlanningInputs(campaignId);
@@ -81,12 +120,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const detectAskedKey = (aiMessage: string): string | null => {
       const n = normalizeForMatch(aiMessage);
       if (!n) return null;
-      if (n.includes('primary target audience') || (n.includes('target audience') && n.includes('who is'))) return 'target_audience';
-      if (n.includes('which professionals') && n.includes('mainly speaking')) return 'audience_professional_segment';
-      if (n.includes('how do you want your content to sound')) return 'communication_style';
-      if (n.includes('after reading your content') && n.includes('what should people do')) return 'action_expectation';
-      if (n.includes('short easy reads') || (n.includes('detailed insights') && n.includes('short'))) return 'content_depth';
+      if (n.includes('key messages') || n.includes('pain points') || n.includes('one thing you want people to remember')) return 'key_messages';
+      if (n.includes('primary target audience') || n.includes('who will see your content') || (n.includes('target audience') && n.includes('who is'))) return 'target_audience';
+      if (n.includes('target audience')) return 'target_audience';
+      if ((n.includes('which professionals') && n.includes('mainly speaking')) || n.includes('which group fits')) return 'audience_professional_segment';
+      if (n.includes('how do you want your content to sound') || n.includes('how should your posts sound')) return 'communication_style';
+      if ((n.includes('after reading your content') && n.includes('what should people do')) || n.includes('what do you want people to do after')) return 'action_expectation';
+      if (n.includes('short easy reads') || (n.includes('detailed insights') && n.includes('short')) || n.includes('short reads or longer') || n.includes('longer pieces')) return 'content_depth';
       if (n.includes('connected series') && n.includes('mostly independent')) return 'topic_continuity';
+      if (n.includes('ongoing story') || n.includes('different topics each time')) return 'topic_continuity';
       if (n.includes('existing content') || n.includes('do you have any existing content')) return 'available_content';
       if (
         n.includes('produce per week') ||
@@ -94,13 +136,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         n.includes('production capacity') ||
         n.includes('weekly production capacity') ||
         n.includes('content capacity') ||
-        n.includes('how much content')
+        n.includes('how much content') ||
+        n.includes('how will you create') ||
+        n.includes('how many pieces per week')
       ) {
         return 'content_capacity';
       }
-      if (n.includes('which platforms') || n.includes('platforms will you focus')) return 'platforms';
-      if (n.includes('platform-exclusive campaigns')) return 'exclusive_campaigns';
+      if (n.includes('which platforms') || n.includes('platforms will you focus') || n.includes('where will you post')) return 'platforms';
+      if (n.includes('platform-exclusive campaigns') || n.includes('only for one platform') || n.includes('anything only for one platform')) return 'exclusive_campaigns';
       if (n.includes('content types') && n.includes('count per week')) return 'platform_content_requests';
+      if (n.includes('how many of each type per week')) return 'platform_content_requests';
+      if (n.includes('set how often') || n.includes('same topic across platforms') || n.includes('publish same day on all platforms') || n.includes('let AI decide')) return 'platform_content_requests';
+      if (n.includes('content types') && n.includes('platform')) return 'platform_content_types';
+      if (n.includes('what will you post on each') || n.includes('which content types will you use') || n.includes('for each platform you selected')) return 'platform_content_types';
+      if ((n.includes('start') && n.includes('date')) || n.includes('when do you want to start') || n.includes('yyyy-mm-dd')) return 'tentative_start';
       return null;
     };
     const extractLatestAnswer = (key: string): string | null => {
@@ -123,46 +172,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const targetAudienceAnswer =
       (existingCollectedPlanningContext as any)?.target_audience ?? extractLatestAnswer('target_audience');
-    finalCollectedPlanningContext = {
-      ...(existingCollectedPlanningContext ?? {}),
-      ...(targetAudienceAnswer ? { target_audience: targetAudienceAnswer } : {}),
-      ...deterministicPlanningContext,
-    };
+    const isoDateOnly = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim()) ? String(s).trim() : null;
+    const history = Array.isArray(conversationHistory) ? conversationHistory : [];
+    const lastAiEntry = history.filter((m: any) => m?.type === 'ai').pop();
+    const lastAiAsksStartDate = lastAiEntry && detectAskedKey(String(lastAiEntry?.message ?? '')) === 'tentative_start';
+    const tentativeStartFromCurrentMessage = lastAiAsksStartDate && isoDateOnly(message) ? message.trim() : null;
+    const tentativeStartAnswer =
+      (existingCollectedPlanningContext as any)?.tentative_start
+      ?? tentativeStartFromCurrentMessage
+      ?? (isoDateOnly(extractLatestAnswer('tentative_start') ?? '') || extractLatestAnswer('tentative_start'));
+    // Extract all Q&A answers from conversation (and existing body) so plan generation has full context, not just target_audience/tentative_start.
+    const availableContent =
+      (existingCollectedPlanningContext as any)?.available_content ??
+      extractLatestAnswer('available_content');
+    const weeklyCapacity =
+      (existingCollectedPlanningContext as any)?.weekly_capacity ??
+      (existingCollectedPlanningContext as any)?.content_capacity ??
+      extractLatestAnswer('content_capacity');
+    const audienceProfessionalSegment =
+      (existingCollectedPlanningContext as any)?.audience_professional_segment ??
+      extractLatestAnswer('audience_professional_segment');
+    const communicationStyle =
+      (existingCollectedPlanningContext as any)?.communication_style ??
+      extractLatestAnswer('communication_style');
+    const actionExpectation =
+      (existingCollectedPlanningContext as any)?.action_expectation ??
+      extractLatestAnswer('action_expectation');
+    const contentDepth =
+      (existingCollectedPlanningContext as any)?.content_depth ??
+      extractLatestAnswer('content_depth');
+    const topicContinuity =
+      (existingCollectedPlanningContext as any)?.topic_continuity ??
+      extractLatestAnswer('topic_continuity');
+    const platformContentRequests = (existingCollectedPlanningContext as any)?.platform_content_requests;
+    const exclusiveCampaigns = (existingCollectedPlanningContext as any)?.exclusive_campaigns;
 
-    const shouldPersistPlanningInputs =
-      !!existingCollectedPlanningContext ||
-      (Array.isArray(conversationHistory) && conversationHistory.length > 0);
-    if (shouldPersistPlanningInputs) {
-      // Persisting is best-effort; do not block weekly plan generation if companyId/DB is unavailable.
-      if (!companyId || typeof companyId !== 'string') {
-        console.warn('[plan] Skipping campaign_planning_inputs persistence (missing companyId).');
-      } else {
-      const availableContent =
-        (existingCollectedPlanningContext as any)?.available_content ??
-        extractLatestAnswer('available_content');
-      const weeklyCapacity =
-        (existingCollectedPlanningContext as any)?.weekly_capacity ??
-        (existingCollectedPlanningContext as any)?.content_capacity ??
-        extractLatestAnswer('content_capacity');
-      const audienceProfessionalSegment =
-        (existingCollectedPlanningContext as any)?.audience_professional_segment ??
-        extractLatestAnswer('audience_professional_segment');
-      const communicationStyle =
-        (existingCollectedPlanningContext as any)?.communication_style ??
-        extractLatestAnswer('communication_style');
-      const actionExpectation =
-        (existingCollectedPlanningContext as any)?.action_expectation ??
-        extractLatestAnswer('action_expectation');
-      const contentDepth =
-        (existingCollectedPlanningContext as any)?.content_depth ??
-        extractLatestAnswer('content_depth');
-      const topicContinuity =
-        (existingCollectedPlanningContext as any)?.topic_continuity ??
-        extractLatestAnswer('topic_continuity');
-      const platformContentRequests = (existingCollectedPlanningContext as any)?.platform_content_requests;
-      const exclusiveCampaigns = (existingCollectedPlanningContext as any)?.exclusive_campaigns;
-
-      const selectedPlatforms = (() => {
+    const selectedPlatforms = (() => {
         const fromRequests =
           platformContentRequests && typeof platformContentRequests === 'object' && !Array.isArray(platformContentRequests)
             ? Object.keys(platformContentRequests as any)
@@ -186,6 +231,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .filter(Boolean);
       })();
 
+    // Merge extracted/conversation-derived context into finalCollectedPlanningContext so runCampaignAiPlan has full info for week plan (not superficial).
+    finalCollectedPlanningContext = {
+      ...(existingCollectedPlanningContext ?? {}),
+      ...(targetAudienceAnswer ? { target_audience: targetAudienceAnswer } : {}),
+      ...(tentativeStartAnswer ? { tentative_start: tentativeStartAnswer } : {}),
+      ...deterministicPlanningContext,
+      ...(audienceProfessionalSegment ? { audience_professional_segment: audienceProfessionalSegment } : {}),
+      ...(communicationStyle ? { communication_style: communicationStyle } : {}),
+      ...(actionExpectation ? { action_expectation: actionExpectation } : {}),
+      ...(contentDepth ? { content_depth: contentDepth } : {}),
+      ...(topicContinuity ? { topic_continuity: topicContinuity } : {}),
+      ...(availableContent != null && String(availableContent).trim() !== '' ? { available_content: availableContent } : {}),
+      ...(weeklyCapacity != null && String(weeklyCapacity).trim() !== '' ? { content_capacity: weeklyCapacity } : {}),
+      ...(selectedPlatforms.length > 0 ? { platforms: selectedPlatforms.join(', ') } : {}),
+      ...(platformContentRequests && typeof platformContentRequests === 'object' ? { platform_content_requests: platformContentRequests } : {}),
+      ...(Array.isArray(exclusiveCampaigns) ? { exclusive_campaigns: exclusiveCampaigns } : {}),
+    };
+
+    const shouldPersistPlanningInputs =
+      !!existingCollectedPlanningContext ||
+      (Array.isArray(conversationHistory) && conversationHistory.length > 0);
+    if (shouldPersistPlanningInputs && resolvedCompanyId) {
       const hasMeaningfulValue = (v: unknown): boolean => {
         if (v == null) return false;
         if (typeof v === 'string') return v.trim().length > 0;
@@ -193,18 +260,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (typeof v === 'object' && !Array.isArray(v)) return Object.keys(v as Record<string, unknown>).length > 0;
         return false;
       };
-
       const normalizedAvailableContent = hasMeaningfulValue(availableContent)
         ? normalizeCapacityCountsWithBreakdown(availableContent)
         : undefined;
       const normalizedWeeklyCapacity = hasMeaningfulValue(weeklyCapacity)
         ? normalizeCapacityCountsWithBreakdown(weeklyCapacity)
         : undefined;
-
       try {
         await saveCampaignPlanningInputs({
           campaignId,
-          companyId,
+          companyId: resolvedCompanyId,
           recommendation_snapshot:
             (recommendationContext && typeof recommendationContext === 'object'
               ? ((recommendationContext as any).context_payload ?? recommendationContext)
@@ -224,13 +289,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           is_completed: false,
         });
       } catch (err) {
-        // Persistence is best-effort: do not block plan generation (scenario runner + prod resilience).
         console.warn('[plan] saveCampaignPlanningInputs failed (continuing):', (err as any)?.message ?? err);
-      }
       }
     }
 
     console.log('[PLAN INPUT SOURCE]', JSON.stringify(finalCollectedPlanningContext, null, 2));
+
+    // Restore point: when user retries (e.g. after timeout) with "continue" or "try again", return existing draft if it matches requested duration — avoid reprocessing with no changes.
+    const requestedWeeks = typeof durationWeeks === 'number' ? durationWeeks : null;
+    const isRetryMessage = /^\s*continue\s*$/i.test(String(message).trim()) || /try again|retry/i.test(String(message));
+    if (mode === 'generate_plan' && isRetryMessage && requestedWeeks != null) {
+      const existingDraft = await getLatestDraftPlan(campaignId);
+      if (existingDraft?.weeks?.length === requestedWeeks) {
+        console.log('[plan] Restore: returning existing draft plan (same duration) to avoid reprocessing.');
+        return res.status(200).json({
+          mode: 'generate_plan',
+          snapshot_hash: `restore-${campaignId}`,
+          omnivyre_decision: { status: 'ok', recommendation: 'proceed' as const },
+          plan: { weeks: existingDraft.weeks },
+          collectedPlanningContext: finalCollectedPlanningContext,
+          startDateConflictWarning: undefined,
+        });
+      }
+    }
 
     const effectiveMode = planningInputs ? 'generate_plan' : mode;
     const toneOnlyConversationHistory = Array.isArray(conversationHistory) ? conversationHistory : undefined;
@@ -296,6 +377,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    let startDateConflictWarning: string | null = null;
+    const tentativeStart = typeof finalCollectedPlanningContext?.tentative_start === 'string'
+      ? finalCollectedPlanningContext.tentative_start.trim()
+      : null;
+    if (tentativeStart && /^\d{4}-\d{2}-\d{2}$/.test(tentativeStart) && supabase) {
+      try {
+        const { data: campaignRow } = await supabase
+          .from('campaigns')
+          .select('user_id')
+          .eq('id', campaignId)
+          .maybeSingle();
+        const userId = campaignRow?.user_id;
+        if (userId) {
+          const startDate = new Date(tentativeStart);
+          const endDate = new Date(startDate);
+          endDate.setDate(endDate.getDate() + 12 * 7);
+          const conflicts = await detectCampaignConflicts(
+            userId,
+            startDate,
+            endDate,
+            campaignId
+          );
+          if (conflicts.length > 0) {
+            const lines = conflicts.map(
+              (c) => `• "${c.campaign_name}" (${c.start_date.toLocaleDateString()} – ${c.end_date.toLocaleDateString()}, ${c.overlap_days} day overlap)`
+            );
+            startDateConflictWarning = `⚠️ **Date conflict:** This start date overlaps with ${conflicts.length} existing campaign(s):\n\n${lines.join('\n')}\n\nConsider choosing a different start date or finishing the overlapping campaign(s) first.`;
+            const suggestion = await suggestAvailableDateRange(userId, 12 * 7, startDate);
+            if (suggestion) {
+              startDateConflictWarning += `\n\nSuggested alternative: start **${suggestion.start_date.toLocaleDateString()}** (after current campaigns).`;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[plan] Start date conflict check failed (non-blocking):', (err as any)?.message ?? err);
+      }
+    }
+
     if (typeof saveAiCampaignPlan === 'function') {
       try {
         await saveAiCampaignPlan({
@@ -331,6 +450,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       platform_content: result.platform_content,
       conversationalResponse: result.conversationalResponse,
       collectedPlanningContext: finalCollectedPlanningContext,
+      startDateConflictWarning: startDateConflictWarning ?? undefined,
     });
   } catch (error: any) {
     console.error('Error in campaign AI plan API:', error);

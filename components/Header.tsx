@@ -14,6 +14,20 @@ const Header: React.FC = () => {
 
   const displayName = userName && userName.trim().length > 0 ? userName : 'User';
 
+  const roleDisplayLabel = (() => {
+    if (!userRole || !userRole.trim()) return null;
+    const r = userRole.toUpperCase().replace(/\s+/g, '_');
+    const labels: Record<string, string> = {
+      SUPER_ADMIN: 'Super Admin',
+      COMPANY_ADMIN: 'Company Admin',
+      CONTENT_CREATOR: 'Content Creator',
+      CONTENT_REVIEWER: 'Content Reviewer',
+      CONTENT_PUBLISHER: 'Content Publisher',
+      VIEW_ONLY: 'View Only',
+    };
+    return labels[r] ?? r.replace(/_/g, ' ');
+  })();
+
   const handleLogout = async () => {
     setIsSigningOut(true);
     await supabase.auth.signOut();
@@ -76,10 +90,22 @@ const Header: React.FC = () => {
   }, [selectedCompanyId]);
 
   return (
-    <div className="bg-white/90 backdrop-blur-sm border-b border-gray-200/60 shadow-sm">
+    <div className="bg-gradient-to-br from-indigo-50 via-white to-purple-50 backdrop-blur-sm border-b border-gray-200/60 shadow-sm">
       <div className="max-w-7xl mx-auto px-6 py-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
+            <a
+              href="/dashboard"
+              onClick={(e) => { e.preventDefault(); router.push('/dashboard'); }}
+              className="flex items-center shrink-0 bg-transparent p-0 m-0 border-0 shadow-none outline-none ring-0"
+              aria-label="Go to home"
+            >
+              <img
+                src="/logo.png"
+                alt="Logo"
+                className="h-[3.74rem] w-auto object-contain bg-transparent border-0 shadow-none"
+              />
+            </a>
             <button
               onClick={() => router.push('/dashboard')}
               className="bg-white text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-100 transition-colors"
@@ -125,11 +151,13 @@ const Header: React.FC = () => {
               </button>
             )}
           </div>
-          <div className="text-lg font-semibold text-gray-900">
-            Content Manager App
-          </div>
           <div className="flex items-center gap-3 text-sm text-gray-700">
-            <div>Logged in as: {displayName}</div>
+            <div className="flex flex-col items-end">
+              <span className="font-medium text-gray-900">{displayName}</span>
+              {roleDisplayLabel && (
+                <span className="text-xs text-gray-500">{roleDisplayLabel}</span>
+              )}
+            </div>
             {!selectedCompanyId && (
               <div className="text-gray-500">No company selected</div>
             )}

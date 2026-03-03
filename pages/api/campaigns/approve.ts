@@ -23,6 +23,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'NOT_ALLOWED' });
   }
 
+  // Multi-tenant: ensure campaign belongs to this company before updating
+  const { data: versionRow, error: versionError } = await supabase
+    .from('campaign_versions')
+    .select('company_id')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (versionError || !versionRow?.company_id) {
+    return res.status(404).json({ error: 'Campaign not found' });
+  }
+  if (String(versionRow.company_id) !== String(companyId)) {
+    return res.status(403).json({ error: 'CAMPAIGN_NOT_IN_COMPANY', code: 'CAMPAIGN_NOT_IN_COMPANY' });
+  }
+
   try {
     const { data: campaign, error } = await supabase
       .from('campaigns')

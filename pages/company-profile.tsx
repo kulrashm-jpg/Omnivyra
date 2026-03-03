@@ -184,14 +184,29 @@ export default function CompanyProfilePage() {
   const router = useRouter();
   const {
     user,
+    userRole,
     companies,
     selectedCompanyId,
     selectedCompanyName,
     setSelectedCompanyId,
     isLoading: isCompanyLoading,
     isAuthenticated,
+    refreshCompanies,
   } = useCompanyContext();
   const isAdmin = useMemo(() => user?.role === 'admin', [user]);
+  const isContentArchitect = userRole === 'CONTENT_ARCHITECT';
+  const isCompanyAdmin = userRole === 'COMPANY_ADMIN';
+  /** Only Super Admin and Content Architect can create companies; Company Admin sees only their company. */
+  const canCreateCompany = userRole === 'SUPER_ADMIN' || userRole === 'CONTENT_ARCHITECT';
+  /** Show company search and "Create new company" only for roles that manage multiple / new companies. */
+  const canSelectMultipleCompanies = canCreateCompany;
+  const canViewStrategicSections = useMemo(
+    () =>
+      userRole === 'SUPER_ADMIN' ||
+      userRole === 'CAMPAIGN_ARCHITECT' ||
+      userRole === 'CONTENT_ARCHITECT',
+    [userRole]
+  );
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
   const [draftProfile, setDraftProfile] = useState<CompanyProfile>(emptyProfile);
   const [companyId, setCompanyId] = useState('');
@@ -244,8 +259,58 @@ export default function CompanyProfilePage() {
     transformation_mechanism?: string | null;
     authority_domains?: string[];
   } | null>(null);
+  const [companySearchFilter, setCompanySearchFilter] = useState('');
+  const [showCreateCompanyModal, setShowCreateCompanyModal] = useState(false);
+  const [createCompanyForm, setCreateCompanyForm] = useState({ name: '', website: '', industry: '' });
+  const [createCompanyLoading, setCreateCompanyLoading] = useState(false);
+  const [companyIdCopied, setCompanyIdCopied] = useState(false);
+  const [createCompanyError, setCreateCompanyError] = useState<string | null>(null);
+
+  const filteredCompanies = useMemo(() => {
+    const q = (companySearchFilter || '').trim().toLowerCase();
+    if (!q) return companies;
+    return companies.filter(
+      (c) =>
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.company_id || '').toLowerCase().includes(q)
+    );
+  }, [companies, companySearchFilter]);
 
   const activeProfile = profile ?? draftProfile;
+
+  const handleCreateCompany = async () => {
+    const { name, website } = createCompanyForm;
+    if (!name?.trim() || !website?.trim()) {
+      setCreateCompanyError('Name and website are required.');
+      return;
+    }
+    setCreateCompanyError(null);
+    setCreateCompanyLoading(true);
+    try {
+      const res = await fetch('/api/super-admin/companies', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createCompanyForm),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to create company');
+      }
+      setShowCreateCompanyModal(false);
+      setCreateCompanyForm({ name: '', website: '', industry: '' });
+      await refreshCompanies();
+      if (data?.company?.id) {
+        setSelectedCompanyId(data.company.id);
+        setCompanyId(data.company.id);
+        router.replace(`/company-profile?companyId=${encodeURIComponent(data.company.id)}`);
+      }
+    } catch (e) {
+      setCreateCompanyError((e as Error).message || 'Failed to create company');
+    } finally {
+      setCreateCompanyLoading(false);
+    }
+  };
 
   const notifyCompanyProfileUpdated = (updatedCompanyId: string) => {
     if (typeof window === 'undefined' || !updatedCompanyId) return;
@@ -266,12 +331,17 @@ export default function CompanyProfilePage() {
     if (!router.isReady) return;
     const queryCompanyId =
       typeof router.query.companyId === 'string' ? router.query.companyId : '';
-    if (queryCompanyId) {
+    if (!queryCompanyId) return;
+    // Only apply URL companyId if user has access (avoids 403 for Company Admin when URL has wrong/stale id)
+    const hasAccess =
+      canCreateCompany ||
+      companies.some((c) => c.company_id === queryCompanyId);
+    if (hasAccess) {
       setSelectedCompanyId(queryCompanyId);
       setCompanyId(queryCompanyId);
       setDraftProfile((prev) => ({ ...prev, company_id: queryCompanyId }));
     }
-  }, [router.isReady, router.query.companyId]);
+  }, [router.isReady, router.query.companyId, canCreateCompany, companies]);
 
   useEffect(() => {
     if (!selectedCompanyId) return;
@@ -301,6 +371,17 @@ export default function CompanyProfilePage() {
           setErrorMessage('Select a company to continue.');
           return;
         }
+        // Company Admin must only view their own company — never request another company
+        if (isCompanyAdmin && companies.length > 0 && !companies.some((c) => c.company_id === companyId)) {
+          const own = companies[0];
+          if (own?.company_id) {
+            setSelectedCompanyId(own.company_id);
+            setCompanyId(own.company_id);
+            setDraftProfile((prev) => ({ ...prev, company_id: own.company_id }));
+          }
+          setIsLoading(false);
+          return;
+        }
         const response = await fetchWithAuth(
           `/api/company-profile?companyId=${encodeURIComponent(companyId)}&includeCompleteness=1`
         );
@@ -320,7 +401,12 @@ export default function CompanyProfilePage() {
           } catch {
             details = '';
           }
-          throw new Error(details || 'Failed to load company profile');
+          const message = details === 'FORBIDDEN_ROLE'
+            ? 'You don\'t have permission to view this company profile.'
+            : (details || 'Failed to load company profile');
+          setLastFetchError(message);
+          setErrorMessage(message);
+          return;
         }
         const data = await response.json();
         setProfile(data.profile || null);
@@ -330,6 +416,8 @@ export default function CompanyProfilePage() {
         setOverallProfileCompletion(data.overall_profile_completion ?? null);
         setProblemTransformationCompletion(data.problem_transformation_completion ?? null);
         setNotFound(false);
+        setErrorMessage(null);
+        setLastFetchError(null);
         if (data.profile?.company_id) {
           setCompanyId(data.profile.company_id);
           localStorage.setItem('company_id', data.profile.company_id);
@@ -344,7 +432,7 @@ export default function CompanyProfilePage() {
     };
 
     loadProfile();
-  }, [companyId, isAuthenticated, isCompanyLoading]);
+  }, [companyId, isAuthenticated, isCompanyLoading, isCompanyAdmin, companies]);
 
   useEffect(() => {
     const loadRefinements = async () => {
@@ -390,13 +478,16 @@ export default function CompanyProfilePage() {
       token = refreshed.data.session?.access_token;
     }
     if (!token) {
-      return new Response(JSON.stringify({ error: 'UNAUTHORIZED' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
+      // Content Architect uses cookie auth; send request with credentials so cookies are included
+      return fetch(input, {
+        ...init,
+        credentials: 'include',
+        headers: init?.headers || {},
       });
     }
     return fetch(input, {
       ...init,
+      credentials: 'include',
       headers: {
         ...(init?.headers || {}),
         Authorization: `Bearer ${token}`,
@@ -1297,13 +1388,15 @@ export default function CompanyProfilePage() {
                 )}
                 %
               </div>
-              <div>
-                Problem & Transformation:{' '}
-                {completionPercent(
-                  problemTransformationCompletion ?? uiProblemTransformationCompletion
-                )}
-                %
-              </div>
+              {canViewStrategicSections && (
+                <div>
+                  Problem & Transformation:{' '}
+                  {completionPercent(
+                    problemTransformationCompletion ?? uiProblemTransformationCompletion
+                  )}
+                  %
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1391,6 +1484,15 @@ export default function CompanyProfilePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium text-gray-700">Company</label>
+                {canSelectMultipleCompanies && (
+                  <input
+                    type="text"
+                    placeholder="Search companies..."
+                    value={companySearchFilter}
+                    onChange={(e) => setCompanySearchFilter(e.target.value)}
+                    className="mt-1 mb-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                )}
                 <select
                   value={companyId}
                   onChange={(e) => {
@@ -1399,18 +1501,69 @@ export default function CompanyProfilePage() {
                     setCompanyId(nextId);
                     updateActiveProfile({ ...activeProfile, company_id: nextId });
                   }}
-                  disabled={!isAdmin || isCompanyLoading}
+                  disabled={(!isAdmin && !isContentArchitect) || isCompanyLoading}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
                 >
                   <option value="">Select company</option>
-                  {companies.map((company) => (
+                  {filteredCompanies.map((company) => (
                     <option key={company.company_id} value={company.company_id}>
                       {company.name}
                     </option>
                   ))}
                 </select>
-                {!isAdmin && selectedCompanyName && (
+                {canCreateCompany && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateCompanyModal(true)}
+                      className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                    >
+                      + Create new company
+                    </button>
+                  </div>
+                )}
+                {companyId && (isAdmin || isContentArchitect) && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <a
+                      href="/campaigns"
+                      className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                    >
+                      View campaigns &amp; weekly/daily plans →
+                    </a>
+                  </div>
+                )}
+                {!isAdmin && !isContentArchitect && selectedCompanyName && (
                   <div className="text-xs text-gray-500 mt-1">Company locked for your role.</div>
+                )}
+                {isCompanyAdmin && companies.length > 0 && !companyId && (
+                  <div className="text-xs text-amber-600 mt-1">Select your company above to view limited profile and go to campaigns.</div>
+                )}
+                {companyId && (
+                  <div className="mt-3 pt-2 border-t border-gray-100">
+                    <label className="text-sm font-medium text-gray-500 block mb-1">Company ID</label>
+                    <div className="flex items-center gap-2">
+                      <code
+                        className="text-xs bg-gray-100 text-gray-800 px-2 py-1.5 rounded font-mono truncate flex-1"
+                        title={companyId}
+                      >
+                        {companyId}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                            navigator.clipboard.writeText(companyId);
+                            setCompanyIdCopied(true);
+                            setTimeout(() => setCompanyIdCopied(false), 2000);
+                          }
+                        }}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 font-medium shrink-0"
+                      >
+                        {companyIdCopied ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">Use this ID to open this company from Content Architect search or share the profile link.</p>
+                  </div>
                 )}
               </div>
               <div>
@@ -1629,18 +1782,20 @@ export default function CompanyProfilePage() {
                 Extracted: {joinList(activeProfile.goals_list, activeProfile.goals)}
               </div>
             </div>
-            <div>
-              <label className="text-sm font-medium text-gray-700">Competitors</label>
-              <textarea
-                value={activeProfile.competitors || ''}
-                onChange={(e) => handleChange('competitors', e.target.value)}
-                rows={2}
-                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              />
-              <div className="text-xs text-gray-500 mt-1">
-                Extracted: {joinList(activeProfile.competitors_list, activeProfile.competitors)}
+            {canViewStrategicSections && (
+              <div>
+                <label className="text-sm font-medium text-gray-700">Competitors</label>
+                <textarea
+                  value={activeProfile.competitors || ''}
+                  onChange={(e) => handleChange('competitors', e.target.value)}
+                  rows={2}
+                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+                <div className="text-xs text-gray-500 mt-1">
+                  Extracted: {joinList(activeProfile.competitors_list, activeProfile.competitors)}
+                </div>
               </div>
-            </div>
+            )}
             <div>
               <label className="text-sm font-medium text-gray-700">Unique Value</label>
               <textarea
@@ -1787,6 +1942,7 @@ export default function CompanyProfilePage() {
               )}
             </div>
 
+            {canViewStrategicSections && (
             <div className="border-t pt-6 mt-6">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Marketing Intelligence</h3>
               <p className="text-sm text-gray-600 mb-4">
@@ -1890,7 +2046,9 @@ export default function CompanyProfilePage() {
                 </div>
               </div>
             </div>
+            )}
 
+            {canViewStrategicSections && (
             <div className="border-t pt-6 mt-6">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Problem & Transformation</h3>
               <p className="text-sm text-gray-600 mb-4">
@@ -2015,6 +2173,7 @@ export default function CompanyProfilePage() {
                 </div>
               </div>
             </div>
+            )}
 
             {latestRefinement?.missing_fields_questions &&
               latestRefinement.missing_fields_questions.length > 0 && (
@@ -2473,6 +2632,66 @@ export default function CompanyProfilePage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {showCreateCompanyModal && canCreateCompany && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Create new company</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Company name</label>
+                <input
+                  type="text"
+                  value={createCompanyForm.name}
+                  onChange={(e) => setCreateCompanyForm((p) => ({ ...p, name: e.target.value }))}
+                  placeholder="Acme Inc."
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Website</label>
+                <input
+                  type="text"
+                  value={createCompanyForm.website}
+                  onChange={(e) => setCreateCompanyForm((p) => ({ ...p, website: e.target.value }))}
+                  placeholder="acme.com"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Industry (optional)</label>
+                <input
+                  type="text"
+                  value={createCompanyForm.industry}
+                  onChange={(e) => setCreateCompanyForm((p) => ({ ...p, industry: e.target.value }))}
+                  placeholder="SaaS"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              {createCompanyError && (
+                <p className="text-sm text-red-600">{createCompanyError}</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => { setShowCreateCompanyModal(false); setCreateCompanyError(null); }}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateCompany}
+                disabled={createCompanyLoading}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                {createCompanyLoading ? 'Creating…' : 'Create company'}
+              </button>
+            </div>
           </div>
         </div>
       )}

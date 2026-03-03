@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { ArrowLeft, Calendar, ChevronLeft, ChevronRight, Clock, ExternalLink } from 'lucide-react';
+import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
 
 type ReadinessLabel = 'ready' | 'missing_media' | 'incomplete';
 type StageKey = 'awareness' | 'education' | 'authority' | 'engagement' | 'conversion' | 'team_note';
@@ -22,6 +23,8 @@ type CalendarActivity = {
     ready_to_schedule: boolean;
   }>;
   raw_item: Record<string, unknown>;
+  /** When set, ownership colors override default card styling (additive). */
+  execution_mode?: string;
 };
 
 type StageGroup = {
@@ -176,6 +179,7 @@ export default function CampaignCalendarPage() {
   const [error, setError] = useState<string | null>(null);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [expandedState, setExpandedState] = useState<Record<string, boolean>>({});
+  const [executionFilter, setExecutionFilter] = useState<'all' | 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI'>('all');
 
   useEffect(() => {
     if (!campaignId) return;
@@ -229,6 +233,7 @@ export default function CampaignCalendarPage() {
                 }))
               : [];
 
+            const execution_mode = typeof (item as any)?.execution_mode === 'string' ? (item as any).execution_mode : undefined;
             mapped.push({
               execution_id,
               week_number: weekNumber,
@@ -241,6 +246,7 @@ export default function CampaignCalendarPage() {
               readiness_label,
               execution_jobs,
               raw_item: item,
+              ...(execution_mode ? { execution_mode } : {}),
             });
           });
         }
@@ -337,9 +343,14 @@ export default function CampaignCalendarPage() {
     [currentDate]
   );
 
+  const filteredActivities = useMemo(() => {
+    if (executionFilter === 'all') return sortedActivities;
+    return sortedActivities.filter((a) => a.execution_mode === executionFilter);
+  }, [sortedActivities, executionFilter]);
+
   const groupedByDate = useMemo(() => {
     const map = new Map<string, CalendarActivity[]>();
-    sortedActivities.forEach((activity) => {
+    filteredActivities.forEach((activity) => {
       const date = new Date(`${activity.date}T00:00:00`);
       if (!Number.isFinite(date.getTime())) return;
       if (date.getMonth() !== currentDate.getMonth() || date.getFullYear() !== currentDate.getFullYear()) return;
@@ -348,7 +359,7 @@ export default function CampaignCalendarPage() {
       map.set(activity.date, list);
     });
     return map;
-  }, [sortedActivities, currentDate]);
+  }, [filteredActivities, currentDate]);
 
   const dayKeys = useMemo(() => Array.from(groupedByDate.keys()).sort(), [groupedByDate]);
 
@@ -451,9 +462,16 @@ export default function CampaignCalendarPage() {
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
             <button
-              onClick={() => router.back()}
+              onClick={() => {
+                if (campaignId) {
+                  const companyId = typeof router.query.companyId === 'string' ? router.query.companyId : '';
+                  router.push(`/campaign-planning-hierarchical?campaignId=${encodeURIComponent(campaignId)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`);
+                } else {
+                  router.back();
+                }
+              }}
               className="p-2 rounded-lg border border-gray-200 hover:bg-white"
-              title="Back"
+              title="Back to week plan"
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
@@ -465,6 +483,24 @@ export default function CampaignCalendarPage() {
           <span className="text-xs text-gray-600 bg-white border border-gray-200 rounded-full px-2 py-1">
             Tentative scheduling only
           </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <span className="text-xs text-gray-500">Responsibility:</span>
+          {(['all', 'AI_AUTOMATED', 'CREATOR_REQUIRED', 'CONDITIONAL_AI'] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setExecutionFilter(mode)}
+              className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                executionFilter === mode
+                  ? 'bg-indigo-100 border-indigo-300 text-indigo-800'
+                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {mode === 'all' ? 'All' : mode === 'AI_AUTOMATED' ? 'AI' : mode === 'CREATOR_REQUIRED' ? 'Creator' : 'Conditional'}
+            </button>
+          ))}
         </div>
 
         <div className="bg-white border border-gray-200 rounded-xl p-3 mb-4">
@@ -494,8 +530,25 @@ export default function CampaignCalendarPage() {
         )}
 
         {dayKeys.length === 0 ? (
-          <div className="bg-white border border-gray-200 rounded-xl p-6 text-sm text-gray-600">
-            No activities found for this month.
+          <div className="bg-white border border-gray-200 rounded-xl p-6 text-sm text-gray-600 space-y-3">
+            <p className="font-medium text-gray-800">No activities found for this month.</p>
+            <p>
+              The calendar shows activities only after <strong>daily plans</strong> are generated from your week plan.
+              If you just created the week plan, go to <strong>Campaign Details</strong> and use{' '}
+              <strong>Generate Daily Plans &amp; Open Planner</strong> to create day-by-day activities; they will then appear here.
+            </p>
+            {campaignId && (
+              <button
+                type="button"
+                onClick={() => {
+                  const companyId = typeof router.query.companyId === 'string' ? router.query.companyId : '';
+                  router.push(`/campaign-details/${campaignId}${companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''}`);
+                }}
+                className="mt-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+              >
+                Go to Campaign Details →
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
@@ -559,15 +612,36 @@ export default function CampaignCalendarPage() {
                           {expanded && (
                             <div className="p-4 space-y-3">
                               {group.items.map((activity) => {
+                                const execMode = (activity.execution_mode ?? 'AI_AUTOMATED') as 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI';
+                                const intel = getExecutionIntelligence(execMode);
                                 const readiness = getReadinessBadge(activity.readiness_label);
+                                const modeColors = intel.colorClasses;
+                                const articleClass = modeColors
+                                  ? `rounded-xl p-4 shadow-sm ${modeColors.card}`
+                                  : 'bg-white border border-gray-200 rounded-xl p-4 shadow-sm';
+                                const execDot = execMode === 'AI_AUTOMATED' ? '🟢' : execMode === 'CONDITIONAL_AI' ? '🟡' : '🔴';
+                                const modeLabel = intel.label;
+                                const modeExplanation = intel.explanation;
+                                const rawItem = activity.raw_item && typeof activity.raw_item === 'object' ? activity.raw_item as Record<string, unknown> : {};
+                                const creatorInst = rawItem?.creator_instruction && typeof rawItem.creator_instruction === 'object' ? rawItem.creator_instruction as Record<string, unknown> : null;
+                                const creatorPreview = creatorInst?.targetAudience ? `Audience: ${String(creatorInst.targetAudience)}` : creatorInst?.objective ? `Goal: ${String(creatorInst.objective)}` : null;
                                 return (
                                   <article
                                     key={activity.execution_id}
-                                    className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm"
+                                    className={articleClass}
                                   >
-                                    <div className="flex items-start justify-between gap-3">
+                                    <div className="font-medium text-gray-900">{modeLabel ?? 'AI Ready'}</div>
+                                    {modeExplanation && <div className="text-xs text-gray-500 mt-0.5">{modeExplanation}</div>}
+                                    {execMode === 'CONDITIONAL_AI' && (
+                                      <>
+                                        <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">Template Required</span>
+                                        <span className="block mt-0.5 text-[10px] text-gray-500">Template unlocks AI generation</span>
+                                      </>
+                                    )}
+                                    <div className="flex items-start justify-between gap-3 mt-1.5">
                                       <h4 className="text-base font-semibold text-gray-900">{activity.title}</h4>
                                       <div className="flex items-center gap-2">
+                                        <span className="text-xs leading-none" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (modeLabel ?? undefined)}>{execDot}</span>
                                         <span className={`text-[11px] px-2 py-1 rounded-full font-medium ${readiness.className}`}>
                                           {readiness.text}
                                         </span>
@@ -577,6 +651,9 @@ export default function CampaignCalendarPage() {
                                         </span>
                                       </div>
                                     </div>
+                                    {creatorPreview && (
+                                      <div className="text-[10px] text-gray-500 mt-1 truncate">{creatorPreview}</div>
+                                    )}
 
                                     <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                                       <span className="px-2 py-1 rounded border border-gray-200 bg-gray-50">

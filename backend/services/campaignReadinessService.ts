@@ -156,7 +156,14 @@ export async function evaluateCampaignReadiness(
         last_evaluated_at: new Date().toISOString(),
       };
     }
-    throw new Error(`Failed to load daily plans: ${dailyError.message}`);
+    console.warn('[campaignReadinessService] daily_content_plans query failed, returning partial readiness:', dailyError.message);
+    return {
+      campaign_id: campaignId,
+      readiness_percentage: 0,
+      readiness_state: 'partial',
+      blocking_issues: [{ code: 'DAILY_PLANS_UNAVAILABLE', message: 'Could not load daily plans; readiness may be incomplete.' }],
+      last_evaluated_at: new Date().toISOString(),
+    };
   }
 
   const dailyList = dailyPlans || [];
@@ -239,7 +246,7 @@ export async function evaluateCampaignReadiness(
 
   const lastEvaluated = new Date().toISOString();
 
-  await supabase.from('campaign_readiness').upsert(
+  const { error: upsertError } = await supabase.from('campaign_readiness').upsert(
     {
       campaign_id: campaignId,
       readiness_percentage: readinessPercentage,
@@ -249,6 +256,9 @@ export async function evaluateCampaignReadiness(
     },
     { onConflict: 'campaign_id' }
   );
+  if (upsertError) {
+    console.warn('[campaignReadinessService] upsert campaign_readiness failed (returning computed result):', upsertError.message);
+  }
 
   return {
     campaign_id: campaignId,

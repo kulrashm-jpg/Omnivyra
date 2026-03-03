@@ -573,17 +573,6 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-      {pendingDeleteCampaignId && (
-        <div className="max-w-7xl mx-auto px-6 pt-2">
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-center justify-between gap-3">
-            <span>Delete this campaign? This cannot be undone.</span>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setPendingDeleteCampaignId(null)} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
-              <button type="button" onClick={confirmDeleteCampaign} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700">Delete</button>
-            </div>
-          </div>
-        </div>
-      )}
       <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -837,6 +826,14 @@ export default function DashboardPage() {
                             >
                               {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
                             </button>
+                            <a
+                              href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                              title="Week plan"
+                            >
+                              <Calendar className="h-4 w-4 text-slate-600" />
+                            </a>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -859,7 +856,18 @@ export default function DashboardPage() {
                             </button>
                           </div>
                         </div>
-                        
+                        {pendingDeleteCampaignId === campaign.id && (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-center justify-between gap-3 mb-4"
+                          >
+                            <span>Delete this campaign? This cannot be undone.</span>
+                            <div className="flex items-center gap-2">
+                              <button type="button" onClick={() => setPendingDeleteCampaignId(null)} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
+                              <button type="button" onClick={confirmDeleteCampaign} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700">Delete</button>
+                            </div>
+                          </div>
+                        )}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
@@ -878,8 +886,16 @@ export default function DashboardPage() {
                           </div>
                         </div>
 
+                        <div className="flex flex-wrap gap-1.5 mb-4">
+                          <a
+                            href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200"
+                          >
+                            Week plan
+                          </a>
                         {(stageAvailability[campaign.id]?.stages && Object.values(stageAvailability[campaign.id].stages).some(Boolean)) && (
-                          <div className="flex flex-wrap gap-1.5 mb-4">
+                            <>
                             {stageAvailability[campaign.id].stages.twelveWeekPlan && (
                               <a
                                 href={buildPlanningWorkspaceUrl(campaign.id)}
@@ -928,8 +944,9 @@ export default function DashboardPage() {
                                 Scheduled
                               </a>
                             )}
-                          </div>
+                            </>
                         )}
+                        </div>
                         
                         <div className="space-y-2">
                           <div className="flex justify-between text-sm">
@@ -980,7 +997,7 @@ export default function DashboardPage() {
                   Manage APIs
                 </button>
               </div>
-              <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl p-6 text-white">
+              <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl p-6 text-white lg:min-w-[calc(100%+16px)] lg:-ml-2 lg:-mr-2">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="p-2 bg-white/20 rounded-lg">
                     <TrendingUp className="h-6 w-6" />
@@ -1141,6 +1158,14 @@ export default function DashboardPage() {
                               {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
                             </button>
                           <div className="flex items-center gap-2">
+                            <a
+                              href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                              title="Week plan"
+                            >
+                              <Calendar className="h-4 w-4 text-slate-600" />
+                            </a>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1163,7 +1188,18 @@ export default function DashboardPage() {
                             </button>
                           </div>
                         </div>
-                        
+                        {pendingDeleteCampaignId === campaign.id && (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-center justify-between gap-3 mb-4"
+                          >
+                            <span>Delete this campaign? This cannot be undone.</span>
+                            <div className="flex items-center gap-2">
+                              <button type="button" onClick={() => setPendingDeleteCampaignId(null)} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
+                              <button type="button" onClick={confirmDeleteCampaign} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700">Delete</button>
+                            </div>
+                          </div>
+                        )}
                         <div className="grid grid-cols-1 gap-4 mb-4">
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
@@ -1182,8 +1218,16 @@ export default function DashboardPage() {
                           </div>
                         </div>
 
+                        <div className="flex flex-wrap gap-1.5 mb-4">
+                          <a
+                            href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200"
+                          >
+                            Week plan
+                          </a>
                         {(stageAvailability[campaign.id]?.stages && Object.values(stageAvailability[campaign.id].stages).some(Boolean)) && (
-                          <div className="flex flex-wrap gap-1.5 mb-4">
+                            <>
                             {stageAvailability[campaign.id].stages.twelveWeekPlan && (
                               <a
                                 href={buildPlanningWorkspaceUrl(campaign.id)}
@@ -1232,8 +1276,9 @@ export default function DashboardPage() {
                                 Scheduled
                               </a>
                             )}
-                          </div>
+                            </>
                         )}
+                        </div>
                         
                         <div className="space-y-2">
                           <div className="flex justify-between text-sm">

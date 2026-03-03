@@ -1,10 +1,17 @@
 import { getLatestProfile } from '../services/companyProfileService';
 
+/** INTERNAL = company's own user (default). EXTERNAL = agency/external. Infrastructure only; no enforcement yet. */
+export type MembershipType = 'INTERNAL' | 'EXTERNAL';
+
 export type UserContext = {
   userId: string;
   role: 'admin' | 'user';
   companyIds: string[];
   defaultCompanyId: string;
+  /** Default company's membership type. Present when resolved from DB. */
+  membershipType?: MembershipType;
+  /** Per-company membership. Used for future visibility filtering. */
+  membershipByCompany?: Record<string, MembershipType>;
 };
 
 const normalizeRole = (value?: string | null): 'admin' | 'user' => {
@@ -53,6 +60,8 @@ export const resolveUserContext = async (): Promise<UserContext> => {
     role,
     companyIds,
     defaultCompanyId: companyIds[0],
+    membershipType: 'INTERNAL',
+    membershipByCompany: companyIds.length ? Object.fromEntries(companyIds.map((c) => [c, 'INTERNAL'])) : undefined,
   };
 
   console.log('USER_CONTEXT_RESOLVED', userContext);

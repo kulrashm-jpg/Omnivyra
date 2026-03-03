@@ -71,6 +71,8 @@ export type CompanyContext = {
   problem_transformation: CompanyContextProblemTransformation;
   campaign: CompanyContextCampaign;
   commercial: CompanyContextCommercial;
+  /** Company-only context for recommendations; used when generating recommendations for this company. */
+  recommendation_notes?: string | null;
 };
 
 export type BuildCompanyContextOptions = {
@@ -204,6 +206,9 @@ export function buildCompanyContext(
     key_metrics: includeEmpty || profile?.key_metrics ? (profile?.key_metrics ?? null) : undefined,
   };
 
+  const recommendation_notes =
+    (profile as { recommendation_context?: string | null })?.recommendation_context?.trim() || null;
+
   return {
     identity,
     brand,
@@ -211,6 +216,31 @@ export function buildCompanyContext(
     problem_transformation,
     campaign,
     commercial,
+    ...(recommendation_notes ? { recommendation_notes } : {}),
+  };
+}
+
+/**
+ * Company context limited to identity only (for COMPANY_ADMIN).
+ * Strategy, brand, customer, problem_transformation, campaign, and commercial are empty.
+ */
+export function buildLimitedCompanyContext(profile: CompanyProfile | null): CompanyContext {
+  const identity: CompanyContextIdentity = {
+    name: profile?.name ?? null,
+    industry: profile?.industry ?? null,
+    industry_list: (profile?.industry_list?.length ?? 0) > 0 ? (profile?.industry_list ?? null) : null,
+    category: profile?.category ?? null,
+    category_list: (profile?.category_list?.length ?? 0) > 0 ? (profile?.category_list ?? null) : null,
+    geography: profile?.geography ?? null,
+    geography_list: (profile?.geography_list?.length ?? 0) > 0 ? (profile?.geography_list ?? null) : null,
+  };
+  return {
+    identity,
+    brand: {},
+    customer: {},
+    problem_transformation: {},
+    campaign: {},
+    commercial: {},
   };
 }
 

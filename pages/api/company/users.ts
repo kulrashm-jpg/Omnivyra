@@ -1,7 +1,13 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getUserRole, hasPermission, isSuperAdmin, Role } from '../../../backend/services/rbacService';
+import {
+  getUserRole,
+  getCompanyRoleIncludingInvited,
+  hasPermission,
+  isSuperAdmin,
+  Role,
+} from '../../../backend/services/rbacService';
 
 const mapAppRoleToRbac = (role: string): Role | null => {
   const normalized = role.toUpperCase();
@@ -26,9 +32,20 @@ const ensureCompanyAccess = async (
     return { userId: user.id, role: Role.SUPER_ADMIN };
   }
 
-  const { role, error: roleError } = await getUserRole(user.id, companyId);
+  let { role, error: roleError } = await getUserRole(user.id, companyId);
+  if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
+    const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+    if (
+      fallbackRole === Role.COMPANY_ADMIN ||
+      fallbackRole === Role.ADMIN ||
+      fallbackRole === Role.SUPER_ADMIN
+    ) {
+      role = fallbackRole;
+      roleError = null;
+    }
+  }
   if (roleError) {
-    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    res.status(403).json({ error: roleError === 'COMPANY_ACCESS_DENIED' ? 'COMPANY_ACCESS_DENIED' : 'FORBIDDEN_ROLE' });
     return null;
   }
   if (!role) {
@@ -217,9 +234,10 @@ const addExistingUserToCompany = async (input: {
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const companyId =
+  const rawCompanyId =
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined);
+  const companyId = typeof rawCompanyId === 'string' ? rawCompanyId.trim() : undefined;
 
   if (!companyId) {
     return res.status(400).json({ error: 'companyId required' });

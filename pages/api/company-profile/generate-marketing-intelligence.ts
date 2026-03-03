@@ -1,8 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { getProfile, MARKETING_INTELLIGENCE_FIELD_NAMES } from '../../../backend/services/companyProfileService';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getUserRole, isSuperAdmin } from '../../../backend/services/rbacService';
+import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { supabase } from '../../../backend/db/supabaseClient';
 
 const OUTPUT_FIELDS = [
@@ -31,20 +30,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (req.body?.companyId as string) ||
     (req.body?.company_id as string);
 
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    return res.status(401).json({ error: 'UNAUTHORIZED' });
-  }
   if (!companyId) {
     return res.status(400).json({ error: 'companyId required' });
   }
-  const isAdmin = await isSuperAdmin(user.id);
-  if (!isAdmin) {
-    const { role, error: roleError } = await getUserRole(user.id, companyId);
-    if (roleError || !role) {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    }
-  }
+  const access = await resolveCompanyAccess(req, res, companyId);
+  if (!access) return;
 
   try {
     const profile = await getProfile(companyId, { autoRefine: false });
@@ -95,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       await supabase.from('audit_logs').insert({
         action: 'MARKETING_INTELLIGENCE_GENERATED',
-        actor_user_id: user.id,
+        actor_user_id: access.userId,
         company_id: null,
         metadata: {
           company_id: companyId,

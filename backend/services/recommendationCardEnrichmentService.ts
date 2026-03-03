@@ -118,6 +118,7 @@ export function enrichRecommendationCards<T extends ResultLike>(result: T): T {
     reader_emotion_target: campaign?.reader_emotion_target ?? null,
     narrative_flow_seed: toCompactString((campaign as any)?.narrative_flow_seed ?? null),
     recommended_cta_style: campaign?.recommended_cta_style ?? null,
+    recommendation_notes: (result.company_context as { recommendation_notes?: string | null })?.recommendation_notes ?? null,
   };
   const blueprintByTopic = new Map<
     string,

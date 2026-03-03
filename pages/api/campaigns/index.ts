@@ -2,6 +2,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import {
   DEFAULT_BUILD_MODE_SCRATCH,
   BUILD_MODES,
@@ -9,8 +10,10 @@ import {
   normalizeCampaignWeights,
   validateCampaignWeights,
 } from '../../../backend/services/campaignContextConfig';
+import { buildHierarchicalPayload, type PrimaryCampaignTypeId } from '../../../lib/campaignTypeHierarchy';
 import {
   Role,
+  getCompanyRoleIncludingInvited,
   getUserRole,
   hasPermission,
   isPlatformSuperAdmin,
@@ -28,6 +31,9 @@ const requireCompanyRole = async (
     res.status(400).json({ error: 'companyId required' });
     return null;
   }
+  if (userId === 'content_architect') {
+    return { userId, role: Role.COMPANY_ADMIN };
+  }
   const platformAdmin = await isPlatformSuperAdmin(userId);
   if (platformAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
     return { userId, role: Role.SUPER_ADMIN };
@@ -41,7 +47,19 @@ const requireCompanyRole = async (
     });
     return { userId, role: Role.SUPER_ADMIN };
   }
-  const { role, error } = await getUserRole(userId, companyId);
+  let { role, error } = await getUserRole(userId, companyId);
+  if (!role) {
+    const fallbackRole = await getCompanyRoleIncludingInvited(userId, companyId);
+    if (
+      fallbackRole &&
+      (fallbackRole === Role.COMPANY_ADMIN ||
+        fallbackRole === Role.ADMIN ||
+        fallbackRole === Role.SUPER_ADMIN) &&
+      allowedRoles.includes(fallbackRole)
+    ) {
+      return { userId, role: fallbackRole };
+    }
+  }
   if (error === 'COMPANY_ACCESS_DENIED') {
     res.status(403).json({ error: 'COMPANY_ACCESS_DENIED' });
     return null;
@@ -119,39 +137,70 @@ const mapCampaignPlaybook = (campaign: any) => ({
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const companyId =
+    const companyIdRaw =
       (req.query.companyId as string | undefined) ||
-      (req.body?.companyId as string | undefined);
+      (req.body?.companyId as string | undefined) ||
+      (req.body?.company_id as string | undefined);
+    const companyId = typeof companyIdRaw === 'string' ? companyIdRaw.trim() : companyIdRaw;
     if (!companyId) {
       return res.status(400).json({ error: 'companyId required' });
     }
     if (!supabase) {
       return res.status(500).json({ error: 'Server configuration error' });
     }
-    const { user: requester, error: authError } = await getSupabaseUserFromRequest(req);
-    if (authError || !requester) {
+    let requester: { id: string } | null = null;
+    if (isContentArchitectSession(req)) {
+      requester = { id: 'content_architect' };
+    } else {
+      const auth = await getSupabaseUserFromRequest(req);
+      if (auth.error || !auth.user) {
+        return res.status(401).json({ error: 'UNAUTHORIZED' });
+      }
+      requester = { id: auth.user.id };
+    }
+    if (!requester) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
-    const { data: roleData, error: roleRowError } = await supabase
-      .from('user_company_roles')
-      .select('role, status')
-      .eq('user_id', requester.id)
-      .eq('company_id', companyId)
-      .maybeSingle();
-    const roleRow = roleData as { role: string; status: string } | null;
-    console.log('RBAC_CHECK', {
-      userId: requester.id,
-      companyId,
-      role: roleRow?.role ?? null,
-      status: roleRow?.status ?? null,
-    });
-    if (roleRowError) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    if (!roleRow) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    if (roleRow.status !== 'active') return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    const role = roleRow;
-    const action = req.method === 'POST' ? 'CREATE_CAMPAIGN' : 'VIEW_CAMPAIGNS';
-    if (!(await hasPermission(role.role, action))) {
-      return res.status(403).json({ error: 'NOT_ALLOWED' });
+    if (requester.id !== 'content_architect') {
+      const { data: roleData, error: roleRowError } = await supabase
+        .from('user_company_roles')
+        .select('role, status')
+        .eq('user_id', requester.id)
+        .eq('company_id', companyId)
+        .maybeSingle();
+      let roleRow = roleData as { role: string; status: string } | null;
+      if (!roleRow && !roleRowError) {
+        const fallbackRole = await getCompanyRoleIncludingInvited(requester.id, companyId);
+        if (
+          fallbackRole === Role.COMPANY_ADMIN ||
+          fallbackRole === Role.ADMIN ||
+          fallbackRole === Role.SUPER_ADMIN
+        ) {
+          roleRow = { role: fallbackRole, status: 'invited' };
+        }
+      }
+      if (roleRowError) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      if (!roleRow) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      if (roleRow.status !== 'active') {
+        const fallbackRole = await getCompanyRoleIncludingInvited(requester.id, companyId);
+        const isAdminViaInvited =
+          fallbackRole === Role.COMPANY_ADMIN ||
+          fallbackRole === Role.ADMIN ||
+          fallbackRole === Role.SUPER_ADMIN;
+        if (!isAdminViaInvited) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+        roleRow = { role: fallbackRole as string, status: roleRow.status };
+      }
+      const role = roleRow;
+      const action = req.method === 'POST' ? 'CREATE_CAMPAIGN' : 'VIEW_CAMPAIGNS';
+      if (!(await hasPermission(role.role, action))) {
+        return res.status(403).json({ error: 'NOT_ALLOWED' });
+      }
+      console.log('RBAC_CHECK', {
+        userId: requester.id,
+        companyId,
+        role: roleRow?.role ?? null,
+        status: roleRow?.status ?? null,
+      });
     }
 
     const access = await requireCompanyRole(req, res, companyId, requester.id, [
@@ -215,11 +264,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const context_scope = Array.isArray(campaignData.context_scope ?? campaignData.contextScope)
         ? (campaignData.context_scope ?? campaignData.contextScope).filter((s: unknown) => typeof s === 'string')
         : null;
-      const campaign_types = normalizeCampaignTypes(campaignData.campaign_types ?? campaignData.campaignTypes);
-      const campaign_weights = normalizeCampaignWeights(
-        campaign_types,
-        campaignData.campaign_weights ?? campaignData.campaignWeights
-      );
+      const planningContext = campaignData.planning_context ?? campaignData.planningContext;
+      const primaryFromPayload = planningContext?.primary_campaign_type ?? campaignData.primary_campaign_type;
+      const secondaryFromPayload = planningContext?.secondary_campaign_types ?? campaignData.secondary_campaign_types;
+      let campaign_types: string[];
+      let campaign_weights: Record<string, number>;
+      if (primaryFromPayload && typeof primaryFromPayload === 'string') {
+        const secondary = Array.isArray(secondaryFromPayload) ? secondaryFromPayload : [];
+        const payload = buildHierarchicalPayload(primaryFromPayload as PrimaryCampaignTypeId, secondary);
+        campaign_types = payload.campaign_types;
+        campaign_weights = payload.campaign_weights;
+      } else {
+        campaign_types = normalizeCampaignTypes(campaignData.campaign_types ?? campaignData.campaignTypes);
+        campaign_weights = normalizeCampaignWeights(
+          campaign_types,
+          campaignData.campaign_weights ?? campaignData.campaignWeights
+        );
+      }
       const weightValidation = validateCampaignWeights(campaign_types, campaign_weights);
       if (!weightValidation.valid) {
         return res.status(400).json({ error: weightValidation.error });
@@ -322,9 +383,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         snapshotPayload.context_payload = context_payload_raw;
       }
       if (typeof recommendation_id === 'string' && recommendation_id.trim()) {
+        const trimmedRecId = recommendation_id.trim();
+        snapshotPayload.source_recommendation_id = trimmedRecId;
         snapshotPayload.metadata = {
-          recommendation_id: recommendation_id.trim(),
+          ...((snapshotPayload.metadata as Record<string, unknown>) ?? {}),
+          recommendation_id: trimmedRecId,
         };
+      }
+      const source_strategic_theme = campaignData.source_strategic_theme ?? campaignData.sourceStrategicTheme;
+      if (source_strategic_theme && typeof source_strategic_theme === 'object') {
+        snapshotPayload.source_strategic_theme = source_strategic_theme;
       }
       const { error: versionError } = await (supabase as any)
         .from('campaign_versions')
@@ -446,15 +514,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         context_payload?: Record<string, unknown> | null;
         metadata?: { source_opportunity_id?: string | null };
         source_opportunity_id?: string | null;
+        source_recommendation_id?: string | null;
+        source_strategic_theme?: Record<string, unknown> | null;
       } | null;
 
       if (snapshot) {
+        const theme = snapshot.source_strategic_theme as { polished_title?: string; topic?: string; title?: string; progression_summary?: string; duration_weeks?: number; themes?: string[]; intelligence?: unknown } | null | undefined;
+        const topicFromCard =
+          theme && typeof theme === 'object'
+            ? (typeof theme.polished_title === 'string' && theme.polished_title.trim()
+                ? theme.polished_title.trim()
+                : null) ??
+              (typeof theme.topic === 'string' && theme.topic.trim() ? theme.topic.trim() : null) ??
+              (typeof theme.title === 'string' && theme.title.trim() ? theme.title.trim() : null)
+            : null;
+        // Merge source_strategic_theme into context_payload so plan API receives full theme (progression, themes, duration) for week plan generation
+        const basePayload = (snapshot.context_payload && typeof snapshot.context_payload === 'object') ? { ...snapshot.context_payload } : {};
+        const mergedPayload = snapshot.source_strategic_theme && typeof snapshot.source_strategic_theme === 'object'
+          ? { ...basePayload, ...snapshot.source_strategic_theme }
+          : basePayload;
         recommendationContext = {
           target_regions: snapshot.target_regions ?? null,
-          context_payload: snapshot.context_payload ?? null,
+          context_payload: Object.keys(mergedPayload).length > 0 ? mergedPayload : null,
           source_opportunity_id: snapshot.source_opportunity_id ?? snapshot.metadata?.source_opportunity_id ?? null,
+          ...(topicFromCard ? { topic_from_card: topicFromCard } : {}),
         };
       }
+
+      // Stored recommendation card (from Build Campaign Blueprint) — for Content Architect and campaign detail views
+      const sourceRecommendationCard =
+        snapshot?.source_recommendation_id || snapshot?.source_strategic_theme
+          ? {
+              source_recommendation_id: snapshot?.source_recommendation_id ?? null,
+              source_strategic_theme: snapshot?.source_strategic_theme ?? null,
+            }
+          : undefined;
 
       // Fallback for promoted-from-opportunity campaigns: get campaign from campaign_versions.campaign_snapshot
       if (!campaign && ownership.ok && snapshot?.campaign) {
@@ -472,6 +566,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         campaign: mapCampaignPlaybook(campaign),
         recommendationContext: recommendationContext || undefined,
         prefilledPlanning: prefilledPlanning || undefined,
+        sourceRecommendationCard: sourceRecommendationCard || undefined,
       });
     } else if (type === 'goals' && campaignId) {
       // Validate Supabase configuration
@@ -520,14 +615,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       // GetAll campaigns for company
       let campaigns, error;
+      let ids: string[] = [];
       try {
-        const { ids, error: mappingError } = await fetchCampaignIdsForCompany();
+        const mappingResult = await fetchCampaignIdsForCompany();
+        const { ids: fetchedIds, error: mappingError } = mappingResult;
         if (mappingError) {
           return res.status(500).json({
             error: 'Failed to fetch campaign mappings',
             details: mappingError.message,
           });
         }
+        ids = fetchedIds ?? [];
         if (ids.length === 0) {
           return res.status(200).json({
             success: true,
@@ -572,10 +670,48 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
 
       console.log(`API: Found ${campaigns?.length || 0} campaigns:`, campaigns?.map(c => ({ id: c.id, name: c.name, status: c.status })));
-      
+
+      // Enrich name from theme when campaign name is generic "Campaign from themes" (so dashboard shows topic of the theme)
+      let themeNameByCampaignId: Record<string, string> = {};
+      if (ids.length > 0) {
+        const { data: versionRows } = await supabase
+          .from('campaign_versions')
+          .select('campaign_id, campaign_snapshot, version')
+          .eq('company_id', companyId)
+          .in('campaign_id', ids)
+          .order('version', { ascending: false });
+        const latestByCampaign = new Map<string, { campaign_snapshot: unknown; version: number }>();
+        for (const row of versionRows || []) {
+          const cid = (row as { campaign_id: string }).campaign_id;
+          if (!cid || latestByCampaign.has(cid)) continue;
+          latestByCampaign.set(cid, {
+            campaign_snapshot: (row as { campaign_snapshot: unknown }).campaign_snapshot,
+            version: (row as { version: number }).version ?? 0,
+          });
+        }
+        for (const [cid, { campaign_snapshot }] of latestByCampaign) {
+          const snap = campaign_snapshot as { source_strategic_theme?: { polished_title?: string; topic?: string; title?: string } } | null;
+          const theme = snap?.source_strategic_theme;
+          if (theme && (theme.polished_title ?? theme.topic ?? theme.title)) {
+            const name = [theme.polished_title, theme.topic, theme.title].map((t) => (typeof t === 'string' ? t.trim() : '')).find(Boolean);
+            if (name) themeNameByCampaignId[cid] = name;
+          }
+        }
+      }
+
+      const campaignsWithThemeName = (campaigns || []).map((c: any) => {
+        const base = mapCampaignPlaybook(c);
+        const genericName = (base.name || '').trim() === 'Campaign from themes';
+        const themeName = themeNameByCampaignId[c.id];
+        if (genericName && themeName) {
+          return { ...base, name: themeName };
+        }
+        return base;
+      });
+
       return res.status(200).json({ 
         success: true,
-        campaigns: (campaigns || []).map(mapCampaignPlaybook)
+        campaigns: campaignsWithThemeName
       });
     }
   } catch (error) {

@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import {
   ALL_ROLES,
@@ -40,6 +40,9 @@ const requireCompanyRole = async (
     return null;
   }
   const user = await resolveUserContext(req);
+  if (user.userId === 'content_architect') {
+    return { userId: user.userId, role: Role.COMPANY_ADMIN };
+  }
   const platformAdmin = await isPlatformSuperAdmin(user.userId);
   if (platformAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
     return { userId: user.userId, role: Role.SUPER_ADMIN };
@@ -75,25 +78,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const companyId =
+    const rawCompanyId =
       (req.query.companyId as string | undefined) ||
       (req.query.company_id as string | undefined);
+    const companyId = typeof rawCompanyId === 'string' ? rawCompanyId.trim() : rawCompanyId;
     if (!companyId) {
       return res.status(400).json({ error: 'companyId required' });
     }
     const { role } = await getUserCompanyRole(req, companyId);
-    if (!(await hasPermission(role, 'view'))) {
+    if (!(await hasPermission(role, 'VIEW_CAMPAIGNS'))) {
       return res.status(403).json({ error: 'NOT_ALLOWED' });
     }
 
     const access = await requireCompanyRole(req, res, companyId, [
       Role.SUPER_ADMIN,
       Role.ADMIN,
+      Role.COMPANY_ADMIN,
       Role.CONTENT_MANAGER,
       Role.CONTENT_PLANNER,
       Role.CONTENT_CREATOR,
       Role.CONTENT_ENGAGER,
       Role.VIEWER,
+      Role.VIEW_ONLY, // normalized form of VIEWER / CONTENT_ENGAGER
     ]);
     if (!access) return;
     // Get all campaigns with simplified fields
@@ -144,17 +150,48 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(500).json({ error: 'Failed to fetch campaigns', details: error });
     }
 
-    // Add simple stats for each campaign
-    const campaignsWithCounts = (campaigns || []).map(mapCampaignPlaybook).map((campaign) => ({
-      ...campaign,
-      name: campaign.name || `Campaign ${campaign.id.substring(0, 8)}`, // Fallback for missing names
-      stats: {
-        goals: 0,
-        weeklyPlans: campaign.weekly_themes ? campaign.weekly_themes.length : 0,
-        dailyPlans: 0,
-        totalContent: campaign.weekly_themes ? campaign.weekly_themes.length : 0
+    // Enrich name from theme when campaign name is "Campaign from themes" (show topic of the theme)
+    let themeNameByCampaignId: Record<string, string> = {};
+    const { data: versionRows } = await supabase
+      .from('campaign_versions')
+      .select('campaign_id, campaign_snapshot, version')
+      .eq('company_id', companyId)
+      .in('campaign_id', campaignIds)
+      .order('version', { ascending: false });
+    const latestByCampaign = new Map<string, { campaign_snapshot: unknown }>();
+    for (const row of versionRows || []) {
+      const cid = (row as { campaign_id: string }).campaign_id;
+      if (!cid || latestByCampaign.has(cid)) continue;
+      latestByCampaign.set(cid, {
+        campaign_snapshot: (row as { campaign_snapshot: unknown }).campaign_snapshot,
+      });
+    }
+    for (const [cid, { campaign_snapshot }] of latestByCampaign) {
+      const snap = campaign_snapshot as { source_strategic_theme?: { polished_title?: string; topic?: string; title?: string } } | null;
+      const theme = snap?.source_strategic_theme;
+      if (theme && (theme.polished_title ?? theme.topic ?? theme.title)) {
+        const name = [theme.polished_title, theme.topic, theme.title].map((t) => (typeof t === 'string' ? t.trim() : '')).find(Boolean);
+        if (name) themeNameByCampaignId[cid] = name;
       }
-    }));
+    }
+
+    // Add simple stats for each campaign
+    const campaignsWithCounts = (campaigns || []).map(mapCampaignPlaybook).map((campaign) => {
+      let displayName = campaign.name || `Campaign ${campaign.id.substring(0, 8)}`;
+      if ((campaign.name || '').trim() === 'Campaign from themes' && themeNameByCampaignId[campaign.id]) {
+        displayName = themeNameByCampaignId[campaign.id];
+      }
+      return {
+        ...campaign,
+        name: displayName,
+        stats: {
+          goals: 0,
+          weeklyPlans: campaign.weekly_themes ? campaign.weekly_themes.length : 0,
+          dailyPlans: 0,
+          totalContent: campaign.weekly_themes ? campaign.weekly_themes.length : 0
+        }
+      };
+    });
 
     return res.status(200).json({
       success: true,

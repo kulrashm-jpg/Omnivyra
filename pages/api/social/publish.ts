@@ -1,13 +1,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isSuperAdmin } from '../../../backend/services/rbacService';
-import {
-  getScheduledPostById,
-  updatePostPublishStatus,
-} from '../../../backend/db/scheduledPostsStore';
-import { publishScheduledPost } from '../../../backend/services/socialPlatformPublisher';
-import { checkAndCompleteCampaignIfEligible } from '../../../backend/services/CampaignCompletionService';
+import { getScheduledPost } from '../../../backend/db/queries';
+import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
+import { publishNow } from '../../../backend/services/publishNowService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -30,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const post = await getScheduledPostById(post_id);
+    const post = await getScheduledPost(post_id);
     if (!post) {
       return res.status(404).json({ error: 'Scheduled post not found' });
     }
@@ -38,21 +34,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Scheduled post missing campaign_id' });
     }
 
-    const result = await publishScheduledPost(
-      {
-        post_id: post.id,
-        platform: post.platform as any,
-        content: post.content,
-        hashtags: post.hashtags || undefined,
-        seo_meta: {
-          title: (post as any).title || undefined,
-          description: post.content?.slice(0, 200) || undefined,
+    if (dry_run) {
+      return res.status(200).json({
+        status: 'DRY_RUN',
+        platform: post.platform,
+        payload_preview: {
+          platform: post.platform,
+          content: post.content?.slice(0, 200),
+          scheduled_time: post.scheduled_for,
         },
-        scheduled_time: post.scheduled_for || new Date().toISOString(),
-        campaign_id: post.campaign_id,
-      },
-      { dry_run: dry_run ?? true, admin_override: true }
-    );
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = await publishNow({
+      scheduled_post_id: post.id,
+      social_account_id: post.social_account_id,
+      user_id: post.user_id,
+    });
 
     await updatePostPublishStatus({
       post_id: post.id,
@@ -61,11 +60,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       last_error: result.status === 'PUBLISHED' ? undefined : result.message,
     });
 
-    if (result.status === 'PUBLISHED' && post.campaign_id) {
-      void checkAndCompleteCampaignIfEligible(post.campaign_id).catch(() => {});
-    }
-
-    return res.status(200).json(result);
+    return res.status(200).json({
+      status: result.status,
+      platform: post.platform,
+      external_post_id: result.external_post_id,
+      message: result.message,
+      timestamp: result.timestamp,
+    });
   } catch (error: any) {
     console.error('Error publishing scheduled post:', error);
     try {

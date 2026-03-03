@@ -3,6 +3,7 @@ import {
   getProfile,
   saveProfile,
   calculateCompanyProfileCompleteness,
+  toLimitedCompanyProfile,
 } from '../../../backend/services/companyProfileService';
 import {
   buildCompanyContext,
@@ -10,49 +11,48 @@ import {
   computeCompanyContextCompletion,
   FORCED_CONTEXT_FIELD_LABELS,
 } from '../../../backend/services/companyContextService';
+import { generateStrategicIntelligence } from '../../../backend/services/strategicIntelligenceService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getUserRole, isSuperAdmin } from '../../../backend/services/rbacService';
-
-const resolveCompanyAccess = async (
-  req: NextApiRequest,
-  res: NextApiResponse,
-  companyId?: string | null
-) => {
-  if (!companyId) {
-    res.status(400).json({ error: 'companyId required' });
-    return null;
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
-  }
-  if (await isSuperAdmin(user.id)) {
-    return { userId: user.id, role: 'SUPER_ADMIN' };
-  }
-  const { role, error: roleError } = await getUserRole(user.id, companyId);
-  if (roleError || !role) {
-    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    return null;
-  }
-  return { userId: user.id, role };
-};
+import { resolveCompanyAccess, getContentArchitectCompanyId, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
   const companyId =
     (req.query.companyId as string | undefined) ||
-    (req.body?.companyId as string | undefined);
-  const mode = (req.query.mode as string | undefined) || (req.body?.mode as string | undefined);
+    (body.companyId as string | undefined) ||
+    (body.company_id as string | undefined);
+  const mode = (req.query.mode as string | undefined) || (body.mode as string | undefined);
   const includeCompleteness = req.query.includeCompleteness !== '0' && req.query.includeCompleteness !== 'false';
 
   if (req.method === 'GET') {
     try {
       if (mode === 'list') {
+        const archCompanyId = getContentArchitectCompanyId(req);
+        if (archCompanyId) {
+          const profile = await getProfile(archCompanyId, { autoRefine: false });
+          return res.status(200).json({
+            companies: [{ company_id: archCompanyId, name: profile?.name || archCompanyId }],
+            rolesByCompany: [{ company_id: archCompanyId, role: 'CONTENT_ARCHITECT' }],
+          });
+        }
+        if (isContentArchitectSession(req)) {
+          const { data: rows } = await supabase.from('company_profiles').select('company_id, name');
+          const companies = (rows || []).map((r: { company_id: string; name?: string }) => ({
+            company_id: r.company_id,
+            name: r.name || r.company_id,
+          }));
+          const rolesByCompany = companies.map((c: { company_id: string }) => ({
+            company_id: c.company_id,
+            role: 'CONTENT_ARCHITECT',
+          }));
+          return res.status(200).json({ companies, rolesByCompany });
+        }
         const { user, error } = await getSupabaseUserFromRequest(req);
         if (error || !user) {
           return res.status(401).json({ error: 'UNAUTHORIZED' });
         }
+        // Only companies this user has an active role for — Company Admin never sees other companies
         const { data: roleRows, error: roleError } = await supabase
           .from('user_company_roles')
           .select('company_id, role, status')
@@ -61,10 +61,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (roleError) {
           return res.status(500).json({ error: 'FAILED_TO_LOAD_COMPANIES' });
         }
-        const companyIds = (roleRows || []).map((row: any) => row.company_id).filter(Boolean);
-        const rolesByCompany = (roleRows || []).map((row: any) => ({
+        const rows = roleRows || [];
+        const companyIdSet = new Set<string>(rows.map((r: { company_id?: string }) => r.company_id).filter(Boolean) as string[]);
+        const companyIds = Array.from(companyIdSet);
+        const normalizeListRole = (r: string) => (r?.toUpperCase() === 'ADMIN' ? 'COMPANY_ADMIN' : r);
+        const rolesByCompany = rows.map((row: { company_id: string; role: string }) => ({
           company_id: row.company_id,
-          role: row.role,
+          role: normalizeListRole(row.role || ''),
         }));
         const profiles = await Promise.all(
           companyIds.map(async (id) => {
@@ -86,26 +89,60 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const profile = await getProfile(companyId, { autoRefine: false });
       const resolvedProfile = profile || await saveProfile({ company_id: companyId });
-      const response: Record<string, unknown> = { profile: resolvedProfile };
+      const isCompanyAdminOnly = access.role === 'COMPANY_ADMIN';
+      const responseProfile = isCompanyAdminOnly
+        ? (toLimitedCompanyProfile(resolvedProfile) ?? resolvedProfile)
+        : resolvedProfile;
+      const response: Record<string, unknown> = { profile: responseProfile };
+
+      // Recommendation tab: backend-driven strategic intelligence (aspects + offerings by aspect). Content Architect overrides from profile.strategic_inputs.
+      const strategic = generateStrategicIntelligence(resolvedProfile ?? null);
+      const overrides = (resolvedProfile as { strategic_inputs?: { strategic_aspects?: string[]; offerings_by_aspect?: Record<string, string[]>; strategic_objectives?: string[] } | null })?.strategic_inputs;
+      const strategic_aspects =
+        Array.isArray(overrides?.strategic_aspects) && overrides.strategic_aspects.length > 0
+          ? overrides.strategic_aspects
+          : strategic.strategic_aspects;
+      const offerings_by_aspect =
+        overrides?.offerings_by_aspect && typeof overrides.offerings_by_aspect === 'object'
+          ? { ...strategic.offerings_by_aspect, ...overrides.offerings_by_aspect }
+          : strategic.offerings_by_aspect;
+      response.recommendation_strategic_config = {
+        strategic_aspects,
+        aspect_offerings_map: offerings_by_aspect,
+        offerings_by_aspect,
+        ranked_aspects: strategic.ranked_aspects,
+        aspect_anchors: strategic.aspect_anchors,
+        offering_tags: strategic.offering_tags,
+        strategic_objectives: Array.isArray(overrides?.strategic_objectives) ? overrides.strategic_objectives : undefined,
+      };
 
       let completeness = null;
       if (includeCompleteness) {
         try {
           completeness = calculateCompanyProfileCompleteness(resolvedProfile);
-          response.problem_transformation_completion = completeness?.section_scores?.problem_transformation ?? 0;
           response.overall_profile_completion = completeness?.score ?? 0;
-          response.section_scores = completeness?.section_scores ?? {};
-          response.completeness = completeness;
-          const companyContext = buildCompanyContext(resolvedProfile);
-          const { forced_context_enabled_fields } = buildForcedCompanyContext(
-            companyContext,
-            resolvedProfile?.forced_context_fields
-          );
-          response.company_context_completion = computeCompanyContextCompletion(companyContext);
-          response.forced_context_enabled_fields = forced_context_enabled_fields;
-          response.forced_context_active_labels = forced_context_enabled_fields.map(
-            (key: string) => FORCED_CONTEXT_FIELD_LABELS[key] || key.replace(/_/g, ' ')
-          );
+          if (isCompanyAdminOnly) {
+            response.problem_transformation_completion = 0;
+            response.section_scores = {};
+            response.company_context_completion = undefined;
+            response.forced_context_enabled_fields = undefined;
+            response.forced_context_active_labels = undefined;
+            response.completeness = undefined;
+          } else {
+            response.problem_transformation_completion = completeness?.section_scores?.problem_transformation ?? 0;
+            response.section_scores = completeness?.section_scores ?? {};
+            response.completeness = completeness;
+            const companyContext = buildCompanyContext(resolvedProfile);
+            const { forced_context_enabled_fields } = buildForcedCompanyContext(
+              companyContext,
+              resolvedProfile?.forced_context_fields
+            );
+            response.company_context_completion = computeCompanyContextCompletion(companyContext);
+            response.forced_context_enabled_fields = forced_context_enabled_fields;
+            response.forced_context_active_labels = forced_context_enabled_fields.map(
+              (key: string) => FORCED_CONTEXT_FIELD_LABELS[key] || key.replace(/_/g, ' ')
+            );
+          }
         } catch (e) {
           response.problem_transformation_completion = 0;
           response.overall_profile_completion = 0;
@@ -125,18 +162,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'POST') {
     try {
-      const resolvedCompanyId = companyId;
+      const resolvedCompanyId = companyId?.trim?.() || companyId;
+      if (!resolvedCompanyId) {
+        return res.status(400).json({ error: 'companyId required' });
+      }
       const access = await resolveCompanyAccess(req, res, resolvedCompanyId);
       if (!access) return;
       const payload = {
-        ...req.body,
+        ...body,
         company_id: resolvedCompanyId,
       };
       const profile = await saveProfile(payload);
-      return res.status(200).json({ profile });
+      const responseProfile =
+        access.role === 'COMPANY_ADMIN' ? toLimitedCompanyProfile(profile) ?? profile : profile;
+      return res.status(200).json({ profile: responseProfile });
     } catch (error: any) {
       console.error('Error saving company profile:', error);
-      return res.status(500).json({ error: 'Failed to save company profile' });
+      const message = error?.message && typeof error.message === 'string' ? error.message : 'Failed to save company profile';
+      return res.status(500).json({ error: message });
     }
   }
 

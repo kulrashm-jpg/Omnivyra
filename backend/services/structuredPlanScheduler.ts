@@ -113,14 +113,14 @@ function buildAllocationSchedule(
   return posts;
 }
 
-/** Map internal content type to DB schema values (platform-specific constraints) */
+/** Map internal content type to DB schema values (platform-specific constraints). Includes image, carousel, reel, short for activity alignment. */
 const FALLBACK_CONTENT_TYPE_MAP: Record<string, Record<string, string>> = {
-  linkedin: { post: 'post', video: 'video', article: 'article', poll: 'post', carousel: 'post' },
-  x: { post: 'tweet', video: 'video', article: 'tweet', poll: 'tweet', carousel: 'tweet' },
-  instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', poll: 'feed_post', carousel: 'feed_post' },
-  youtube: { post: 'video', video: 'video', article: 'video', poll: 'video', carousel: 'short' },
-  facebook: { post: 'post', video: 'video', article: 'post', poll: 'post', carousel: 'post' },
-  blog: { post: 'post', video: 'post', article: 'post', poll: 'post', carousel: 'post' },
+  linkedin: { post: 'post', video: 'video', article: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post' },
+  x: { post: 'tweet', video: 'video', article: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'tweet' },
+  instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post' },
+  youtube: { post: 'video', video: 'video', article: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video' },
+  facebook: { post: 'post', video: 'video', article: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post' },
+  blog: { post: 'post', video: 'post', article: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'post', short: 'post', story: 'post', thread: 'post' },
 };
 
 function extractTypeMapFromPlatformRules(bundle: any): Record<string, string> | null {
@@ -146,15 +146,20 @@ function toDbContentType(
   return fallback[normalizedType] || 'post';
 }
 
-/** Assign content_type from content_type_mix, rotating deterministically */
+/** Assign content_type from content_type_mix, rotating deterministically. Aligns to planning choices (image, carousel, video, reel, short, post). */
 function pickContentType(contentTypeMix: string[], index: number): string {
   if (!contentTypeMix?.length) return 'post';
   const normalized = contentTypeMix.map((s) => {
-    const lower = s.toLowerCase();
+    const lower = String(s ?? '').toLowerCase().trim();
+    if (lower.includes('image')) return 'image';
+    if (lower.includes('carousel')) return 'carousel';
+    if (lower.includes('reel')) return 'reel';
+    if (lower.includes('short')) return 'short';
     if (lower.includes('video')) return 'video';
     if (lower.includes('article') || lower.includes('blog')) return 'article';
     if (lower.includes('poll')) return 'poll';
-    if (lower.includes('carousel')) return 'carousel';
+    if (lower.includes('story')) return 'story';
+    if (lower.includes('thread')) return 'thread';
     return 'post';
   });
   return normalized[index % normalized.length] || 'post';

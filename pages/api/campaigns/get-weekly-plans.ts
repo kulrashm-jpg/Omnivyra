@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -8,21 +9,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { campaignId, raw } = req.query;
-
-    if (!campaignId) {
-      return res.status(400).json({ error: 'Campaign ID is required' });
-    }
+    const { campaignId: campaignIdQuery, raw } = req.query;
+    const campaignId = typeof campaignIdQuery === 'string' ? campaignIdQuery : Array.isArray(campaignIdQuery) ? campaignIdQuery[0] : '';
+    const access = await requireCampaignAccess(req, res, campaignId);
+    if (!access) return;
 
     // Blueprint (twelve_week_plan) is source of truth for committed plans — check first
-    const blueprint = await getUnifiedCampaignBlueprint(campaignId as string);
+    const blueprint = await getUnifiedCampaignBlueprint(access.campaignId);
     const rawFlag = Array.isArray(raw) ? raw[0] : raw;
     const wantsRawBlueprint =
       rawFlag === '1' || rawFlag === 'true' || rawFlag === 'yes' || rawFlag === 'blueprint';
     if (wantsRawBlueprint) {
       return res.status(200).json({
         source: blueprint?.weeks?.length ? 'unified_blueprint' : 'legacy_or_empty',
-        campaignId,
+        campaignId: access.campaignId,
         blueprint: blueprint ?? null,
       });
     }
@@ -48,6 +48,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         posting_execution_map: Array.isArray((w as any).posting_execution_map) ? (w as any).posting_execution_map : [],
         resolved_postings: Array.isArray((w as any).resolved_postings) ? (w as any).resolved_postings : [],
         week_extras: (w as any).week_extras ?? null,
+        distribution_strategy: (w as any).distribution_strategy ?? null,
+        distribution_reason: (w as any).distribution_reason ?? null,
+        planning_adjustment_reason: (w as any).planning_adjustment_reason ?? null,
+        planning_adjustments_summary: (w as any).planning_adjustments_summary ?? null,
+        momentum_adjustments: (w as any).momentum_adjustments ?? null,
       }));
     }
     // Fallback to legacy tables when no committed blueprint
@@ -55,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { data: plans, error: plansError } = await supabase
         .from('weekly_content_plans')
         .select('*')
-        .eq('campaign_id', campaignId)
+        .eq('campaign_id', access.campaignId)
         .order('week_number');
       if (!plansError && plans && plans.length > 0) {
         source = plans;
@@ -63,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const { data: refinements, error: refError } = await supabase
           .from('weekly_content_refinements')
           .select('*')
-          .eq('campaign_id', campaignId)
+          .eq('campaign_id', access.campaignId)
           .order('week_number');
         if (!refError && refinements && refinements.length > 0) {
           source = refinements;
@@ -96,6 +101,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       posting_execution_map: Array.isArray((plan as any).posting_execution_map) ? (plan as any).posting_execution_map : [],
       resolved_postings: Array.isArray((plan as any).resolved_postings) ? (plan as any).resolved_postings : [],
       week_extras: (plan as any).week_extras ?? null,
+      distribution_strategy: (plan as any).distribution_strategy ?? null,
+      distribution_reason: (plan as any).distribution_reason ?? null,
+      planning_adjustment_reason: (plan as any).planning_adjustment_reason ?? null,
+      planning_adjustments_summary: (plan as any).planning_adjustments_summary ?? null,
+      momentum_adjustments: (plan as any).momentum_adjustments ?? null,
     }));
 
     try {

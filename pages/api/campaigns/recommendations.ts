@@ -10,6 +10,8 @@ import {
   fromRecommendationPlan,
   blueprintWeekToLegacyWeekPlan,
 } from '../../../backend/services/campaignBlueprintAdapter';
+import { validateCapacityAndFrequency } from '../../../backend/services/capacityFrequencyValidationGateway';
+import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -42,6 +44,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const derivedWeeklyPlan = blueprint.weeks.map((w) => blueprintWeekToLegacyWeekPlan(w));
 
       if (blueprint.weeks.length > 0) {
+        const planningInputs = await getCampaignPlanningInputs(campaignId ?? '');
+        const validationResult = validateCapacityAndFrequency({
+          weekly_capacity: planningInputs?.weekly_capacity,
+          available_content: planningInputs?.available_content,
+          exclusive_campaigns: planningInputs?.exclusive_campaigns,
+          cross_platform_sharing: (planningInputs as any)?.cross_platform_sharing,
+          blueprint,
+        });
+        if (
+          validationResult &&
+          validationResult.status === 'invalid' &&
+          !validationResult.override_confirmed
+        ) {
+          return res.status(400).json({
+            error: 'Capacity validation failed',
+            validation_result: validationResult,
+            result,
+          });
+        }
         await saveCampaignBlueprintFromRecommendation({
           campaignId: campaignId ?? '',
           companyId,

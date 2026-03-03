@@ -19,6 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const campaignId = (req.query.campaignId as string)?.trim?.();
+  const companyIdQuery = (req.query.companyId as string)?.trim?.() || null;
   if (!campaignId) {
     return res.status(400).json({ error: 'campaignId is required' });
   }
@@ -34,14 +35,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       getBlueprintBlockReason(campaignId),
     ]);
 
-    const campaign = (campaignResult as { data?: unknown })?.data;
-    if (!campaign) {
-      return res.status(404).json({ error: 'Campaign not found' });
+    const campaign = (campaignResult as { data?: unknown })?.data as Record<string, unknown> | null;
+    const companyId = cvResult?.company_id ?? companyIdQuery ?? null;
+
+    if (!companyId) {
+      return res.status(404).json({ error: 'Campaign not found (no company mapping; include companyId query param if known)' });
     }
 
-    const companyId = cvResult?.company_id ?? null;
-    if (!companyId) {
-      return res.status(404).json({ error: 'Campaign not found' });
+    // Campaign may exist only in campaign_versions (e.g. promoted-from-opportunity); return minimal governance so UI does not 404
+    if (!campaign) {
+      const { data: latestEvent } = await supabase
+        .from('campaign_governance_events')
+        .select('id, event_type, event_status, metadata, created_at')
+        .eq('campaign_id', campaignId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const metadata = (latestEvent?.metadata as Record<string, any>) ?? {};
+      const tradeOffFromMetadata = metadata.trade_off_options as any[] | undefined;
+      const snapshot = cvResult?.campaign_snapshot as { campaign?: { duration_weeks?: number } } | undefined;
+      const durationWeeks = snapshot?.campaign?.duration_weeks ?? null;
+      return res.status(200).json({
+        campaignId,
+        companyId,
+        governance: {
+          priorityLevel: 'NORMAL',
+          isProtected: false,
+          blueprintStatus: 'ACTIVE',
+          durationWeeks,
+          durationLocked: false,
+          lastPreemptedAt: null,
+          cooldownActive: false,
+          blueprintImmutable: blockReason === 'IMMUTABLE',
+          blueprintFrozen: blockReason === 'FROZEN',
+          autoOptimizeEnabled: false,
+        },
+        latestGovernanceEvent: latestEvent
+          ? {
+              eventType: latestEvent.event_type,
+              eventStatus: latestEvent.event_status,
+              createdAt: latestEvent.created_at,
+              metadata,
+            }
+          : null,
+        trade_off_options: Array.isArray(tradeOffFromMetadata) ? tradeOffFromMetadata : undefined,
+      });
     }
 
     const lastPreemptedAt = (campaign as any).last_preempted_at

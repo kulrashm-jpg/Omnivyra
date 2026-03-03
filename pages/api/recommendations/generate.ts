@@ -7,6 +7,7 @@ import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
+import { getStrategyHistoryForCompany } from '../../../backend/services/strategyHistoryService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -25,6 +26,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       chat,
       selected_api_ids,
       manual_context,
+      strategicPayload,
     } = req.body || {};
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
@@ -69,6 +71,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const resolvedSelection = Array.isArray(selected_api_ids) ? selected_api_ids : defaultApiIds;
     const manualContext =
       manual_context && typeof manual_context === 'object' ? manual_context : null;
+    let strategyMemory: Awaited<ReturnType<typeof getStrategyHistoryForCompany>> | null = null;
+    try {
+      strategyMemory = await getStrategyHistoryForCompany(companyId);
+      if (strategyMemory.campaigns_count === 0) strategyMemory = null;
+    } catch {
+      strategyMemory = null;
+    }
     const result = await generateRecommendations(
       {
         companyId,
@@ -80,6 +89,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         selectedApiIds: resolvedSelection,
         regions: regions.length > 0 ? regions : undefined,
         enrichmentEnabled: enrichmentEnabled !== false,
+        strategicPayload:
+          strategicPayload && typeof strategicPayload === 'object' ? strategicPayload : undefined,
+        strategyMemory: strategyMemory ?? undefined,
       },
       {
         onContext: chatMode
@@ -314,12 +326,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     }
 
-    const resultWithSnapshots = snapshotHashByTopic && Object.keys(snapshotHashByTopic).length > 0
+    const hasSnapshotData =
+      (snapshotHashByTopic && Object.keys(snapshotHashByTopic).length > 0) ||
+      (snapshotRowsByTopic && Object.keys(snapshotRowsByTopic).length > 0);
+    const resultWithSnapshots = hasSnapshotData
       ? {
           ...result,
           trends_used: result.trends_used.map((trend: any) => ({
             ...trend,
             snapshot_hash: snapshotHashByTopic[trend.topic] || undefined,
+            id: snapshotRowsByTopic[trend.topic]?.id ?? undefined,
           })),
         }
       : result;

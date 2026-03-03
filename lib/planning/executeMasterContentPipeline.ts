@@ -1,0 +1,165 @@
+/**
+ * Execution trigger: calls existing backend content API (generate_master then generate_variants).
+ * No new AI logic; backend contentGenerationPipeline remains the only generation engine.
+ */
+
+import type { MasterContentDocument } from './masterContentDocument';
+
+type ActivityLike = {
+  id?: string;
+  platform?: string;
+  contentType?: string;
+  topic?: string;
+  title?: string;
+  description?: string;
+  [k: string]: unknown;
+};
+
+type ScheduleLike = { id?: string; platform: string; contentType?: string; [k: string]: unknown };
+
+export type ExecuteMasterContentPipelineParams = {
+  campaignId: string;
+  executionId: string;
+  masterDocument: MasterContentDocument | null;
+  dailyExecutionItem: Record<string, unknown> | null;
+  schedules: ScheduleLike[];
+  activity?: ActivityLike | null;
+};
+
+export type ExecuteMasterContentPipelineResult = {
+  master_content: Record<string, unknown> | null;
+  platform_variants: Array<Record<string, unknown>>;
+};
+
+const CONTENT_API = '/api/activity-workspace/content';
+
+function buildActivityFromItem(
+  dailyExecutionItem: Record<string, unknown> | null,
+  executionId: string
+): ActivityLike {
+  const item = dailyExecutionItem || {};
+  return {
+    id: String((item as any)?.execution_id || executionId).trim(),
+    platform: String((item as any)?.platform || 'linkedin').trim().toLowerCase(),
+    contentType: String((item as any)?.content_type || (item as any)?.contentType || 'post').trim().toLowerCase(),
+    topic: String((item as any)?.topic || (item as any)?.title || '').trim(),
+    title: String((item as any)?.title || (item as any)?.topic || '').trim(),
+    description: String((item as any)?.content || (item as any)?.description || '').trim(),
+  };
+}
+
+/**
+ * Runs the real backend pipeline: generate_master then generate_variants.
+ * Uses existing /api/activity-workspace/content; no new AI logic.
+ */
+export async function executeMasterContentPipeline({
+  campaignId,
+  executionId,
+  masterDocument,
+  dailyExecutionItem,
+  schedules,
+  activity: activityOverride,
+}: ExecuteMasterContentPipelineParams): Promise<ExecuteMasterContentPipelineResult> {
+  const activity = activityOverride ?? buildActivityFromItem(dailyExecutionItem, executionId);
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[ExecutionPipelineIntegration]', {
+      executionId,
+      platforms: masterDocument?.platforms ?? [],
+      campaignId,
+    });
+  }
+
+  const resMaster = await fetch(CONTENT_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'generate_master',
+      activity,
+      schedules,
+      dailyExecutionItem: dailyExecutionItem || {},
+    }),
+  });
+
+  if (!resMaster.ok) {
+    const err = await resMaster.json().catch(() => ({}));
+    throw new Error(String(err?.message || err?.error || 'Failed to execute content pipeline (generate_master)'));
+  }
+
+  const dataMaster = await resMaster.json().catch(() => ({}));
+  const master_content =
+    (dataMaster?.master_content && typeof dataMaster.master_content === 'object')
+      ? dataMaster.master_content
+      : (dataMaster?.masterContent && typeof dataMaster.masterContent === 'object')
+        ? dataMaster.masterContent
+        : null;
+
+  const itemWithMaster = {
+    ...(dailyExecutionItem || {}),
+    master_content,
+    platform_variants: (dailyExecutionItem as any)?.platform_variants,
+  };
+
+  const resVariants = await fetch(CONTENT_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'generate_variants',
+      activity,
+      schedules: schedules.length > 0 ? schedules : (masterDocument?.platforms ?? []).map((p) => ({ platform: p, contentType: 'post' })),
+      dailyExecutionItem: itemWithMaster,
+    }),
+  });
+
+  if (!resVariants.ok) {
+    const err = await resVariants.json().catch(() => ({}));
+    throw new Error(String(err?.message || err?.error || 'Failed to execute content pipeline (generate_variants)'));
+  }
+
+  const dataVariants = await resVariants.json().catch(() => ({}));
+  const platform_variants = Array.isArray(dataVariants?.platform_variants) ? dataVariants.platform_variants : [];
+
+  return { master_content, platform_variants };
+}
+
+export type ExecuteVariantImprovementParams = {
+  campaignId?: string;
+  executionId: string;
+  platform: string;
+  improvementType: 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
+  variant: Record<string, unknown>;
+  dailyExecutionItem?: Record<string, unknown> | null;
+};
+
+/**
+ * Calls backend improve_variant action for targeted single-variant improvement.
+ */
+export async function executeVariantImprovement(
+  payload: ExecuteVariantImprovementParams
+): Promise<{ improved_variant: Record<string, unknown> }> {
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[VariantImprovement]', { platform: payload.platform, action: payload.improvementType });
+  }
+  const res = await fetch(CONTENT_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'improve_variant',
+      improvementType: payload.improvementType,
+      platform: payload.platform,
+      executionId: payload.executionId,
+      execution_id: payload.executionId,
+      variant: payload.variant,
+      dailyExecutionItem: payload.dailyExecutionItem ?? {},
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(String(err?.message || err?.error || 'Variant improvement failed'));
+  }
+  const data = await res.json().catch(() => ({}));
+  const improved_variant = data?.improved_variant && typeof data.improved_variant === 'object'
+    ? data.improved_variant
+    : payload.variant;
+  return { improved_variant };
+}

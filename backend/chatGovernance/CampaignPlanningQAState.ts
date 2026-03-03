@@ -26,6 +26,7 @@ const USER_CONFIRMATIONS = new Set([
   'yes', 'sure', 'ok', 'okay', 'please', 'yeah', 'yep',
   'create it', 'do it', 'go for it', 'go ahead', 'create my plan',
   'generate plan', "i'm ready", "that's all", 'create campaign', 'build the plan',
+  'continue', // Use last stored info (e.g. duration) and generate — do not ask for duration again
 ]);
 
 function normalizeForMatch(s: string): string {
@@ -43,6 +44,8 @@ function isUserConfirmation(userMessage: string): boolean {
   // Accept natural confirmation variants (e.g. "yes, proceed with 4 weeks", "use 8 weeks instead")
   if (/^(yes|sure|ok|okay|please|yeah|yep)\b/.test(n)) return true;
   if (/\b(proceed with|use)\s+\d{1,2}\s*weeks?\b/.test(n)) return true;
+  // Bare duration after "create your week plan now?" (e.g. "4 weeks", "8 weeks") = confirm with that duration
+  if (/^\s*\d{1,2}\s*weeks?\s*$/.test(n)) return true;
   if (/\bcreate\b.*\bplan\b/.test(n)) return true;
   return false;
 }
@@ -127,6 +130,10 @@ export function computeCampaignPlanningQAState(params: {
     if (!text) return false;
     if (isDeferral(text)) return true;
     switch (key) {
+      case 'target_audience':
+        return text.length >= 2;
+      case 'key_messages':
+        return text.length >= 2;
       case 'campaign_duration':
         return parseDurationWeeks(text) != null;
       case 'platforms':
@@ -183,33 +190,40 @@ export function computeCampaignPlanningQAState(params: {
   const detectAskedKey = (aiMessage: string): string | null => {
     const n = normalizeForMatch(aiMessage);
     if (!n) return null;
-    if (n.includes('target audience')) return 'target_audience';
-    if (n.includes('which professionals') && n.includes('mainly speaking')) return 'audience_professional_segment';
-    if (n.includes('how do you want your content to sound')) return 'communication_style';
-    if (n.includes('after reading your content') && n.includes('what should people do')) return 'action_expectation';
-    if (n.includes('short easy reads') || (n.includes('detailed insights') && n.includes('short'))) return 'content_depth';
+    // Prefer key_messages / pain points before generic "target audience" so "What are your key messages..."
+    // never matches target_audience (e.g. when "target" appears in "to address" or in required missing list).
+    if (n.includes('key messages') || n.includes('pain points') || n.includes('one thing you want people to remember')) return 'key_messages';
+    if (n.includes('who is your primary target audience') || n.includes('primary target audience') || n.includes('who will see your content') || n.includes('target audience')) return 'target_audience';
+    if ((n.includes('which professionals') && n.includes('mainly speaking')) || n.includes('which group fits')) return 'audience_professional_segment';
+    if (n.includes('how do you want your content to sound') || n.includes('how should your posts sound')) return 'communication_style';
+    if ((n.includes('after reading your content') && n.includes('what should people do')) || n.includes('what do you want people to do after')) return 'action_expectation';
+    if (n.includes('short easy reads') || (n.includes('detailed insights') && n.includes('short')) || n.includes('short reads or longer') || n.includes('longer pieces')) return 'content_depth';
     if (n.includes('connected series') && n.includes('mostly independent')) return 'topic_continuity';
+    if (n.includes('ongoing story') || n.includes('different topics each time')) return 'topic_continuity';
     if (n.includes('existing content') || n.includes('do you have any existing content')) return 'available_content';
     if (n.includes('which category') || n.includes('which specific week') || n.includes('should it serve')) return 'available_content_allocation';
-    if ((n.includes('start') && n.includes('campaign')) || n.includes('yy-mm-dd') || (n.includes('start') && n.includes('date'))) return 'tentative_start';
-    if (n.includes('campaign types')) return 'campaign_types';
+    if ((n.includes('start') && n.includes('campaign')) || n.includes('yy-mm-dd') || (n.includes('start') && n.includes('date')) || n.includes('when do you want to start')) return 'tentative_start';
+    if (n.includes('campaign types') || n.includes("what's the main goal")) return 'campaign_types';
     if (
       n.includes('produce per week') ||
       n.includes('produce each week') ||
       n.includes('production capacity') ||
       n.includes('weekly production capacity') ||
       n.includes('content capacity') ||
-      n.includes('how much content')
+      n.includes('how much content') ||
+      n.includes('how will you create') ||
+      n.includes('how many pieces per week')
     ) {
       return 'content_capacity';
     }
-    if ((n.includes('how many') && n.includes('week')) || n.includes('campaign run') || n.includes('duration')) return 'campaign_duration';
-    if (n.includes('which platforms') || n.includes('platforms will you focus')) return 'platforms';
-    if (n.includes('platform-exclusive campaigns')) return 'exclusive_campaigns';
+    if ((n.includes('how many') && n.includes('week')) || n.includes('campaign run') || n.includes('duration') || n.includes('how many weeks')) return 'campaign_duration';
+    if (n.includes('which platforms') || n.includes('platforms will you focus') || n.includes('where will you post')) return 'platforms';
+    if (n.includes('platform-exclusive campaigns') || n.includes('only for one platform') || n.includes('anything only for one platform')) return 'exclusive_campaigns';
     if (n.includes('content types') && n.includes('count per week')) return 'platform_content_requests';
-    if (n.includes('content types') && n.includes('platform')) return 'platform_content_types';
-    if (n.includes('key messages') || n.includes('pain points')) return 'key_messages';
-    if (n.includes('success metrics') || (n.includes('metrics') && n.includes('track'))) return 'success_metrics';
+    if (n.includes('how many of each type per week')) return 'platform_content_requests';
+    if (n.includes('set how often') || n.includes('same topic across platforms') || n.includes('publish same day on all platforms') || n.includes('let AI decide')) return 'platform_content_requests';
+    if ((n.includes('content types') && n.includes('platform')) || n.includes('what will you post on each') || n.includes('which content types will you use') || n.includes('for each platform you selected')) return 'platform_content_types';
+    if (n.includes('success metrics') || (n.includes('metrics') && n.includes('track')) || n.includes('like to see improve')) return 'success_metrics';
     return null;
   };
 
@@ -249,8 +263,20 @@ export function computeCampaignPlanningQAState(params: {
     }
   }
 
+  // Safeguard: if the very last exchange (last AI, last user) is a question we're about to re-ask,
+  // treat the user's reply as the answer so we don't repeat the question (handles edge cases in pairing).
   const lastAi = history.filter((m) => m.type === 'ai').pop()?.message ?? '';
   const lastUser = history.filter((m) => m.type === 'user').pop()?.message ?? '';
+  const lastAskedKey = lastAi ? detectAskedKey(lastAi) : null;
+  if (lastAskedKey && lastUser.trim().length > 0 && requiredSet.has(lastAskedKey) && !answeredKeys.has(lastAskedKey)) {
+    if (validateAnswerForKey(lastAskedKey, lastUser)) {
+      answeredKeys.add(lastAskedKey);
+      if (lastAskedKey === 'available_content') {
+        hasExistingContent = parseYesNo(lastUser);
+      }
+      invalidReasonByKey.delete(lastAskedKey);
+    }
+  }
 
   const lastWasConfirmation = isConfirmationPrompt(lastAi);
   const explicitGenerateRequest = isUserConfirmation(lastUser);
@@ -288,6 +314,16 @@ export function computeCampaignPlanningQAState(params: {
   // even if the immediately previous AI turn was not the confirmation prompt.
   const userConfirmed = (lastWasConfirmation && explicitGenerateRequest) || (allRequiredAnswered && explicitGenerateRequest);
   const readyToGenerate = allRequiredAnswered && userConfirmed;
+
+  if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'test') {
+    console.info('[campaign-planning-qa]', {
+      answeredKeys: Array.from(answeredKeys),
+      nextQuestionKey: nextQuestion?.key ?? null,
+      missingRequiredKeys,
+      lastAskedKey,
+      readyToGenerate,
+    });
+  }
 
   return {
     answeredKeys: Array.from(answeredKeys),

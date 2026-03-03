@@ -45,6 +45,8 @@ type DailyPlanItem = {
   };
   ctaType: string;
   kpiTarget: string;
+  /** Stable id for one logical content piece (optional, backward compatible). */
+  masterContentId?: string;
 };
 
 type DailyObjectiveRefinement = {
@@ -88,6 +90,118 @@ function pickContentType(contentTypeMix: string[] | undefined, index: number): s
 
 function buildTopicReference(weekNumber: number, topicIndex: number): string {
   return `w${weekNumber}.t${topicIndex + 1}`;
+}
+
+/** First-class creator card for one daily activity. Additive; all fields optional for backward compatibility. */
+export type CreatorCard = {
+  theme?: string;
+  objective?: string;
+  target_audience?: string;
+  summary?: string;
+  keywords?: string[];
+  hashtags?: string[];
+  intent?: Record<string, unknown>;
+  platform_notes?: string[];
+  instructions_for_creator?: string;
+};
+
+/**
+ * Build a creator card from week blueprint, daily item, and enriched output.
+ * Used at daily generation time only; does not alter planning logic.
+ * Missing fields degrade gracefully (empty string or empty array).
+ */
+function buildCreatorCard(
+  week: any,
+  item: DailyPlanItem,
+  enrichedItem: any
+): CreatorCard {
+  const capsule = (week?.weeklyContextCapsule ?? week?.weekly_context_capsule) as any;
+  const theme =
+    (typeof week?.phase_label === 'string' && week.phase_label.trim()) ||
+    (typeof week?.primary_objective === 'string' && week.primary_objective.trim()) ||
+    (typeof capsule?.campaignTheme === 'string' && capsule.campaignTheme.trim()) ||
+    (typeof week?.theme === 'string' && week.theme.trim()) ||
+    '';
+
+  const intent = (enrichedItem?.intent ?? item?.writerBrief) as Record<string, unknown> | undefined;
+  const objective =
+    (typeof item?.dailyObjective === 'string' && item.dailyObjective.trim()) ||
+    (typeof enrichedItem?.objective === 'string' && enrichedItem.objective.trim()) ||
+    (typeof intent?.objective === 'string' && (intent.objective as string).trim()) ||
+    '';
+
+  const target_audience =
+    (typeof item?.whoAreWeWritingFor === 'string' && item.whoAreWeWritingFor.trim()) ||
+    (typeof enrichedItem?.target_audience === 'string' && enrichedItem.target_audience.trim()) ||
+    (typeof intent?.target_audience === 'string' && (intent.target_audience as string).trim()) ||
+    (typeof capsule?.audienceProfile === 'string' && capsule.audienceProfile.trim()) ||
+    '';
+
+  const summary =
+    (typeof item?.briefSummary === 'string' && item.briefSummary.trim()) ||
+    (typeof intent?.brief_summary === 'string' && (intent.brief_summary as string).trim()) ||
+    (typeof item?.writingIntent === 'string' && item.writingIntent.trim()) ||
+    '';
+
+  const topicStr = typeof item?.topicTitle === 'string' ? item.topicTitle.trim() : '';
+  const keywords: string[] =
+    topicStr.length > 0
+      ? topicStr
+          .split(/\s+/)
+          .map((w) => w.replace(/[^a-z0-9#]/gi, ''))
+          .filter((w) => w.length >= 2)
+          .slice(0, 12)
+      : [];
+
+  const hashtags: string[] = Array.isArray(enrichedItem?.hashtags)
+    ? enrichedItem.hashtags.filter((h: unknown) => typeof h === 'string').slice(0, 20)
+    : Array.isArray((week?.week_extras as any)?.hashtag_suggestions)
+      ? ((week.week_extras as any).hashtag_suggestions as string[]).filter(Boolean).slice(0, 20)
+      : [];
+
+  const intentShape: Record<string, unknown> = intent && typeof intent === 'object'
+    ? {
+        objective: intent.objective ?? '',
+        target_audience: intent.target_audience ?? '',
+        brief_summary: intent.brief_summary ?? '',
+        cta_type: intent.cta_type ?? item?.ctaType ?? '',
+        strategic_role: intent.strategic_role ?? '',
+        pain_point: intent.pain_point ?? '',
+        outcome_promise: intent.outcome_promise ?? '',
+        narrative_style: item?.narrativeStyle ?? intent.writing_angle ?? '',
+      }
+    : {};
+
+  const platform_notes: string[] = Array.isArray(enrichedItem?.validation_notes)
+    ? [...enrichedItem.validation_notes]
+    : typeof enrichedItem?.format_requirements === 'object' && enrichedItem.format_requirements != null
+      ? [JSON.stringify(enrichedItem.format_requirements)]
+      : [];
+
+  const instructionsParts: string[] = [];
+  if (objective) instructionsParts.push(`Objective: ${objective}`);
+  if (summary) instructionsParts.push(`Summary: ${summary}`);
+  if (target_audience) instructionsParts.push(`Target audience: ${target_audience}`);
+  if (item?.desiredAction || intent?.cta_type) {
+    instructionsParts.push(`Desired action: ${String(item?.desiredAction || intent?.cta_type || '').trim() || '—'}`);
+  }
+  if (item?.narrativeStyle) {
+    instructionsParts.push(`Tone: ${item.narrativeStyle}`);
+  }
+  const instructions_for_creator =
+    instructionsParts.length > 0 ? instructionsParts.join('\n') : '';
+
+  return {
+    theme: theme || undefined,
+    objective: objective || undefined,
+    target_audience: target_audience || undefined,
+    summary: summary || undefined,
+    keywords: keywords.length > 0 ? keywords : undefined,
+    hashtags: hashtags.length > 0 ? hashtags : undefined,
+    intent: Object.keys(intentShape).length > 0 ? intentShape : undefined,
+    platform_notes: platform_notes.length > 0 ? platform_notes : undefined,
+    instructions_for_creator: instructions_for_creator.trim() || undefined,
+  };
 }
 
 function buildDayTopics(topicOrder: string[], topicWeights: number[]): string[][] {
@@ -338,7 +452,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const autoRebalance = Boolean(auto_rebalance);
     const autoOptimizeDistribution = Boolean(auto_optimize_distribution);
     const enableCampaignWaves = Boolean(enable_campaign_waves);
-    const distributionMode = distribution_mode === 'same_day_per_topic' ? 'same_day_per_topic' : 'staggered';
     const weekNumber = Number(week);
     if (!campaignId || !Number.isFinite(weekNumber) || weekNumber < 1) {
       return res.status(400).json({ error: 'campaignId and week (week number) are required' });
@@ -362,6 +475,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!weekBlueprint) {
       return res.status(404).json({ error: `Week ${weekNumber} not found in blueprint` });
     }
+
+    const distributionStrategy = (weekBlueprint as any).distribution_strategy as string | undefined;
+    const fromStrategy =
+      distributionStrategy === 'QUICK_LAUNCH'
+        ? { campaignMode: 'QUICK_LAUNCH' as const, distributionMode: 'same_day_per_topic' as const }
+        : distributionStrategy === 'STAGGERED'
+          ? { campaignMode: 'STRATEGIC' as const, distributionMode: 'staggered' as const }
+          : null;
+    const distributionMode =
+      fromStrategy?.distributionMode ??
+      (distribution_mode === 'same_day_per_topic' ? 'same_day_per_topic' : 'staggered');
+    const campaignModeForAI = fromStrategy?.campaignMode ?? 'STRATEGIC';
 
     const topicOrderRaw: string[] = Array.isArray(weekBlueprint.topics)
       ? weekBlueprint.topics.map((t) => String((t as any)?.topicTitle ?? '').trim()).filter(Boolean)
@@ -462,6 +587,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
       .filter((it) => it.content_type && it.selected_platforms.length > 0 && Number(it.count_per_week) > 0);
     const useExecutionItems = executionItems.length > 0;
+    const isAiPath = !useExecutionItems;
 
     if (useExecutionItems) {
       for (const it of executionItems) {
@@ -494,12 +620,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         campaignName: (campaign as any)?.name ?? undefined,
         campaignStartDate: campaign?.start_date ?? undefined,
         targetRegion: null,
-        campaignMode: 'STRATEGIC',
+        campaignMode: campaignModeForAI,
         contentTypesAvailable: (weekBlueprint as any)?.content_type_mix ?? undefined,
         distributionMode,
       });
       let globalProgressionIndex = 1;
-      for (const slot of aiSlots) {
+      for (let slotIndex = 0; slotIndex < aiSlots.length; slotIndex += 1) {
+        const slot = aiSlots[slotIndex]!;
         const dayIndex = Math.min(7, Math.max(1, slot.day_index));
         const topicTitle = slot.short_topic?.trim() || slot.full_topic?.trim() || 'Daily topic';
         const contentGuidance = deriveContentGuidance(null);
@@ -510,6 +637,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           brief_summary: slot.full_topic,
           writing_angle: slot.reasoning,
         };
+        const syntheticMasterContentId = `${campaignId}_w${weekNumber}_ai_${slotIndex}`;
         const item: DailyPlanItem = {
           dayIndex,
           weekNumber,
@@ -530,6 +658,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           contentGuidance,
           ctaType: 'Learn more',
           kpiTarget: String((weekBlueprint as any)?.weekly_kpi_focus ?? 'Reach growth'),
+          masterContentId: syntheticMasterContentId,
         };
         dailyItemsDeterministic.push(item);
         const existing = dayTopics[dayIndex - 1] ?? [];
@@ -538,10 +667,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         globalProgressionIndex += 1;
       }
     } else {
+      const isStaggered = distributionStrategy === 'STAGGERED';
       for (const exec of executionItems) {
         const dayIndices = spreadEvenlyAcrossDays(exec.count_per_week, 7);
+        const platforms = exec.selected_platforms.map(normalizePlatformKey).filter(Boolean);
         for (let k = 0; k < dayIndices.length; k += 1) {
-          const dayIndex = dayIndices[k]!;
+          const baseDayIndex = dayIndices[k]!;
           const slot = (exec.topic_slots || [])[k];
           if (!slot || !slot.intent) {
             throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
@@ -552,8 +683,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           const topicTitle = rawTopic;
           const topicKey = normalizeTopicKey(topicTitle);
+          const briefForSlot = briefByKey.get(topicKey) ?? undefined;
           const topicIndex = topicIndexByKey.get(topicKey) ?? 0;
           const execIntent = slot.intent;
+
+          const narrativeFallback =
+            (briefForSlot as any)?.narrativeStyle
+            ?? (weekBlueprint as any)?.weeklyContextCapsule?.toneGuidance
+            ?? 'clear, practical, outcome-driven';
 
           const dailyObjective = execIntent.objective;
           const who = execIntent.target_audience;
@@ -568,56 +705,113 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (typeof ctaType !== 'string' || !ctaType) throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
           if (!Number.isFinite(globalProgressionIndex) || globalProgressionIndex < 1) throw new Error('DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
 
-          const contentGuidance = deriveContentGuidance(null);
-          const item: DailyPlanItem = {
-            dayIndex,
-            weekNumber,
-            topicTitle,
-            topicReference: buildTopicReference(weekNumber, topicIndex),
-            globalProgressionIndex,
-            dailyObjective,
-            platformTargets: exec.selected_platforms.map(normalizePlatformKey).filter(Boolean),
-            contentType: String(exec.content_type || 'post').toLowerCase(),
-            briefSummary,
-            writerBrief,
-            writingIntent: briefSummary,
-            whoAreWeWritingFor: who,
-            whatProblemAreWeAddressing: '',
-            whatShouldReaderLearn: '',
-            desiredAction: ctaType,
-            narrativeStyle: writingAngle || 'clear, practical, outcome-driven',
-            contentGuidance,
-            ctaType,
-            kpiTarget: String((weekBlueprint as any)?.weekly_kpi_focus ?? 'Reach growth'),
-          };
-          for (const platform of item.platformTargets) {
-            const p = normalizePlatformKey(platform);
-            if (!p) continue;
-            assertDailyExecutionIdentityNotMutated({
-              source_execution: { content_type: item.contentType, platform: p, topic: item.topicTitle },
-              candidate: { content_type: item.contentType, platform: p, topic: item.topicTitle },
+          const contentGuidance = deriveContentGuidance(briefForSlot);
+          const slotMasterContentId = (slot as any)?.master_content_id;
+
+          if (isStaggered && platforms.length > 0) {
+            for (let pi = 0; pi < platforms.length; pi += 1) {
+              const dayIndex = ((baseDayIndex - 1 + pi) % 7) + 1;
+              const item: DailyPlanItem = {
+                dayIndex,
+                weekNumber,
+                topicTitle,
+                topicReference: buildTopicReference(weekNumber, topicIndex),
+                globalProgressionIndex,
+                dailyObjective,
+                platformTargets: [platforms[pi]!],
+                contentType: String(exec.content_type || 'post').toLowerCase(),
+                briefSummary,
+                writerBrief,
+                writingIntent: briefSummary,
+                whoAreWeWritingFor: who,
+                whatProblemAreWeAddressing: typeof execIntent.pain_point === 'string' ? execIntent.pain_point : '',
+                whatShouldReaderLearn: typeof execIntent.outcome_promise === 'string' ? execIntent.outcome_promise : '',
+                desiredAction: ctaType,
+                narrativeStyle: writingAngle || narrativeFallback,
+                contentGuidance,
+                ctaType,
+                kpiTarget: String((weekBlueprint as any)?.weekly_kpi_focus ?? 'Reach growth'),
+                ...(slotMasterContentId ? { masterContentId: slotMasterContentId } : {}),
+              };
+              const p = platforms[pi]!;
+              assertDailyExecutionIdentityNotMutated({
+                source_execution: { content_type: item.contentType, platform: p, topic: item.topicTitle },
+                candidate: { content_type: item.contentType, platform: p, topic: item.topicTitle },
+                stage: 'daily-build',
+              });
+              assertDailyGlobalProgressionNotMutated({
+                source_global_progression_index: item.globalProgressionIndex,
+                candidate: { global_progression_index: item.globalProgressionIndex },
+                stage: 'daily-build',
+              });
+              assertDailyIntentNotMutated({
+                sourceIntent: execIntent,
+                dailyItem: item,
+                candidate: {
+                  objective: item.dailyObjective,
+                  target_audience: item.whoAreWeWritingFor,
+                  cta_type: item.ctaType,
+                  brief_summary: item.briefSummary,
+                  writer_brief: item.writerBrief,
+                },
+                stage: 'daily-build',
+              });
+              dailyItemsDeterministic.push(item);
+              dayTopics[dayIndex - 1] = Array.from(new Set([...(dayTopics[dayIndex - 1] ?? []), topicTitle]));
+            }
+          } else {
+            const dayIndex = baseDayIndex;
+            const item: DailyPlanItem = {
+              dayIndex,
+              weekNumber,
+              topicTitle,
+              topicReference: buildTopicReference(weekNumber, topicIndex),
+              globalProgressionIndex,
+              dailyObjective,
+              platformTargets: platforms.length > 0 ? platforms : exec.selected_platforms.map(normalizePlatformKey).filter(Boolean),
+              contentType: String(exec.content_type || 'post').toLowerCase(),
+              briefSummary,
+              writerBrief,
+              writingIntent: briefSummary,
+              whoAreWeWritingFor: who,
+              whatProblemAreWeAddressing: typeof execIntent.pain_point === 'string' ? execIntent.pain_point : '',
+              whatShouldReaderLearn: typeof execIntent.outcome_promise === 'string' ? execIntent.outcome_promise : '',
+              desiredAction: ctaType,
+              narrativeStyle: writingAngle || narrativeFallback,
+              contentGuidance,
+              ctaType,
+              kpiTarget: String((weekBlueprint as any)?.weekly_kpi_focus ?? 'Reach growth'),
+              ...(slotMasterContentId ? { masterContentId: slotMasterContentId } : {}),
+            };
+            for (const platform of item.platformTargets) {
+              const p = normalizePlatformKey(platform);
+              if (!p) continue;
+              assertDailyExecutionIdentityNotMutated({
+                source_execution: { content_type: item.contentType, platform: p, topic: item.topicTitle },
+                candidate: { content_type: item.contentType, platform: p, topic: item.topicTitle },
+                stage: 'daily-build',
+              });
+              assertDailyGlobalProgressionNotMutated({
+                source_global_progression_index: item.globalProgressionIndex,
+                candidate: { global_progression_index: item.globalProgressionIndex },
+                stage: 'daily-build',
+              });
+            }
+            assertDailyIntentNotMutated({
+              sourceIntent: execIntent,
+              dailyItem: item,
+              candidate: {
+                objective: item.dailyObjective,
+                target_audience: item.whoAreWeWritingFor,
+                cta_type: item.ctaType,
+                brief_summary: item.briefSummary,
+                writer_brief: item.writerBrief,
+              },
               stage: 'daily-build',
             });
-            assertDailyGlobalProgressionNotMutated({
-              source_global_progression_index: item.globalProgressionIndex,
-              candidate: { global_progression_index: item.globalProgressionIndex },
-              stage: 'daily-build',
-            });
+            dailyItemsDeterministic.push(item);
+            dayTopics[dayIndex - 1] = Array.from(new Set([...(dayTopics[dayIndex - 1] ?? []), topicTitle]));
           }
-          assertDailyIntentNotMutated({
-            sourceIntent: execIntent,
-            dailyItem: item,
-            candidate: {
-              objective: item.dailyObjective,
-              target_audience: item.whoAreWeWritingFor,
-              cta_type: item.ctaType,
-              brief_summary: item.briefSummary,
-              writer_brief: item.writerBrief,
-            },
-            stage: 'daily-build',
-          });
-          dailyItemsDeterministic.push(item);
-          dayTopics[dayIndex - 1] = Array.from(new Set([...(dayTopics[dayIndex - 1] ?? []), topicTitle]));
         }
       }
     }
@@ -745,6 +939,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const enriched = await enrichDailyItemWithPlatformRequirements(validated.dailyItem as any);
+        if ((item as any).masterContentId != null) {
+          (enriched as any).master_content_id = (item as any).masterContentId;
+        }
+        const creator_card = buildCreatorCard(weekBlueprint as any, item, enriched);
+        if (Object.keys(creator_card).length > 0) {
+          (enriched as any).creator_card = creator_card;
+        }
         assertDailyExecutionIdentityNotMutated({
           source_execution: identitySource,
           candidate: enriched,
@@ -783,7 +984,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           posting_strategy: `Week ${weekNumber} Day ${item.dayIndex} — ${item.topicReference}`,
           status: 'planned',
           priority: 'medium',
-          ai_generated: true,
+          ai_generated: isAiPath,
           target_audience: item.whoAreWeWritingFor,
         };
         rowsWithContent.push({ row, contentObj: enriched });
@@ -907,6 +1108,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           `auto_optimize_distribution: moved platform "${currentPlatform}" -> "${preferredPlatform}"`,
         ];
         (enriched as any).validation_status = (enriched as any).validation_status === 'invalid' ? 'invalid' : 'adjusted';
+        if ((entry.contentObj as any)?.creator_card != null) {
+          (enriched as any).creator_card = (entry.contentObj as any).creator_card;
+        }
 
         const nextRow = {
           ...entry.row,

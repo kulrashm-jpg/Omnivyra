@@ -9,8 +9,23 @@ import EngineJobStatusPanel from '../../engines/EngineJobStatusPanel';
 import { useEngineJobPolling } from '../../../hooks/useEngineJobPolling';
 import OfferingFacetSelector from '../engine-framework/OfferingFacetSelector';
 import StrategicConsole from '../engine-framework/StrategicConsole';
-import RecommendationBlueprintCard from '../cards/RecommendationBlueprintCard';
+import RecommendationBlueprintCard, {
+  getConfidenceTierForRecommendation,
+  getJourneyState,
+  getDecisionMomentumState,
+} from '../cards/RecommendationBlueprintCard';
+import StrategicWorkspacePanel from '../StrategicWorkspacePanel';
 import AIGenerationProgress from '../../AIGenerationProgress';
+import {
+  PRIMARY_OPTIONS,
+  PERSONAL_BRAND_SECONDARY_GROUPS,
+  getSecondaryOptionsForPrimary,
+  isPersonalBrandPrimary,
+  buildHierarchicalPayload,
+  getDilutionSeverity,
+  type PrimaryCampaignTypeId,
+  type SecondaryOptionId,
+} from '../../../lib/campaignTypeHierarchy';
 
 const TYPE = 'TREND';
 
@@ -56,16 +71,12 @@ export type StrategicPayload = {
   cluster_inputs?: ClusterInput[];
   focused_modules?: string[];
   additional_direction?: string;
+  /** Hierarchical campaign focus: primary + secondaries → mapped core types for engine. */
+  primary_campaign_type?: PrimaryCampaignTypeId;
+  secondary_campaign_types?: SecondaryOptionId[];
+  context?: 'business' | 'personal' | 'third_party';
+  mapped_core_types?: string[];
 };
-
-const STRATEGIC_INTENT_OPTIONS = [
-  'Brand awareness',
-  'Network expansion',
-  'Lead generation',
-  'Authority positioning',
-  'Engagement growth',
-  'Product promotion',
-] as const;
 
 /** Country name → ISO 2-letter code for autocomplete and resolution. */
 const ISO_COUNTRIES = [
@@ -153,8 +164,167 @@ function regionInputToIsoCodes(regionInput: string): string[] {
   return parts.map(tokenToIsoCode);
 }
 
+/** UI-level priority score from existing recommendation signals only. Used for presentation order; does not mutate data. */
+function getRecommendationPriorityScore(card: { id: string; recommendation: Record<string, unknown> }): number {
+  const rec = card.recommendation ?? {};
+  const tier = getConfidenceTierForRecommendation(rec);
+  let score =
+    tier === 'high' ? 100 : tier === 'medium' ? 60 : 20;
+  const polishFlags = rec.polish_flags as Record<string, unknown> | undefined;
+  if (polishFlags?.diamond_candidate === true) score += 20;
+  if (polishFlags?.authority_elevated === true) score += 15;
+  const strategyModifier =
+    typeof rec.strategy_modifier === 'number' && Number.isFinite(rec.strategy_modifier)
+      ? rec.strategy_modifier
+      : null;
+  if (strategyModifier != null && strategyModifier > 0) score += 10;
+  const finalAlignmentScore =
+    typeof rec.final_alignment_score === 'number' && Number.isFinite(rec.final_alignment_score)
+      ? rec.final_alignment_score
+      : typeof (rec as { finalAlignmentScore?: number }).finalAlignmentScore === 'number' &&
+          Number.isFinite((rec as { finalAlignmentScore: number }).finalAlignmentScore)
+        ? (rec as { finalAlignmentScore: number }).finalAlignmentScore
+        : null;
+  if (finalAlignmentScore != null) score += finalAlignmentScore * 20;
+  const execution = (rec.execution as Record<string, unknown> | undefined) ?? rec;
+  const executionStage =
+    (typeof execution?.execution_stage === 'string' && execution.execution_stage.trim()) ||
+    (typeof (rec as { execution_stage?: string }).execution_stage === 'string' &&
+      (rec as { execution_stage: string }).execution_stage.trim());
+  const stageLower = executionStage ? String(executionStage).toLowerCase() : '';
+  if (stageLower.includes('conversion') || stageLower.includes('action') || stageLower.includes('consideration')) {
+    score += 15;
+  }
+  return score;
+}
+
+type StrategyStatusForProgress = 'continuation' | 'expansion' | 'neutral' | 'momentum_expand' | undefined;
+
+/** Progress-aware adjustment from existing UI state. Does not mutate data. */
+function getProgressAdjustment(
+  card: { id: string; recommendation: Record<string, unknown> },
+  strategyStatus: StrategyStatusForProgress,
+  longTermEngineIds: Set<string>
+): { adjustment: number; resurfaced: boolean } {
+  let adjustment = 0;
+  let resurfaced = false;
+  const rec = card.recommendation ?? {};
+  const isLongTerm = longTermEngineIds.has(card.id);
+  const isContinuationOrExpansion =
+    strategyStatus === 'continuation' || strategyStatus === 'expansion';
+
+  if (isContinuationOrExpansion) {
+    adjustment -= 25;
+  }
+  if (isLongTerm) {
+    adjustment -= 40;
+  }
+
+  const tier = getConfidenceTierForRecommendation(rec);
+  if (
+    tier === 'high' &&
+    !isContinuationOrExpansion &&
+    !isLongTerm
+  ) {
+    adjustment += 15;
+    resurfaced = true;
+  }
+
+  const execution = (rec.execution as Record<string, unknown> | undefined) ?? rec;
+  const executionStage =
+    (typeof execution?.execution_stage === 'string' && execution.execution_stage.trim()) ||
+    (typeof (rec as { execution_stage?: string }).execution_stage === 'string' &&
+      (rec as { execution_stage: string }).execution_stage.trim());
+  const stageLower = executionStage ? String(executionStage).toLowerCase() : '';
+
+  if (stageLower.includes('education') || stageLower.includes('awareness')) {
+    adjustment += 5;
+  }
+  if (
+    (stageLower.includes('conversion') || stageLower.includes('action')) &&
+    !isContinuationOrExpansion
+  ) {
+    adjustment += 10;
+  }
+
+  return { adjustment, resurfaced };
+}
+
+type StrategicFlowState =
+  | 'expansion'
+  | 'momentum'
+  | 'exploration'
+  | 'consolidation'
+  | 'default';
+
+type CardSignals = {
+  journeyState: ReturnType<typeof getJourneyState>;
+  confidenceTier: 'high' | 'medium' | 'low';
+  momentumState: ReturnType<typeof getDecisionMomentumState>;
+  strategyStatus: StrategyStatusForProgress;
+};
+
+/** List-level flow state from existing per-card signals. Narrative aggregation only. */
+function getStrategicFlowState(cards: CardSignals[]): StrategicFlowState {
+  if (cards.length === 0) return 'default';
+  const pastCount = cards.filter((c) => c.journeyState === 'past').length;
+  const currentCount = cards.filter((c) => c.journeyState === 'current').length;
+  const upcomingCount = cards.filter((c) => c.journeyState === 'upcoming').length;
+  const continuationOrExpansionCount = cards.filter(
+    (c) =>
+      c.strategyStatus === 'continuation' ||
+      c.strategyStatus === 'expansion'
+  ).length;
+  const currentWithHighOrMedium = cards.some(
+    (c) => c.journeyState === 'current' && (c.confidenceTier === 'high' || c.confidenceTier === 'medium')
+  );
+  const planCount = cards.filter((c) => c.momentumState === 'plan').length;
+  const majority = cards.length / 2;
+
+  if (continuationOrExpansionCount >= majority || pastCount >= majority) {
+    return 'consolidation';
+  }
+  if (pastCount >= 1 && currentCount >= 1 && currentWithHighOrMedium) {
+    return 'expansion';
+  }
+  const topMomentum = cards[0]?.momentumState;
+  const strongPast = pastCount >= majority || continuationOrExpansionCount >= majority;
+  if (topMomentum === 'execute' && !strongPast) {
+    return 'momentum';
+  }
+  if (upcomingCount >= majority || planCount >= majority) {
+    return 'exploration';
+  }
+  return 'default';
+}
+
+const FLOW_SUMMARY_MESSAGES: Record<StrategicFlowState, string> = {
+  expansion:
+    'Your strategy is expanding from established momentum into a strong active focus.',
+  momentum:
+    'Your strategy shows strong forward momentum — this is a good time to execute on priority opportunities.',
+  exploration:
+    'Your strategy is in exploration mode — focus on shaping direction before committing heavily.',
+  consolidation:
+    'Your strategy is consolidating — maintaining consistency will strengthen long-term positioning.',
+  default:
+    'Your strategy contains multiple opportunities — focus on current priorities while monitoring upcoming directions.',
+};
+
+function StrategicFlowSummary(props: { state: StrategicFlowState }) {
+  const message = FLOW_SUMMARY_MESSAGES[props.state];
+  return (
+    <div
+      className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
+      role="status"
+    >
+      <p className="text-sm text-slate-600">{message}</p>
+    </div>
+  );
+}
+
 export default function TrendCampaignsTab(props: OpportunityTabProps) {
-  const { companyId, regions, engineRecommendations, fetchWithAuth } = props;
+  const { companyId, regions, engineRecommendations, fetchWithAuth, strategicIntents, onStrategicIntentsChange, viewMode } = props;
   const router = useRouter();
   const [hasRun, setHasRun] = useState(false);
   const [contextMode, setContextMode] = useState<ContextMode>('FULL');
@@ -164,7 +334,9 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [selectedAspect, setSelectedAspect] = useState<string | null>(null);
   const [selectedFacets, setSelectedFacets] = useState<string[]>([]);
   const [strategicText, setStrategicText] = useState('');
-  const [selectedStrategicIntents, setSelectedStrategicIntents] = useState<string[]>([]);
+  /** Campaign focus: one primary, optional secondaries (hierarchical). */
+  const [primaryCampaignType, setPrimaryCampaignType] = useState<PrimaryCampaignTypeId>('brand_awareness');
+  const [secondaryCampaignTypes, setSecondaryCampaignTypes] = useState<SecondaryOptionId[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [lastStrategicPayload, setLastStrategicPayload] = useState<StrategicPayload | null>(null);
   const [customPillars, setCustomPillars] = useState<Array<{ id: string; title: string; summary: string | null }>>([]);
@@ -193,12 +365,45 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const clusterBridgeConsumedRef = useRef(false);
   const pulseBridgeConsumedRef = useRef(false);
   const regionInputRef = useRef<HTMLInputElement>(null);
+  const themesSectionRef = useRef<HTMLDivElement>(null);
+  const prevSubmittingRef = useRef(false);
   const [regionDropdownOpen, setRegionDropdownOpen] = useState(false);
+  const [strategicConfig, setStrategicConfig] = useState<{
+    strategic_aspects: string[];
+    aspect_offerings_map: Record<string, string[]>;
+    offerings_by_aspect?: Record<string, string[]>;
+    strategic_objectives?: string[];
+  } | null>(null);
   const [generatedEngineRecommendations, setGeneratedEngineRecommendations] = useState<
     Array<Record<string, unknown>>
   >([]);
   const [archivedEngineIds, setArchivedEngineIds] = useState<Set<string>>(new Set());
   const [longTermEngineIds, setLongTermEngineIds] = useState<Set<string>>(new Set());
+  /** Recommendation snapshot IDs already used by this company to create a campaign (hide from list). */
+  const [usedRecommendationIds, setUsedRecommendationIds] = useState<Set<string>>(new Set());
+  /** Campaign created when user clicked "Generate Strategic Themes"; card is saved to this campaign when they click "Build Campaign Blueprint". */
+  const [generatedCampaignId, setGeneratedCampaignId] = useState<string | null>(null);
+  /** User-selectable strategy guidance: which momentum signals to emphasize (no backend). */
+  const [strategyGuidanceMode, setStrategyGuidanceMode] = useState<'balanced' | 'continue' | 'expand'>('balanced');
+  /** Expandable drift details (progressive reveal). Once expanded, stays open until refresh. */
+  const [showStrategyDetails, setShowStrategyDetails] = useState(false);
+  /** Transient hint shown after strategy mode change (clears after 1.5s). */
+  const [modeHint, setModeHint] = useState<string | null>(null);
+  /** Used for confidence meter soft fade (0.85 → 1 when concentration changes). */
+  const [meterReveal, setMeterReveal] = useState(false);
+  const prevConcentrationRef = useRef<number | undefined>(undefined);
+  /** Strategy history for journey badges (continuation/expansion); only set when campaigns_count > 0. */
+  const [strategyHistory, setStrategyHistory] = useState<{
+    campaigns_count: number;
+    aspect_counts: Record<string, number>;
+    dominant_aspects: string[];
+    underused_aspects: string[];
+    strategy_momentum: {
+      dominant_streak_aspect: string | null;
+      dominant_streak_count: number;
+      diversification_score: number;
+    } | null;
+  } | null>(null);
   const engineRecommendationSource =
     generatedEngineRecommendations.length > 0 ? generatedEngineRecommendations : (engineRecommendations ?? []);
   const engineRecommendationCards = useMemo<Array<{ id: string; recommendation: Record<string, unknown> }>>(() => {
@@ -214,10 +419,231 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
       return { id: `engine-${idBase}`, recommendation: rec };
     });
   }, [engineRecommendationSource]);
-  const visibleEngineCards = useMemo(
-    () => engineRecommendationCards.filter((c) => !archivedEngineIds.has(c.id)),
-    [engineRecommendationCards, archivedEngineIds]
+  const visibleEngineCards = useMemo(() => {
+    return engineRecommendationCards.filter((c) => {
+      if (archivedEngineIds.has(c.id)) return false;
+      const snapshotId = typeof c.recommendation?.id === 'string' ? c.recommendation.id.trim() : '';
+      if (snapshotId && usedRecommendationIds.has(snapshotId)) return false;
+      return true;
+    });
+  }, [engineRecommendationCards, archivedEngineIds, usedRecommendationIds]);
+
+  /** Cards with effective strategyStatus; sorted by mode (continue → continuation first, expand → expansion first, balanced → original order). */
+  const visibleEngineCardsWithStatus = useMemo(() => {
+    const hasHistory = strategyHistory && strategyHistory.campaigns_count > 0;
+    const getStatus = (card: { id: string; recommendation: Record<string, unknown> }): 'continuation' | 'expansion' | 'neutral' | 'momentum_expand' | undefined => {
+      if (!hasHistory) return undefined;
+      const aspect =
+        (typeof card.recommendation?.aspect === 'string' && card.recommendation.aspect.trim())
+          ? card.recommendation.aspect
+          : (typeof card.recommendation?.selected_aspect === 'string' && card.recommendation.selected_aspect.trim())
+            ? card.recommendation.selected_aspect
+            : selectedAspect ?? '';
+      if (!aspect) return 'neutral';
+      const momentum = strategyHistory!.strategy_momentum;
+      const rawContinuation = strategyHistory!.dominant_aspects.includes(aspect);
+      const rawExpansion = strategyHistory!.underused_aspects.includes(aspect);
+      const rawMomentumExpand = !!(momentum && momentum.dominant_streak_count >= 2 && rawExpansion);
+      if (strategyGuidanceMode === 'continue') {
+        return rawContinuation ? 'continuation' : 'neutral';
+      }
+      if (strategyGuidanceMode === 'expand') {
+        if (rawMomentumExpand || rawExpansion) return 'expansion';
+        return 'neutral';
+      }
+      if (rawMomentumExpand) return 'momentum_expand';
+      if (rawContinuation) return 'continuation';
+      if (rawExpansion) return 'expansion';
+      return 'neutral';
+    };
+    const withStatus = visibleEngineCards.map((card) => ({
+      card,
+      strategyStatus: getStatus(card),
+    }));
+    if (strategyGuidanceMode === 'continue') {
+      return [...withStatus].sort((a, b) => {
+        const p = (s: typeof a.strategyStatus) => (s === 'continuation' ? 0 : 1);
+        return p(a.strategyStatus) - p(b.strategyStatus);
+      });
+    }
+    if (strategyGuidanceMode === 'expand') {
+      return [...withStatus].sort((a, b) => {
+        const p = (s: typeof a.strategyStatus) =>
+          s === 'expansion' || s === 'momentum_expand' ? 0 : 1;
+        return p(a.strategyStatus) - p(b.strategyStatus);
+      });
+    }
+    return withStatus;
+  }, [visibleEngineCards, strategyHistory, strategyGuidanceMode, selectedAspect]);
+
+  /** Ranked list: strategic score + progress adjustment, stable sort. Top 2 get isTopPriority; resurfaced get label. */
+  const rankedEngineCardsWithStatus = useMemo(() => {
+    const withScore = visibleEngineCardsWithStatus.map((item, originalIndex) => {
+      const baseScore = getRecommendationPriorityScore(item.card);
+      const { adjustment, resurfaced } = getProgressAdjustment(
+        item.card,
+        item.strategyStatus,
+        longTermEngineIds
+      );
+      return {
+        ...item,
+        score: baseScore + adjustment,
+        originalIndex,
+        resurfaced,
+      };
+    });
+    withScore.sort((a, b) => {
+      const d = b.score - a.score;
+      if (d !== 0) return d;
+      return a.originalIndex - b.originalIndex;
+    });
+    return withScore.map((item, index) => ({
+      card: item.card,
+      strategyStatus: item.strategyStatus,
+      isTopPriority: index < 2,
+      resurfaced: item.resurfaced,
+    }));
+  }, [visibleEngineCardsWithStatus, longTermEngineIds]);
+
+  /** List-level strategic flow + workspace signals. Narrative only; no backend. */
+  const workspaceSummaryData = useMemo(() => {
+    const cardsWithSignals: CardSignals[] = rankedEngineCardsWithStatus.map(
+      ({ card, strategyStatus, isTopPriority, resurfaced }) => {
+        const journeyState = getJourneyState({
+          strategyStatus,
+          isTopPriority,
+          resurfaced,
+        });
+        const confidenceTier = getConfidenceTierForRecommendation(card.recommendation);
+        const momentumState = getDecisionMomentumState({
+          confidenceTier,
+          journeyState,
+          strategyStatus,
+        });
+        return {
+          journeyState,
+          confidenceTier,
+          momentumState,
+          strategyStatus,
+        };
+      }
+    );
+    const flowState = getStrategicFlowState(cardsWithSignals);
+    return { flowState, cardsWithSignals };
+  }, [rankedEngineCardsWithStatus]);
+
+  const strategicFlowState = workspaceSummaryData.flowState;
+
+  /** Suggested strategy mode from momentum (deterministic, no backend). Shown only when campaigns_count >= 2. */
+  const suggestedStrategyMode = useMemo((): 'balanced' | 'continue' | 'expand' | null => {
+    if (!strategyHistory || strategyHistory.campaigns_count < 2) return null;
+    const momentum = strategyHistory.strategy_momentum;
+    if (!momentum) return null;
+    const { dominant_streak_count, diversification_score } = momentum;
+    if (dominant_streak_count >= 2) return 'expand';
+    if (diversification_score >= 0.6) return 'continue';
+    return 'balanced';
+  }, [strategyHistory]);
+
+  /** Short explanation for suggested mode (deterministic, from existing strategy_momentum only). */
+  const suggestedStrategyExplanation = useMemo(() => {
+    if (!strategyHistory) return null;
+    const momentum = strategyHistory.strategy_momentum;
+    if (!momentum) return null;
+    const { dominant_streak_count, diversification_score } = momentum;
+    if (suggestedStrategyMode === 'expand' && dominant_streak_count >= 2) {
+      return `Your last ${dominant_streak_count} campaigns focused on the same strategy. Expanding helps diversify your direction.`;
+    }
+    if (suggestedStrategyMode === 'continue' && diversification_score >= 0.6) {
+      return `Your recent campaigns already cover multiple strategies. Continuing strengthens your current momentum.`;
+    }
+    if (suggestedStrategyMode === 'balanced') {
+      return `Your strategy usage is balanced. Keeping a mixed approach is recommended.`;
+    }
+    return null;
+  }, [strategyHistory, suggestedStrategyMode]);
+
+  /** Strategy drift: advisory when recent campaigns span too many directions (frontend-only, deterministic). */
+  const strategyDrift = useMemo(() => {
+    if (!strategyHistory || strategyHistory.campaigns_count < 3) return null;
+    const aspectCounts = strategyHistory.aspect_counts ?? {};
+    const total = strategyHistory.campaigns_count;
+    const uniqueAspects = Object.keys(aspectCounts).length;
+    const values = Object.values(aspectCounts);
+    const concentration = values.length > 0 && total > 0 ? Math.max(...values) / total : 0;
+    const hasDrift = uniqueAspects >= 3 && concentration < 0.5;
+    return { hasDrift, uniqueAspects, concentration };
+  }, [strategyHistory]);
+
+  /** When drift exists: recommend stabilizing toward strongest aspect (advisory only, deterministic). */
+  const stabilizationRecommendation = useMemo(() => {
+    if (!strategyDrift?.hasDrift || !strategyHistory) return null;
+    const aspectCounts = strategyHistory.aspect_counts ?? {};
+    const entries = Object.entries(aspectCounts);
+    if (entries.length === 0) return null;
+    const [topAspect, topCount] = entries.sort((a, b) => b[1] - a[1])[0];
+    if (topCount <= 1) return null;
+    return { aspect: topAspect, count: topCount };
+  }, [strategyDrift, strategyHistory]);
+
+  /** Focus label for confidence meter — uses existing strategyDrift.concentration, no new calculations. */
+  const strategyFocusLabel =
+    strategyDrift?.concentration != null
+      ? strategyDrift.concentration > 0.7
+        ? 'Strong Focus'
+        : strategyDrift.concentration >= 0.5
+        ? 'Moderate'
+        : 'Fragmented'
+      : null;
+
+  /** Soft fade when concentration value changes (opacity 0.85 → 1). */
+  useEffect(() => {
+    const c = strategyDrift?.concentration;
+    if (c === undefined || c === null) return;
+    if (prevConcentrationRef.current !== undefined && prevConcentrationRef.current !== c) {
+      setMeterReveal(true);
+      prevConcentrationRef.current = c;
+      const t = setTimeout(() => setMeterReveal(false), 200);
+      return () => clearTimeout(t);
+    }
+    prevConcentrationRef.current = c;
+  }, [strategyDrift?.concentration]);
+
+  const hierarchicalPayload = useMemo(
+    () => buildHierarchicalPayload(primaryCampaignType, secondaryCampaignTypes),
+    [primaryCampaignType, secondaryCampaignTypes]
   );
+  const dilutionSeverity = useMemo(
+    () =>
+      primaryCampaignType && secondaryCampaignTypes.length > 0
+        ? getDilutionSeverity(primaryCampaignType, secondaryCampaignTypes)
+        : 'none',
+    [primaryCampaignType, secondaryCampaignTypes]
+  );
+
+  const selectPrimary = (id: PrimaryCampaignTypeId) => {
+    setPrimaryCampaignType(id);
+    setSecondaryCampaignTypes([]);
+  };
+  const toggleSecondary = (id: SecondaryOptionId) => {
+    if (primaryCampaignType === 'third_party') return;
+    setSecondaryCampaignTypes((prev) => {
+      const has = prev.includes(id);
+      return has ? prev.filter((t) => t !== id) : [...prev, id];
+    });
+  };
+
+  /** Set strategy mode and show transient micro-confirmation (no toast). */
+  const setStrategyModeWithHint = (mode: 'balanced' | 'continue' | 'expand') => {
+    setStrategyGuidanceMode(mode);
+    const hints: Record<string, string> = {
+      balanced: 'Showing both continuation and expansion options.',
+      continue: 'Prioritizing themes aligned with your current strategy.',
+      expand: 'Prioritizing expansion themes.',
+    };
+    setModeHint(hints[mode]);
+    setTimeout(() => setModeHint(null), 1500);
+  };
 
   const { job: polledJob } = useEngineJobPolling<{
     status?: string;
@@ -264,7 +690,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
 
   useEffect(() => {
     setValidationError(null);
-  }, [contextMode, selectedAspect, selectedFacets, strategicText, selectedStrategicIntents]);
+  }, [contextMode, selectedAspect, selectedFacets, strategicText, primaryCampaignType, secondaryCampaignTypes]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || pulseBridgeConsumedRef.current) return;
@@ -323,6 +749,31 @@ Generate strategic campaign pillars to capture this demand.`;
   }, [router.query?.cluster_payload, router.isReady]);
 
   useEffect(() => {
+    const wasSubmitting = prevSubmittingRef.current;
+    prevSubmittingRef.current = isSubmitting;
+    if (wasSubmitting && !isSubmitting && hasRun && visibleEngineCards.length > 0) {
+      requestAnimationFrame(() => {
+        themesSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  }, [isSubmitting, hasRun, visibleEngineCards.length]);
+
+  // When opening with #cards (e.g. from Content Architect hub), scroll to recommendation cards section
+  const cardsSectionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash;
+    if (hash !== '#cards') return;
+    const el = cardsSectionRef.current ?? document.getElementById('recommendation-cards');
+    if (el) {
+      const t = setTimeout(() => {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+      return () => clearTimeout(t);
+    }
+  }, [companyId]);
+
+  useEffect(() => {
     if (!historyDrawerOpen || !companyId) return;
     setHistoryLoading(true);
     fetchWithAuth(`/api/recommendations/job/history?companyId=${encodeURIComponent(companyId)}&limit=5`)
@@ -331,6 +782,52 @@ Generate strategic campaign pillars to capture this demand.`;
       .catch(() => setJobHistory([]))
       .finally(() => setHistoryLoading(false));
   }, [historyDrawerOpen, companyId, fetchWithAuth]);
+
+  useEffect(() => {
+    if (!companyId) {
+      setUsedRecommendationIds(new Set());
+      return;
+    }
+    fetchWithAuth(`/api/recommendations/used-by-company?companyId=${encodeURIComponent(companyId)}`)
+      .then((res) => (res.ok ? res.json() : { usedRecommendationIds: [] }))
+      .then((data) =>
+        setUsedRecommendationIds(
+          new Set(Array.isArray(data?.usedRecommendationIds) ? data.usedRecommendationIds : [])
+        )
+      )
+      .catch(() => setUsedRecommendationIds(new Set()));
+  }, [companyId, fetchWithAuth]);
+
+  useEffect(() => {
+    if (!companyId) {
+      setStrategyHistory(null);
+      return;
+    }
+    fetchWithAuth(`/api/recommendations/strategy-history?companyId=${encodeURIComponent(companyId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && typeof data.campaigns_count === 'number' && data.campaigns_count > 0) {
+          const sm = data.strategy_momentum && typeof data.strategy_momentum === 'object';
+          const aspect_counts = data.aspect_counts && typeof data.aspect_counts === 'object' ? data.aspect_counts : {};
+          setStrategyHistory({
+            campaigns_count: data.campaigns_count,
+            aspect_counts,
+            dominant_aspects: Array.isArray(data.dominant_aspects) ? data.dominant_aspects : [],
+            underused_aspects: Array.isArray(data.underused_aspects) ? data.underused_aspects : [],
+            strategy_momentum: sm
+              ? {
+                  dominant_streak_aspect: data.strategy_momentum.dominant_streak_aspect ?? null,
+                  dominant_streak_count: typeof data.strategy_momentum.dominant_streak_count === 'number' ? data.strategy_momentum.dominant_streak_count : 0,
+                  diversification_score: typeof data.strategy_momentum.diversification_score === 'number' ? data.strategy_momentum.diversification_score : 0,
+                }
+              : null,
+          });
+        } else {
+          setStrategyHistory(null);
+        }
+      })
+      .catch(() => setStrategyHistory(null));
+  }, [companyId, fetchWithAuth]);
 
   const handleViewIntelligence = async (id: string) => {
     try {
@@ -352,6 +849,70 @@ Generate strategic campaign pillars to capture this demand.`;
     return data?.profile ?? null;
   };
 
+  // Load company-specific strategic config from backend (aspects + offerings_by_aspect). No frontend derivation.
+  useEffect(() => {
+    if (!companyId) {
+      setStrategicConfig(null);
+      return;
+    }
+    let cancelled = false;
+    fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        const config = data?.recommendation_strategic_config;
+        const map = config?.offerings_by_aspect ?? config?.aspect_offerings_map;
+        if (config && Array.isArray(config.strategic_aspects) && typeof map === 'object') {
+          const sortAz = (a: string, b: string) => a.trim().toLowerCase().localeCompare(b.trim().toLowerCase(), undefined, { sensitivity: 'base' });
+          const sortedAspects = [...config.strategic_aspects].sort(sortAz);
+          const sortedMap: Record<string, string[]> = {};
+          for (const [k, v] of Object.entries(map ?? {})) {
+            sortedMap[k] = Array.isArray(v) ? [...v].sort(sortAz) : [];
+          }
+          setStrategicConfig({
+            strategic_aspects: sortedAspects,
+            aspect_offerings_map: sortedMap,
+            offerings_by_aspect: sortedMap,
+            strategic_objectives: Array.isArray(config.strategic_objectives) ? [...config.strategic_objectives].sort(sortAz) : undefined,
+          });
+        } else {
+          setStrategicConfig(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setStrategicConfig(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, fetchWithAuth]);
+
+  const aspects = strategicConfig?.strategic_aspects ?? [];
+  const aspectOfferingsMap = strategicConfig?.aspect_offerings_map ?? strategicConfig?.offerings_by_aspect ?? {};
+
+  // Offerings shown only after aspect selection (offerings_by_aspect[selected_aspect]).
+  const offeringsForSelectedAspect = useMemo(() => {
+    if (!selectedAspect) return [];
+    const ids = aspectOfferingsMap[selectedAspect];
+    return Array.isArray(ids) ? ids : [];
+  }, [selectedAspect, aspectOfferingsMap]);
+
+  const offeringFacetCards = useMemo(() => {
+    return offeringsForSelectedAspect.map((id: string) => {
+      const title = id.includes(':') ? id.split(':').slice(1).join(':').trim() || id : id;
+      return { id, title, description: title };
+    });
+  }, [offeringsForSelectedAspect]);
+
+  // When aspect changes, keep only selected facets that belong to the new aspect.
+  useEffect(() => {
+    if (!selectedAspect || selectedFacets.length === 0) return;
+    const allowed = aspectOfferingsMap[selectedAspect];
+    if (!allowed || allowed.length === 0) return;
+    const next = selectedFacets.filter((id) => allowed.includes(id));
+    if (next.length !== selectedFacets.length) setSelectedFacets(next);
+  }, [selectedAspect, aspectOfferingsMap]);
+
   const buildStrategicPayload = async (): Promise<StrategicPayload> => {
     const profile = await fetchProfile();
     const companyContext: Record<string, unknown> = {};
@@ -372,11 +933,15 @@ Generate strategic campaign pillars to capture this demand.`;
       selected_offerings: selectedFacets,
       selected_aspect: selectedAspect,
       strategic_text: strategicText,
-      strategic_intents: selectedStrategicIntents.length > 0 ? selectedStrategicIntents : undefined,
+      strategic_intents: campaignFocusLabels.length > 0 ? campaignFocusLabels : undefined,
       regions: regions.length > 0 ? regions : undefined,
       cluster_inputs: clusterInputs?.length ? clusterInputs : undefined,
       focused_modules: contextMode === 'FOCUSED' && focusedModules.length > 0 ? focusedModules : undefined,
       additional_direction: additionalDirection.trim() || undefined,
+      primary_campaign_type: hierarchicalPayload.primary_campaign_type,
+      secondary_campaign_types: hierarchicalPayload.secondary_campaign_types,
+      context: hierarchicalPayload.context,
+      mapped_core_types: hierarchicalPayload.mapped_core_types,
     };
   };
 
@@ -402,7 +967,11 @@ Generate strategic campaign pillars to capture this demand.`;
       setLastStrategicPayload(payload);
       const regionList = regionInputToIsoCodes(regionInput);
       const objective =
-        selectedStrategicIntents[0]?.toLowerCase().replace(/\s+/g, '_') || 'awareness';
+        (payload.mapped_core_types?.length
+          ? payload.mapped_core_types[0]
+          : primaryCampaignType === 'third_party'
+            ? 'third_party'
+            : primaryCampaignType) ?? 'brand_awareness';
       const recRes = await fetchWithAuth('/api/recommendations/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -411,12 +980,22 @@ Generate strategic campaign pillars to capture this demand.`;
           objective,
           durationWeeks: 12,
           ...(regionList.length > 0 ? { regions: regionList } : {}),
+          strategicPayload: payload,
         }),
       });
       if (!recRes.ok) {
         const recErr = await recRes.json().catch(() => ({}));
-        const base = recErr?.error || 'Recommendation engine request failed';
-        const detail = recErr?.detail ? ` (${recErr.detail})` : '';
+        const code = recErr?.error;
+        const friendlyMessage =
+          code === 'FORBIDDEN_ROLE'
+            ? 'You don’t have permission to generate themes. Company Admin or Content Creator role is required for this company.'
+            : code === 'COMPANY_SCOPE_VIOLATION' || code === 'Access denied to company'
+            ? 'You don’t have access to this company. Select a company you belong to.'
+            : code === 'CAMPAIGN_NOT_IN_COMPANY'
+            ? 'The selected campaign doesn’t belong to this company.'
+            : null;
+        const base = friendlyMessage ?? code ?? 'Recommendation engine request failed';
+        const detail = recErr?.detail && !friendlyMessage ? ` (${recErr.detail})` : '';
         throw new Error(`${base}${detail}`);
       }
       const recData = await recRes.json().catch(() => null);
@@ -424,6 +1003,32 @@ Generate strategic campaign pillars to capture this demand.`;
       setGeneratedEngineRecommendations(trends as Array<Record<string, unknown>>);
       if (trends.length === 0) {
         setValidationError('Engine returned no recommendations for this input. Adjust context/objective and try again.');
+      } else {
+        // Create a campaign when themes are generated so "Build Campaign Blueprint" saves the card to this campaign.
+        try {
+          const newCampaignId = uuidv4();
+          const createRes = await fetchWithAuth('/api/campaigns', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: newCampaignId,
+              companyId,
+              name: 'Campaign from themes',
+              description: 'Select a card and click Build Campaign Blueprint to set the strategic theme.',
+              status: 'planning',
+              current_stage: 'planning',
+              build_mode: 'no_context',
+            }),
+          });
+          if (createRes.ok) {
+            const createData = await createRes.json().catch(() => ({}));
+            const id = createData?.campaign?.id ?? newCampaignId;
+            setGeneratedCampaignId(id);
+          }
+        } catch (_) {
+          // If draft campaign creation fails, Build Campaign Blueprint will create a new campaign as before.
+          setGeneratedCampaignId(null);
+        }
       }
     } catch (e) {
       setValidationError(e instanceof Error ? e.message : 'Failed to generate themes');
@@ -459,12 +1064,23 @@ Generate strategic campaign pillars to capture this demand.`;
   };
 
 
-  const modeIndicatorLabel =
-    contextMode === 'FULL'
-      ? 'Themes aligned to full company context (brand, ICP, positioning, themes, geography).'
-      : contextMode === 'FOCUSED'
-        ? `Themes aligned to selected modules: ${focusedModules.length > 0 ? focusedModules.join(', ') : 'none selected'}.`
-        : 'No company context; use research direction only.';
+  const campaignFocusLabels = useMemo(() => {
+    const primaryLabel = PRIMARY_OPTIONS.find((o) => o.id === primaryCampaignType)?.label ?? '';
+    const secondaryLabels = isPersonalBrandPrimary(primaryCampaignType)
+      ? secondaryCampaignTypes
+          .map((id) => PERSONAL_BRAND_SECONDARY_GROUPS.flatMap((g) => g.options).find((o) => o.id === id)?.label)
+          .filter(Boolean) as string[]
+      : secondaryCampaignTypes
+          .map((id) => getSecondaryOptionsForPrimary(primaryCampaignType).find((o) => o.id === id)?.label)
+          .filter(Boolean) as string[];
+    return [primaryLabel, ...secondaryLabels].filter(Boolean);
+  }, [primaryCampaignType, secondaryCampaignTypes]);
+
+  useEffect(() => {
+    if (onStrategicIntentsChange && campaignFocusLabels.length > 0) {
+      onStrategicIntentsChange(campaignFocusLabels);
+    }
+  }, [campaignFocusLabels, onStrategicIntentsChange]);
 
   const intentSummaryContent = (): { type: 'summary' | 'warning'; text: React.ReactNode } => {
     if (contextMode === 'NONE') {
@@ -474,7 +1090,7 @@ Generate strategic campaign pillars to capture this demand.`;
       if (additionalDirection.trim()) parts.push(<>• Research direction: &quot;{additionalDirection.slice(0, 80)}{additionalDirection.length > 80 ? '…' : ''}&quot;</>);
       if (selectedAspect) parts.push(<>• Aspect: {selectedAspect}</>);
       if (selectedFacets.length > 0) parts.push(<>• Offerings: {selectedFacets.map((id) => id.split(':').slice(1).join(':') || id).join(', ')}</>);
-      if (selectedStrategicIntents.length > 0) parts.push(<>• Objectives: {selectedStrategicIntents.join(', ')}</>);
+      if (campaignFocusLabels.length > 0) parts.push(<>• Campaign focus: {campaignFocusLabels.join(', ')}</>);
       if (strategicText.trim()) parts.push(<>• Strategic text: &quot;{strategicText.slice(0, 60)}…&quot;</>);
       const regionList = regionInputToIsoCodes(regionInput);
       if (regionList.length) parts.push(<>• Regions: {regionList.join(', ')}</>);
@@ -484,7 +1100,7 @@ Generate strategic campaign pillars to capture this demand.`;
     const lines: React.ReactNode[] = [<>Context: {contextMode}</>];
     if (list.length) lines.push(<>• Offerings: {list.join(', ')}</>);
     if (selectedAspect) lines.push(<>• Aspect: {selectedAspect}</>);
-    if (selectedStrategicIntents.length > 0) lines.push(<>• Objectives: {selectedStrategicIntents.join(', ')}</>);
+    if (campaignFocusLabels.length > 0) lines.push(<>• Campaign focus: {campaignFocusLabels.join(', ')}</>);
     if (strategicText.trim()) lines.push(<>• Direction: &quot;{strategicText.slice(0, 80)}…&quot;</>);
     const regionList = regionInputToIsoCodes(regionInput);
     if (regionList.length) lines.push(<>• Regions: {regionList.join(', ')}</>);
@@ -493,6 +1109,14 @@ Generate strategic campaign pillars to capture this demand.`;
 
   const intentSummary = intentSummaryContent();
 
+  const modeIndicatorLabel =
+    contextMode === 'FULL'
+      ? 'Using full company context for recommendations.'
+      : contextMode === 'FOCUSED' && focusedModules.length > 0
+        ? `Focused on: ${focusedModules.join(', ')}.`
+        : contextMode === 'NONE'
+          ? 'No company context; use research direction below.'
+          : 'Context: ' + contextMode;
 
   if (!companyId) {
     return (
@@ -538,45 +1162,110 @@ Generate strategic campaign pillars to capture this demand.`;
       <div className="rounded-lg border border-gray-200 bg-gray-50/50 px-4 py-3 text-sm text-gray-700">
         {modeIndicatorLabel}
       </div>
-      <StrategicAspectSelector selectedAspect={selectedAspect} onChange={setSelectedAspect} />
+      <StrategicAspectSelector
+        aspects={aspects}
+        selectedAspect={selectedAspect}
+        onChange={setSelectedAspect}
+      />
       <OfferingFacetSelector
-        companyId={companyId}
-        fetchWithAuth={fetchWithAuth}
+        selectedAspect={selectedAspect}
+        offerings={offeringFacetCards}
         selectedFacets={selectedFacets}
         onChange={setSelectedFacets}
         mode={contextMode}
       />
-      <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-        <h3 className="text-sm font-semibold text-gray-800">Strategic Objectives</h3>
+      <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+        <h3 className="text-sm font-semibold text-gray-800">Campaign focus &amp; goals</h3>
         <p className="text-xs text-gray-500">
-          Select what this recommendation run should optimize for.
+          Choose one primary focus; optional supporting goals appear below.
         </p>
-        <div className="flex flex-wrap gap-2">
-          {STRATEGIC_INTENT_OPTIONS.map((intent) => {
-            const selected = selectedStrategicIntents.includes(intent);
-            return (
-              <button
-                key={intent}
-                type="button"
-                onClick={() =>
-                  setSelectedStrategicIntents((prev) =>
-                    prev.includes(intent)
-                      ? prev.filter((x) => x !== intent)
-                      : [...prev, intent]
-                  )
-                }
-                className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
-                  selected
-                    ? 'bg-indigo-600 border-indigo-600 text-white'
-                    : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-                }`}
-                aria-pressed={selected}
-              >
-                {intent}
-              </button>
-            );
-          })}
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-2">Campaign focus (choose one)</label>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {PRIMARY_OPTIONS.map((opt) => {
+              const selected = primaryCampaignType === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => selectPrimary(opt.id)}
+                  className={`rounded-xl border-2 px-4 py-3 text-left text-sm font-medium transition-colors ${
+                    selected
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-800'
+                      : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
+        {primaryCampaignType && primaryCampaignType !== 'third_party' && (
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-2">Supporting goals (optional)</label>
+            <p className="text-xs text-gray-500 mb-2">Add compatible objectives for this run.</p>
+            {isPersonalBrandPrimary(primaryCampaignType) ? (
+              <div className="space-y-4">
+                {PERSONAL_BRAND_SECONDARY_GROUPS.map((group) => (
+                  <div key={group.label}>
+                    <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{group.label}</span>
+                    <div className="flex flex-wrap gap-2 mt-1.5">
+                      {group.options.map((opt) => {
+                        const selected = secondaryCampaignTypes.includes(opt.id);
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => toggleSecondary(opt.id)}
+                            className={`px-3 py-1.5 text-sm font-medium rounded-lg border ${
+                              selected ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {getSecondaryOptionsForPrimary(primaryCampaignType).map((opt) => {
+                  const selected = secondaryCampaignTypes.includes(opt.id);
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => toggleSecondary(opt.id)}
+                      className={`px-3 py-1.5 text-sm font-medium rounded-lg border ${
+                        selected ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {primaryCampaignType === 'third_party' && (
+          <p className="text-sm text-gray-600 rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+            Third-party campaign: no further options. Recommendations will be generic collaboration/distribution-focused.
+          </p>
+        )}
+        {dilutionSeverity !== 'none' && (
+          <div
+            className={`rounded-lg border px-3 py-2 text-sm ${
+              dilutionSeverity === 'caution' ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-indigo-200 bg-indigo-50 text-indigo-800'
+            }`}
+            role="status"
+          >
+            These goals may dilute campaign focus. Consider selecting a primary campaign focus.
+          </div>
+        )}
       </div>
       <StrategicConsole
         value={strategicText}
@@ -669,6 +1358,7 @@ Generate strategic campaign pillars to capture this demand.`;
         </button>
       </div>
       {validationError && <div className="text-sm text-red-600">{validationError}</div>}
+      <div id="recommendation-cards" ref={cardsSectionRef}>
       {!hasRun && !isSubmitting && (
         <div className="flex justify-center py-12">
           <div className="max-w-md rounded-lg border border-gray-200 bg-gray-50/80 p-6 text-center text-sm text-gray-700">
@@ -677,7 +1367,7 @@ Generate strategic campaign pillars to capture this demand.`;
         </div>
       )}
       {(hasRun || visibleEngineCards.length > 0) && !isSubmitting && (
-        <>
+        <div ref={themesSectionRef} className="space-y-6">
           <div className="flex flex-col gap-4">
             <button
               type="button"
@@ -729,12 +1419,156 @@ Generate strategic campaign pillars to capture this demand.`;
               </div>
             )}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {visibleEngineCards.length > 0
-              ? visibleEngineCards.map((card) => (
-                  <RecommendationBlueprintCard
+          {visibleEngineCards.length > 0 && (
+            <div className="sticky top-0 z-10 bg-white/80 backdrop-blur-sm transition-all duration-200 ease-out space-y-4 -mx-0 px-0">
+              {strategyDrift?.hasDrift && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-4 py-2.5 transition-all duration-200 ease-out">
+                  <p className="text-xs text-amber-800">
+                    ⚠ Strategy appears fragmented.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowStrategyDetails((v) => !v)}
+                    className="mt-1.5 text-xs text-amber-700 hover:text-amber-900 font-medium flex items-center gap-1"
+                  >
+                    Why this matters {showStrategyDetails ? '▴' : '▾'}
+                  </button>
+                  {showStrategyDetails && (
+                    <div className="mt-2 pt-2 border-t border-amber-200/60 space-y-1.5 transition-all duration-200 ease-out">
+                      {stabilizationRecommendation && (
+                        <p className="text-xs font-medium text-amber-900">
+                          Strategic focus suggestion: Focus on &quot;{stabilizationRecommendation.aspect}&quot; — your strongest recent strategic direction.
+                        </p>
+                      )}
+                      {suggestedStrategyMode && (
+                        <p className="text-xs text-amber-700">
+                          Suggested direction may help restore focus.
+                        </p>
+                      )}
+                      {suggestedStrategyMode === 'continue' && stabilizationRecommendation && (
+                        <p className="text-xs text-amber-700">
+                          Continue mode supports strategic consistency.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="rounded-lg border border-gray-200 bg-gray-50/50 px-4 py-3 transition-all duration-200 ease-out">
+                {strategyDrift != null && strategyFocusLabel != null && (
+                  <div
+                    className={`mb-3 transition-opacity duration-200 ease-out ${meterReveal ? 'opacity-[0.85]' : 'opacity-100'}`}
+                  >
+                    <p className="text-xs font-medium text-gray-600 mb-1">Strategy Focus</p>
+                    <div className="flex items-center gap-2">
+                      <div className="flex gap-0.5" aria-hidden>
+                        {[1, 2, 3, 4, 5].map((i) => {
+                          const filled = (strategyDrift.concentration ?? 0) >= (i - 0.5) / 5;
+                          return (
+                            <span
+                              key={i}
+                              className={`w-2 h-2.5 rounded-sm ${filled ? 'bg-gray-500' : 'bg-gray-200'}`}
+                            />
+                          );
+                        })}
+                      </div>
+                      <span className="text-xs text-gray-500">({strategyFocusLabel})</span>
+                    </div>
+                  </div>
+                )}
+                <p className="text-xs font-medium text-gray-600 mb-2">Strategy direction</p>
+                <div className="flex flex-wrap items-center gap-4">
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="strategyGuidance"
+                      checked={strategyGuidanceMode === 'balanced'}
+                      onChange={() => setStrategyModeWithHint('balanced')}
+                      className="text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                    />
+                    <span className="text-sm text-gray-700">Balanced</span>
+                    {suggestedStrategyMode === 'balanced' && (
+                      <span className="text-xs font-medium text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">Recommended</span>
+                    )}
+                  </label>
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="strategyGuidance"
+                      checked={strategyGuidanceMode === 'continue'}
+                      onChange={() => setStrategyModeWithHint('continue')}
+                      className="text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                    />
+                    <span className="text-sm text-gray-700">Continue strategy</span>
+                    {suggestedStrategyMode === 'continue' && (
+                      <span className="text-xs font-medium text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">Recommended</span>
+                    )}
+                  </label>
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="strategyGuidance"
+                      checked={strategyGuidanceMode === 'expand'}
+                      onChange={() => setStrategyModeWithHint('expand')}
+                      className="text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                    />
+                    <span className="text-sm text-gray-700">Expand strategy</span>
+                    {suggestedStrategyMode === 'expand' && (
+                      <span className="text-xs font-medium text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">Recommended</span>
+                    )}
+                  </label>
+                </div>
+                {suggestedStrategyMode && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-gray-500">
+                      Suggested: {suggestedStrategyMode === 'balanced' ? 'Balanced' : suggestedStrategyMode === 'continue' ? 'Continue Strategy' : 'Expand Strategy'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setStrategyModeWithHint(suggestedStrategyMode)}
+                      className="text-xs font-medium text-indigo-600 hover:text-indigo-700 border border-indigo-200 hover:border-indigo-300 rounded px-2 py-1 bg-white"
+                    >
+                      Apply suggested
+                    </button>
+                  </div>
+                )}
+                {suggestedStrategyMode && suggestedStrategyExplanation && (
+                  <p className="mt-1.5 text-xs text-gray-500">
+                    {suggestedStrategyExplanation}
+                  </p>
+                )}
+                <p className={`mt-2 text-xs text-gray-500 transition-opacity duration-200 ease-out ${modeHint ? 'opacity-100' : ''}`}>
+                  {modeHint ?? (
+                    <>
+                      {strategyGuidanceMode === 'balanced' && 'Showing both continuation and expansion options.'}
+                      {strategyGuidanceMode === 'continue' && 'Prioritizing themes aligned with your current strategy.'}
+                      {strategyGuidanceMode === 'expand' && 'Prioritizing themes that diversify your strategy.'}
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+          )}
+          {rankedEngineCardsWithStatus.length > 0 && (
+            <>
+              <StrategicWorkspacePanel
+                flowState={strategicFlowState}
+                cardsWithSignals={workspaceSummaryData.cardsWithSignals}
+              />
+              <StrategicFlowSummary state={strategicFlowState} />
+            </>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 transition-all duration-200 ease-out">
+            {rankedEngineCardsWithStatus.length > 0
+              ? rankedEngineCardsWithStatus.map(({ card, strategyStatus, isTopPriority, resurfaced }) => (
+                  <div key={card.id} className="transition-all duration-200 ease-out">
+                    <RecommendationBlueprintCard
                     key={card.id}
                     recommendation={card.recommendation}
+                    strategyStatus={strategyStatus}
+                    viewMode={viewMode}
+                    isTopPriority={isTopPriority}
+                    resurfaced={resurfaced}
                     onBuildCampaignBlueprint={async () => {
                       if (!companyId) {
                         setValidationError('Select a company first.');
@@ -783,51 +1617,91 @@ Generate strategic campaign pillars to capture this demand.`;
                           ? recommendation.snapshot_hash
                           : null) ??
                         `recommendation:${card.id}`;
+                      const sourceStrategicTheme = {
+                        topic: recommendation.topic ?? recommendation.polished_title ?? title,
+                        polished_title: recommendation.polished_title ?? recommendation.topic ?? title,
+                        summary: recommendation.summary ?? recommendation.narrative_direction ?? description,
+                        intelligence: recommendation.intelligence ?? undefined,
+                        execution: recommendation.execution ?? undefined,
+                        company_context_snapshot: recommendation.company_context_snapshot ?? undefined,
+                        duration_weeks: recommendation.duration_weeks ?? undefined,
+                        progression_summary: recommendation.progression_summary ?? undefined,
+                        primary_recommendations: recommendation.primary_recommendations ?? undefined,
+                        supporting_recommendations: recommendation.supporting_recommendations ?? undefined,
+                        estimated_reach: recommendation.estimated_reach ?? recommendation.volume ?? undefined,
+                        formats: recommendation.formats ?? undefined,
+                        regions: recommendation.regions ?? undefined,
+                      };
+                      const recId = typeof recommendation.id === 'string' ? recommendation.id.trim() : '';
                       try {
-                        const campaignId = uuidv4();
-                        const response = await fetchWithAuth('/api/campaigns', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            id: campaignId,
-                            companyId,
-                            name: title,
-                            description,
-                            status: 'planning',
-                            current_stage: 'planning',
-                            build_mode: 'no_context',
-                            source_opportunity_id: sourceOpportunityId,
-                            recommendation_id:
-                              typeof recommendation.id === 'string' ? recommendation.id : null,
-                            target_regions: regionsFromCard.length > 0 ? regionsFromCard : undefined,
-                            context_payload:
-                              Object.keys(contextPayload).length > 0 ? contextPayload : undefined,
-                            planning_context: {
-                              context_mode: contextMode,
-                              focused_modules:
-                                contextMode === 'FOCUSED' && focusedModules.length > 0
-                                  ? focusedModules
-                                  : undefined,
-                              additional_direction: additionalDirection.trim() || undefined,
-                            },
-                          }),
-                        });
-                        if (!response.ok) {
-                          const err = await response.json().catch(() => ({}));
-                          throw new Error(err?.error || 'Failed to create campaign');
+                        let createdCampaignId: string;
+                        if (generatedCampaignId) {
+                          // Save this card to the campaign created at "Generate Strategic Themes".
+                          const putRes = await fetchWithAuth(
+                            `/api/campaigns/${encodeURIComponent(generatedCampaignId)}/source-recommendation`,
+                            {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                source_recommendation_id: recId || null,
+                                source_strategic_theme: sourceStrategicTheme,
+                              }),
+                            }
+                          );
+                          if (!putRes.ok) {
+                            const err = await putRes.json().catch(() => ({}));
+                            throw new Error(err?.error || 'Failed to save card to campaign');
+                          }
+                          createdCampaignId = generatedCampaignId;
+                          setGeneratedCampaignId(null);
+                        } else {
+                          // Fallback: create a new campaign (e.g. if Generate didn't create one).
+                          const campaignId = uuidv4();
+                          const response = await fetchWithAuth('/api/campaigns', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              id: campaignId,
+                              companyId,
+                              name: title,
+                              description,
+                              status: 'planning',
+                              current_stage: 'planning',
+                              build_mode: 'no_context',
+                              source_opportunity_id: sourceOpportunityId,
+                              recommendation_id: recId || null,
+                              target_regions: regionsFromCard.length > 0 ? regionsFromCard : undefined,
+                              context_payload:
+                                Object.keys(contextPayload).length > 0 ? contextPayload : undefined,
+                              source_strategic_theme: sourceStrategicTheme,
+                              planning_context: {
+                                context_mode: contextMode,
+                                focused_modules:
+                                  contextMode === 'FOCUSED' && focusedModules.length > 0
+                                    ? focusedModules
+                                    : undefined,
+                                additional_direction: additionalDirection.trim() || undefined,
+                              },
+                            }),
+                          });
+                          if (!response.ok) {
+                            const err = await response.json().catch(() => ({}));
+                            throw new Error(err?.error || 'Failed to create campaign');
+                          }
+                          const data = await response.json().catch(() => ({}));
+                          createdCampaignId =
+                            data?.campaign?.id && typeof data.campaign.id === 'string'
+                              ? data.campaign.id
+                              : campaignId;
                         }
-                        const data = await response.json().catch(() => ({}));
-                        const createdCampaignId =
-                          data?.campaign?.id && typeof data.campaign.id === 'string'
-                            ? data.campaign.id
-                            : campaignId;
+                        if (recId) {
+                          setUsedRecommendationIds((prev) => new Set([...prev, recId]));
+                        }
                         const qs = new URLSearchParams({
                           companyId,
                           fromRecommendation: '1',
                         });
-                        if (typeof recommendation.id === 'string' && recommendation.id.trim()) {
-                          qs.set('recommendationId', recommendation.id);
-                        }
+                        if (recId) qs.set('recommendationId', recId);
                         router.push(`/campaign-details/${createdCampaignId}?${qs.toString()}`);
                       } catch (error) {
                         setValidationError(
@@ -852,6 +1726,7 @@ Generate strategic campaign pillars to capture this demand.`;
                       })
                     }
                   />
+                  </div>
                 ))
               : null}
           </div>
@@ -961,8 +1836,9 @@ Generate strategic campaign pillars to capture this demand.`;
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
+      </div>
       {isSubmitting && (
         <div className="py-6">
           <AIGenerationProgress

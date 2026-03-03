@@ -1,118 +1,40 @@
 import { NextApiRequest, NextApiResponse } from 'next';
+import { supabase } from '../../../backend/db/supabaseClient';
+import {
+  ingestComments,
+  getCommentsForScheduledPost,
+} from '../../../backend/services/engagementIngestionService';
 
-interface CommentRequest {
-  platform: string;
-  postId: string;
-  accountId: string;
-  action: 'fetch' | 'reply' | 'delete';
-  commentId?: string;
-  replyText?: string;
-}
-
-// Platform-specific comment management functions
-const fetchLinkedInComments = async (accessToken: string, postId: string) => {
-  const response = await fetch(`https://api.linkedin.com/v2/socialActions/${postId}/comments`, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Accept': 'application/json'
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`LinkedIn comments fetch failed: ${response.statusText}`);
-  }
-
-  return response.json();
-};
-
-const fetchTwitterComments = async (accessToken: string, postId: string) => {
-  const response = await fetch(`https://api.twitter.com/2/tweets/${postId}/replies`, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Accept': 'application/json'
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Twitter replies fetch failed: ${response.statusText}`);
-  }
-
-  return response.json();
-};
-
-const fetchFacebookComments = async (accessToken: string, postId: string) => {
-  const response = await fetch(`https://graph.facebook.com/v18.0/${postId}/comments`, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Accept': 'application/json'
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Facebook comments fetch failed: ${response.statusText}`);
-  }
-
-  return response.json();
-};
-
-const fetchInstagramComments = async (accessToken: string, postId: string) => {
-  const response = await fetch(`https://graph.facebook.com/v18.0/${postId}/comments`, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Accept': 'application/json'
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Instagram comments fetch failed: ${response.statusText}`);
-  }
-
-  return response.json();
-};
-
+// Reply helpers left unchanged for now (deprecated later per canonical design).
 const replyToLinkedInComment = async (accessToken: string, commentId: string, replyText: string) => {
-  const replyData = {
-    message: replyText,
-    parentComment: `urn:li:comment:${commentId}`
-  };
-
   const response = await fetch('https://api.linkedin.com/v2/comments', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
     },
-    body: JSON.stringify(replyData)
+    body: JSON.stringify({
+      message: replyText,
+      parentComment: `urn:li:comment:${commentId}`,
+    }),
   });
-
-  if (!response.ok) {
-    throw new Error(`LinkedIn reply failed: ${response.statusText}`);
-  }
-
+  if (!response.ok) throw new Error(`LinkedIn reply failed: ${response.statusText}`);
   return response.json();
 };
 
 const replyToTwitterComment = async (accessToken: string, postId: string, replyText: string) => {
-  const replyData = {
-    text: replyText,
-    reply: {
-      in_reply_to_tweet_id: postId
-    }
-  };
-
   const response = await fetch('https://api.twitter.com/2/tweets', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
     },
-    body: JSON.stringify(replyData)
+    body: JSON.stringify({
+      text: replyText,
+      reply: { in_reply_to_tweet_id: postId },
+    }),
   });
-
-  if (!response.ok) {
-    throw new Error(`Twitter reply failed: ${response.statusText}`);
-  }
-
+  if (!response.ok) throw new Error(`Twitter reply failed: ${response.statusText}`);
   return response.json();
 };
 
@@ -122,85 +44,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { platform, postId, accountId, action, commentId, replyText } = req.body;
+    const { platform, postId, accountId, action, commentId, replyText, scheduled_post_id } = req.body;
 
-    // Validate required fields
-    if (!platform || !postId || !accountId || !action) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!action) {
+      return res.status(400).json({ error: 'Missing required field: action' });
     }
 
-    // Get access token for the account (mock for now)
-    const mockAccessToken = `mock_token_${accountId}`;
-
-    let result;
-
-    switch (action) {
-      case 'fetch':
-        switch (platform) {
-          case 'linkedin':
-            result = await fetchLinkedInComments(mockAccessToken, postId);
-            break;
-          case 'twitter':
-            result = await fetchTwitterComments(mockAccessToken, postId);
-            break;
-          case 'facebook':
-            result = await fetchFacebookComments(mockAccessToken, postId);
-            break;
-          case 'instagram':
-            result = await fetchInstagramComments(mockAccessToken, postId);
-            break;
-          default:
-            throw new Error(`Unsupported platform: ${platform}`);
-        }
-        break;
-
-      case 'reply':
-        if (!replyText) {
-          return res.status(400).json({ error: 'Reply text is required' });
-        }
-
-        switch (platform) {
-          case 'linkedin':
-            if (!commentId) {
-              return res.status(400).json({ error: 'Comment ID is required for LinkedIn replies' });
-            }
-            result = await replyToLinkedInComment(mockAccessToken, commentId, replyText);
-            break;
-          case 'twitter':
-            result = await replyToTwitterComment(mockAccessToken, postId, replyText);
-            break;
-          case 'facebook':
-          case 'instagram':
-            // Facebook/Instagram reply implementation
-            result = { id: `reply_${Date.now()}`, message: 'Reply posted successfully' };
-            break;
-          default:
-            throw new Error(`Unsupported platform: ${platform}`);
-        }
-        break;
-
-      case 'delete':
-        // Delete comment implementation
-        result = { message: 'Comment deleted successfully' };
-        break;
-
-      default:
-        throw new Error(`Unsupported action: ${action}`);
+    if (action === 'fetch') {
+      // Resolve scheduled_post_id: from body or by (platform_post_id, social_account_id)
+      let resolvedScheduledPostId: string | null = scheduled_post_id ?? null;
+      if (!resolvedScheduledPostId && platform && postId && accountId) {
+        const { data: row } = await supabase
+          .from('scheduled_posts')
+          .select('id')
+          .eq('platform_post_id', postId)
+          .eq('social_account_id', accountId)
+          .maybeSingle();
+        resolvedScheduledPostId = row?.id ?? null;
+      }
+      if (!resolvedScheduledPostId) {
+        return res.status(400).json({
+          error: 'Cannot fetch comments: provide scheduled_post_id or (platform, postId, accountId) for a published post',
+        });
+      }
+      const ingestResult = await ingestComments(resolvedScheduledPostId);
+      const comments = await getCommentsForScheduledPost(resolvedScheduledPostId);
+      return res.status(200).json({
+        success: true,
+        platform,
+        action: 'fetch',
+        data: comments,
+        ingested: ingestResult.ingested,
+      });
     }
 
-    res.status(200).json({
-      success: true,
-      platform,
-      action,
-      data: result
-    });
+    if (action === 'reply') {
+      if (!platform || !postId || !accountId || !replyText) {
+        return res.status(400).json({ error: 'Reply requires platform, postId, accountId, replyText' });
+      }
+      const mockAccessToken = `mock_token_${accountId}`;
+      let result: any;
+      if (platform === 'linkedin') {
+        if (!commentId) return res.status(400).json({ error: 'Comment ID is required for LinkedIn replies' });
+        result = await replyToLinkedInComment(mockAccessToken, commentId, replyText);
+      } else if (platform === 'twitter') {
+        result = await replyToTwitterComment(mockAccessToken, postId, replyText);
+      } else if (platform === 'facebook' || platform === 'instagram') {
+        result = { id: `reply_${Date.now()}`, message: 'Reply posted successfully' };
+      } else {
+        throw new Error(`Unsupported platform: ${platform}`);
+      }
+      return res.status(200).json({ success: true, platform, action: 'reply', data: result });
+    }
 
+    if (action === 'delete') {
+      return res.status(200).json({ success: true, platform, action: 'delete', data: { message: 'Comment deleted successfully' } });
+    }
+
+    return res.status(400).json({ error: `Unsupported action: ${action}` });
   } catch (error: any) {
     console.error('Comment management error:', error);
-    res.status(500).json({ 
-      error: error.message,
-      success: false 
-    });
+    return res.status(500).json({ error: error.message, success: false });
   }
 }
 

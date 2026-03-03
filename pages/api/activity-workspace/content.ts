@@ -2,10 +2,12 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import {
   buildPlatformVariantsFromMaster,
   generateMasterContentFromIntent,
+  optimizeDiscoverabilityForPlatform,
 } from '@/backend/services/contentGenerationPipeline';
 import { generateCampaignPlan } from '@/backend/services/aiGateway';
 
-type WorkspaceAction = 'generate_master' | 'generate_variants' | 'refine_variant';
+type WorkspaceAction = 'generate_master' | 'generate_variants' | 'refine_variant' | 'improve_variant';
+type ImprovementType = 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -24,8 +26,77 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const schedules = Array.isArray((req.body as any)?.schedules) ? (req.body as any).schedules : [];
     const dailyExecutionItemRaw = asObject((req.body as any)?.dailyExecutionItem) || {};
 
-    if (!action || !['generate_master', 'generate_variants', 'refine_variant'].includes(action)) {
+    if (!action || !['generate_master', 'generate_variants', 'refine_variant', 'improve_variant'].includes(action)) {
       return res.status(400).json({ error: 'Invalid action' });
+    }
+
+    if (action === 'improve_variant') {
+      const improvementType = String((req.body as any)?.improvementType || '').trim() as ImprovementType;
+      const variantRaw = asObject((req.body as any)?.variant);
+      const platform = String((req.body as any)?.platform || (variantRaw as any)?.platform || '').trim().toLowerCase();
+      const executionId = String((req.body as any)?.executionId || (req.body as any)?.execution_id || (dailyExecutionItemRaw as any)?.execution_id || '').trim();
+      if (!variantRaw || !platform || !['IMPROVE_CTA', 'IMPROVE_HOOK', 'ADD_DISCOVERABILITY'].includes(improvementType)) {
+        return res.status(400).json({ error: 'improve_variant requires improvementType, platform, and variant' });
+      }
+      const variant = { ...variantRaw } as any;
+      const currentContent = String(variant?.generated_content || variant?.content || '').trim();
+      if (!currentContent) {
+        return res.status(400).json({ error: 'Variant has no content to improve' });
+      }
+      const contentType = String(variant?.content_type || 'post').trim().toLowerCase();
+
+      if (improvementType === 'ADD_DISCOVERABILITY') {
+        const discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
+        const hashtagLine = Array.isArray(discoverabilityMeta?.hashtags) && discoverabilityMeta.hashtags.length > 0
+          ? '\n\n' + (discoverabilityMeta.hashtags as string[]).join(' ')
+          : '';
+        const improved_variant = {
+          ...variant,
+          discoverability_meta: discoverabilityMeta,
+          generated_content: currentContent + hashtagLine,
+        };
+        return res.status(200).json({ success: true, improved_variant });
+      }
+
+      const instructions: Record<ImprovementType, string> = {
+        IMPROVE_CTA: 'Add a clear call-to-action at the end (e.g. Learn more, Sign up, Try now, Book a demo). Keep the rest of the content unchanged. Return only the revised content.',
+        IMPROVE_HOOK: 'Make the first line or opening sentence shorter and punchier (under 100 characters). Keep the rest of the content unchanged. Return only the revised content.',
+        ADD_DISCOVERABILITY: '',
+      };
+      const instruction = instructions[improvementType];
+      if (!instruction) {
+        return res.status(400).json({ error: 'Unsupported improvement type' });
+      }
+      const aiResult = await generateCampaignPlan({
+        companyId: null,
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.2,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a senior social content editor. Apply only the requested change. Return only the revised content plain text, no explanation.',
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              platform,
+              content_type: contentType,
+              instruction,
+              current_content: currentContent,
+              intent: (dailyExecutionItemRaw as any)?.intent ?? null,
+            }),
+          },
+        ],
+      });
+      const revised = String(aiResult?.output || '').trim();
+      if (!revised) {
+        return res.status(500).json({ error: 'Improvement returned empty output' });
+      }
+      const improved_variant = {
+        ...variant,
+        generated_content: revised,
+      };
+      return res.status(200).json({ success: true, improved_variant });
     }
 
     const activePlatformTargets = schedules

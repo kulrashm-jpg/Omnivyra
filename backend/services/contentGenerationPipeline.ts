@@ -121,6 +121,8 @@ type DailyExecutionItemLike = {
   media_status?: 'missing' | 'ready';
   master_content?: MasterContentPayload;
   platform_variants?: PlatformVariantPayload[];
+  progression_step?: number | null;
+  global_progression_index?: number | null;
   execution_readiness?: {
     text_ready: boolean;
     media_ready: boolean;

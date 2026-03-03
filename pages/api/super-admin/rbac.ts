@@ -6,6 +6,12 @@ const requireSuperAdminAccess = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> => {
+  // Legacy super-admin login: cookie takes precedence so RBAC works when user also has a Supabase session
+  const hasSession = req.cookies?.super_admin_session === '1';
+  if (hasSession) {
+    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
+    return true;
+  }
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id) {
     const isAdmin = await isPlatformSuperAdmin(user.id);
@@ -13,11 +19,6 @@ const requireSuperAdminAccess = async (
       res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       return false;
     }
-    return true;
-  }
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
     return true;
   }
   res.status(403).json({ error: 'NOT_AUTHORIZED' });
@@ -28,8 +29,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!(await requireSuperAdminAccess(req, res))) return;
 
   if (req.method === 'GET') {
-    const config = await getRbacConfig();
-    return res.status(200).json(config);
+    try {
+      const config = await getRbacConfig();
+      return res.status(200).json(config);
+    } catch (err: any) {
+      console.error('RBAC config fetch failed:', err);
+      return res.status(500).json({
+        error: 'RBAC_LOAD_FAILED',
+        message: err?.message || 'Failed to load RBAC configuration',
+      });
+    }
   }
 
   if (req.method === 'POST') {

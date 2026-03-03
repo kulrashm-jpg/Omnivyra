@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Target } from 'lucide-react';
+import { getIntentLabelForContentType } from '../utils/formatLineForContentType';
 
 export interface DayPlanItem {
   id: string;
@@ -174,7 +175,7 @@ export default function DayDetailModal({ day, weekNumber, items, onClose, weekTh
 
                       {writingIntent && (
                         <div>
-                          <span className="font-medium text-gray-600">Writing intent:</span>
+                          <span className="font-medium text-gray-600">{getIntentLabelForContentType(effectiveContentType)}:</span>
                           <p className="mt-0.5 text-gray-900">{writingIntent}</p>
                         </div>
                       )}

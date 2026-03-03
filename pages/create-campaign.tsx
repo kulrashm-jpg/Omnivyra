@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/router';
 import {
   ArrowLeft,
   Plus,
-  Target,
   Loader2,
   MessageSquare,
 } from 'lucide-react';
@@ -13,6 +12,16 @@ import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import EngineContextPanel from '../components/recommendations/EngineContextPanel';
 import UnifiedContextModeSelector, { type ContextMode, type FocusModule } from '../components/recommendations/engine-framework/UnifiedContextModeSelector';
+import {
+  PRIMARY_OPTIONS,
+  PERSONAL_BRAND_SECONDARY_GROUPS,
+  getSecondaryOptionsForPrimary,
+  isPersonalBrandPrimary,
+  buildHierarchicalPayload,
+  getDilutionSeverity,
+  type PrimaryCampaignTypeId,
+  type SecondaryOptionId,
+} from '../lib/campaignTypeHierarchy';
 
 const ISO_COUNTRIES = [
   { name: 'India', code: 'IN' },
@@ -27,22 +36,15 @@ const ISO_COUNTRIES = [
   { name: 'Japan', code: 'JP' },
 ];
 
-const CAMPAIGN_TYPES = [
-  { id: 'brand_awareness', label: 'Brand awareness' },
-  { id: 'network_expansion', label: 'Network expansion' },
-  { id: 'lead_generation', label: 'Lead generation' },
-  { id: 'authority_positioning', label: 'Authority positioning' },
-  { id: 'engagement_growth', label: 'Engagement growth' },
-  { id: 'product_promotion', label: 'Product promotion' },
-] as const;
-
 interface CampaignData {
   name: string;
   contextMode: ContextMode;
   focusedModules: FocusModule[];
   additionalDirection: string;
-  campaignTypes: string[];
-  campaignWeights: Record<string, number>;
+  /** Hierarchical: one primary (mutually exclusive). */
+  primaryCampaignType: PrimaryCampaignTypeId | null;
+  /** Secondary options (only shown after primary; skipped for Third-Party). */
+  secondaryCampaignTypes: SecondaryOptionId[];
   regionInput: string;
 }
 
@@ -62,8 +64,8 @@ export default function CreateCampaign() {
     contextMode: 'FULL',
     focusedModules: [],
     additionalDirection: '',
-    campaignTypes: ['brand_awareness'],
-    campaignWeights: { brand_awareness: 100 },
+    primaryCampaignType: 'brand_awareness',
+    secondaryCampaignTypes: [],
     regionInput: '',
   });
   const [regionWarning, setRegionWarning] = useState<string | null>(null);
@@ -76,28 +78,36 @@ export default function CreateCampaign() {
     return () => window.clearTimeout(t);
   }, [notice]);
 
-  const toggleCampaignType = (typeId: string) => {
-    const current = campaignData.campaignTypes;
-    let next: string[];
-    let weights = { ...campaignData.campaignWeights };
-    if (current.includes(typeId)) {
-      next = current.filter((t) => t !== typeId);
-      delete weights[typeId];
-    } else {
-      next = [...current, typeId];
-    }
-    if (next.length === 0) next = ['brand_awareness'];
-    if (next.length === 1) {
-      weights = { [next[0]]: 100 };
-    } else {
-      const per = Math.floor(100 / next.length);
-      const remainder = 100 - per * next.length;
-      weights = {};
-      next.forEach((t, i) => {
-        weights[t] = per + (i < remainder ? 1 : 0);
-      });
-    }
-    setCampaignData({ ...campaignData, campaignTypes: next, campaignWeights: weights });
+  const hierarchicalPayload = useMemo(() => {
+    const primary = campaignData.primaryCampaignType ?? 'brand_awareness';
+    return buildHierarchicalPayload(primary, campaignData.secondaryCampaignTypes);
+  }, [campaignData.primaryCampaignType, campaignData.secondaryCampaignTypes]);
+
+  const dilutionSeverity = useMemo(
+    () =>
+      campaignData.primaryCampaignType && campaignData.secondaryCampaignTypes.length > 0
+        ? getDilutionSeverity(campaignData.primaryCampaignType, campaignData.secondaryCampaignTypes)
+        : 'none',
+    [campaignData.primaryCampaignType, campaignData.secondaryCampaignTypes]
+  );
+
+  const selectPrimary = (id: PrimaryCampaignTypeId) => {
+    setCampaignData((prev) => ({
+      ...prev,
+      primaryCampaignType: id,
+      secondaryCampaignTypes: id === 'third_party' ? [] : prev.secondaryCampaignTypes,
+    }));
+  };
+
+  const toggleSecondary = (id: SecondaryOptionId) => {
+    setCampaignData((prev) => {
+      if (!prev.primaryCampaignType || prev.primaryCampaignType === 'third_party') return prev;
+      const has = prev.secondaryCampaignTypes.includes(id);
+      const next = has
+        ? prev.secondaryCampaignTypes.filter((t) => t !== id)
+        : [...prev.secondaryCampaignTypes, id];
+      return { ...prev, secondaryCampaignTypes: next };
+    });
   };
 
   const createCampaign = async () => {
@@ -112,13 +122,6 @@ export default function CreateCampaign() {
     if (campaignData.contextMode === 'NONE' && !campaignData.additionalDirection.trim()) {
       notify('info', 'Please provide research direction when using No Company Context.');
       return;
-    }
-    if (campaignData.campaignTypes.length > 1) {
-      const total = Object.values(campaignData.campaignWeights).reduce((a, b) => a + b, 0);
-      if (total !== 100) {
-        notify('info', `Campaign weights must sum to 100. Current total: ${total}%`);
-        return;
-      }
     }
 
     setIsLoading(true);
@@ -139,8 +142,8 @@ export default function CreateCampaign() {
         companyId: selectedCompanyId,
         build_mode: buildMode,
         context_scope: contextScope,
-        campaign_types: campaignData.campaignTypes,
-        campaign_weights: campaignData.campaignWeights,
+        campaign_types: hierarchicalPayload.campaign_types,
+        campaign_weights: hierarchicalPayload.campaign_weights,
         planning_context: {
           context_mode: campaignData.contextMode,
           focused_modules: campaignData.focusedModules,
@@ -149,6 +152,10 @@ export default function CreateCampaign() {
             campaignData.regionInput.trim()
               ? campaignData.regionInput.split(',').map((r) => r.trim().toUpperCase()).filter(Boolean)
               : undefined,
+          primary_campaign_type: campaignData.primaryCampaignType ?? undefined,
+          secondary_campaign_types: campaignData.secondaryCampaignTypes.length > 0 ? campaignData.secondaryCampaignTypes : undefined,
+          context: hierarchicalPayload.context,
+          mapped_core_types: hierarchicalPayload.mapped_core_types,
         },
       };
 
@@ -245,49 +252,106 @@ export default function CreateCampaign() {
             requireDirectionWhenNone={true}
           />
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Campaign Types (multi-select)</label>
-            <div className="flex flex-wrap gap-2">
-              {CAMPAIGN_TYPES.map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => toggleCampaignType(id)}
-                  className={`px-3 py-1.5 text-sm font-medium rounded-lg border ${
-                    campaignData.campaignTypes.includes(id)
-                      ? 'bg-green-100 border-green-300 text-green-800'
-                      : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
+          <div className="space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Primary campaign focus (choose one)</label>
+              <p className="text-xs text-gray-500 mb-3">Select your main objective. This locks the context for supporting options.</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {PRIMARY_OPTIONS.map((opt) => {
+                  const selected = campaignData.primaryCampaignType === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => selectPrimary(opt.id)}
+                      className={`rounded-xl border-2 px-4 py-3 text-left text-sm font-medium transition-colors ${
+                        selected
+                          ? 'border-green-500 bg-green-50 text-green-800'
+                          : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            {campaignData.campaignTypes.length > 1 && (
-              <div className="mt-3 flex flex-wrap gap-4">
-                {campaignData.campaignTypes.map((t) => (
-                  <div key={t} className="flex items-center gap-2">
-                    <label className="text-sm whitespace-nowrap">{CAMPAIGN_TYPES.find((c) => c.id === t)?.label ?? t}</label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={campaignData.campaignWeights[t] ?? 0}
-                      onChange={(e) => {
-                        const v = Math.min(100, Math.max(0, parseInt(e.target.value, 10) || 0));
-                        setCampaignData({
-                          ...campaignData,
-                          campaignWeights: { ...campaignData.campaignWeights, [t]: v },
-                        });
-                      }}
-                      className="w-16 px-2 py-1 border rounded"
-                    />
-                    <span className="text-sm text-gray-500">%</span>
+
+            {campaignData.primaryCampaignType && campaignData.primaryCampaignType !== 'third_party' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  {isPersonalBrandPrimary(campaignData.primaryCampaignType)
+                    ? 'Supporting goals (optional)'
+                    : 'Supporting goals (optional)'}
+                </label>
+                <p className="text-xs text-gray-500 mb-3">
+                  Add compatible objectives. These feed into the same recommendation engine.
+                </p>
+                {isPersonalBrandPrimary(campaignData.primaryCampaignType) ? (
+                  <div className="space-y-4">
+                    {PERSONAL_BRAND_SECONDARY_GROUPS.map((group) => (
+                      <div key={group.label}>
+                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{group.label}</span>
+                        <div className="flex flex-wrap gap-2 mt-1.5">
+                          {group.options.map((opt) => {
+                            const selected = campaignData.secondaryCampaignTypes.includes(opt.id);
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => toggleSecondary(opt.id)}
+                                className={`px-3 py-1.5 text-sm font-medium rounded-lg border ${
+                                  selected ? 'bg-green-100 border-green-300 text-green-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-                <span className={`text-xs ${Object.values(campaignData.campaignWeights).reduce((a, b) => a + b, 0) === 100 ? 'text-green-600' : 'text-red-600'}`}>
-                  Total: {Object.values(campaignData.campaignWeights).reduce((a, b) => a + b, 0)}%
-                </span>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {getSecondaryOptionsForPrimary(campaignData.primaryCampaignType).map((opt) => {
+                      const selected = campaignData.secondaryCampaignTypes.includes(opt.id);
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => toggleSecondary(opt.id)}
+                          className={`px-3 py-1.5 text-sm font-medium rounded-lg border ${
+                            selected ? 'bg-green-100 border-green-300 text-green-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {campaignData.primaryCampaignType === 'third_party' && (
+              <p className="text-sm text-gray-600 rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+                Third-party campaign: no further options. Recommendations will be generic collaboration/distribution-focused.
+              </p>
+            )}
+
+            {dilutionSeverity !== 'none' && (
+              <div
+                className={`rounded-lg border px-3 py-2 text-sm ${
+                  dilutionSeverity === 'caution'
+                    ? 'border-amber-300 bg-amber-50 text-amber-800'
+                    : 'border-indigo-200 bg-indigo-50 text-indigo-800'
+                }`}
+                role="status"
+              >
+                {dilutionSeverity === 'caution'
+                  ? 'These goals may dilute campaign focus. Consider selecting a primary campaign focus.'
+                  : 'These goals may dilute campaign focus. Consider selecting a primary campaign focus.'}
               </div>
             )}
           </div>
@@ -377,7 +441,7 @@ export default function CreateCampaign() {
             description: campaignData.additionalDirection,
             context_mode: campaignData.contextMode,
             focused_modules: campaignData.focusedModules,
-            campaign_types: campaignData.campaignTypes,
+            campaign_types: hierarchicalPayload.campaign_types,
             target_regions: campaignData.regionInput.trim()
               ? campaignData.regionInput.split(',').map((r) => r.trim().toUpperCase()).filter(Boolean)
               : undefined,

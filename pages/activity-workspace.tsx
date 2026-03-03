@@ -1,6 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
-import { ArrowLeft, CheckCircle2, Loader2, MessageSquare, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, CheckCircle2, Loader2, MessageSquare, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
+import { getAiLookingAheadMessage } from '@/lib/aiLookingAheadMessage';
+import { getAiStrategicConfidence } from '@/lib/aiStrategicConfidence';
+import { getViewMode } from '@/utils/getViewMode';
+import { VIEW_RULES } from '@/utils/viewVisibilityMatrix';
+import { executeMasterContentPipeline, executeVariantImprovement } from '@/lib/planning/executeMasterContentPipeline';
+import { computeVariantConfidence } from '@/lib/planning/variantConfidence';
+import { deriveVariantSuggestions } from '@/lib/planning/variantSuggestions';
+import {
+  getStoredFeedbackEvents,
+  buildStrategicMemoryProfile,
+  appendFeedbackEvent,
+} from '@/lib/intelligence/strategicMemory';
 
 type ScheduleItem = {
   id: string;
@@ -13,6 +25,13 @@ type ScheduleItem = {
   title?: string;
 };
 
+type MasterContentDocumentPayload = {
+  master_title: string;
+  source_execution_id: string;
+  platforms: string[];
+  platform_variants: Record<string, { execution_id: string; status: string; content?: string }>;
+};
+
 type WorkspacePayload = {
   campaignId?: string | null;
   weekNumber?: number;
@@ -22,7 +41,11 @@ type WorkspacePayload = {
   topic?: string;
   description?: string;
   dailyExecutionItem?: Record<string, unknown> | null;
+  /** When 'daily', opened from daily view topic click: no delete, show add platform. */
+  source?: 'daily' | 'weekly';
   schedules?: ScheduleItem[];
+  repurposing_context?: unknown;
+  master_content_document?: MasterContentDocumentPayload | null;
 };
 
 type RefineChatMessage = {
@@ -38,15 +61,30 @@ function asObject(value: unknown): Record<string, unknown> | null {
 
 export default function ActivityWorkspacePage() {
   const router = useRouter();
-  const workspaceKey = useMemo(() => {
+  const queryWorkspaceKey = useMemo(() => {
     const raw = Array.isArray(router.query.workspaceKey) ? router.query.workspaceKey[0] : router.query.workspaceKey;
     return String(raw || '').trim();
   }, [router.query.workspaceKey]);
+  const queryCampaignId = useMemo(() => {
+    const raw = Array.isArray(router.query.campaignId) ? router.query.campaignId[0] : router.query.campaignId;
+    return String(raw || '').trim();
+  }, [router.query.campaignId]);
+  const queryExecutionId = useMemo(() => {
+    const raw = Array.isArray(router.query.executionId) ? router.query.executionId[0] : router.query.executionId;
+    return String(raw || '').trim();
+  }, [router.query.executionId]);
+
+  const workspaceKey = useMemo(() => {
+    if (queryWorkspaceKey) return queryWorkspaceKey;
+    if (queryCampaignId && queryExecutionId) return `activity-workspace-${queryCampaignId}-${queryExecutionId}`;
+    return '';
+  }, [queryWorkspaceKey, queryCampaignId, queryExecutionId]);
 
   const [payload, setPayload] = useState<WorkspacePayload | null>(null);
   const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isGeneratingMaster, setIsGeneratingMaster] = useState(false);
+  const [isGeneratingVariants, setIsGeneratingVariants] = useState(false);
   const [latestMasterContent, setLatestMasterContent] = useState<Record<string, unknown> | null>(null);
   const [repurposingByScheduleId, setRepurposingByScheduleId] = useState<Record<string, boolean>>({});
   const [isHydratingContext, setIsHydratingContext] = useState(false);
@@ -57,7 +95,87 @@ export default function ActivityWorkspacePage() {
   const [refineMessagesByScheduleId, setRefineMessagesByScheduleId] = useState<Record<string, RefineChatMessage[]>>({});
   const [finalizedByScheduleId, setFinalizedByScheduleId] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [systemBlockExpanded, setSystemBlockExpanded] = useState(false);
+  const [selectedVariantTab, setSelectedVariantTab] = useState<string>('');
+  const [platformRulesByPlatform, setPlatformRulesByPlatform] = useState<Record<string, { guidelines: string[] }>>({});
+  const [improvingSuggestionKey, setImprovingSuggestionKey] = useState<string | null>(null);
+  const [improvedByScheduleId, setImprovedByScheduleId] = useState<Record<string, boolean>>({});
+  const [isAutoImprovingByScheduleId, setIsAutoImprovingByScheduleId] = useState<Record<string, boolean>>({});
+  const [autoAppliedByScheduleId, setAutoAppliedByScheduleId] = useState<Record<string, boolean>>({});
+  const [strategicMemoryProfile, setStrategicMemoryProfile] = useState<ReturnType<typeof buildStrategicMemoryProfile> | null>(null);
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+
+  type VariantIntelligenceStatus = 'pending' | 'generated' | 'adapted' | 'ready';
+  const getVariantIntelligenceStatus = (variant: Record<string, unknown> | null | undefined, scheduleId: string): VariantIntelligenceStatus => {
+    if (!variant || !String((variant as any)?.generated_content ?? '').trim()) return 'pending';
+    if (finalizedByScheduleId[scheduleId]) return 'ready';
+    if ((variant as any)?.adaptation_trace && typeof (variant as any).adaptation_trace === 'object') return 'adapted';
+    return 'generated';
+  };
+  const variantStatusLabel: Record<VariantIntelligenceStatus, string> = {
+    pending: 'Pending',
+    generated: 'Generated',
+    adapted: 'Adapted to platform rules',
+    ready: 'Ready to publish',
+  };
+  const variantStatusDot: Record<VariantIntelligenceStatus, string> = {
+    pending: '🟡',
+    generated: '🟢',
+    adapted: '🔵',
+    ready: '🟣',
+  };
+  const fetchPlatformRules = (platform: string) => {
+    const key = String(platform || '').trim().toLowerCase();
+    if (!key || platformRulesByPlatform[key]?.guidelines?.length) return;
+    fetch(`/api/content/platform-rules?platform=${encodeURIComponent(key)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.guidelines?.length) setPlatformRulesByPlatform((prev) => ({ ...prev, [key]: { guidelines: data.guidelines } }));
+      })
+      .catch(() => {});
+  };
+
+  const variantTabPlatforms = useMemo(() => {
+    const set = new Set<string>();
+    schedules.forEach((s) => set.add(normalizeKey(s.platform)));
+    return Array.from(set);
+  }, [schedules]);
+
+  const confidenceByPlatform = useMemo(() => {
+    const out: Record<string, number> = {};
+    variantTabPlatforms.forEach((plat) => {
+      const variantsForPlatform = platformVariants.filter(
+        (v) => normalizeKey((v as any)?.platform) === plat
+      );
+      let maxScore = 0;
+      variantsForPlatform.forEach((v) => {
+        const c = computeVariantConfidence(v);
+        if (c.score > maxScore) maxScore = c.score;
+      });
+      if (variantsForPlatform.length > 0) out[plat] = maxScore;
+    });
+    return out;
+  }, [variantTabPlatforms, platformVariants]);
+
+  useEffect(() => {
+    if (schedules.length > 0 && !selectedVariantTab && variantTabPlatforms[0]) {
+      setSelectedVariantTab(variantTabPlatforms[0]);
+      fetchPlatformRules(variantTabPlatforms[0]);
+    }
+  }, [schedules.length, selectedVariantTab, variantTabPlatforms.join(',')]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const events = getStoredFeedbackEvents();
+    const campaignId = payload?.campaignId ?? '';
+    const filtered = campaignId ? events.filter((e) => e.campaign_id === campaignId) : events;
+    setStrategicMemoryProfile(buildStrategicMemoryProfile(filtered));
+  }, [payload?.campaignId]);
+
+  const aiPreviewMessage = useMemo(() => getAiLookingAheadMessage(payload as any), [payload]);
+  const session = undefined as { role?: string } | undefined;
+  const viewMode = getViewMode(session?.role);
+  const aiConfidenceMessage = useMemo(() => getAiStrategicConfidence(payload as any), [payload]);
 
   useEffect(() => {
     if (!notice) return;
@@ -71,21 +189,62 @@ export default function ActivityWorkspacePage() {
       setIsLoaded(true);
       return;
     }
-    try {
-      const raw = window.sessionStorage.getItem(workspaceKey);
-      if (!raw) {
-        setIsLoaded(true);
-        return;
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const raw = typeof window !== 'undefined' ? window.sessionStorage.getItem(workspaceKey) : null;
+        if (raw) {
+          const parsed = JSON.parse(raw) as WorkspacePayload;
+          if (!cancelled) {
+            setPayload(parsed);
+            setSchedules(Array.isArray(parsed?.schedules) ? parsed.schedules : []);
+          }
+          if (!cancelled) setIsLoaded(true);
+          return;
+        }
+
+        const canResolve =
+          (queryCampaignId && queryExecutionId) ||
+          (queryWorkspaceKey && String(queryWorkspaceKey).startsWith('activity-workspace-'));
+        if (canResolve && typeof window !== 'undefined') {
+          setHasTriedHydration(true);
+          setIsHydratingContext(true);
+          const params = new URLSearchParams();
+          if (queryWorkspaceKey) params.set('workspaceKey', queryWorkspaceKey);
+          else {
+            params.set('campaignId', queryCampaignId);
+            params.set('executionId', queryExecutionId);
+          }
+          const res = await fetch(`/api/activity-workspace/resolve?${params}`, { credentials: 'include' });
+          if (!cancelled && res.ok) {
+            const data = await res.json();
+            const resolvedPayload = data?.payload;
+            if (resolvedPayload && typeof resolvedPayload === 'object') {
+              setPayload(resolvedPayload);
+              setSchedules(Array.isArray(resolvedPayload?.schedules) ? resolvedPayload.schedules : []);
+              const key = data?.workspaceKey || workspaceKey;
+              try {
+                window.sessionStorage.setItem(key, JSON.stringify(resolvedPayload));
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (error) {
+        if (!cancelled) console.error('Failed to load workspace payload:', error);
+      } finally {
+        if (!cancelled) {
+          setIsHydratingContext(false);
+          setIsLoaded(true);
+        }
       }
-      const parsed = JSON.parse(raw) as WorkspacePayload;
-      setPayload(parsed);
-      setSchedules(Array.isArray(parsed?.schedules) ? parsed.schedules : []);
-    } catch (error) {
-      console.error('Failed to load workspace payload:', error);
-    } finally {
-      setIsLoaded(true);
-    }
-  }, [router.isReady, workspaceKey]);
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [router.isReady, workspaceKey, queryCampaignId, queryExecutionId, queryWorkspaceKey]);
 
   const dailyRaw = asObject(payload?.dailyExecutionItem);
   const nestedBrief = asObject(dailyRaw?.writer_content_brief);
@@ -118,8 +277,31 @@ export default function ActivityWorkspacePage() {
     String(masterContent?.generation_status || '').toLowerCase() === 'generated' ||
     String(masterContent?.content || '').trim().length > 0;
 
+  /** When opened from daily view topic click: no delete, show add platform only. */
+  const isDailyTopicView = payload?.source === 'daily';
+
   const normalizeKey = (value: unknown) => String(value || '').trim().toLowerCase();
-  const platformOptions = ['linkedin', 'facebook', 'instagram', 'x', 'youtube', 'tiktok', 'reddit', 'pinterest'];
+  const allPlatformOptions = ['linkedin', 'facebook', 'instagram', 'x', 'youtube', 'tiktok', 'reddit', 'pinterest'];
+  /** Suggested social media platforms for this activity (from execution item + current schedules). Same list shown in Writer Context and used in Platform Schedules. */
+  const suggestedPlatforms = (() => {
+    const seen = new Set<string>();
+    const add = (platform: unknown) => {
+      const p = normalizeKey(platform);
+      if (p && allPlatformOptions.includes(p)) seen.add(p);
+    };
+    const daily = asObject(payload?.dailyExecutionItem);
+    if (daily) {
+      (Array.isArray((daily as any)?.selected_platforms) ? (daily as any).selected_platforms : []).forEach(add);
+      (Array.isArray((daily as any)?.planned_platform_targets) ? (daily as any).planned_platform_targets : []).forEach((t: any) => add(t?.platform));
+      (Array.isArray((daily as any)?.active_platform_targets) ? (daily as any).active_platform_targets : []).forEach((t: any) => add(t?.platform));
+      (Array.isArray((daily as any)?.platform_variants) ? (daily as any).platform_variants : []).forEach((v: any) => add(v?.platform));
+      add((daily as any)?.platform);
+    }
+    (payload?.schedules || schedules || []).forEach((s: ScheduleItem) => add(s.platform));
+    const list = Array.from(seen);
+    return list.length > 0 ? list : allPlatformOptions;
+  })();
+  const platformOptions = suggestedPlatforms;
   const contentTypeOptionsByPlatform: Record<string, string[]> = {
     linkedin: ['feed_post', 'article', 'white_paper', 'case_study', 'carousel', 'video', 'newsletter'],
     facebook: ['post', 'carousel', 'video', 'story', 'reel'],
@@ -472,6 +654,24 @@ export default function ActivityWorkspacePage() {
           return {
             ...prev,
             dailyExecutionItem: nextDailyExecution,
+            ...((weekMatch as any)?.distribution_strategy != null
+              ? { distribution_strategy: (weekMatch as any).distribution_strategy }
+              : {}),
+            ...((weekMatch as any)?.distribution_reason != null
+              ? { distribution_reason: (weekMatch as any).distribution_reason }
+              : {}),
+            ...((weekMatch as any)?.planning_adjustment_reason != null
+              ? { planning_adjustment_reason: (weekMatch as any).planning_adjustment_reason }
+              : {}),
+            ...((weekMatch as any)?.planning_adjustments_summary != null
+              ? { planning_adjustments_summary: (weekMatch as any).planning_adjustments_summary }
+              : {}),
+            ...((weekMatch as any)?.momentum_adjustments != null
+              ? { momentum_adjustments: (weekMatch as any).momentum_adjustments }
+              : {}),
+            ...((weekMatch as any)?.week_extras != null
+              ? { week_extras: (weekMatch as any).week_extras }
+              : {}),
           };
         });
         setSchedules(hydratedSchedules);
@@ -500,7 +700,11 @@ export default function ActivityWorkspacePage() {
 
   const addScheduleRow = () => {
     const first = schedules[0];
-    const platform = normalizeKey(first?.platform) || 'linkedin';
+    const preferred = normalizeKey(first?.platform);
+    const platform =
+      (preferred && suggestedPlatforms.includes(preferred) ? preferred : null) ||
+      suggestedPlatforms[0] ||
+      'linkedin';
     const contentType = normalizeKey(first?.contentType) || getContentTypeOptions(platform)[0];
     const row: ScheduleItem = {
       id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -657,6 +861,27 @@ export default function ActivityWorkspacePage() {
     notify('success', 'Changes saved to daily planner.');
   };
 
+  /** Build URL to week plan (campaign-planning-hierarchical) so back goes to the week plan view. */
+  const getBackToWeekPlanUrl = (): string | null => {
+    const cid = String(payload?.campaignId || '').trim();
+    if (!cid) return null;
+    const params = new URLSearchParams();
+    params.set('campaignId', cid);
+    const weekNum = payload?.weekNumber;
+    if (weekNum != null && Number.isFinite(weekNum)) params.set('week', String(weekNum));
+    const qs = params.toString();
+    return `/campaign-planning-hierarchical${qs ? `?${qs}` : ''}`;
+  };
+
+  const handleBackToWeekPlan = () => {
+    const url = getBackToWeekPlanUrl();
+    if (url) {
+      router.push(url);
+    } else {
+      router.back();
+    }
+  };
+
   const buildActivityRequestPayload = () => {
     const primary = schedules[0];
     return {
@@ -711,6 +936,78 @@ export default function ActivityWorkspacePage() {
       notify('error', `Failed to generate master content: ${String((error as any)?.message || error)}`);
     } finally {
       setIsGeneratingMaster(false);
+    }
+  };
+
+  const onGenerateVariants = async () => {
+    const campaignId = String(payload?.campaignId ?? '').trim();
+    const executionId = String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? '').trim();
+    const masterDoc = payload?.master_content_document ?? null;
+    const dailyExecutionItem = payload?.dailyExecutionItem ?? null;
+    if (!campaignId || !executionId) {
+      notify('info', 'Campaign and activity context required.');
+      return;
+    }
+    try {
+      setIsGeneratingVariants(true);
+      const result = await executeMasterContentPipeline({
+        campaignId,
+        executionId,
+        masterDocument: masterDoc,
+        dailyExecutionItem,
+        schedules,
+      });
+      const incomingVariants = Array.isArray(result.platform_variants) ? result.platform_variants : [];
+      const normalizeKey = (v: unknown) => String(v ?? '').trim().toLowerCase();
+      const mergedByKey = new Map<string, Record<string, unknown>>();
+      const existingVariants = Array.isArray((dailyExecutionItem as any)?.platform_variants) ? (dailyExecutionItem as any).platform_variants : [];
+      for (const v of existingVariants) {
+        const key = `${normalizeKey((v as any)?.platform)}::${normalizeKey((v as any)?.content_type)}`;
+        if (key !== '::') mergedByKey.set(key, v as Record<string, unknown>);
+      }
+      for (const v of incomingVariants) {
+        const key = `${normalizeKey((v as any)?.platform)}::${normalizeKey((v as any)?.content_type)}`;
+        if (key !== '::') {
+          mergedByKey.set(key, {
+            ...(v as Record<string, unknown>),
+            generated_content: (v as any)?.generated_content ?? (v as any)?.content,
+            generation_status: 'generated',
+          });
+        }
+      }
+      const mergedVariants = Array.from(mergedByKey.values());
+      const nextPlatformVariantsRecord: Record<string, { execution_id: string; status: string; content?: string }> = { ...(masterDoc?.platform_variants ?? {}) };
+      for (const v of incomingVariants) {
+        const platform = normalizeKey((v as any)?.platform);
+        if (!platform) continue;
+        const content = String((v as any)?.generated_content ?? (v as any)?.content ?? '').trim();
+        const execution_id = (masterDoc?.platform_variants?.[platform] as any)?.execution_id ?? executionId;
+        nextPlatformVariantsRecord[platform] = { execution_id, status: 'GENERATED', content: content || undefined };
+      }
+      if (result.master_content) {
+        setLatestMasterContent(result.master_content as Record<string, unknown>);
+      }
+      setPayload((prev) => {
+        if (!prev) return prev;
+        const current = asObject(prev.dailyExecutionItem) || {};
+        return {
+          ...prev,
+          master_content_document: masterDoc
+            ? { ...masterDoc, platform_variants: nextPlatformVariantsRecord }
+            : prev.master_content_document,
+          dailyExecutionItem: {
+            ...current,
+            ...(result.master_content ? { master_content: result.master_content } : {}),
+            platform_variants: mergedVariants,
+          },
+        };
+      });
+      notify('success', 'Platform variants generated.');
+    } catch (error) {
+      console.error('Generate variants failed:', error);
+      notify('error', `Failed to generate variants: ${String((error as any)?.message || error)}`);
+    } finally {
+      setIsGeneratingVariants(false);
     }
   };
 
@@ -816,15 +1113,46 @@ export default function ActivityWorkspacePage() {
             <h1 className="text-2xl font-bold text-gray-900">Activity Content Workspace</h1>
             <p className="text-sm text-gray-600">
               Week {payload.weekNumber || '—'} • {payload.day || '—'} • {payload.title || 'Untitled activity'}
+              {(payload as any).distribution_strategy && (
+                <> • Distribution: {String((payload as any).distribution_strategy).replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())}</>
+              )}
             </p>
+            {(payload as any).distribution_reason && (
+              <p className="text-xs text-gray-500 mt-0.5">Why: {(payload as any).distribution_reason}</p>
+            )}
+            {(payload as any).planning_adjustment_reason && (
+              <p className="text-xs text-gray-500 mt-0.5">{(payload as any).planning_adjustment_reason}</p>
+            )}
+            {(payload as any).planning_adjustments_summary?.text && (
+              <p className="text-xs text-gray-500 mt-0.5">What changed: {(payload as any).planning_adjustments_summary.text}</p>
+            )}
+            {(payload as any).momentum_adjustments?.absorbed_from_week?.length ? (
+              <p className="text-xs text-gray-500 mt-0.5">
+                Momentum adjusted from Week {(payload as any).momentum_adjustments.absorbed_from_week.join(', ')}
+                {(payload as any).momentum_adjustments?.momentum_transfer_strength ? (
+                  <> · Momentum: {(payload as any).momentum_adjustments.momentum_transfer_strength.charAt(0).toUpperCase()}{(payload as any).momentum_adjustments.momentum_transfer_strength.slice(1)} adjustment</>
+                ) : null}
+              </p>
+            ) : null}
+            {(payload as any).week_extras?.recovered_topics?.length ? (
+              <p className="text-xs text-gray-500 mt-0.5" title={((payload as any).week_extras.recovered_topics as Array<{ topic: string; recovered_from_week: number }>).map((r) => r.topic).join(', ')}>
+                Narrative recovered from Week {((payload as any).week_extras.recovered_topics as Array<{ recovered_from_week: number }>).map((r) => r.recovered_from_week).filter((v, i, a) => a.indexOf(v) === i).join(', ')}
+              </p>
+            ) : null}
+            {aiPreviewMessage ? (
+              <p className="text-xs text-slate-500 italic mt-0.5">AI Preview: {aiPreviewMessage}</p>
+            ) : null}
+            {aiConfidenceMessage ? (
+              <p className="text-xs text-slate-400 italic mt-0.5">{aiConfidenceMessage}</p>
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => router.back()}
+              onClick={handleBackToWeekPlan}
               className="px-3 py-2 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
             >
               <ArrowLeft className="h-4 w-4" />
-              Back
+              Back to week plan
             </button>
             <button
               onClick={saveAndSendBack}
@@ -869,6 +1197,14 @@ export default function ActivityWorkspacePage() {
               <div className="text-gray-500">Narrative style</div>
               <div className="text-gray-900">{String(writerBrief?.narrativeStyle || '—')}</div>
             </div>
+            <div className="md:col-span-2">
+              <div className="text-gray-500">Suggested social media platforms</div>
+              <div className="text-gray-900">
+                {suggestedPlatforms.length > 0
+                  ? suggestedPlatforms.map((p) => labelize(p)).join(', ')
+                  : '—'}
+              </div>
+            </div>
           </div>
           {payload.description && (
             <div>
@@ -878,18 +1214,80 @@ export default function ActivityWorkspacePage() {
           )}
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">Content Inputs by Platform</h2>
-            <button
-              onClick={handleGenerateMasterContent}
-              disabled={isGeneratingMaster}
-              className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
-            >
-              {isGeneratingMaster ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {hasMasterGenerated ? 'Regenerate Master Content' : 'Create Master Content'}
-            </button>
+        {VIEW_RULES[viewMode].showCreatorBrief && dailyRaw?.creator_instruction && typeof dailyRaw.creator_instruction === 'object' && (
+          <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+            <h2 className="text-lg font-semibold text-gray-900">Creator Brief</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              {(dailyRaw.creator_instruction as Record<string, unknown>).objective != null && (
+                <div>
+                  <div className="text-gray-500">Objective</div>
+                  <div className="text-gray-900">{String((dailyRaw.creator_instruction as Record<string, unknown>).objective ?? '—')}</div>
+                </div>
+              )}
+              {(dailyRaw.creator_instruction as Record<string, unknown>).targetAudience != null && (
+                <div>
+                  <div className="text-gray-500">Audience</div>
+                  <div className="text-gray-900">{String((dailyRaw.creator_instruction as Record<string, unknown>).targetAudience ?? '—')}</div>
+                </div>
+              )}
+              {(dailyRaw.creator_instruction as Record<string, unknown>).keyMessage != null && (
+                <div className="md:col-span-2">
+                  <div className="text-gray-500">Key message</div>
+                  <div className="text-gray-900">{String((dailyRaw.creator_instruction as Record<string, unknown>).keyMessage ?? '—')}</div>
+                </div>
+              )}
+              {(dailyRaw.creator_instruction as Record<string, unknown>).expectedOutcome != null && (
+                <div className="md:col-span-2">
+                  <div className="text-gray-500">Expected outcome</div>
+                  <div className="text-gray-900">{String((dailyRaw.creator_instruction as Record<string, unknown>).expectedOutcome ?? '—')}</div>
+                </div>
+              )}
+              {(dailyRaw.creator_instruction as Record<string, unknown>).formatHint != null && (
+                <div className="md:col-span-2">
+                  <div className="text-gray-500">Format hint</div>
+                  <div className="text-gray-900">{String((dailyRaw.creator_instruction as Record<string, unknown>).formatHint ?? '—')}</div>
+                </div>
+              )}
+              {Array.isArray((dailyRaw.creator_instruction as Record<string, unknown>).executionChecklist) &&
+                ((dailyRaw.creator_instruction as Record<string, unknown>).executionChecklist as string[]).length > 0 && (
+                  <div className="md:col-span-2 space-y-1">
+                    <div className="text-gray-500">Execution Checklist</div>
+                    <ul className="text-gray-600 text-sm list-disc list-inside space-y-0.5">
+                      {((dailyRaw.creator_instruction as Record<string, unknown>).executionChecklist as string[]).map((item, i) => (
+                        <li key={i}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+            </div>
           </div>
+        )}
+
+        {VIEW_RULES[viewMode].showSystemFields && dailyRaw && (
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setSystemBlockExpanded((v) => !v)}
+              className="w-full px-5 py-3 flex items-center justify-between text-left text-sm font-medium text-gray-700 hover:bg-gray-50 border-b border-gray-100"
+            >
+              <span>System Execution Intelligence</span>
+              {systemBlockExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+            {systemBlockExpanded && (
+              <div className="p-5 space-y-2 text-xs text-gray-600 grid grid-cols-1 md:grid-cols-2 gap-2">
+                {dailyRaw.execution_mode != null && <div><span className="font-medium text-gray-500">execution_mode:</span> {String(dailyRaw.execution_mode)}</div>}
+                {dailyRaw.ai_generated != null && <div><span className="font-medium text-gray-500">ai_generated:</span> {String(dailyRaw.ai_generated)}</div>}
+                {dailyRaw.master_content_id != null && <div className="md:col-span-2"><span className="font-medium text-gray-500">master_content_id:</span> {String(dailyRaw.master_content_id)}</div>}
+                {dailyRaw.narrativeStyle != null && <div className="md:col-span-2"><span className="font-medium text-gray-500">narrativeStyle:</span> {String(dailyRaw.narrativeStyle)}</div>}
+                {(dailyRaw.contentGuidance && typeof dailyRaw.contentGuidance === 'object') && <div className="md:col-span-2"><span className="font-medium text-gray-500">contentGuidance:</span> {JSON.stringify(dailyRaw.contentGuidance)}</div>}
+                {dailyRaw.weeklyContextCapsule != null && typeof dailyRaw.weeklyContextCapsule === 'object' && <div className="md:col-span-2"><span className="font-medium text-gray-500">weeklyContextCapsule:</span> {JSON.stringify(dailyRaw.weeklyContextCapsule)}</div>}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+          <h2 className="text-lg font-semibold text-gray-900">Master Content &amp; Platform Variants</h2>
           {!hasMasterGenerated && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
               Create master content first, then use per-platform Repurpose Content buttons below.
@@ -904,14 +1302,87 @@ export default function ActivityWorkspacePage() {
             Repurposed output will appear under each platform schedule inside Master Content Reference.
           </p>
 
-          {masterContent && (
-            <div className="rounded-lg border border-gray-200 p-3 bg-indigo-50">
-              <div className="text-sm font-medium text-indigo-900">Master Content Reference</div>
-              <p className="text-sm text-indigo-800 whitespace-pre-wrap mt-2">
-                {String(masterContent.content || '')}
-              </p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* LEFT: Master Content (single source) */}
+            <div className="space-y-3">
+              <h3 className="text-base font-semibold text-gray-900">Master Content</h3>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleGenerateMasterContent}
+                  disabled={isGeneratingMaster}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                >
+                  {isGeneratingMaster ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {hasMasterGenerated ? 'Regenerate Master' : 'Create Master Content'}
+                </button>
+                <button
+                  onClick={onGenerateVariants}
+                  disabled={isGeneratingVariants || !payload?.campaignId || !payload?.activityId}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
+                >
+                  {isGeneratingVariants ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  Generate All Variants
+                </button>
+              </div>
+              {masterContent ? (
+                <div className="rounded-lg border border-indigo-200 p-4 bg-indigo-50/50">
+                  <div className="text-sm font-medium text-indigo-900">Single source</div>
+                  <p className="text-sm text-indigo-800 whitespace-pre-wrap mt-2">
+                    {String(masterContent.content || '')}
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-gray-200 p-4 bg-gray-50 text-sm text-gray-500">
+                  No master content yet. Create master content to repurpose into platform variants.
+                </div>
+              )}
             </div>
-          )}
+
+            {/* RIGHT: Platform variants (tabs) + rules transparency */}
+            <div className="space-y-3">
+              <h3 className="text-base font-semibold text-gray-900">Platform Variants</h3>
+              {variantTabPlatforms.length > 0 && (
+                <div className="flex flex-wrap gap-1 border-b border-gray-200 pb-2">
+                  {variantTabPlatforms.map((plat) => {
+                    const isSelected = (selectedVariantTab || variantTabPlatforms[0]) === plat;
+                    return (
+                      <button
+                        key={plat}
+                        type="button"
+                        onClick={() => { setSelectedVariantTab(plat); fetchPlatformRules(plat); }}
+                        className={`px-3 py-1.5 rounded-t text-sm font-medium ${isSelected ? 'bg-indigo-100 text-indigo-800 border border-b-0 border-gray-200 -mb-px' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                      >
+                        {labelize(plat)}
+                        {confidenceByPlatform[plat] != null && (
+                          <span className="ml-1 opacity-90">• {confidenceByPlatform[plat]}%</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {schedules.length > 0 && (() => {
+                const activePlatform = selectedVariantTab || variantTabPlatforms[0];
+                if (activePlatform && !platformRulesByPlatform[activePlatform]?.guidelines?.length) fetchPlatformRules(activePlatform);
+                const rules = platformRulesByPlatform[activePlatform];
+                return rules?.guidelines?.length > 0 ? (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
+                    <div className="text-sm font-medium text-emerald-900 mb-2">
+                      {labelize(activePlatform)} rules applied
+                    </div>
+                    <ul className="space-y-1 text-sm text-emerald-800">
+                      {rules.guidelines.map((g, i) => (
+                        <li key={i} className="flex items-center gap-2">
+                          <span className="text-emerald-600">✔</span>
+                          {g}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null;
+              })()}
+            </div>
+          </div>
 
           <div className="rounded-lg border border-gray-200 p-3 bg-gray-50 mt-3">
             <div className="text-sm font-medium text-gray-900 mb-2">
@@ -924,14 +1395,18 @@ export default function ActivityWorkspacePage() {
                 className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
               >
                 <Plus className="h-3.5 w-3.5" />
-                Add Content Format (white paper, video, carousel...)
+                {isDailyTopicView
+                  ? 'Add social media platform'
+                  : 'Add Content Format (white paper, video, carousel...)'}
               </button>
             </div>
             {schedules.length === 0 ? (
               <p className="text-sm text-gray-600">No platform schedule rows. Add one above to set platform, format, date/time and repurpose content.</p>
             ) : (
               <div className="space-y-3">
-                {schedules.map((item) => {
+                {schedules
+                  .filter((item) => normalizeKey(item.platform) === (selectedVariantTab || variantTabPlatforms[0]))
+                  .map((item) => {
                       const matchedVariant = findVariantForSchedule(item);
                       const marketing = buildMarketingSupport(
                         item.platform,
@@ -1020,15 +1495,17 @@ export default function ActivityWorkspacePage() {
                               <CheckCircle2 className="h-3.5 w-3.5" />
                               Finalize
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => removeScheduleRow(item.id)}
-                              disabled={schedules.length <= 1}
-                              className="rounded-lg border border-red-200 p-1.5 text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-                              title="Remove format row"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                            {!isDailyTopicView && (
+                              <button
+                                type="button"
+                                onClick={() => removeScheduleRow(item.id)}
+                                disabled={schedules.length <= 1}
+                                className="rounded-lg border border-red-200 p-1.5 text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                title="Remove format row"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           </div>
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1052,7 +1529,212 @@ export default function ActivityWorkspacePage() {
                           </label>
                         </div>
                         <div className="mt-3 pt-3 border-t border-gray-200 space-y-2">
-                          <div className="text-xs font-semibold text-gray-700">Repurposed Output</div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-semibold text-gray-700">Repurposed Output</span>
+                            <span className="text-xs text-gray-500">
+                              {variantStatusDot[getVariantIntelligenceStatus(matchedVariant as Record<string, unknown>, item.id)]}{' '}
+                              {variantStatusLabel[getVariantIntelligenceStatus(matchedVariant as Record<string, unknown>, item.id)]}
+                            </span>
+                          </div>
+                          {matchedVariant && (() => {
+                            const confidence = computeVariantConfidence(matchedVariant);
+                            const suggestions = deriveVariantSuggestions(confidence, matchedVariant, item.platform, strategicMemoryProfile);
+                            const shouldShowAutoStrategist =
+                              confidence.level === 'LOW' ||
+                              (confidence.level === 'MEDIUM' && suggestions.length >= 2);
+                            const levelColor =
+                              confidence.level === 'HIGH'
+                                ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                                : confidence.level === 'MEDIUM'
+                                  ? 'text-amber-700 bg-amber-50 border-amber-200'
+                                  : 'text-red-700 bg-red-50 border-red-200';
+                            return (
+                              <>
+                                <div className={`rounded-lg border p-2 text-xs ${levelColor}`}>
+                                  <div className="font-semibold mb-1">
+                                    Confidence: {confidence.score}% ({confidence.level})
+                                  </div>
+                                  <ul className="space-y-0.5">
+                                    {confidence.reasons.map((r, i) => (
+                                      <li key={i} className="flex items-center gap-2">
+                                        {r === 'CTA could be stronger' ? (
+                                          <span className="text-amber-600">⚠</span>
+                                        ) : (
+                                          <span className="text-emerald-600">✔</span>
+                                        )}
+                                        {r}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                                {suggestions.length > 0 && (
+                                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs">
+                                    <div className="font-semibold text-slate-700 mb-2">AI Suggestions</div>
+                                    {suggestions.map((s) => {
+                                      const suggestionKey = `${item.id}-${s.id}`;
+                                      const isImproving = improvingSuggestionKey === suggestionKey;
+                                      const showImproved = improvedByScheduleId[item.id];
+                                      return (
+                                        <div key={s.id} className="mb-2 last:mb-0">
+                                          <div className="font-medium text-slate-800">→ {s.label}</div>
+                                          <div className="text-slate-600 mt-0.5">{s.description}</div>
+                                          <div className="mt-1.5 flex items-center gap-2">
+                                            <button
+                                              type="button"
+                                              disabled={isImproving}
+                                              onClick={async () => {
+                                                setImprovingSuggestionKey(suggestionKey);
+                                                try {
+                                                  const { improved_variant } = await executeVariantImprovement({
+                                                    campaignId: payload?.campaignId ?? undefined,
+                                                    executionId: String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? ''),
+                                                    platform: item.platform,
+                                                    improvementType: s.action,
+                                                    variant: matchedVariant as Record<string, unknown>,
+                                                    dailyExecutionItem: payload?.dailyExecutionItem ?? undefined,
+                                                  });
+                                                  const nextVariants = [...platformVariants];
+                                                  const idx = nextVariants.findIndex(
+                                                    (v) =>
+                                                      normalizeKey((v as any)?.platform) === normalizeKey(item.platform) &&
+                                                      normalizeKey((v as any)?.content_type) === normalizeKey(item.contentType)
+                                                  );
+                                                  if (idx >= 0) {
+                                                    nextVariants[idx] = improved_variant as any;
+                                                  } else {
+                                                    nextVariants.push({ ...improved_variant, platform: item.platform, content_type: item.contentType });
+                                                  }
+                                                  setPayload((prev) =>
+                                                    prev
+                                                      ? {
+                                                          ...prev,
+                                                          dailyExecutionItem: {
+                                                            ...(prev.dailyExecutionItem || {}),
+                                                            platform_variants: nextVariants,
+                                                          },
+                                                        }
+                                                      : prev
+                                                  );
+                                                  setImprovedByScheduleId((prev) => ({ ...prev, [item.id]: true }));
+                                                  appendFeedbackEvent({
+                                                    campaign_id: payload?.campaignId ?? '',
+                                                    execution_id: String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? ''),
+                                                    platform: item.platform,
+                                                    action: s.action,
+                                                    accepted: true,
+                                                    timestamp: new Date().toISOString(),
+                                                  });
+                                                  const events = getStoredFeedbackEvents();
+                                                  const cid = payload?.campaignId ?? '';
+                                                  setStrategicMemoryProfile(buildStrategicMemoryProfile(cid ? events.filter((e) => e.campaign_id === cid) : events));
+                                                  notify('success', 'Variant improved.');
+                                                } catch (err) {
+                                                  console.error('[AISuggestion]', err);
+                                                  notify('error', String((err as Error)?.message || 'Improvement failed'));
+                                                } finally {
+                                                  setImprovingSuggestionKey(null);
+                                                }
+                                              }}
+                                              className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                                            >
+                                              {isImproving ? 'Improving...' : 'Apply Suggestion'}
+                                            </button>
+                                            {showImproved && (
+                                              <span className="text-[11px] font-medium text-emerald-600">✔ Improved</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                                {shouldShowAutoStrategist && suggestions.length > 0 && (
+                                  <div className="rounded-lg border border-violet-200 bg-gradient-to-br from-violet-50 to-purple-50/50 p-3 text-xs">
+                                    <div className="font-semibold text-violet-900 mb-1">✨ Auto Strategist Suggestion</div>
+                                    <p className="text-violet-800 mb-2">This variant could be improved automatically.</p>
+                                    <ul className="list-disc list-inside text-violet-700 mb-2 space-y-0.5">
+                                      {suggestions.slice(0, 2).map((s) => (
+                                        <li key={s.id}>{s.label}</li>
+                                      ))}
+                                    </ul>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        disabled={!!isAutoImprovingByScheduleId[item.id]}
+                                        onClick={async () => {
+                                          setIsAutoImprovingByScheduleId((prev) => ({ ...prev, [item.id]: true }));
+                                          let currentVariant = matchedVariant as Record<string, unknown>;
+                                          const toApply = suggestions.slice(0, 2);
+                                          let variantsList = [...platformVariants];
+                                          try {
+                                            for (const s of toApply) {
+                                              const { improved_variant } = await executeVariantImprovement({
+                                                campaignId: payload?.campaignId ?? undefined,
+                                                executionId: String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? ''),
+                                                platform: item.platform,
+                                                improvementType: s.action,
+                                                variant: currentVariant,
+                                                dailyExecutionItem: payload?.dailyExecutionItem ?? undefined,
+                                              });
+                                              currentVariant = improved_variant as Record<string, unknown>;
+                                              const idx = variantsList.findIndex(
+                                                (v) =>
+                                                  normalizeKey((v as any)?.platform) === normalizeKey(item.platform) &&
+                                                  normalizeKey((v as any)?.content_type) === normalizeKey(item.contentType)
+                                              );
+                                              if (idx >= 0) variantsList[idx] = currentVariant as any;
+                                              else variantsList.push({ ...currentVariant, platform: item.platform, content_type: item.contentType });
+                                              setPayload((prev) =>
+                                                prev
+                                                  ? {
+                                                      ...prev,
+                                                      dailyExecutionItem: {
+                                                        ...(prev.dailyExecutionItem || {}),
+                                                        platform_variants: [...variantsList],
+                                                      },
+                                                    }
+                                                  : prev
+                                              );
+                                            }
+                                            if (process.env.NODE_ENV === 'development') {
+                                              console.log('[AutoStrategist]', { platform: item.platform, applied: toApply.map((s) => s.action) });
+                                            }
+                                            setAutoAppliedByScheduleId((prev) => ({ ...prev, [item.id]: true }));
+                                            setImprovedByScheduleId((prev) => ({ ...prev, [item.id]: true }));
+                                            for (const s of toApply) {
+                                              appendFeedbackEvent({
+                                                campaign_id: payload?.campaignId ?? '',
+                                                execution_id: String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? ''),
+                                                platform: item.platform,
+                                                action: s.action,
+                                                accepted: true,
+                                                timestamp: new Date().toISOString(),
+                                              });
+                                            }
+                                            const events = getStoredFeedbackEvents();
+                                            const cid = payload?.campaignId ?? '';
+                                            setStrategicMemoryProfile(buildStrategicMemoryProfile(cid ? events.filter((e) => e.campaign_id === cid) : events));
+                                            notify('success', 'Auto improvements applied.');
+                                          } catch (err) {
+                                            console.error('[AutoStrategist]', err);
+                                            notify('error', String((err as Error)?.message || 'Auto improve failed'));
+                                          } finally {
+                                            setIsAutoImprovingByScheduleId((prev) => ({ ...prev, [item.id]: false }));
+                                          }
+                                        }}
+                                        className="rounded-lg border border-violet-300 bg-violet-100 px-3 py-1.5 text-[11px] font-medium text-violet-800 hover:bg-violet-200 disabled:opacity-50"
+                                      >
+                                        {isAutoImprovingByScheduleId[item.id] ? 'Auto Improving...' : 'Auto Apply Improvements'}
+                                      </button>
+                                      {autoAppliedByScheduleId[item.id] && (
+                                        <span className="text-[11px] font-medium text-emerald-600">✨ Auto improvements applied</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
                           {!matchedVariant ? (
                             <p className="text-xs text-gray-500">
                               No repurposed content yet. Click Repurpose Content.

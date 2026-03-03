@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import type { ExecutionMode } from './executionModeInference';
 
 type DeterministicPlanningContext = {
   content_capacity?: unknown;
@@ -18,7 +19,7 @@ export type DeterministicExecutionItem = {
   platform_counts?: Record<string, number>;
   /** For each unique piece (slot), which platforms will reuse it. */
   slot_platforms?: string[][];
-  topic_slots: Array<{
+    topic_slots: Array<{
     topic: string | null;
     intent: {
       objective: string | null;
@@ -35,6 +36,10 @@ export type DeterministicExecutionItem = {
         alignment_reason: string | null;
       };
     };
+    /** Stable id for one logical content piece (set when merged into blueprint). Optional for backward compatibility. */
+    master_content_id?: string;
+    /** Execution ownership (set during weekly enrichment). Frozen type prevents accidental values. */
+    execution_mode?: ExecutionMode;
   }>;
 };
 
@@ -319,31 +324,10 @@ export async function buildDeterministicWeeklySkeleton(
     .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0) || a[0].localeCompare(b[0]))
     .map(([type, count]) => `${count} ${type}`);
 
-  const availableTotal = coerceTotalCount(planningContext.available_content);
-  const capacityTotalRaw = coerceTotalCount(planningContext.content_capacity);
-  const exclusiveReduction = coerceExclusiveReduction(planningContext.exclusive_campaigns);
-  const capacityTotal = Math.max(0, capacityTotalRaw - exclusiveReduction);
-  const maxCreatable = availableTotal + capacityTotal;
-
-  const overrideConfirmed = Boolean(
-    (planningContext as any)?.validation_result?.override_confirmed ||
-      (planningContext as any)?.capacity_override_confirmed
-  );
-  if (!overrideConfirmed && total_weekly_content_count > maxCreatable) {
-    throw new DeterministicWeeklySkeletonError(
-      'DETERMINISTIC_REQUEST_EXCEEDS_AVAILABLE_PLUS_CAPACITY',
-      'Requested weekly execution exceeds available_content + content_capacity (after exclusive_campaigns reduction).',
-      {
-        requested: total_weekly_content_count,
-        requested_platform_postings_total: platform_postings_total,
-        available_content_total: availableTotal,
-        content_capacity_total: capacityTotalRaw,
-        exclusive_campaigns_reduction: exclusiveReduction,
-        effective_capacity_total: capacityTotal,
-        max_creatable: maxCreatable,
-      }
-    );
-  }
+  // Capacity/frequency validation is handled by capacityFrequencyValidationGateway.
+  // Callers (e.g. campaignAiOrchestrator) run validateCapacityAndFrequency() first and
+  // only call buildDeterministicWeeklySkeleton when valid or override confirmed.
+  // No capacity error thrown here.
 
   // Build execution items at the UNIQUE piece level (sharing-aware).
   for (const [content_type, perPlatform] of byType.entries()) {

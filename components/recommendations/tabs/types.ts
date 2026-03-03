@@ -17,6 +17,11 @@ export type OpportunityTabProps = {
   onSwitchTab?: (tab: string) => void;
   /** For Daily Focus "Act Now" OPEN_GENERATOR: open quick-content generator modal with this target. */
   onOpenGenerator?: (targetType: string) => void;
+  /** Trend tab: optional legacy; campaign focus is now hierarchical (primary + supporting goals) in tab state. */
+  strategicIntents?: string[];
+  onStrategicIntentsChange?: (intents: string[]) => void;
+  /** FULL = full strategic card (Content Architect, Super Admin); MINIMAL = decision-focused (company users). */
+  viewMode?: 'FULL' | 'MINIMAL';
 };
 
 /**

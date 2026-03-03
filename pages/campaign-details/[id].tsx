@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { 
@@ -40,6 +40,10 @@ import { GovernanceTimeline } from '../../components/governance/GovernanceTimeli
 import { PreemptionHistory } from '../../components/governance/PreemptionHistory';
 import { TradeOffSuggestionList } from '../../components/governance/TradeOffSuggestionList';
 import { truncateMeaningfulTitle } from '../../lib/ui/truncateMeaningfulTitle';
+import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
+import { getFormatLineForContentType, getIntentLabelForContentType, toneForUserDisplay } from '../../utils/formatLineForContentType';
+import { getViewMode } from '../../utils/getViewMode';
+import { VIEW_RULES } from '../../utils/viewVisibilityMatrix';
 
 interface Campaign {
   id: string;
@@ -206,6 +210,8 @@ export default function CampaignDetails() {
   const { selectedCompanyId, isLoading: isCompanyLoading, setSelectedCompanyId } = useCompanyContext();
   // Prefer URL companyId for deep links (prevents "Campaign not found" when a different company is currently selected).
   const effectiveCompanyId = (typeof companyIdFromUrl === 'string' ? companyIdFromUrl : '') || selectedCompanyId || '';
+  const session = undefined as { role?: string } | undefined;
+  const viewMode = getViewMode(session?.role);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [weeklyPlans, setWeeklyPlans] = useState<WeeklyPlan[]>([]);
   const [dailyPlans, setDailyPlans] = useState<DailyPlan[]>([]);
@@ -214,8 +220,10 @@ export default function CampaignDetails() {
   const [viralityDiagnostics, setViralityDiagnostics] = useState<ViralityAssessmentResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedWeeks, setExpandedWeeks] = useState<Set<number>>(new Set());
+  const [expandedSystemWeek, setExpandedSystemWeek] = useState<number | null>(null);
   const [plannerQueryConsumed, setPlannerQueryConsumed] = useState(false);
   const [isGeneratingWeek, setIsGeneratingWeek] = useState<number | null>(null);
+  const [isEnhancingAllWeeks, setIsEnhancingAllWeeks] = useState(false);
   const [editedWeekDailyPlans, setEditedWeekDailyPlans] = useState<Record<number, DailyPlan[]>>({});
   const [isSavingWeekPlan, setIsSavingWeekPlan] = useState<number | null>(null);
   const [distributionMode, setDistributionMode] = useState<'staggered' | 'same_day_per_topic'>('staggered');
@@ -289,6 +297,7 @@ export default function CampaignDetails() {
   } | null>(null);
   const [prefilledPlanning, setPrefilledPlanning] = useState<Record<string, unknown> | null>(null);
   const [showAIChat, setShowAIChat] = useState(false);
+  const didAutoOpenChatRef = useRef(false);
   const [prePlanningResult, setPrePlanningResult] = useState<{
     status: string;
     requested_weeks: number;
@@ -543,21 +552,15 @@ export default function CampaignDetails() {
   useEffect(() => {
     if (!router.isReady || plannerQueryConsumed) return;
     const rawWeek = Array.isArray(router.query.plannerWeek) ? router.query.plannerWeek[0] : router.query.plannerWeek;
-    const rawDay = Array.isArray(router.query.plannerDay) ? router.query.plannerDay[0] : router.query.plannerDay;
     const weekNumber = Number(rawWeek);
     if (!Number.isFinite(weekNumber) || weekNumber < 1) {
       setPlannerQueryConsumed(true);
       return;
     }
-    const normalizedDay = String(rawDay || 'Monday').trim();
-    const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    const selectedDay = validDays.includes(normalizedDay) ? normalizedDay : 'Monday';
     setExpandedWeeks((prev) => new Set([...Array.from(prev), weekNumber]));
     setActiveTab('overview');
     setPlannerQueryConsumed(true);
-    if (typeof id === 'string') {
-      router.replace(buildCampaignCalendarUrl(id, weekNumber, selectedDay));
-    }
+    setTimeout(() => document.getElementById('content-blueprint')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
   }, [router.isReady, router.query.plannerWeek, router.query.plannerDay, plannerQueryConsumed]);
 
   useEffect(() => {
@@ -595,7 +598,7 @@ export default function CampaignDetails() {
   const [blueprintFrozen, setBlueprintFrozen] = useState(false);
   useEffect(() => {
     if (!id || !effectiveCompanyId) return;
-    fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}`)
+    fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}&companyId=${encodeURIComponent(effectiveCompanyId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.governance) {
@@ -622,7 +625,7 @@ export default function CampaignDetails() {
     setGovernanceLoading(true);
     try {
       const [statusRes, eventsRes, analyticsRes, driftRes] = await Promise.all([
-        fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}`),
+        fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}&companyId=${encodeURIComponent(effectiveCompanyId)}`),
         fetchWithAuth(`/api/governance/events?companyId=${encodeURIComponent(effectiveCompanyId)}&campaignId=${encodeURIComponent(id as string)}`),
         fetchWithAuth(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(id as string)}`),
         fetchWithAuth(`/api/governance/company-drift?companyId=${encodeURIComponent(effectiveCompanyId)}`),
@@ -776,7 +779,9 @@ export default function CampaignDetails() {
                 null,
             }))
           : [];
-        setWeeklyPlans(normalizedWeeklyData);
+        setWeeklyPlans((prev) =>
+          normalizedWeeklyData.length > 0 ? normalizedWeeklyData : prev
+        );
       }
 
       // Load daily plans
@@ -880,6 +885,109 @@ export default function CampaignDetails() {
 
   const regenerateWeekDailyPlan = async (weekNumber: number) => {
     await enhanceWeekWithAI(weekNumber);
+  };
+
+  const createWeekPlanFromStoredContext = async () => {
+    if (!id || !campaign || !effectiveCompanyId || isRegeneratingBlueprint || blueprintImmutable || governanceLocked) return;
+    if ((campaign as { duration_weeks?: number }).duration_weeks == null) {
+      notify('error', 'Set campaign duration first (pre-planning).');
+      setTimeout(() => {
+        const el = document.getElementById('pre-planning') || document.querySelector('[data-preplanning]');
+        el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+      return;
+    }
+    setIsRegeneratingBlueprint(true);
+    setBlueprintRegenerateFailedMsg(null);
+    try {
+      let planningContext: Record<string, unknown> | undefined;
+      if (typeof window !== 'undefined') {
+        const stored = sessionStorage.getItem(`campaign_planning_context_${campaign.id}`);
+        if (stored) {
+          try {
+            planningContext = JSON.parse(stored) as Record<string, unknown>;
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      const res = await fetchWithAuth('/api/campaigns/regenerate-blueprint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          companyId: effectiveCompanyId,
+          ...(planningContext && Object.keys(planningContext).length > 0 ? { planningContext } : {}),
+        }),
+      });
+      if (res.ok) {
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem(`campaign_planning_context_${campaign.id}`);
+        }
+        notify('success', 'Week plan created from stored strategic theme and context.');
+        loadCampaignDetails(id as string);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        const msg = errData?.message || errData?.error || 'Failed to create plan from stored context';
+        setBlueprintRegenerateFailedMsg(msg);
+        notify('error', msg);
+      }
+    } catch (err) {
+      console.error('Create week plan from stored context failed', err);
+      const msg = err instanceof Error ? err.message : 'Failed to create plan from stored context';
+      setBlueprintRegenerateFailedMsg(msg);
+      notify('error', msg);
+    } finally {
+      setIsRegeneratingBlueprint(false);
+    }
+  };
+
+  const buildDailyPlanPageUrl = (campaignId: string) => {
+    const params = new URLSearchParams();
+    if (effectiveCompanyId) params.set('companyId', effectiveCompanyId);
+    return `/campaign-daily-plan/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
+  };
+
+  const enhanceAllWeeksWithAI = async () => {
+    if (!id || !campaign?.start_date || !(campaign as any).duration_weeks || !effectiveCompanyId) return;
+    const total = (campaign as any).duration_weeks as number;
+    const weeksWithDaily = new Set(dailyPlans.map((d) => d.weekNumber));
+    const pendingWeeks = Array.from({ length: total }, (_, i) => i + 1).filter((w) => !weeksWithDaily.has(w));
+    if (pendingWeeks.length === 0) {
+      router.push(buildDailyPlanPageUrl(id as string));
+      return;
+    }
+    setIsEnhancingAllWeeks(true);
+    try {
+      for (const weekNumber of pendingWeeks) {
+        const weekPlan = weeklyPlans.find((w) => w.weekNumber === weekNumber);
+        const response = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companyId: effectiveCompanyId,
+            campaignId: id,
+            week: weekNumber,
+            theme: (weekPlan as any)?.theme || `Week ${weekNumber} Theme`,
+            contentFocus: (weekPlan as any)?.focusArea || `Week ${weekNumber} Content Focus`,
+            targetAudience: 'General Audience',
+            distribution_mode: distributionMode,
+          }),
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          notify('error', err?.error || `Failed to generate daily plan for week ${weekNumber}.`);
+          break;
+        }
+      }
+      notify('success', pendingWeeks.length > 0 ? `Daily plans created for ${pendingWeeks.length} week(s). Opening daily plan page.` : 'Opening daily plan.');
+      router.push(buildDailyPlanPageUrl(id as string));
+    } catch (error) {
+      console.error('Error enhancing all weeks:', error);
+      notify('error', 'Error generating daily plans. Please try again.');
+    } finally {
+      setIsEnhancingAllWeeks(false);
+    }
   };
 
   const saveWeekDailyPlan = async (weekNumber: number) => {
@@ -986,6 +1094,18 @@ export default function CampaignDetails() {
         badge: 'bg-red-100 text-red-700 border-red-200',
       };
     }
+    if (t.includes('image') || t.includes('photo')) {
+      return {
+        card: 'border-sky-200 bg-sky-50/60',
+        badge: 'bg-sky-100 text-sky-700 border-sky-200',
+      };
+    }
+    if (t.includes('carousel')) {
+      return {
+        card: 'border-fuchsia-200 bg-fuchsia-50/60',
+        badge: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200',
+      };
+    }
     if (t.includes('blog') || t.includes('article')) {
       return {
         card: 'border-blue-200 bg-blue-50/60',
@@ -1002,6 +1122,12 @@ export default function CampaignDetails() {
       card: 'border-emerald-200 bg-emerald-50/60',
       badge: 'bg-emerald-100 text-emerald-700 border-emerald-200',
     };
+  };
+
+  /** Use shared Format line logic for all content types (video, image, carousel, post, etc.). */
+  const isVisualContentType = (contentType?: string) => {
+    const t = String(contentType || '').toLowerCase();
+    return t.includes('video') || t.includes('reel') || t.includes('short') || t.includes('image') || t.includes('photo') || t.includes('carousel');
   };
 
   const getGateBadgeColor = (decision?: GateResponse['gate_decision']) => {
@@ -1072,18 +1198,18 @@ export default function CampaignDetails() {
 
   useEffect(() => {
     if (shouldForceWeeklyBlueprintView) return;
-    if (needsPrePlanning && !showAIChat) {
-      setShowAIChat(true);
-    }
-  }, [needsPrePlanning, showAIChat, shouldForceWeeklyBlueprintView]);
+    if (!needsPrePlanning || didAutoOpenChatRef.current) return;
+    didAutoOpenChatRef.current = true;
+    setShowAIChat(true);
+  }, [needsPrePlanning, shouldForceWeeklyBlueprintView]);
 
   useEffect(() => {
     if (shouldForceWeeklyBlueprintView) return;
     const fromRecommendation = Boolean(router.query.fromRecommendation);
-    if (!fromRecommendation) return;
-    // Recommendation-driven production flow must open in AI Chat first.
-    if (!showAIChat) setShowAIChat(true);
-  }, [router.query.fromRecommendation, showAIChat, shouldForceWeeklyBlueprintView]);
+    if (!fromRecommendation || didAutoOpenChatRef.current) return;
+    didAutoOpenChatRef.current = true;
+    setShowAIChat(true);
+  }, [router.query.fromRecommendation, shouldForceWeeklyBlueprintView]);
 
   if (isCompanyLoading) {
     return (
@@ -1116,13 +1242,13 @@ export default function CampaignDetails() {
     );
   }
 
-  if (isLoading) {
+  if (isLoading && !campaign) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           <AIGenerationProgress
             isActive={true}
-            message="Creating weekly content…"
+            message="Loading campaign…"
             expectedSeconds={18}
           />
         </div>
@@ -2189,10 +2315,37 @@ export default function CampaignDetails() {
                   </span>
                 </div>
               ) : (
-                <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
-                  <p className="text-sm text-amber-800">
-                    No content blueprint yet. Use <strong>AI Assistant</strong> to generate a campaign plan, or go to campaign planning to create one.
+                <div className="mb-4 p-4 bg-amber-50 rounded-lg border-2 border-amber-300">
+                  <p className="text-sm font-medium text-amber-900 mb-2">
+                    No content blueprint yet
                   </p>
+                  <p className="text-sm text-amber-800 mb-4">
+                    Use <strong>AI Assistant</strong> (purple button above) to generate a plan, or create one from your stored strategic theme and context:
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={createWeekPlanFromStoredContext}
+                      disabled={isRegeneratingBlueprint || blueprintImmutable || governanceLocked || (campaign as { duration_weeks?: number })?.duration_weeks == null}
+                      title={(campaign as { duration_weeks?: number })?.duration_weeks == null ? 'Set campaign duration first (complete pre-planning above)' : undefined}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                    >
+                      {isRegeneratingBlueprint ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <FileText className="h-4 w-4" />
+                      )}
+                      Create week plan from stored context
+                    </button>
+                    {(campaign as { duration_weeks?: number })?.duration_weeks == null && (
+                      <span className="text-xs text-amber-700">
+                        Set start date and duration in pre-planning above first.
+                      </span>
+                    )}
+                  </div>
+                  {blueprintRegenerateFailedMsg && (
+                    <p className="mt-3 text-sm text-red-600">{blueprintRegenerateFailedMsg}</p>
+                  )}
                 </div>
               )}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -2228,7 +2381,7 @@ export default function CampaignDetails() {
                 const hasDuration = !!(campaign as { duration_weeks?: number }).duration_weeks;
                 const canPlanDaily = hasStartDate && hasDuration;
                 return canPlanDaily ? null : (
-                  <div className="mb-6 p-4 rounded-lg border-2 border-amber-200 bg-amber-50">
+                  <div id="pre-planning" className="mb-6 p-4 rounded-lg border-2 border-amber-200 bg-amber-50">
                     <div className="flex items-center gap-2 font-semibold text-amber-800">
                       <AlertCircle className="h-5 w-5 flex-shrink-0" />
                       Fix start date and tentative duration before planning daily content
@@ -2264,12 +2417,17 @@ export default function CampaignDetails() {
                     View Plan & Work on Daily
                   </button>
                   <button 
-                    onClick={() => router.push(`/ai-chat?campaignId=${campaign.id}&context=12week-plan`)}
-                    disabled={!campaign?.start_date || !(campaign as any).duration_weeks}
+                    onClick={enhanceAllWeeksWithAI}
+                    disabled={!campaign?.start_date || !(campaign as any).duration_weeks || isEnhancingAllWeeks}
                     className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Generate daily plans for all weeks that don't have one yet, then open the daily plan page"
                   >
-                    <Sparkles className="h-4 w-4" />
-                    AI Enhance All Weeks
+                    {isEnhancingAllWeeks ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4" />
+                    )}
+                    Generate Daily Plans & Open Planner
                   </button>
                 </div>
               </div>
@@ -2286,18 +2444,110 @@ export default function CampaignDetails() {
                   const contentTypes = Array.isArray((weekPlan as any)?.contentTypes)
                     ? (weekPlan as any).contentTypes
                     : (Array.isArray((weekPlan as any)?.content_type_mix) ? (weekPlan as any).content_type_mix : []);
+                  const executionItems = Array.isArray((weekPlan as any)?.execution_items) ? (weekPlan as any).execution_items : [];
+                  const flatSlots = executionItems.flatMap((e: any) => Array.isArray(e?.topic_slots) ? e.topic_slots : []);
+                  let slotIndexGlobal = 0;
+                  const contentTypesBySlotIndex = executionItems.flatMap((e: any) =>
+                    (Array.isArray(e?.topic_slots) ? e.topic_slots : []).map(() => {
+                      const fromExec = String((e as any)?.content_type ?? (e as any)?.contentType ?? '').trim();
+                      const fallback = contentTypes[slotIndexGlobal % Math.max(contentTypes.length, 1)] || '—';
+                      slotIndexGlobal += 1;
+                      return fromExec || fallback;
+                    })
+                  );
+                  const ownershipCounts = (() => {
+                    let ai = 0, creator = 0, conditional = 0;
+                    flatSlots.forEach((s: any) => {
+                      const m = s?.execution_mode;
+                      if (m === 'AI_AUTOMATED') ai += 1;
+                      else if (m === 'CREATOR_REQUIRED') creator += 1;
+                      else if (m === 'CONDITIONAL_AI') conditional += 1;
+                    });
+                    return { ai, creator, conditional, total: ai + creator + conditional };
+                  })();
+                  const creatorShare = ownershipCounts.total > 0
+                    ? (ownershipCounts.creator + ownershipCounts.conditional) / ownershipCounts.total
+                    : 0;
+                  const showHighCreatorWorkload = creatorShare > 0.6;
+
+                  // CMO: Execution Risk — creatorRatio = (creator + conditional*0.7) / total
+                  const creatorRatio = ownershipCounts.total > 0
+                    ? (ownershipCounts.creator + ownershipCounts.conditional * 0.7) / ownershipCounts.total
+                    : 0;
+                  const executionRiskLabel = creatorRatio <= 0.35 ? 'LOW' : creatorRatio <= 0.65 ? 'MEDIUM' : 'HIGH';
+                  const executionRiskClass = creatorRatio <= 0.35 ? 'bg-emerald-100 text-emerald-800' : creatorRatio <= 0.65 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800';
+
+                  // CMO/SYSTEM: Execution Pressure (system-only) — same chip size as Execution Risk
+                  const weekIntelligence = getExecutionIntelligence(undefined, ownershipCounts);
+                  const pressureLabel = weekIntelligence.pressureLabel;
+                  const pressureColorClass = weekIntelligence.pressureColorClass;
+
+                  // AUTO EXECUTION BALANCER: read-only recommendations when pressure is HIGH (no DB/API changes)
+                  const executionBalancerRecommendations = (() => {
+                    if (pressureLabel !== 'HIGH' || ownershipCounts.total <= 0) return [];
+                    const creatorRatio = ownershipCounts.creator / ownershipCounts.total;
+                    const conditionalRatio = ownershipCounts.conditional / ownershipCounts.total;
+                    const recs: string[] = [];
+                    if (creatorRatio > 0.5) recs.push('Reduce creator-dependent content or stagger execution.');
+                    if (conditionalRatio > 0.2) recs.push('Templates could unlock more AI execution.');
+                    if (ownershipCounts.creator + ownershipCounts.conditional > ownershipCounts.ai) {
+                      recs.push('Consider shifting some ideas toward AI-executable formats.');
+                    }
+                    return recs.slice(0, 3);
+                  })();
+
+                  // CMO: Capacity Fit — only if weekly capacity value exists
+                  const weeklyCapacity = typeof (weekPlan as any)?.capacity === 'number' && Number.isFinite((weekPlan as any).capacity)
+                    ? (weekPlan as any).capacity
+                    : typeof (weekPlan as any)?.weekly_capacity === 'number' && Number.isFinite((weekPlan as any).weekly_capacity)
+                      ? (weekPlan as any).weekly_capacity
+                      : null;
+                  const creatorLoad = ownershipCounts.creator + ownershipCounts.conditional;
+                  const capacityRatio = weeklyCapacity != null && weeklyCapacity > 0 ? creatorLoad / weeklyCapacity : null;
+                  const capacityFitLabel = capacityRatio == null ? null : capacityRatio <= 0.8 ? 'Strong' : capacityRatio <= 1 ? 'Tight' : 'Overloaded';
+                  const capacityFitClass = capacityRatio != null ? (capacityRatio <= 0.8 ? 'bg-gray-100 text-gray-700' : capacityRatio <= 1 ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700') : '';
+
+                  // CMO: Momentum — current vs previous week creator share
+                  const prevWeekPlan = weekNumber > 1 ? weeklyPlans.find((w: any) => w.weekNumber === weekNumber - 1) : null;
+                  const prevFlatSlots = prevWeekPlan && Array.isArray((prevWeekPlan as any)?.execution_items)
+                    ? (prevWeekPlan as any).execution_items.flatMap((e: any) => Array.isArray(e?.topic_slots) ? e.topic_slots : [])
+                    : [];
+                  const prevCounts = (() => {
+                    let ai = 0, creator = 0, conditional = 0;
+                    prevFlatSlots.forEach((s: any) => {
+                      const m = s?.execution_mode;
+                      if (m === 'AI_AUTOMATED') ai += 1;
+                      else if (m === 'CREATOR_REQUIRED') creator += 1;
+                      else if (m === 'CONDITIONAL_AI') conditional += 1;
+                    });
+                    const total = ai + creator + conditional;
+                    return { creator, conditional, total };
+                  })();
+                  const prevCreatorShare = prevCounts.total > 0 ? (prevCounts.creator + prevCounts.conditional) / prevCounts.total : null;
+                  const momentumLabel = prevCreatorShare == null ? null
+                    : creatorShare < prevCreatorShare - 0.1 ? 'Building ↑'
+                    : Math.abs(creatorShare - prevCreatorShare) <= 0.1 ? 'Balanced →'
+                    : creatorShare > prevCreatorShare + 0.1 ? 'Heavy Load ↓'
+                    : 'Balanced →';
                   const topicsWithExecution = hasEnrichedTopics
-                    ? (((weekPlan as any).topics as any[]).map((topic, idx) => ({
-                        ...topic,
-                        topicExecution: {
-                          platformTargets: platformTargets.length > 0
-                            ? [platformTargets[idx % platformTargets.length]]
-                            : ['—'],
-                          contentType: contentTypes[idx % Math.max(contentTypes.length, 1)] || '—',
-                          ctaType: (weekPlan as any)?.cta_type || '—',
-                          kpiFocus: (weekPlan as any)?.weekly_kpi_focus || '—',
-                        },
-                      })))
+                    ? (((weekPlan as any).topics as any[]).map((topic, idx) => {
+                        const slot = flatSlots[idx];
+                        const execution_mode = typeof (slot as any)?.execution_mode === 'string' ? (slot as any).execution_mode : undefined;
+                        const creator_instruction = (slot as any)?.creator_instruction && typeof (slot as any).creator_instruction === 'object' ? (slot as any).creator_instruction : undefined;
+                        return {
+                          ...topic,
+                          topicExecution: {
+                            platformTargets: platformTargets.length > 0
+                              ? [platformTargets[idx % platformTargets.length]]
+                              : ['—'],
+                            contentType: (contentTypesBySlotIndex[idx] ?? contentTypes[idx % Math.max(contentTypes.length, 1)] ?? '—') || '—',
+                            ctaType: (weekPlan as any)?.cta_type || '—',
+                            kpiFocus: (weekPlan as any)?.weekly_kpi_focus || '—',
+                            ...(execution_mode ? { execution_mode } : {}),
+                            ...(creator_instruction ? { creator_instruction } : {}),
+                          },
+                        };
+                      }))
                     : [];
                   const topicsCount = hasEnrichedTopics
                     ? ((weekPlan as any).topics as any[]).length
@@ -2305,6 +2555,83 @@ export default function CampaignDetails() {
                   
                   return (
                     <div key={weekNumber} className="border rounded-lg overflow-hidden">
+                      {/* Ownership summary strip */}
+                      {ownershipCounts.total > 0 && (
+                        <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 text-xs text-gray-600 flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span>AI Ready: {ownershipCounts.ai}</span>
+                          <span className="text-gray-400">•</span>
+                          <span>Creator Required: {ownershipCounts.creator}</span>
+                          <span className="text-gray-400">•</span>
+                          <span>Conditional AI: {ownershipCounts.conditional}</span>
+                          {showHighCreatorWorkload && (
+                            <>
+                              <span className="text-gray-400">•</span>
+                              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">⚠ High creator workload</span>
+                            </>
+                          )}
+                          {VIEW_RULES[viewMode].showCMOLayer && (
+                            <>
+                              <span className="text-gray-400">•</span>
+                              <span className={`px-1.5 py-0.5 rounded font-medium ${executionRiskClass}`}>Execution Risk: {executionRiskLabel}</span>
+                              {pressureLabel != null && pressureColorClass != null && (
+                                <>
+                                  <span className="text-gray-400">•</span>
+                                  <span className={`px-1.5 py-0.5 rounded font-medium ${pressureColorClass}`}>Execution Pressure: {pressureLabel}</span>
+                                </>
+                              )}
+                              {capacityFitLabel != null && (
+                                <>
+                                  <span className="text-gray-400">•</span>
+                                  <span className={`px-1.5 py-0.5 rounded ${capacityFitClass}`}>Capacity Fit: {capacityFitLabel}</span>
+                                </>
+                              )}
+                              {momentumLabel != null && (
+                                <>
+                                  <span className="text-gray-400">•</span>
+                                  <span className="text-gray-500">Momentum: {momentumLabel}</span>
+                                </>
+                              )}
+                            </>
+                          )}
+                          {VIEW_RULES[viewMode].showSystemFields && (
+                            <>
+                              <span className="text-gray-400">•</span>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setExpandedSystemWeek(expandedSystemWeek === weekNumber ? null : weekNumber); }}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-100 text-xs"
+                                title="Execution intelligence"
+                              >
+                                <Settings className="h-3 w-3" /> Execution Intelligence
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      {ownershipCounts.total > 0 && creatorShare > 0.6 && (
+                        <div className="px-4 py-1 bg-gray-50 border-b border-gray-100 text-[10px] text-amber-600">
+                          ⚠ Creator-heavy week — consider reducing manual load.
+                        </div>
+                      )}
+                      {VIEW_RULES[viewMode].showCMOLayer && executionBalancerRecommendations.length > 0 && (
+                        <div className="px-4 py-1.5 bg-gray-50 border-b border-gray-100 text-[10px] text-gray-600">
+                          <ul className="list-none space-y-0.5">
+                            {executionBalancerRecommendations.map((text, i) => (
+                              <li key={i} className="flex gap-1.5">
+                                <span className="shrink-0">•</span>
+                                <span>{text}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {expandedSystemWeek === weekNumber && VIEW_RULES[viewMode].showSystemFields && ownershipCounts.total > 0 && (
+                        <div className="px-4 py-2 bg-gray-100 border-b border-gray-200 text-xs text-gray-600 space-y-0.5">
+                          <div>Execution items: {Array.isArray((weekPlan as any)?.execution_items) ? (weekPlan as any).execution_items.length : 0}</div>
+                          <div>Slots (topic_slots): {flatSlots.length}</div>
+                          <div>Ownership: AI {Math.round((ownershipCounts.ai / ownershipCounts.total) * 100)}% · Creator {Math.round((ownershipCounts.creator / ownershipCounts.total) * 100)}% · Conditional {Math.round((ownershipCounts.conditional / ownershipCounts.total) * 100)}%</div>
+                        </div>
+                      )}
                       {/* Week Header */}
                       <div 
                         className="p-4 cursor-pointer hover:bg-gray-50 transition-colors"
@@ -2440,7 +2767,7 @@ export default function CampaignDetails() {
                                           <div><span className="font-medium">Weekly intent:</span> {(weekPlan as any).weeklyContextCapsule.weeklyIntent}</div>
                                         )}
                                         {(weekPlan as any).weeklyContextCapsule.toneGuidance && (
-                                          <div><span className="font-medium">Tone:</span> {(weekPlan as any).weeklyContextCapsule.toneGuidance}</div>
+                                          <div><span className="font-medium">Tone:</span> {toneForUserDisplay((weekPlan as any).weeklyContextCapsule.toneGuidance)}</div>
                                         )}
                                         {(weekPlan as any).weeklyContextCapsule.campaignStage && (
                                           <div><span className="font-medium">Campaign stage:</span> {(weekPlan as any).weeklyContextCapsule.campaignStage}</div>
@@ -2452,21 +2779,51 @@ export default function CampaignDetails() {
                                     )}
                                     {hasEnrichedTopics && (
                                       <div className="mt-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-                                        {topicsWithExecution.map((topic, idx) => (
+                                        {topicsWithExecution.map((topic, idx) => {
+                                          const execMode = (topic?.topicExecution?.execution_mode ?? (topic as any)?.execution_mode ?? 'AI_AUTOMATED') as 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI';
+                                          const intel = getExecutionIntelligence(execMode);
+                                          const modeColors = intel.colorClasses;
+                                          const cardClass = modeColors ? modeColors.card : getActivityColorClasses(topic?.topicExecution?.contentType).card;
+                                          const badgeClass = modeColors ? modeColors.badge : getActivityColorClasses(topic?.topicExecution?.contentType).badge;
+                                          const modeLabel = intel.label;
+                                          const modeExplanation = intel.explanation;
+                                          const execDot = execMode === 'AI_AUTOMATED' ? '🟢' : execMode === 'CONDITIONAL_AI' ? '🟡' : '🔴';
+                                          const creatorBrief = topic?.topicExecution?.creator_instruction && typeof topic.topicExecution.creator_instruction === 'object'
+                                            ? (topic.topicExecution.creator_instruction as Record<string, unknown>).targetAudience
+                                              ? `Audience: ${String((topic.topicExecution.creator_instruction as Record<string, unknown>).targetAudience)}`
+                                              : (topic.topicExecution.creator_instruction as Record<string, unknown>).objective
+                                                ? `Goal: ${String((topic.topicExecution.creator_instruction as Record<string, unknown>).objective)}`
+                                                : null
+                                            : null;
+                                          return (
                                           <button
                                             key={`${topic?.topicTitle || 'topic'}-${idx}`}
                                             type="button"
                                             onClick={() => openTopicWorkspaceFromWeeklyCard(weekNumber, topic)}
-                                            className={`text-xs text-gray-700 rounded border p-2 text-left hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors cursor-pointer ${getActivityColorClasses(topic?.topicExecution?.contentType).card}`}
+                                            className={`text-xs text-gray-700 rounded border p-2 text-left hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors cursor-pointer ${cardClass}`}
                                           >
-                                            <div className="flex items-center justify-between gap-2">
+                                            <div className="font-medium text-gray-900">{modeLabel ?? 'AI Ready'}</div>
+                                            {modeExplanation && <div className="text-[10px] text-gray-500 mt-0.5">{modeExplanation}</div>}
+                                            {execMode === 'CONDITIONAL_AI' && (
+                                              <>
+                                                <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">Template Required</span>
+                                                <span className="block mt-0.5 text-[10px] text-gray-500">Template unlocks AI generation</span>
+                                              </>
+                                            )}
+                                            <div className="flex items-center justify-between gap-2 flex-wrap mt-1.5">
                                               <div className="font-medium">{displayWeeklyTitle(topic?.topicTitle, 'Untitled Topic')}</div>
-                                              <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${getActivityColorClasses(topic?.topicExecution?.contentType).badge}`}>
-                                                {topic?.topicExecution?.contentType || 'activity'}
-                                              </span>
+                                              <div className="flex items-center gap-1.5">
+                                                <span className="text-[10px] leading-none" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (modeLabel ?? undefined)}>{execDot}</span>
+                                                <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${badgeClass}`}>
+                                                  {topic?.topicExecution?.contentType || 'activity'}
+                                                </span>
+                                              </div>
                                             </div>
+                                            {creatorBrief && (
+                                              <div className="text-[10px] text-gray-500 mt-0.5 truncate">{creatorBrief}</div>
+                                            )}
                                             {topic?.topicContext?.writingIntent && (
-                                              <div className="mt-0.5"><span className="font-medium">Writing intent:</span> {topic.topicContext.writingIntent}</div>
+                                              <div className="mt-0.5"><span className="font-medium">{getIntentLabelForContentType(topic?.topicExecution?.contentType ?? (topic as any)?.content_type)}:</span> {topic.topicContext.writingIntent}</div>
                                             )}
                                             <div className="mt-1 pt-1 border-t border-gray-100">
                                               <div className="font-medium text-gray-800">Execution details</div>
@@ -2488,18 +2845,28 @@ export default function CampaignDetails() {
                                               <div className="mt-0.5"><span className="font-medium">Desired action:</span> {topic.desiredAction}</div>
                                             )}
                                             {topic?.narrativeStyle && (
-                                              <div className="mt-0.5"><span className="font-medium">Narrative style:</span> {topic.narrativeStyle}</div>
+                                              <div className="mt-0.5"><span className="font-medium">Narrative style:</span> {toneForUserDisplay(topic.narrativeStyle)}</div>
                                             )}
-                                            {(topic?.contentTypeGuidance?.primaryFormat || topic?.contentTypeGuidance?.maxWordTarget || topic?.contentTypeGuidance?.platformWithHighestLimit) && (
-                                              <div className="mt-0.5">
-                                                <span className="font-medium">Format:</span> {topic?.contentTypeGuidance?.primaryFormat || '—'}
-                                                {topic?.contentTypeGuidance?.maxWordTarget ? ` · Max words: ${topic.contentTypeGuidance.maxWordTarget}` : ''}
-                                                {topic?.contentTypeGuidance?.platformWithHighestLimit ? ` · Highest-limit platform: ${topic.contentTypeGuidance.platformWithHighestLimit}` : ''}
-                                              </div>
-                                            )}
+                                            {(() => {
+                                              const contentType =
+                                                topic?.topicExecution?.contentType ??
+                                                (topic as any)?.contentType ??
+                                                (topic as any)?.content_type;
+                                              const line = getFormatLineForContentType(
+                                                contentType,
+                                                topic?.contentTypeGuidance,
+                                                topic?.topicExecution?.platformTargets
+                                              );
+                                              return line ? (
+                                                <div className="mt-0.5">
+                                                  <span className="font-medium">Format:</span> {line.replace(/^Format:\s*/i, '')}
+                                                </div>
+                                              ) : null;
+                                            })()}
                                             <div className="mt-1 text-[10px] text-indigo-600">Click to open topic workspace</div>
                                           </button>
-                                        ))}
+                                          );
+                                        })}
                                       </div>
                                     )}
                                   </div>
@@ -2977,7 +3344,7 @@ export default function CampaignDetails() {
                                 evaluation: data.evaluation,
                               });
                               const [statusRes, eventsRes, analyticsRes] = await Promise.all([
-                                fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}`),
+                                fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}&companyId=${encodeURIComponent(effectiveCompanyId)}`),
                                 fetchWithAuth(`/api/governance/events?companyId=${encodeURIComponent(effectiveCompanyId)}&campaignId=${encodeURIComponent(id as string)}`),
                                 fetchWithAuth(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(id as string)}`),
                               ]);
@@ -3097,8 +3464,16 @@ export default function CampaignDetails() {
       {campaign && !shouldForceWeeklyBlueprintView && (
         <CampaignAIChat
           isOpen={showAIChat}
-          onClose={() => setShowAIChat(false)}
-          onMinimize={() => setShowAIChat(false)}
+          onClose={() => {
+            setShowAIChat(false);
+            setActiveTab('overview');
+            setTimeout(() => document.getElementById('content-blueprint')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+          }}
+          onMinimize={() => {
+            setShowAIChat(false);
+            setActiveTab('overview');
+            setTimeout(() => document.getElementById('content-blueprint')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+          }}
           context="campaign-planning"
           forceFreshPlanningThread={false}
           companyId={effectiveCompanyId || undefined}
@@ -3107,6 +3482,14 @@ export default function CampaignDetails() {
           recommendationContext={recommendationContext}
           prefilledPlanning={prefilledPlanning}
           governanceLocked={governanceLocked}
+          onProgramGenerated={() => {
+            if (typeof id === 'string') {
+              loadCampaignDetails(id);
+              setShowAIChat(false);
+              setActiveTab('overview');
+              setTimeout(() => document.getElementById('content-blueprint')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+            }
+          }}
           collectedPlanningContext={(() => {
             const ctx: Record<string, unknown> = {};
             if (campaign?.start_date) ctx.tentative_start = campaign.start_date;

@@ -194,7 +194,21 @@ export async function saveDraftBlueprint(input: {
 }): Promise<void> {
   const weeksForDb = weeksForDbFromBlueprint(input.blueprint);
   const snapshot_hash = `draft-${input.campaignId}`;
-  const { data: existing } = await supabase
+  const now = new Date().toISOString();
+
+  const row: Record<string, unknown> = {
+    campaign_id: input.campaignId,
+    snapshot_hash,
+    weeks: weeksForDb,
+    raw_plan_text: '',
+    omnivyre_decision: { status: 'ok', recommendation: 'proceed' } as DecisionResult,
+    source: 'draft-save',
+    blueprint: input.blueprint as any,
+    updated_at: now,
+  };
+
+  let existing: { id: number } | null = null;
+  const withStatus = await supabase
     .from('twelve_week_plan')
     .select('id')
     .eq('campaign_id', input.campaignId)
@@ -203,27 +217,36 @@ export async function saveDraftBlueprint(input: {
     .limit(1)
     .maybeSingle();
 
-  const row = {
-    campaign_id: input.campaignId,
-    snapshot_hash,
-    weeks: weeksForDb,
-    raw_plan_text: '',
-    omnivyre_decision: { status: 'ok', recommendation: 'proceed' } as DecisionResult,
-    source: 'draft-save',
-    status: 'draft' as PlanStatus,
-    blueprint: input.blueprint as any,
-    updated_at: new Date().toISOString(),
-  };
+  if (!withStatus.error && withStatus.data) {
+    existing = withStatus.data as { id: number };
+  }
+  (row as any).status = 'draft';
+
   if (existing?.id) {
     const { error } = await supabase.from('twelve_week_plan').update(row).eq('id', existing.id);
     if (error) throw new Error(`Failed to update draft blueprint: ${error.message}`);
   } else {
-    const { error } = await supabase.from('twelve_week_plan').insert({
-      ...row,
-      created_at: new Date().toISOString(),
-    } as any);
+    const insertPayload = { ...row, created_at: now } as any;
+    const { error } = await supabase.from('twelve_week_plan').insert(insertPayload);
     if (error) throw new Error(`Failed to save draft blueprint: ${error.message}`);
   }
+}
+
+/**
+ * Get the latest draft plan for a campaign (for restore-on-retry: avoid reprocessing when user says "continue" or "try again").
+ */
+export async function getLatestDraftPlan(campaignId: string): Promise<{ weeks: any[] } | null> {
+  const { data } = await supabase
+    .from('twelve_week_plan')
+    .select('weeks, blueprint')
+    .eq('campaign_id', campaignId)
+    .eq('status', 'draft')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!data?.weeks?.length && !(data as any)?.blueprint?.weeks?.length) return null;
+  const weeks = (data as any)?.blueprint?.weeks ?? data.weeks;
+  return Array.isArray(weeks) && weeks.length > 0 ? { weeks } : null;
 }
 
 /**

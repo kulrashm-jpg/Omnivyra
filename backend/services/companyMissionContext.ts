@@ -162,7 +162,7 @@ export async function buildCompanyMissionContext(
     ? String(cpi.primary_objective).trim()
     : deriveMissionStatement(profile);
   const core_problem_domains = hasCpi && Array.isArray(cpi.dominant_problem_domains) && cpi.dominant_problem_domains.length > 0
-    ? cpi.dominant_problem_domains.filter((d): d is string => typeof d === 'string').slice(0, 10)
+    ? cpi.dominant_problem_domains.filter((d): d is string => typeof d === 'string')
     : deriveProblemDomains(profile);
   const opportunity_intent = hasCpi && cpi.campaign_intent
     ? String(cpi.campaign_intent).trim()

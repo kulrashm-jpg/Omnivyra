@@ -3,6 +3,7 @@ import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetSto
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { ALL_ROLES } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { resolveEffectiveCampaignRole, type CampaignAuthContext } from '../../../backend/services/campaignRoleService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -22,6 +23,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!access) return;
     if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'campaignId is required' });
+    }
+    const companyIdStr = typeof companyId === 'string' ? companyId : undefined;
+    if (companyIdStr) {
+      const campaignAuthResult = await resolveEffectiveCampaignRole(
+        access.userId,
+        campaignId,
+        companyIdStr
+      );
+      if (campaignAuthResult.error === 'CAMPAIGN_ROLE_REQUIRED') {
+        return res.status(403).json({ error: 'CAMPAIGN_ROLE_REQUIRED' });
+      }
+      if (!campaignAuthResult.error) {
+        const campaignAuth: CampaignAuthContext = {
+          companyRole: campaignAuthResult.companyRole,
+          campaignRole: campaignAuthResult.campaignRole,
+          effectiveRole: campaignAuthResult.effectiveRole,
+          source: campaignAuthResult.source,
+        };
+        (req as NextApiRequest & { campaignAuth?: CampaignAuthContext }).campaignAuth = campaignAuth;
+        if (process.env.NODE_ENV !== 'test') {
+          console.log('CAMPAIGN_AUTH_CONTENT_LIST', { campaignId, companyId: companyIdStr, ...campaignAuth });
+        }
+      }
     }
     const week = weekNumber ? Number(weekNumber) : undefined;
     const assets = await listAssetsWithLatestContent({ campaignId, weekNumber: week });

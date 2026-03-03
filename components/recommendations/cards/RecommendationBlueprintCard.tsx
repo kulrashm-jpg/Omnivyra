@@ -1,11 +1,189 @@
 import React, { useMemo, useState } from 'react';
 
+export type StrategyStatus = 'continuation' | 'expansion' | 'neutral' | 'momentum_expand';
+
+/** Role-based view: FULL = all sections (Content Architect, Super Admin); MINIMAL = decision-focused (company users). */
+export type RecommendationCardViewMode = 'FULL' | 'MINIMAL';
+
+/** Returns true for roles that see the full strategic recommendation card. */
+export function isFullRecommendationView(role: string | null): boolean {
+  if (!role || typeof role !== 'string') return false;
+  const r = role.toUpperCase();
+  return r === 'CONTENT_ARCHITECT' || r === 'SUPER_ADMIN';
+}
+
 type RecommendationBlueprintCardProps = {
   recommendation: Record<string, unknown>;
   onBuildCampaignBlueprint?: () => Promise<void> | void;
   onMarkLongTerm?: () => Promise<void> | void;
   onArchive?: () => Promise<void> | void;
+  /** Journey signal: show small badge (only when campaigns_count > 0). */
+  strategyStatus?: StrategyStatus;
+  /** FULL = all sections (default); MINIMAL = decision-focused card only. */
+  viewMode?: RecommendationCardViewMode;
+  /** When true, show subtle "AI Priority" label in header (top 1–2 in ranked list). */
+  isTopPriority?: boolean;
+  /** When true, show subtle "Re-surfaced Opportunity" label (progress-aware boost applied). */
+  resurfaced?: boolean;
 };
+
+export type JourneyState = 'past' | 'current' | 'upcoming' | null;
+
+/** One journey label per card: past (in progress), current (focus), or upcoming (resurfaced). */
+/** Exported for list-level flow summary (e.g. TrendCampaignsTab). */
+export function getJourneyState(props: {
+  strategyStatus?: StrategyStatus;
+  isTopPriority?: boolean;
+  resurfaced?: boolean;
+}): JourneyState {
+  const { strategyStatus, isTopPriority, resurfaced } = props;
+  if (strategyStatus === 'continuation' || strategyStatus === 'expansion') return 'past';
+  if (isTopPriority) return 'current';
+  if (resurfaced) return 'upcoming';
+  return null;
+}
+
+const JOURNEY_LABELS: Record<Exclude<JourneyState, null>, { text: string; className: string }> = {
+  past: { text: '✓ In Progress', className: 'text-slate-400' },
+  current: { text: '● Current Focus', className: 'text-slate-500 font-medium' },
+  upcoming: { text: '↗ Upcoming Opportunity', className: 'text-slate-400' },
+};
+
+function RecommendationJourneyLabel(props: { state: Exclude<JourneyState, null> }) {
+  const { text, className } = JOURNEY_LABELS[props.state];
+  return (
+    <span className={`inline-flex items-center text-xs ${className}`} title="Journey position">
+      {text}
+    </span>
+  );
+}
+
+const NARRATIVE_BY_STATE: Record<Exclude<JourneyState, null>, string> = {
+  past: 'Building on your current direction, this recommendation extends the strategy forward.',
+  current: 'Based on your current momentum, this is the strongest next strategic focus.',
+  upcoming: 'As your strategy progresses, this is positioned as a strong upcoming opportunity.',
+};
+
+/** AI narrative continuity — one sentence explaining why this recommendation appears now. Presentation only. */
+function RecommendationNarrativeLine(props: { state: Exclude<JourneyState, null> }) {
+  const sentence = NARRATIVE_BY_STATE[props.state];
+  if (!sentence) return null;
+  return (
+    <p className="mt-2 text-sm text-slate-500 italic" role="status">
+      {sentence}
+    </p>
+  );
+}
+
+type StrategicMemoryState = 'reinforcement' | 'momentum' | 'emerging' | null;
+
+/** One strategic memory line per card: why this recommendation gains relevance now. Derived from existing props only. */
+function getStrategicMemoryState(props: {
+  strategyStatus?: StrategyStatus;
+  isTopPriority?: boolean;
+  resurfaced?: boolean;
+}): StrategicMemoryState {
+  const { strategyStatus, isTopPriority, resurfaced } = props;
+  if (strategyStatus === 'continuation' || strategyStatus === 'expansion') return 'reinforcement';
+  if (isTopPriority) return 'momentum';
+  if (resurfaced) return 'emerging';
+  return null;
+}
+
+const STRATEGIC_MEMORY_MESSAGES: Record<Exclude<StrategicMemoryState, null>, string> = {
+  reinforcement:
+    "Because you're already moving in this direction, the AI sees strong strategic continuity here.",
+  momentum:
+    'This opportunity is elevated because it aligns with your current momentum.',
+  emerging:
+    'This has gained strength as your recent strategy signals evolved.',
+};
+
+/** AI strategic memory — one sentence quiet commentary. Presentation only. */
+function RecommendationStrategicMemoryLine(props: { state: Exclude<StrategicMemoryState, null> }) {
+  const sentence = STRATEGIC_MEMORY_MESSAGES[props.state];
+  if (!sentence) return null;
+  return (
+    <p className="mt-2 text-xs text-slate-400 italic" role="status">
+      {sentence}
+    </p>
+  );
+}
+
+type IntentForecastState = 'momentum' | 'progression' | 'continuity' | null;
+
+/** One intent forecast per card: what likely comes next if user acts. Derived from existing signals only. */
+function getIntentForecastState(props: {
+  journeyState: JourneyState;
+  confidenceTier: ConfidenceTier;
+  strategyStatus?: StrategyStatus;
+}): IntentForecastState {
+  const { journeyState, confidenceTier, strategyStatus } = props;
+  const isPastOrContinuity =
+    journeyState === 'past' ||
+    strategyStatus === 'continuation' ||
+    strategyStatus === 'expansion';
+  if (isPastOrContinuity) return 'continuity';
+  if (journeyState === 'current' && confidenceTier === 'high') return 'momentum';
+  if (journeyState === 'upcoming' || confidenceTier === 'medium') return 'progression';
+  return null;
+}
+
+const INTENT_FORECAST_MESSAGES: Record<Exclude<IntentForecastState, null>, string> = {
+  momentum:
+    'If executed now, this is likely to accelerate momentum toward conversion-focused activity.',
+  progression:
+    'If you explore this next, it will likely become a stronger strategic focus as your campaign progresses.',
+  continuity:
+    'Continuing along this path will likely deepen consistency and strengthen long-term positioning.',
+};
+
+/** AI intent forecast — one sentence gentle prediction. Presentation only. */
+function RecommendationIntentForecastLine(props: { state: Exclude<IntentForecastState, null> }) {
+  const sentence = INTENT_FORECAST_MESSAGES[props.state];
+  if (!sentence) return null;
+  return (
+    <p className="mt-2 text-xs text-slate-400 italic" role="status">
+      {sentence}
+    </p>
+  );
+}
+
+export type MomentumState = 'execute' | 'plan' | 'consistent' | null;
+
+/** Exported for list-level flow summary (e.g. TrendCampaignsTab). Decision momentum from existing signals only. */
+export function getDecisionMomentumState(props: {
+  confidenceTier: ConfidenceTier;
+  journeyState: JourneyState;
+  strategyStatus?: StrategyStatus;
+}): MomentumState {
+  const { confidenceTier, journeyState, strategyStatus } = props;
+  const isContinuationOrExpansion =
+    strategyStatus === 'continuation' || strategyStatus === 'expansion';
+  if (journeyState === 'past' || isContinuationOrExpansion) return 'consistent';
+  if (confidenceTier === 'high' && journeyState === 'current' && !isContinuationOrExpansion) {
+    return 'execute';
+  }
+  if (confidenceTier === 'medium' || journeyState === 'upcoming') return 'plan';
+  return null;
+}
+
+const MOMENTUM_CUE_MESSAGES: Record<Exclude<MomentumState, null>, string> = {
+  execute: 'AI suggests strong execution momentum.',
+  plan: 'AI suggests planning momentum.',
+  consistent: 'AI suggests maintaining strategic consistency.',
+};
+
+/** AI decision momentum cue — whisper-level guidance. Presentation only. */
+function RecommendationMomentumCue(props: { state: Exclude<MomentumState, null> }) {
+  const sentence = MOMENTUM_CUE_MESSAGES[props.state];
+  if (!sentence) return null;
+  return (
+    <p className="mt-2 text-xs text-slate-400 italic" role="status">
+      {sentence}
+    </p>
+  );
+}
 
 const readText = (obj: Record<string, unknown> | null | undefined, key: string): string | null => {
   if (!obj) return null;
@@ -44,11 +222,164 @@ const readTopicList = (obj: Record<string, unknown> | null | undefined, key: str
     .filter((v): v is string => !!v);
 };
 
+const MAX_BANNER_SNIPPET = 80;
+
+function getTransformationSummary(
+  problem: string | null,
+  transformation: string | null,
+  summaryFallback: string | null
+): string {
+  const truncate = (s: string) =>
+    s.length <= MAX_BANNER_SNIPPET ? s : s.slice(0, MAX_BANNER_SNIPPET).trim() + '…';
+  if (problem && transformation) {
+    return `Designed to move your audience from ${truncate(problem)} → ${truncate(transformation)}`;
+  }
+  if (problem) {
+    return `Designed to address: ${truncate(problem)}. Clear audience progress and momentum.`;
+  }
+  if (transformation) {
+    return `Designed to achieve: ${truncate(transformation)}.`;
+  }
+  if (summaryFallback) {
+    return summaryFallback.length <= MAX_BANNER_SNIPPET * 2
+      ? summaryFallback
+      : summaryFallback.slice(0, MAX_BANNER_SNIPPET).trim() + '…';
+  }
+  return 'Designed to create clear audience progress and momentum.';
+}
+
+export type ConfidenceTier = 'high' | 'medium' | 'low';
+
+function getConfidenceTier(
+  finalAlignmentScore: number | null,
+  strategyModifier: number | null,
+  diamondType: string | null,
+  polishFlags: Record<string, unknown> | null | undefined
+): ConfidenceTier {
+  const diamondCandidate =
+    diamondType === 'diamond_candidate' ||
+    diamondType === 'authority_elevated' ||
+    polishFlags?.diamond_candidate === true ||
+    polishFlags?.authority_elevated === true;
+  if (diamondCandidate) return 'high';
+  const score = finalAlignmentScore ?? 0;
+  if (score >= 0.6) return 'high';
+  if (score >= 0.35 || (strategyModifier != null && strategyModifier > 0)) return 'medium';
+  return 'low';
+}
+
+/** Exported for UI-level priority ranking (e.g. TrendCampaignsTab). Single source of truth for tier from recommendation data. */
+export function getConfidenceTierForRecommendation(
+  rec: Record<string, unknown> | null | undefined
+): ConfidenceTier {
+  if (!rec || typeof rec !== 'object') return 'low';
+  const finalAlignmentScore = readNumber(rec, 'final_alignment_score') ?? readNumber(rec, 'finalAlignmentScore');
+  const strategyModifier = readNumber(rec, 'strategy_modifier');
+  const diamondType = readText(rec, 'diamond_type');
+  const polishFlags = (rec.polish_flags as Record<string, unknown> | undefined) ?? undefined;
+  return getConfidenceTier(finalAlignmentScore, strategyModifier, diamondType, polishFlags);
+}
+
+function getConfidencePhrase(tier: ConfidenceTier): string {
+  switch (tier) {
+    case 'high':
+      return 'High confidence — strong strategic alignment detected.';
+    case 'medium':
+      return 'Moderate confidence — strong potential with clear execution direction.';
+    case 'low':
+    default:
+      return 'Early-stage opportunity — recommended for exploration and testing.';
+  }
+}
+
+function getConfidenceBannerTone(tier: ConfidenceTier): string {
+  switch (tier) {
+    case 'high':
+      return 'border-slate-300';
+    case 'medium':
+      return 'border-slate-200';
+    case 'low':
+    default:
+      return 'border-slate-100';
+  }
+}
+
+function getPrimaryActionLabel(tier: ConfidenceTier): string {
+  switch (tier) {
+    case 'high':
+      return 'Start This Campaign';
+    case 'medium':
+      return 'Build Campaign Blueprint';
+    case 'low':
+    default:
+      return 'Explore This Strategy';
+  }
+}
+
+function getExpandActionLabel(tier: ConfidenceTier): string {
+  return tier === 'low' ? 'Explore Strategy Details' : 'Expand Theme Strategy';
+}
+
+/** AI confidence framing banner — visible in both FULL and MINIMAL. Uses existing card data only. */
+function RecommendationConfidenceBanner(props: {
+  transformationLine: string;
+  confidenceLine: string;
+  tier: ConfidenceTier;
+}) {
+  const { transformationLine, confidenceLine, tier } = props;
+  const toneClass = getConfidenceBannerTone(tier);
+  return (
+    <div
+      className={`mt-4 rounded-lg border bg-slate-50 px-4 py-3 ${toneClass}`}
+      role="region"
+      aria-label="AI recommendation summary"
+    >
+      <div className="flex gap-3">
+        <span className="text-lg leading-none text-slate-500" aria-hidden>
+          💎
+        </span>
+        <div className="min-w-0 flex-1 space-y-1 text-sm">
+          <div className="font-semibold text-slate-800">Recommended Campaign Direction</div>
+          <div className="text-slate-700">{transformationLine}</div>
+          <div className="text-slate-600">{confidenceLine}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RecommendationBlueprintCard(props: RecommendationBlueprintCardProps) {
-  const { recommendation, onBuildCampaignBlueprint, onMarkLongTerm, onArchive } = props;
+  const { recommendation, onBuildCampaignBlueprint, onMarkLongTerm, onArchive, strategyStatus, viewMode = 'FULL', isTopPriority, resurfaced } = props;
   const [expanded, setExpanded] = useState(false);
   const [minimized, setMinimized] = useState(true);
   const [busy, setBusy] = useState(false);
+  const isMinimal = viewMode === 'MINIMAL';
+  const journeyState = getJourneyState({ strategyStatus, isTopPriority, resurfaced });
+  const memoryState = getStrategicMemoryState({ strategyStatus, isTopPriority, resurfaced });
+  const confidenceTier = useMemo(
+    () => getConfidenceTierForRecommendation(recommendation ?? {}),
+    [recommendation]
+  );
+  const forecastState = useMemo(
+    () =>
+      getIntentForecastState({
+        journeyState,
+        confidenceTier,
+        strategyStatus,
+      }),
+    [journeyState, confidenceTier, strategyStatus]
+  );
+  const momentumState = useMemo(
+    () =>
+      getDecisionMomentumState({
+        confidenceTier,
+        journeyState,
+        strategyStatus,
+      }),
+    [confidenceTier, journeyState, strategyStatus]
+  );
+  const primaryButtonEmphasis =
+    momentumState === 'execute' ? 'font-semibold' : 'font-medium';
 
   const rec = recommendation ?? {};
   const intelligence = (rec.intelligence as Record<string, unknown> | undefined) ?? null;
@@ -172,15 +503,239 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
     }
   };
 
+  const hasMinimalProblemTransformation =
+    !!intelligenceBlock.problem_being_solved || !!intelligenceBlock.expected_transformation;
+  const hasMinimalWhyNow = !!intelligenceBlock.why_now;
+  const hasMinimalExecution =
+    !!executionBlock.execution_stage || !!executionBlock.stage_objective;
+  const hasMinimalBlueprint =
+    blueprint.duration_weeks != null || blueprint.primary_recommendations.length > 0;
+
+  const confidenceBannerContent = useMemo(() => {
+    const transformationLine = getTransformationSummary(
+      intelligenceBlock.problem_being_solved,
+      intelligenceBlock.expected_transformation,
+      core.summary
+    );
+    const confidenceLine = getConfidencePhrase(confidenceTier);
+    return { transformationLine, confidenceLine, tier: confidenceTier };
+  }, [
+    intelligenceBlock.problem_being_solved,
+    intelligenceBlock.expected_transformation,
+    core.summary,
+    confidenceTier,
+  ]);
+
+  if (isMinimal) {
+    return (
+      <div className="rounded-xl p-6 shadow-sm border border-gray-200 bg-white hover:shadow-md">
+        <section>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h4 className="text-sm font-semibold text-gray-800 mb-1">Core Theme</h4>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {core.polished_title || core.topic || 'Strategic recommendation'}
+                </h3>
+                {strategyStatus === 'continuation' && (
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800" title="Aligns with your dominant strategy">
+                    ⭐ Continue Strategy
+                  </span>
+                )}
+                {strategyStatus === 'expansion' && (
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800" title="Underused strategy area">
+                    🌱 Expand Strategy
+                  </span>
+                )}
+                {strategyStatus === 'momentum_expand' && (
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-800" title="Diversification recommended after repeated focus">
+                    ⚡ Strategic Expansion Recommended
+                  </span>
+                )}
+                {isTopPriority && (
+                  <span className="inline-flex items-center text-xs text-slate-500 font-medium" title="AI-suggested priority">
+                    ⭐ AI Priority
+                  </span>
+                )}
+                {resurfaced && (
+                  <span className="inline-flex items-center text-xs text-slate-400 font-medium" title="Re-surfaced based on progress">
+                    ↺ Re-surfaced Opportunity
+                  </span>
+                )}
+                {journeyState && <RecommendationJourneyLabel state={journeyState} />}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMinimized((v) => !v)}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+            >
+              {minimized ? 'Expand' : 'Collapse'}
+            </button>
+          </div>
+          {core.summary ? (
+            <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap break-words">{core.summary}</p>
+          ) : null}
+        </section>
+
+        <RecommendationConfidenceBanner
+          transformationLine={confidenceBannerContent.transformationLine}
+          confidenceLine={confidenceBannerContent.confidenceLine}
+          tier={confidenceBannerContent.tier}
+        />
+        {journeyState && <RecommendationNarrativeLine state={journeyState} />}
+        {memoryState && <RecommendationStrategicMemoryLine state={memoryState} />}
+        {forecastState && <RecommendationIntentForecastLine state={forecastState} />}
+
+        {!minimized && hasMinimalProblemTransformation && (
+          <section className="mt-4 pt-4 border-t border-gray-200">
+            <h4 className="text-sm font-semibold text-gray-800 mb-2">Decision brief</h4>
+            <div className="text-sm text-gray-700 space-y-2">
+              {intelligenceBlock.problem_being_solved ? (
+                <div>
+                  <div className="text-gray-500 font-medium mb-0.5">Current challenge</div>
+                  <div className="whitespace-pre-wrap break-words">
+                    {intelligenceBlock.problem_being_solved}
+                  </div>
+                </div>
+              ) : null}
+              {intelligenceBlock.expected_transformation ? (
+                <div>
+                  <div className="text-gray-500 font-medium mb-0.5">Expected outcome</div>
+                  <div className="whitespace-pre-wrap break-words">
+                    {intelligenceBlock.expected_transformation}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        )}
+
+        {!minimized && hasMinimalWhyNow && (
+          <section className="mt-4 pt-4 border-t border-gray-200">
+            <h4 className="text-sm font-semibold text-gray-800 mb-2">Why now</h4>
+            <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+              {intelligenceBlock.why_now}
+            </p>
+          </section>
+        )}
+
+        {!minimized && hasMinimalExecution && (
+          <section className="mt-4 pt-4 border-t border-gray-200">
+            <h4 className="text-sm font-semibold text-gray-800 mb-2">Execution stage</h4>
+            <div className="text-sm text-gray-700 space-y-1">
+              {executionBlock.execution_stage ? (
+                <div>
+                  <span className="text-gray-500 font-medium">Stage:</span> {executionBlock.execution_stage}
+                </div>
+              ) : null}
+              {executionBlock.stage_objective ? (
+                <div>
+                  <span className="text-gray-500 font-medium">Objective:</span>{' '}
+                  <span className="whitespace-pre-wrap break-words">{executionBlock.stage_objective}</span>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        )}
+
+        {!minimized && hasMinimalBlueprint && (
+          <section className="mt-4 pt-4 border-t border-gray-200">
+            <h4 className="text-sm font-semibold text-gray-800 mb-2">Campaign preview</h4>
+            <div className="text-sm text-gray-700 space-y-1">
+              {blueprint.duration_weeks != null ? (
+                <div>
+                  <span className="text-gray-500 font-medium">Duration:</span> {blueprint.duration_weeks} weeks
+                </div>
+              ) : null}
+              {blueprint.primary_recommendations.length > 0 ? (
+                <div>
+                  <span className="text-gray-500 font-medium">Primary:</span>{' '}
+                  {blueprint.primary_recommendations.join(', ')}
+                </div>
+              ) : null}
+            </div>
+          </section>
+        )}
+
+        <section className="mt-4 pt-4 border-t border-gray-200">
+          <h4 className="text-sm font-semibold text-gray-800 mb-2">Actions</h4>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => run(onBuildCampaignBlueprint)}
+              disabled={busy || !onBuildCampaignBlueprint}
+              className={`px-4 py-2 text-sm rounded-lg bg-indigo-600 text-white disabled:opacity-50 ${primaryButtonEmphasis}`}
+            >
+              {getPrimaryActionLabel(confidenceBannerContent.tier)}
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              disabled={minimized}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-600 text-indigo-600 hover:bg-indigo-50"
+            >
+              {getExpandActionLabel(confidenceBannerContent.tier)}
+            </button>
+            <button
+              type="button"
+              onClick={() => run(onMarkLongTerm)}
+              disabled={busy || !onMarkLongTerm}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 disabled:opacity-50"
+            >
+              Mark Long-Term
+            </button>
+            <button
+              type="button"
+              onClick={() => run(onArchive)}
+              disabled={busy || !onArchive}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-600 disabled:opacity-50"
+            >
+              Archive
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-xl p-6 shadow-sm border border-gray-200 bg-white hover:shadow-md">
       <section>
         <div className="flex items-start justify-between gap-3">
           <div>
             <h4 className="text-sm font-semibold text-gray-800 mb-1">Core Theme</h4>
-            <h3 className="text-lg font-semibold text-gray-900">
-              {core.polished_title || core.topic || 'Strategic recommendation'}
-            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold text-gray-900">
+                {core.polished_title || core.topic || 'Strategic recommendation'}
+              </h3>
+              {strategyStatus === 'continuation' && (
+                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800" title="Aligns with your dominant strategy">
+                  ⭐ Continue Strategy
+                </span>
+              )}
+              {strategyStatus === 'expansion' && (
+                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800" title="Underused strategy area">
+                  🌱 Expand Strategy
+                </span>
+              )}
+              {strategyStatus === 'momentum_expand' && (
+                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-800" title="Diversification recommended after repeated focus">
+                  ⚡ Strategic Expansion Recommended
+                </span>
+              )}
+              {isTopPriority && (
+                <span className="inline-flex items-center text-xs text-slate-500 font-medium" title="AI-suggested priority">
+                  ⭐ AI Priority
+                </span>
+              )}
+              {resurfaced && (
+                <span className="inline-flex items-center text-xs text-slate-400 font-medium" title="Re-surfaced based on progress">
+                  ↺ Re-surfaced Opportunity
+                </span>
+              )}
+              {journeyState && <RecommendationJourneyLabel state={journeyState} />}
+            </div>
           </div>
           <button
             type="button"
@@ -199,6 +754,16 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
           </div>
         ) : null}
       </section>
+
+      <RecommendationConfidenceBanner
+        transformationLine={confidenceBannerContent.transformationLine}
+        confidenceLine={confidenceBannerContent.confidenceLine}
+        tier={confidenceBannerContent.tier}
+      />
+      {journeyState && <RecommendationNarrativeLine state={journeyState} />}
+      {memoryState && <RecommendationStrategicMemoryLine state={memoryState} />}
+      {forecastState && <RecommendationIntentForecastLine state={forecastState} />}
+      {momentumState && <RecommendationMomentumCue state={momentumState} />}
 
       {!minimized && hasStrategicContext && (
         <section className="mt-4 pt-4 border-t border-gray-200">
@@ -293,9 +858,9 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             type="button"
             onClick={() => run(onBuildCampaignBlueprint)}
             disabled={busy || !onBuildCampaignBlueprint}
-            className="px-4 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white disabled:opacity-50"
+            className={`px-4 py-2 text-sm rounded-lg bg-indigo-600 text-white disabled:opacity-50 ${primaryButtonEmphasis}`}
           >
-            Build Campaign Blueprint
+            {getPrimaryActionLabel(confidenceBannerContent.tier)}
           </button>
           <button
             type="button"
@@ -303,7 +868,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             disabled={minimized}
             className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-600 text-indigo-600 hover:bg-indigo-50"
           >
-            Expand Theme Strategy
+            {getExpandActionLabel(confidenceBannerContent.tier)}
           </button>
           <button
             type="button"

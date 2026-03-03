@@ -12,6 +12,7 @@ import {
   shouldShowNoveltyWarning,
 } from '../backend/services/recommendationUiExplainability';
 import TrendCampaignsTab from '../components/recommendations/tabs/TrendCampaignsTab';
+import { useRecommendationViewMode } from '../components/recommendations/hooks/useRecommendationViewMode';
 import ActiveLeadsTab from '../components/recommendations/tabs/ActiveLeadsTab';
 import MarketPulseTab from '../components/recommendations/tabs/MarketPulseTab';
 import SeasonalRegionalTab from '../components/recommendations/tabs/SeasonalRegionalTab';
@@ -158,6 +159,7 @@ export default function RecommendationsPage() {
     userRole,
     hasPermission,
   } = useCompanyContext();
+  const viewMode = useRecommendationViewMode();
   const [engineResult, setEngineResult] = useState<RecommendationEngineResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -253,6 +255,7 @@ export default function RecommendationsPage() {
   >('reach');
   const [activeOpportunityTab, setActiveOpportunityTab] = useState<string>('TREND');
   const [opportunityRegions, setOpportunityRegions] = useState<string>('');
+  const [trendStrategicIntents, setTrendStrategicIntents] = useState<string[]>([]);
   const [engineOverrides, setEngineOverrides] = useState<Record<string, string>>({});
   const isAdmin = useMemo(() => user?.role === 'admin', [user]);
   const canManageRecommendationState = useMemo(() => {
@@ -313,21 +316,31 @@ export default function RecommendationsPage() {
     return map;
   }, [engineResult?.chat_meta?.trend_explanations]);
 
+  // Sync URL params when router is ready (e.g. opening from Content Architect "Open recommendation cards" link)
   useEffect(() => {
-    const queryTab = typeof router.query.tab === 'string' ? router.query.tab.toUpperCase() : '';
+    if (!router.isReady) return;
+    const query = router.query as Record<string, string | string[] | undefined>;
+    const queryCompanyId = typeof query.companyId === 'string' ? query.companyId.trim() : '';
+    const queryTab = typeof query.tab === 'string' ? query.tab.toUpperCase() : '';
+    const queryCampaignId = typeof query.campaignId === 'string' ? query.campaignId.trim() : '';
+    if (queryCompanyId && selectedCompanyId !== queryCompanyId) {
+      setSelectedCompanyId(queryCompanyId);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('selected_company_id', queryCompanyId);
+        window.localStorage.setItem('company_id', queryCompanyId);
+      }
+    }
     if (queryTab && ['TREND', 'LEAD', 'PULSE', 'SEASONAL', 'INFLUENCER', 'DAILY_FOCUS'].includes(queryTab)) {
       setActiveOpportunityTab(queryTab);
     }
-  }, [router.query.tab]);
-
-  useEffect(() => {
-    const queryCampaignId =
-      typeof router.query.campaignId === 'string' ? router.query.campaignId : '';
     if (queryCampaignId) {
       setSelectedCampaignId(queryCampaignId);
       setCampaignIdLocked(true);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('selected_campaign_id', queryCampaignId);
+      }
     }
-  }, [router.query.campaignId]);
+  }, [router.isReady, router.query.companyId, router.query.tab, router.query.campaignId]);
 
   useEffect(() => {
     if (!selectedCompanyId) {
@@ -336,13 +349,15 @@ export default function RecommendationsPage() {
       setSelectedCampaignName('');
       return;
     }
+    // Do not overwrite campaign from URL when opened via Content Architect link (campaignIdLocked)
+    if (campaignIdLocked) return;
     const stored = typeof window !== 'undefined'
       ? window.localStorage.getItem('selected_campaign_id') || ''
       : '';
     if (stored && stored !== selectedCampaignId) {
       setSelectedCampaignId(stored);
     }
-  }, [selectedCompanyId]);
+  }, [selectedCompanyId, campaignIdLocked]);
 
   useEffect(() => {
     if (!selectedCompanyId || !selectedCampaignId) {
@@ -1291,9 +1306,9 @@ export default function RecommendationsPage() {
     <div className="min-h-screen bg-gray-50 p-6">
       <Header />
       <div className="max-w-6xl mx-auto space-y-8">
-        {/* Marketing Intelligence Hub: engine-based workspace. */}
+        {/* Recommendation Hub: engine-based workspace. */}
         <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-3">Marketing Intelligence Hub</h2>
+          <h2 className="text-xl font-semibold text-gray-900 mb-3">Recommendation Hub</h2>
           <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-3 mb-3">
             {OPPORTUNITY_TAB_TYPES.map(({ type, label }) => (
               <button
@@ -1325,6 +1340,9 @@ export default function RecommendationsPage() {
                 fetchWithAuth={fetchWithAuth}
                 overrideText={engineOverrides['TREND'] ?? ''}
                 onOverrideChange={(v) => setEngineOverride('TREND', v)}
+                strategicIntents={trendStrategicIntents}
+                onStrategicIntentsChange={setTrendStrategicIntents}
+                viewMode={viewMode}
               />
             )}
             {activeOpportunityTab === 'LEAD' && (

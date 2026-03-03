@@ -1,4 +1,4 @@
-type CapacityValidationStatus = 'valid' | 'invalid';
+type CapacityValidationStatus = 'valid' | 'invalid' | 'balanced';
 
 export type CapacityValidationResult = {
   status: CapacityValidationStatus;
@@ -18,6 +18,12 @@ export type CapacityValidationResult = {
     reduce_total_by: number;
   };
   explanation: string;
+  /** When status === 'balanced': workload after auto rebalance. */
+  balanced_requests?: Array<{ platform: string; content_type: string; count_per_week: number }>;
+  /** When status === 'balanced': human-readable adjustment reason. */
+  planning_adjustment_reason?: string;
+  /** When status === 'balanced': concise summary of what was reduced and preserved. */
+  planning_adjustments_summary?: { reduced: string[]; preserved: string[]; text: string };
 };
 
 function normalizePlatformKey(raw: unknown): string {

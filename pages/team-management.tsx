@@ -37,7 +37,7 @@ export default function TeamManagement() {
   const [roleNotice, setRoleNotice] = useState('');
   const [toastMessage, setToastMessage] = useState('');
 
-  const { selectedCompanyId, selectedCompanyName, userRole, isAuthenticated } = useCompanyContext();
+  const { selectedCompanyId, selectedCompanyName, userRole, isAuthenticated, refreshCompanies } = useCompanyContext();
   const canManage =
     userRole === 'COMPANY_ADMIN' ||
     userRole === 'SUPER_ADMIN' ||
@@ -69,8 +69,20 @@ export default function TeamManagement() {
       const data = await response.json();
       if (!response.ok) {
         console.error(data.error || 'FAILED_TO_LIST_USERS');
-        setToastMessage(data.error || 'Failed to load users');
+        const errorCode = data.error || 'FAILED_TO_LIST_USERS';
+        const friendlyMessage =
+          errorCode === 'FORBIDDEN_ROLE'
+            ? "You don't have permission to view this company's team. If you were invited, accept the invite first. Otherwise select a company you belong to or contact your admin."
+            : errorCode === 'COMPANY_ACCESS_DENIED'
+            ? "You don't have access to this company. Please select a company you belong to from the dropdown."
+            : errorCode === 'UNAUTHORIZED'
+            ? 'Please log in again to view team members.'
+            : errorCode;
+        setToastMessage(friendlyMessage);
         setTeamMembers([]);
+        if (errorCode === 'FORBIDDEN_ROLE' || errorCode === 'COMPANY_ACCESS_DENIED') {
+          refreshCompanies?.();
+        }
         return;
       }
       const users = (data.users || []).map((row: any) => ({

@@ -3,6 +3,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { saveProfile } from '../../../backend/services/companyProfileService';
+import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 
 const normalizeWebsite = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -14,6 +15,15 @@ const requireSuperAdminAccess = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> => {
+  if (isContentArchitectSession(req)) {
+    return true;
+  }
+  // Legacy super-admin login: cookie takes precedence when user also has a Supabase session
+  const hasSession = req.cookies?.super_admin_session === '1';
+  if (hasSession) {
+    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
+    return true;
+  }
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id) {
     const isAdmin = await isPlatformSuperAdmin(user.id);
@@ -21,11 +31,6 @@ const requireSuperAdminAccess = async (
       res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       return false;
     }
-    return true;
-  }
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
     return true;
   }
   res.status(403).json({ error: 'NOT_AUTHORIZED' });

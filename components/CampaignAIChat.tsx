@@ -22,6 +22,7 @@ import {
 import ChatVoiceButton from './ChatVoiceButton';
 import AIGenerationProgress from './AIGenerationProgress';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
+import { getFormatLineForContentType, getIntentLabelForContentType } from '../utils/formatLineForContentType';
 
 /** True when the user message indicates they're ready for the final weekly plan (not just answering a question). */
 function isFinalPlanSubmissionMessage(text: string): boolean {
@@ -31,8 +32,19 @@ function isFinalPlanSubmissionMessage(text: string): boolean {
   // "Yes, proceed with 4 weeks." / "Proceed with 12 weeks." / "Use 8 weeks instead."
   if (/(yes,?\s*)?proceed with \d+\s*weeks?/i.test(t)) return true;
   if (/use \d+\s*weeks?\s*(instead)?/i.test(t)) return true;
+  // Bare duration after "create your week plan now?" (e.g. "4 weeks", "8 weeks")
+  if (/^\s*\d{1,2}\s*weeks?\s*$/i.test(t)) return true;
   if (/^\s*sure\s*$/i.test(t)) return true;
   return false;
+}
+
+/** Expected and max seconds for weekly plan generation by campaign length (2–12 weeks). Longer = more complexity. */
+function getWeeklyPlanTimingByWeeks(weeks: number): { expectedSeconds: number; maxSecondsHint: number } {
+  const w = Math.min(12, Math.max(2, Math.floor(weeks)));
+  if (w <= 2) return { expectedSeconds: 50, maxSecondsHint: 120 };   // 2 weeks: ~1 min typical, up to 2 min
+  if (w <= 4) return { expectedSeconds: 75, maxSecondsHint: 180 };   // 4 weeks: ~1.25 min typical, up to 3 min
+  if (w <= 8) return { expectedSeconds: 105, maxSecondsHint: 240 };  // 8 weeks: ~1.75 min typical, up to 4 min
+  return { expectedSeconds: 135, maxSecondsHint: 300 };               // 12 weeks: ~2.25 min typical, up to 5 min
 }
 
 function formatPlanMarkersForDisplay(raw: string): string {
@@ -139,6 +151,8 @@ interface RecommendationContext {
   target_regions?: string[] | null;
   context_payload?: Record<string, unknown> | null;
   source_opportunity_id?: string | null;
+  /** Topic/title from the recommendation card when campaign was built from a theme (replaces generic "Campaign from themes"). */
+  topic_from_card?: string | null;
 }
 
 interface AIChatProps {
@@ -175,6 +189,10 @@ type AIProvider = 'gpt' | 'claude' | 'demo';
 type ProgressiveStyleConfig = {
   primaryOptions: string[];
   secondaryByPrimary: Record<string, string[]>;
+  /** Hover tooltip per primary option (words/characters guidance). */
+  primaryTooltips?: Record<string, string>;
+  /** Hover tooltip per secondary option. */
+  secondaryTooltips?: Record<string, string>;
 };
 
 type QuickPickConfig = {
@@ -199,9 +217,15 @@ type QuickPickConfig = {
   options: string[];
   /** When set, use primary-then-secondary flow; primary is one, secondaries limited by compatibility. */
   progressiveStyle?: ProgressiveStyleConfig;
+  /** Optional short hint shown above options (e.g. "Pick one; a 1–2 line answer is fine."). */
+  helperText?: string;
+  /** Optional one-line description per option (key = option label). Shown as title or caption. */
+  optionDescriptions?: Record<string, string>;
+  /** Optional hover tooltip per option (words/characters guidance). */
+  optionTooltips?: Record<string, string>;
 };
 
-/** Primary communication styles (mutually exclusive). Compatible secondaries per primary. */
+/** Primary communication styles. Pick one or two; "Simple & easy" and "Deep & thoughtful" describe different depth levels — avoid picking both. */
 const COMMUNICATION_STYLE_PRIMARY = [
   'Simple & easy',
   'Professional & expert',
@@ -376,30 +400,33 @@ function getQuickPickConfig(question: string, platformOptions: string[]): QuickP
     q.includes('duration') ||
     q.includes('create your week plan now')
   ) {
+    const isCreatePlanStep = q.includes('create your week plan now');
     return {
       key: 'campaign_duration',
       multi: false,
       options: ['2 weeks', '4 weeks', '8 weeks', '12 weeks'],
+      ...(isCreatePlanStep && { helperText: "You're all set — pick a duration and click Submit to create your plan." }),
     };
   }
-  if (q.includes('target audience')) {
+  if (q.includes('target audience') || q.includes('who will see your content')) {
     return {
       key: 'target_audience',
       multi: true,
       options: ['Professionals', 'Entrepreneurs', 'Students', 'SMB owners', 'Parents'],
     };
   }
-  if (q.includes('which professionals') && q.includes('mainly speaking')) {
+  if ((q.includes('which professionals') && q.includes('mainly speaking')) || q.includes('which group fits')) {
     return {
       key: 'audience_professional_segment',
       multi: true,
       options: ['Managers', 'Job seekers', 'Founders', 'Corporate employees'],
     };
   }
-  if (q.includes('how do you want your content to sound')) {
+  if (q.includes('how do you want your content to sound') || q.includes('how should your posts sound')) {
     return {
       key: 'communication_style',
       multi: true,
+      helperText: 'Primary = main voice; modifiers add nuance. Tip: pick either "Simple & easy" (clear, scannable) or "Deep & thoughtful" (in-depth) as your main direction — they work best separately.',
       options: [
         'Simple & easy',
         'Professional & expert',
@@ -415,10 +442,24 @@ function getQuickPickConfig(question: string, platformOptions: string[]): QuickP
       progressiveStyle: {
         primaryOptions: [...COMMUNICATION_STYLE_PRIMARY],
         secondaryByPrimary: COMMUNICATION_STYLE_SECONDARY_BY_PRIMARY,
+        primaryTooltips: {
+          'Simple & easy': 'Clear, everyday words; easy to follow. Best for short tips or scannable posts.',
+          'Professional & expert': 'Structured and authoritative; you sound like the expert.',
+          'Friendly & conversational': 'Warm, like talking to a friend.',
+          'Bold & opinionated': 'Clear point of view; strong opening.',
+          'Deep & thoughtful': 'In-depth when the topic needs it: full explanation or reflective story. Pairs well with Professional.',
+        },
+        secondaryTooltips: {
+          'Direct & no-fluff': 'One clear ask (e.g. “Sign up” or “Read more”).',
+          'Story-driven': 'Start with a short hook; posts link together.',
+          'Data-driven': 'Add a number or stat when it helps.',
+          'Inspiring & motivational': 'End on an uplifting note.',
+          'Witty & playful': 'Light, punchy tone.',
+        },
       },
     };
   }
-  if (q.includes('after reading your content') && q.includes('what should people do')) {
+  if ((q.includes('after reading your content') && q.includes('what should people do')) || q.includes('what do you want people to do after')) {
     return {
       key: 'action_expectation',
       multi: true,
@@ -439,21 +480,54 @@ function getQuickPickConfig(question: string, platformOptions: string[]): QuickP
       progressiveStyle: {
         primaryOptions: [...CTA_INTENT_PRIMARY],
         secondaryByPrimary: CTA_ACTIONS_BY_INTENT,
+        primaryTooltips: {
+          'Awareness': 'Goal: people notice and remember you.',
+          'Lead Generation': 'Goal: get sign-ups, demos, or contacts.',
+          'Engagement': 'Goal: more likes, comments, shares.',
+          'Authority': 'Goal: show expertise (e.g. download, read more).',
+        },
+        secondaryTooltips: {
+          'Like / react': 'Ask for a like or reaction.',
+          'Visit website': 'Link to your site + one short line.',
+          'Book a call / demo': 'One clear button or line to book.',
+        },
       },
     };
   }
-  if (q.includes('short easy reads') || q.includes('detailed insights')) {
+  if (q.includes('short easy reads') || q.includes('detailed insights') || q.includes('short reads or longer') || q.includes('longer pieces')) {
     return {
       key: 'content_depth',
       multi: false,
       options: ['Short & quick', 'Medium detail', 'Deep explanation'],
+      helperText: 'Pick one.',
+      optionDescriptions: {
+        'Short & quick': 'Tips, takeaways; a few lines.',
+        'Medium detail': 'Clear sections; not too long.',
+        'Deep explanation': 'Full guides; in-depth read.',
+      },
+      optionTooltips: {
+        'Short & quick': 'Like a tip: a few lines, easy to scan.',
+        'Medium detail': 'A few short sections with headings.',
+        'Deep explanation': 'Longer piece; full story or guide.',
+      },
     };
   }
-  if (q.includes('connected series') && q.includes('mostly independent')) {
+  if ((q.includes('connected series') && q.includes('mostly independent')) || q.includes('ongoing story') || q.includes('different topics each time')) {
     return {
       key: 'topic_continuity',
       multi: false,
       options: ['Connected series', 'Mostly independent', 'Mix of both'],
+      helperText: 'Pick one.',
+      optionDescriptions: {
+        'Connected series': 'Posts link together (e.g. weekly thread).',
+        'Mostly independent': 'Each post is its own topic.',
+        'Mix of both': 'Some threads + one-off posts.',
+      },
+      optionTooltips: {
+        'Connected series': 'Same thread or story; people follow along.',
+        'Mostly independent': 'New topic each time; no order needed.',
+        'Mix of both': 'A few series plus standalone posts.',
+      },
     };
   }
   if (q.includes('existing content') || q.includes('do you have any existing content') || q.includes('content for this campaign')) {
@@ -463,28 +537,38 @@ function getQuickPickConfig(question: string, platformOptions: string[]): QuickP
       options: Array.from(PLANNING_CONTENT_TYPE_LABELS),
     };
   }
-  if (q.includes('which platforms') || q.includes('platforms will you focus')) {
+  if (q.includes('which platforms') || q.includes('platforms will you focus') || q.includes('where will you post')) {
     return {
       key: 'platforms',
       multi: true,
       options: platformOptions.length > 0 ? platformOptions : [],
     };
   }
-  if (q.includes('content types') && q.includes('count per week')) {
+  if (
+    (q.includes('content types') && q.includes('count per week')) ||
+    q.includes('set how often') ||
+    q.includes('same topic across platforms') ||
+    q.includes('publish same day on all platforms') ||
+    q.includes('let AI decide')
+  ) {
     return {
       key: 'platform_content_requests',
       multi: true,
       options: [],
     };
   }
-  if (q.includes('platform-exclusive campaigns')) {
+  if (q.includes('platform-exclusive campaigns') || q.includes('anything only for one platform')) {
     return {
       key: 'exclusive_campaigns',
       multi: true,
       options: [],
     };
   }
-  if (q.includes('content types') && q.includes('platform')) {
+  if (
+    (q.includes('content types') && q.includes('platform')) ||
+    q.includes('which content types will you use') ||
+    q.includes('for each platform you selected')
+  ) {
     return {
       key: 'platform_content_types',
       multi: true,
@@ -512,7 +596,9 @@ function getQuickPickConfig(question: string, platformOptions: string[]): QuickP
     q.includes('create each week') ||
     q.includes('produce each week') ||
     q.includes('how much content') ||
-    q.includes('what can your team produce')
+    q.includes('what can your team produce') ||
+    q.includes('how will you create') ||
+    q.includes('how many pieces per week')
   ) {
     return {
       key: 'content_capacity',
@@ -674,6 +760,21 @@ function getPlatformSupportedPlanningTypes(platform: string, platformContentType
   if (supportedCanon.has('Reels') || supportedCanon.has('Shorts') || supportedCanon.has('Long Videos')) supportedCanon.add('Videos');
 
   return supportedCanon;
+}
+
+/** Returns all content-type keys (catalog raw + any supported canonical not in catalog) so the capacity grid shows every type the platform supports (e.g. Carousel, Image for Facebook). */
+function getAllSupportedContentTypeKeysForPlatform(
+  platform: string,
+  platformContentTypeRawOptions: Record<string, string[]>,
+  platformContentTypeOptions: Record<string, string[]>
+): string[] {
+  const rawFromCatalog = platformContentTypeRawOptions[platform] || [];
+  const supportedCanon = getPlatformSupportedPlanningTypes(platform, platformContentTypeOptions);
+  const covered = new Set(
+    rawFromCatalog.map((r) => canonicalPlanningTypeLabel(prettyContentTypeLabel(r))).filter(Boolean)
+  );
+  const additional = Array.from(supportedCanon).filter((c) => !covered.has(c));
+  return [...rawFromCatalog, ...additional];
 }
 
 function getEligiblePlatformPlanningTypeOptions(args: {
@@ -899,6 +1000,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [hasViewedPlanMessageId, setHasViewedPlanMessageId] = useState<number | null>(null);
   const [showPlanOverview, setShowPlanOverview] = useState(false);
   const [pendingAmendment, setPendingAmendment] = useState<StructuredPlan | null>(null);
+  const [isSavingDraftForView, setIsSavingDraftForView] = useState(false);
   const [retrievePlanData, setRetrievePlanData] = useState<{ savedPlan?: { content: string; savedAt: string }; committedPlan?: { weeks: any[] }; draftPlan?: { weeks: any[]; savedAt: string } } | null>(null);
   const [planSource, setPlanSource] = useState<'ai' | 'committed' | 'draft'>('ai');
   const [isRetrievePlanLoading, setIsRetrievePlanLoading] = useState(false);
@@ -946,6 +1048,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const freshThreadAppliedRef = useRef<Set<string>>(new Set());
+  const planAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1651,6 +1754,37 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       .join('\n\n');
   };
 
+  const saveDraftAndViewOnCampaign = async () => {
+    if (!campaignId || !structuredPlan?.weeks?.length || !onProgramGenerated) return;
+    setIsSavingDraftForView(true);
+    setUiErrorMessage(null);
+    const weeksToSave = structuredPlan.weeks.map((w: any, idx: number) => ({
+      ...w,
+      week: Number(w.week ?? w.week_number ?? idx + 1) || idx + 1,
+      week_number: Number(w.week_number ?? w.week ?? idx + 1) || idx + 1,
+    }));
+    let saveSucceeded = false;
+    try {
+      const saveRes = await fetchWithAuth('/api/campaigns/save-draft-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId, structuredPlan: { weeks: weeksToSave } }),
+      });
+      if (saveRes.ok) saveSucceeded = true;
+      else {
+        const err = await saveRes.json().catch(() => ({}));
+        console.warn('Failed to save draft for view', err);
+        setUiErrorMessage('Plan could not be saved. Try again or use "Create week plan from stored context" on the campaign page.');
+      }
+    } catch (e) {
+      console.warn('Failed to save draft for view', e);
+      setUiErrorMessage('Plan could not be saved. Try again or use "Create week plan from stored context" on the campaign page.');
+    }
+    const programData = convertStructuredPlanToProgram(structuredPlan);
+    onProgramGenerated({ program: programData, structuredPlan, saveSucceeded });
+    setIsSavingDraftForView(false);
+  };
+
   const commitPlan = (aiMessage?: string) => {
     const today = new Date().toISOString().split('T')[0];
     const resolvedStartDate =
@@ -1949,7 +2083,8 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
     const contextKey = `${campaignId}:${String(context || 'general').toLowerCase()}`;
     const isPlanningContext =
       context.toLowerCase().includes('campaign-planning') ||
-      context.toLowerCase().includes('12week-plan');
+      context.toLowerCase().includes('12week-plan') ||
+      context.toLowerCase().includes('blueprint-plan');
     const freshThreadSessionKey = `campaign_chat_fresh_applied_${contextKey}`;
     const wasFreshAppliedInSession =
       typeof window !== 'undefined' &&
@@ -1963,6 +2098,7 @@ When we have everything, say "Create my plan" or "I'm ready" and I'll generate i
     if (shouldForceFreshNow && typeof window !== 'undefined') {
       try {
         window.sessionStorage.removeItem(getChatStorageKey(campaignId));
+        window.sessionStorage.removeItem(getPlanningFormStorageKey(campaignId));
         window.sessionStorage.setItem(freshThreadSessionKey, '1');
       } catch (e) {
         console.warn('Could not clear saved chat draft', e);
@@ -1990,7 +2126,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
 
 **Would you like to improve all weeks, or focus on a specific week (or weeks)?**`
           : `Hello! I'm your expert consultant for **vetting and refining recommendations**. Generate recommendations first (click "Generate Recommendations" above), then I'll help you improve them by scope (all weeks or specific weeks), topics, content types, geo focus, and more.`;
-      } else if (initialPlan?.weeks?.length && context?.toLowerCase().includes('12week-plan')) {
+      } else if (initialPlan?.weeks?.length && (context?.toLowerCase().includes('12week-plan') || context?.toLowerCase().includes('blueprint-plan'))) {
         welcomeText = `Hello! You're refining your **${durationWeeks}-week campaign plan**. I won't ask questions—just describe the changes you want (e.g., "Add topic X to Week 1", "Change Week 2 theme to...", "Add 2 LinkedIn posts to Week 3"). I'll apply them and return the updated plan.`;
       } else if (recommendationContext && (recommendationContext.target_regions?.length || recommendationContext.context_payload)) {
         welcomeText = buildRecommendationWelcome(campaignData);
@@ -2009,12 +2145,41 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     } else {
       setMessages(existingMessages);
     }
+
+    // Restore planning form state (last unsaved) so user can continue from where they left off
+    if (typeof window !== 'undefined' && campaignId && isPlanningContext) {
+      try {
+        const formKey = getPlanningFormStorageKey(campaignId);
+        const saved = window.sessionStorage.getItem(formKey);
+        if (saved) {
+          const parsed = JSON.parse(saved) as {
+            platformContentRequests?: Record<string, Record<string, string>>;
+            crossPlatformSharing?: boolean;
+            scheduleMode?: string;
+          };
+          if (parsed?.platformContentRequests && typeof parsed.platformContentRequests === 'object' && Object.keys(parsed.platformContentRequests).length > 0) {
+            setPlanningPlatformContentRequests(parsed.platformContentRequests);
+          }
+          if (typeof parsed?.crossPlatformSharing === 'boolean') {
+            setPlanningCrossPlatformSharingEnabled(parsed.crossPlatformSharing);
+          }
+          if (parsed?.scheduleMode === 'same_time' || parsed?.scheduleMode === 'staggered' || parsed?.scheduleMode === 'ai_recommended') {
+            setPlanningCrossPlatformScheduleMode(parsed.scheduleMode);
+          }
+        }
+      } catch (e) {
+        console.warn('Could not restore planning form state', e);
+      }
+    }
   };
 
   const getChatStorageKey = (cid: string) =>
     context?.toLowerCase().includes('campaign-recommendations')
       ? `campaign_chat_draft_${cid}_recommendations`
       : `campaign_chat_draft_${cid}`;
+
+  const getPlanningFormStorageKey = (cid: string) =>
+    `campaign_planning_form_${cid}`;
 
   const loadCampaignMessages = async (campaignId: string): Promise<ChatMessage[]> => {
     const storageKey = getChatStorageKey(campaignId);
@@ -2324,6 +2489,27 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     setQuickPlatformContentTypes({});
   }, [quickPickConfig?.key]);
 
+  // Persist planning form state (platform content requests, sharing, schedule) so user can start from last unsaved state
+  useEffect(() => {
+    if (typeof window === 'undefined' || !campaignId) return;
+    const isPlanning =
+      context?.toLowerCase().includes('campaign-planning') ||
+      context?.toLowerCase().includes('12week-plan') ||
+      context?.toLowerCase().includes('blueprint-plan');
+    if (!isPlanning) return;
+    try {
+      const formKey = getPlanningFormStorageKey(campaignId);
+      const payload = {
+        platformContentRequests: planningPlatformContentRequests ?? {},
+        crossPlatformSharing: planningCrossPlatformSharingEnabled,
+        scheduleMode: planningCrossPlatformScheduleMode,
+      };
+      window.sessionStorage.setItem(formKey, JSON.stringify(payload));
+    } catch (e) {
+      console.warn('Could not persist planning form state', e);
+    }
+  }, [campaignId, context, planningPlatformContentRequests, planningCrossPlatformSharingEnabled, planningCrossPlatformScheduleMode]);
+
   const sendMessage = async (overrideMessage?: unknown) => {
     const safeOverride =
       typeof overrideMessage === 'string'
@@ -2400,7 +2586,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
 
         const mode = context.toLowerCase().includes('daily')
           ? 'refine_day'
-          : context.toLowerCase().includes('campaign-planning') || context.toLowerCase().includes('12week-plan') || context.toLowerCase().includes('campaign-recommendations')
+          : context.toLowerCase().includes('campaign-planning') || context.toLowerCase().includes('12week-plan') || context.toLowerCase().includes('blueprint-plan') || context.toLowerCase().includes('campaign-recommendations')
           ? 'generate_plan'
           : 'platform_customize';
 
@@ -2433,6 +2619,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             scopeWeeks: scopeWeeks ?? undefined,
             chatContext: context?.toLowerCase().includes('campaign-recommendations') ? 'campaign-recommendations' : undefined,
             vetScope: vetScope,
+            planAbortRef,
           }
         );
 
@@ -2460,11 +2647,14 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             response = 'Changes applied to your plan. Review below and click **Amend** when ready to save all changes.';
           } else {
             setPendingAmendment(null);
-            response = 'Structured plan generated.';
+            response = 'Structured plan generated.\n\n**Review your week plan below.** When ready: **Save & view on campaign** to see it on the campaign page, **Save for Later** to keep a copy, or **Submit This Plan** to commit.';
           }
           console.log('Structured plan received', planResponse.plan, 'refineMode:', isRefineMode);
         } else if (planResponse.conversationalResponse) {
           response = enrichPlanningQuestionExamples(planResponse.conversationalResponse);
+          if (planResponse.startDateConflictWarning) {
+            response += '\n\n' + planResponse.startDateConflictWarning;
+          }
         } else if (planResponse.day) {
           setStructuredPlan((prev) =>
             prev ? updatePlanWithRefinedDay(prev, planResponse.day) : prev
@@ -2483,6 +2673,9 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
           );
           response = 'No structured response received.';
         }
+        if (planResponse.startDateConflictWarning && response) {
+          response += '\n\n' + planResponse.startDateConflictWarning;
+        }
 
         setMessages(prev => prev.map(msg =>
           msg.id === aiResponseId
@@ -2495,61 +2688,65 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         throw new Error('Invalid provider');
       }
 
-      // Check if AI generated a campaign program — only auto-call when NOT in refine mode (no pending amendment)
-      if (onProgramGenerated && context === 'campaign-planning' && !effectiveCurrentPlan?.weeks?.length) {
-        const planForProgram = structuredPlanFromResponse || structuredPlan;
-        if (planForProgram) {
-          const programData = convertStructuredPlanToProgram(planForProgram);
-          onProgramGenerated({ program: programData, structuredPlan: planForProgram });
-        } else {
-          const programMatch = response.match(/(\d+.*week.*program|week.*program|campaign.*program|weekly.*program)/i);
-          if (programMatch || response.includes('Week 1') || response.includes('Week 2')) {
-            const programData = extractProgramFromResponse(response);
-            if (programData) {
-              onProgramGenerated({ program: programData });
-            }
-          }
-        }
-      }
-      
+      // No auto-save or redirect: flow stops at week plan so user can save / view / commit from chat.
+
       setIsTyping(false);
       setIsLoading(false);
       focusInputSoon();
     } catch (error) {
       console.error('Error calling AI API:', error);
+      const err = error as { name?: string; message?: string };
+      const isAbort =
+        err?.name === 'AbortError' ||
+        (typeof err?.message === 'string' && err.message.toLowerCase().includes('aborted'));
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
       const isSchemaError =
-        errorMessage.toLowerCase().includes('schema') ||
-        errorMessage.toLowerCase().includes('validation');
+        !isAbort &&
+        (errorMessage.toLowerCase().includes('schema') ||
+          errorMessage.toLowerCase().includes('validation'));
       setUiErrorMessage(
-        isSchemaError
+        isAbort
+          ? 'Plan generation is taking longer than expected. You can try again with a shorter duration (e.g. 4 weeks) or try again in a moment.'
+          : isSchemaError
           ? 'We could not parse the AI response. Please try again.'
           : 'We could not complete that request. Please try again in a moment.'
       );
-      const errorResponse: ChatMessage = {
-        id: Date.now() + 1,
-        type: 'ai',
-        message: `Sorry, I encountered an error with ${selectedProvider.toUpperCase()}. Please check your API key and try again.`,
-        timestamp: new Date().toLocaleTimeString(),
-        provider: 'Error',
-        campaignId
-      };
       const lastAssistantQuestion =
         [...messages]
           .reverse()
           .find((m) => m.type === 'ai' && m.provider !== 'Error' && m.message)?.message || '';
+      const isAtConfirmationStep =
+        /create your (week )?plan now|would you like me to create|I have everything I need/i.test(lastAssistantQuestion);
+      const timeoutMessage = isAbort && isAtConfirmationStep
+        ? 'That took too long — no worries. Pick a duration below and click **Submit** to try again (fewer weeks is quicker). Your last choices are remembered so you can also say **continue** to use the same settings.'
+        : isAbort
+          ? 'Plan generation timed out. Try a shorter duration (e.g. 4 weeks) or say **continue** to retry with the same settings.'
+          : null;
+      const errorResponse: ChatMessage = {
+        id: Date.now() + 1,
+        type: 'ai',
+        message: timeoutMessage
+          ?? (isAbort
+            ? 'Plan generation timed out. Try a shorter duration (e.g. 4 weeks) or retry in a moment.'
+            : `Sorry, I encountered an error with ${selectedProvider.toUpperCase()}. Please check your API key and try again.`),
+        timestamp: new Date().toLocaleTimeString(),
+        provider: 'Error',
+        campaignId
+      };
       const repeatedQuestion = extractLastQuestionLine(lastAssistantQuestion);
-      const continuationMessage: ChatMessage | null = repeatedQuestion
-        ? {
-            id: Date.now() + 2,
-            type: 'ai',
-            message: `Let's continue from the previous step.\n\n${enrichPlanningQuestionExamples(repeatedQuestion)}`,
-            timestamp: new Date().toLocaleTimeString(),
-            provider: getProviderName(selectedProvider),
-            campaignId,
-          }
-        : null;
+      const shouldNotRepeatQuestion = isAtConfirmationStep && isAbort;
+      const continuationMessage: ChatMessage | null =
+        shouldNotRepeatQuestion || !repeatedQuestion
+          ? null
+          : {
+              id: Date.now() + 2,
+              type: 'ai',
+              message: `Let's continue.\n\n${enrichPlanningQuestionExamples(repeatedQuestion)}`,
+              timestamp: new Date().toLocaleTimeString(),
+              provider: getProviderName(selectedProvider),
+              campaignId,
+            };
       setMessages((prev) =>
         continuationMessage ? [...prev, errorResponse, continuationMessage] : [...prev, errorResponse]
       );
@@ -2564,7 +2761,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     if (isBusy) return;
     if (config.progressiveStyle && quickPickPrimaryStyles.length > 0 && (config.key === 'communication_style' || config.key === 'action_expectation')) {
       const primaries = quickPickPrimaryStyles.join(', ');
-      const modifiers = quickPickSecondaryModifiers;
+      let modifiers = quickPickSecondaryModifiers;
+      if (config.key === 'communication_style' && quickPickPrimaryStyles.includes('Simple & easy')) {
+        modifiers = modifiers.filter((s) => s !== 'Deep & thoughtful');
+      }
       const answer =
         config.key === 'action_expectation'
           ? modifiers.length > 0
@@ -2971,6 +3171,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     if (config.key === 'content_capacity') {
       const showAll = Boolean(showAllTypeCounters.content_capacity);
       const visibleOptions = showAll ? config.options : config.options.slice(0, 10);
+      const hasPreparation = !!quickCapacityCreationMode;
       const hasCapacityInput = Object.values(quickCapacityCounts).some((v) => {
         const n = Number(String(v).trim());
         return Number.isFinite(n) && n > 0;
@@ -2983,10 +3184,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
           <div className="text-xs text-gray-600 mb-2">
-            <strong>Preparation:</strong> Choose how you will create this content (Manual, AI‑assisted, or Full AI). Then enter weekly count for each content type and submit.
+            <strong>(1) How will you create?</strong> Pick one: Manual, AI‑assisted, or Full AI.
           </div>
           <div className="text-xs font-medium text-gray-700 mb-1.5">
-            Preparation method
+            Your choice
           </div>
           <div className="flex flex-wrap items-center gap-2 mb-2">
             {(['manual', 'ai-assisted', 'full-ai'] as const).map((mode) => {
@@ -3010,9 +3211,14 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             })}
           </div>
           <div className="text-xs font-medium text-gray-700 mb-1.5">
-            Weekly counts per content type
+            (2) How many per week? (e.g. 2 posts, 1 video)
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+          {!hasPreparation ? (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5 mb-2">
+              Pick an option above first, then add your counts.
+            </div>
+          ) : null}
+          <div className={`grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2 ${!hasPreparation ? 'opacity-60 pointer-events-none' : ''}`}>
             {visibleOptions.map((option) => (
               <label key={option} className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-2">
                 <span className="text-xs text-gray-700 w-20 shrink-0">{option}</span>
@@ -3131,7 +3337,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             </button>
             <button
               type="button"
-              disabled={isBusy || !hasCapacityInput}
+              disabled={isBusy || !hasPreparation || !hasCapacityInput}
               onClick={() => submitQuickPickAnswer(config)}
               className="px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white disabled:opacity-50"
             >
@@ -3155,7 +3361,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
           <div className="text-xs text-gray-600 mb-2">
-            Select content types per platform, then submit.
+            For each platform, pick the content types you’ll use. Next we’ll set how often (aligned with your capacity).
           </div>
           {quickCustomizeMode ? (
             <div className="mb-2 rounded-md border border-gray-200 bg-white p-2">
@@ -3444,10 +3650,13 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
           <div className="text-xs text-gray-600 mb-2">
-            Select content types per platform and enter weekly counts (per week), then submit.
+            Set frequency per content type per platform (aligned with your capacity), then choose same topic across platforms or different, and same day vs staggered vs AI.
           </div>
           <div className="mb-2 rounded-md border border-gray-200 bg-white p-2">
-            <div className="flex flex-wrap items-center gap-3 text-xs text-gray-700">
+            <div className="text-xs font-medium text-gray-700 mb-2">(1) Frequency per content type — match or adjust to your capacity</div>
+            <div className="text-[11px] text-gray-500 mb-2">Set how many of each type per week per platform below.</div>
+            <div className="flex flex-wrap items-center gap-3 text-xs text-gray-700 mt-3 pt-2 border-t border-gray-100">
+              <span className="font-medium text-gray-700">(2) Same topic across platforms?</span>
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -3455,20 +3664,28 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                   disabled={isBusy}
                   onChange={(e) => setPlanningCrossPlatformSharingEnabled(e.target.checked)}
                 />
-                <span className="font-medium">Allow sharing</span>
-                <span className="text-gray-500">(1 piece can be reused across platforms for same type)</span>
+                <span>Yes — reuse one piece across platforms (same topic)</span>
               </label>
+              <span className="text-gray-400">|</span>
+              <span className="text-gray-500">Uncheck = different content per platform</span>
+            </div>
+            {planningCrossPlatformSharingEnabled && (
+              <p className="text-[11px] text-gray-600 mt-1.5">
+                <strong>Unique</strong> = pieces to create. Same piece can go to many platforms. E.g. 2 posts × 4 platforms = <strong>2 unique</strong>, 8 postings; 2 videos × 4 platforms = <strong>2 unique</strong>, 8 postings. Supply is compared to this total.
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-3 text-xs text-gray-700 mt-2">
+              <span className="font-medium text-gray-700">(3) Publish same day or staggered?</span>
               <label className="flex items-center gap-2">
-                <span className="font-medium">Posting timing</span>
                 <select
                   value={planningCrossPlatformScheduleMode}
                   disabled={isBusy}
                   onChange={(e) => setPlanningCrossPlatformScheduleMode(e.target.value as any)}
                   className="rounded border border-gray-200 px-2 py-1 text-xs"
                 >
-                  <option value="ai_recommended">AI recommended</option>
-                  <option value="staggered">Staggered</option>
-                  <option value="same_time">Same time</option>
+                  <option value="ai_recommended">Let AI decide</option>
+                  <option value="staggered">Staggered (different days)</option>
+                  <option value="same_time">Same day on all platforms</option>
                 </select>
               </label>
               <span className="text-gray-500">
@@ -3479,7 +3696,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               <div className="mt-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
                 Sharing enabled: we’ll create <span className="font-semibold">{totals.uniqueTotal}</span> unique piece(s) and reuse them across platforms to fulfill <span className="font-semibold">{totals.postingsTotal}</span> total postings/week.
                 <div className="text-emerald-700 mt-1">
-                  Note: sharing works across platforms only — if a platform needs 2 posts/week, that still means 2 unique posts/week for that platform.
+                  Unique = per content type (e.g. 2 posts on 4 platforms = 2 unique, 8 postings; 1 post + 1 video on 4 platforms = 2 unique). Sharing is across platforms only — same type can be reused on each platform.
                 </div>
                 {sharingBreakdown.length > 0 ? (
                   <div className="text-emerald-700 mt-1">
@@ -3497,11 +3714,29 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                 ) : null}
               </div>
             )}
-            {!isValid && totals.uniqueTotal > 0 && isOverSupply && (
-              <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
-                Requested unique pieces/week ({totals.uniqueTotal}) exceeds your supply ({supplyTotal}) by {overBy}. Reduce weekly counts or increase capacity.
-              </div>
-            )}
+            {!isValid && totals.uniqueTotal > 0 && isOverSupply && (() => {
+              const byType = (planningCrossPlatformSharingEnabled
+                ? (totals as any).maxByType
+                : (totals as any).sumByType) as Record<string, number> | undefined;
+              const breakdown =
+                byType && Object.keys(byType).length > 0
+                  ? Object.entries(byType)
+                      .filter(([, n]) => Number(n) > 0)
+                      .map(([ct, n]) => `${prettyContentTypeLabel(ct)} ${n}`)
+                      .join(', ')
+                  : null;
+              return (
+                <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-2">
+                  <p className="font-medium">Requested unique pieces/week ({totals.uniqueTotal}) exceeds your supply ({supplyTotal}) by {overBy}.</p>
+                  {breakdown ? (
+                    <p className="mt-1 text-red-700">Breakdown: {breakdown} → total {totals.uniqueTotal}. Reduce any count below by at least {overBy}.</p>
+                  ) : null}
+                  <p className="mt-1.5 text-red-800">
+                    <strong>How to fix:</strong> In the grid below, reduce one or more counts so unique pieces ≤ {supplyTotal}. For example: change one <strong>1/week</strong> to <strong>0</strong>, or a <strong>2/week</strong> to <strong>1</strong>. You can also increase supply by setting higher capacity or available content earlier in this chat.
+                  </p>
+                </div>
+              );
+            })()}
             {!hasKnownSupply && totals.uniqueTotal > 0 && (
               <div className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
                 Supply/week is unknown here (capacity and available content weren’t detected in the chat UI yet). You can still submit expectations — we’ll validate again once capacity is available.
@@ -3583,10 +3818,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               ) : null}
               {platforms.map((platform) => {
                 const platformName = platformLabels[platform] || platform;
-                const rawTypes = platformContentTypeRawOptions[platform] || [];
+                const rawTypes = getAllSupportedContentTypeKeysForPlatform(platform, platformContentTypeRawOptions, platformContentTypeOptions);
                 const byType = planningPlatformContentRequests?.[platform] || {};
                 const extraTypes = Object.keys(byType).filter((ct) => !rawTypes.includes(ct));
-                const allTypes = [...rawTypes, ...extraTypes].filter((ct) => isEligiblePlanningType(prettyContentTypeLabel(ct), eligiblePlanningTypes));
+                const allTypes = [...rawTypes, ...extraTypes];
                 return (
                   <div key={platform} className="bg-white border border-gray-200 rounded-md p-2">
                     <div className="text-xs font-medium text-gray-700 mb-2">{platformName}</div>
@@ -3598,12 +3833,14 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                           const label = prettyContentTypeLabel(ct);
                           const value = String(byType?.[ct] ?? '');
                           const checked = value.replace(/\D/g, '').length > 0;
+                          const checkboxId = `platform-${platform}-${ct}-cb`;
                           return (
-                            <label
+                            <div
                               key={ct}
                               className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-2"
                             >
                               <input
+                                id={checkboxId}
                                 type="checkbox"
                                 checked={checked}
                                 disabled={isBusy}
@@ -3620,7 +3857,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                                   });
                                 }}
                               />
-                              <span className="text-xs text-gray-700 w-44 shrink-0">{label}</span>
+                              <label htmlFor={checkboxId} className="text-xs text-gray-700 w-44 shrink-0 cursor-pointer select-none">{label}</label>
                               <input
                                 type="text"
                                 inputMode="numeric"
@@ -3641,9 +3878,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                                 placeholder="0"
                                 className="w-16 px-2 py-1.5 border border-gray-300 rounded-md text-sm"
                                 disabled={isBusy || !checked}
+                                onClick={(e) => e.stopPropagation()}
                               />
                               <span className="text-xs text-gray-500">/week</span>
-                            </label>
+                            </div>
                           );
                         })}
                       </div>
@@ -3850,17 +4088,26 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       );
     }
     if (config.progressiveStyle && (config.key === 'communication_style' || config.key === 'action_expectation')) {
-      const { primaryOptions, secondaryByPrimary } = config.progressiveStyle;
+      const { primaryOptions, secondaryByPrimary, primaryTooltips, secondaryTooltips } = config.progressiveStyle;
       const selectedPrimaries = quickPickPrimaryStyles;
       const secondaries = quickPickSecondaryModifiers;
-      const compatibleSecondaries = selectedPrimaries.length > 0
+      let compatibleSecondaries = selectedPrimaries.length > 0
         ? Array.from(new Set(selectedPrimaries.flatMap((p) => secondaryByPrimary[p] ?? [])))
         : [];
+      // When "Simple & easy" is primary, don't offer "Deep & thoughtful" as modifier — they describe opposite depth levels
+      if (config.key === 'communication_style' && selectedPrimaries.includes('Simple & easy')) {
+        compatibleSecondaries = compatibleSecondaries.filter((s) => s !== 'Deep & thoughtful');
+      }
       const isCta = config.key === 'action_expectation';
       const primaryLabel = isCta ? 'Choose one or more primary CTA intents.' : 'Choose one or more primary communication directions.';
       const modifiersLabel = isCta ? 'Select actions (optional):' : 'Select modifiers (optional):';
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          {config.helperText && (
+            <div className="text-xs text-gray-600 mb-2 pb-2 border-b border-gray-200">
+              {config.helperText}
+            </div>
+          )}
           {selectedPrimaries.length === 0 ? (
             <>
               <div className="text-xs text-gray-600 mb-2">
@@ -3874,6 +4121,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                       key={option}
                       type="button"
                       disabled={isBusy}
+                      title={primaryTooltips?.[option]}
                       onClick={() => {
                         setQuickPickPrimaryStyles((prev) =>
                           prev.includes(option) ? prev.filter((p) => p !== option) : [...prev, option]
@@ -3902,6 +4150,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                       key={option}
                       type="button"
                       disabled={isBusy}
+                      title={primaryTooltips?.[option]}
                       onClick={() => {
                         const next = selected
                           ? selectedPrimaries.filter((p) => p !== option)
@@ -3910,7 +4159,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                         if (next.length === 0) {
                           setQuickPickSecondaryModifiers([]);
                         } else {
-                          const nextCompat = Array.from(new Set(next.flatMap((p) => secondaryByPrimary[p] ?? [])));
+                          let nextCompat = Array.from(new Set(next.flatMap((p) => secondaryByPrimary[p] ?? [])));
+                          if (config.key === 'communication_style' && next.includes('Simple & easy')) {
+                            nextCompat = nextCompat.filter((s) => s !== 'Deep & thoughtful');
+                          }
                           setQuickPickSecondaryModifiers((prev) => prev.filter((s) => nextCompat.includes(s)));
                         }
                       }}
@@ -3947,6 +4199,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                           key={option}
                           type="button"
                           disabled={isBusy}
+                          title={secondaryTooltips?.[option]}
                           onClick={() => {
                             setQuickPickSecondaryModifiers((prev) =>
                               prev.includes(option)
@@ -3983,16 +4236,18 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     return (
       <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
         <div className="text-xs text-gray-600 mb-2">
-          {config.multi ? 'Select one or more options, then submit.' : 'Select one option, then submit.'}
+          {config.helperText ?? (config.multi ? 'Select one or more, then submit.' : 'Pick one, then submit.')}
         </div>
         <div className="flex flex-wrap gap-2 mb-2">
           {config.options.map((option) => {
             const selected = selectedQuickOptions.includes(option);
+            const tooltip = config.optionTooltips?.[option] ?? config.optionDescriptions?.[option];
             return (
               <button
                 key={option}
                 type="button"
                 disabled={isBusy}
+                title={tooltip}
                 onClick={() => {
                   if (config.multi) {
                     setSelectedQuickOptions((prev) =>
@@ -4065,6 +4320,8 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       chatContext?: string;
       vetScope?: { selectedWeeks: number[]; areasByWeek?: Record<number, string[]> };
       collectedPlanningContextOverride?: Record<string, unknown>;
+      /** When provided, the in-flight request's AbortController is assigned here so the UI can cancel */
+      planAbortRef?: React.MutableRefObject<AbortController | null>;
     }
   ): Promise<{
     plan?: StructuredPlan;
@@ -4073,6 +4330,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     conversationalResponse?: string;
     validation_result?: any;
     collectedPlanningContext?: Record<string, unknown>;
+    startDateConflictWarning?: string;
   }> => {
     const baseContext =
       options?.collectedPlanningContextOverride ??
@@ -4088,29 +4346,50 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       throw new Error('companyId is required to persist campaign_planning_inputs');
     }
 
-    const response = await fetchWithAuth('/api/campaigns/ai/plan', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        campaignId,
-        companyId: resolvedCompanyId,
-        mode,
-        message,
-        durationWeeks: options?.durationWeeks,
-        targetDay: options?.targetDay,
-        platforms: options?.platforms,
-        messages: options?.conversationHistory,
-        recommendationContext,
-        optimizationContext,
-        currentPlan: options?.currentPlan,
-        scopeWeeks: options?.scopeWeeks,
-        chatContext: options?.chatContext,
-        vetScope: options?.vetScope ?? vetScope,
-        collectedPlanningContext: mergedCollectedPlanningContext,
-      }),
-    });
+    // Timeout scales with weeks: base 5 min + ~45s per week so 4-week plans get ~8 min (avoids "took too long" on theme-based flow)
+    const durationWeeks = options?.durationWeeks ?? 12;
+    const PLAN_API_TIMEOUT_MS = Math.min(600000, 300000 + durationWeeks * 45000);
+    const timeoutMinutes = Math.round(PLAN_API_TIMEOUT_MS / 60000);
+    const controller = new AbortController();
+    if (options?.planAbortRef) {
+      options.planAbortRef.current = controller;
+    }
+    const timeoutId = setTimeout(() => {
+      controller.abort(new DOMException(`Plan request timed out after ${timeoutMinutes} minutes`, 'AbortError'));
+    }, PLAN_API_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetchWithAuth('/api/campaigns/ai/plan', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          campaignId,
+          companyId: resolvedCompanyId,
+          mode,
+          message,
+          durationWeeks: options?.durationWeeks,
+          targetDay: options?.targetDay,
+          platforms: options?.platforms,
+          messages: options?.conversationHistory,
+          recommendationContext,
+          optimizationContext,
+          currentPlan: options?.currentPlan,
+          scopeWeeks: options?.scopeWeeks,
+          chatContext: options?.chatContext,
+          vetScope: options?.vetScope ?? vetScope,
+          collectedPlanningContext: mergedCollectedPlanningContext,
+        }),
+      });
+    } finally {
+      clearTimeout(timeoutId);
+      if (options?.planAbortRef) {
+        options.planAbortRef.current = null;
+      }
+    }
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -4135,6 +4414,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       conversationalResponse: data.conversationalResponse,
       validation_result: data.validation_result,
       collectedPlanningContext: data.collectedPlanningContext as Record<string, unknown> | undefined,
+      startDateConflictWarning: data.startDateConflictWarning,
     };
   };
 
@@ -4472,7 +4752,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                     {topicsWithExecution.map((topic, idx) => (
                       <div key={`${week.week}-topic-${idx}`} className="rounded border border-gray-200 p-2">
                         <div className="font-medium text-gray-900">{topic.topicTitle || `Topic ${idx + 1}`}</div>
-                        <div className="text-gray-600">Writing intent: {topic?.topicContext?.writingIntent || '—'}</div>
+                        <div className="text-gray-600">{getIntentLabelForContentType(topic?.topicExecution?.contentType ?? (topic as any)?.content_type)}: {topic?.topicContext?.writingIntent || '—'}</div>
                         <div className="text-gray-600">Platform(s): {(topic.topicExecution.platformTargets || []).join(', ')}</div>
                         <div className="text-gray-600">Content type: {topic.topicExecution.contentType || '—'}</div>
                         <div className="text-gray-600">CTA: {topic.topicExecution.ctaType || '—'} • KPI: {topic.topicExecution.kpiFocus || '—'}</div>
@@ -4482,7 +4762,11 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                         <div className="text-gray-600">Action: {topic.desiredAction || '—'}</div>
                         <div className="text-gray-600">Style: {topic.narrativeStyle || '—'}</div>
                         <div className="text-gray-600">
-                          Format: {topic?.contentTypeGuidance?.primaryFormat || '—'} • Max words: {topic?.contentTypeGuidance?.maxWordTarget ?? '—'} • Highest-limit platform: {topic?.contentTypeGuidance?.platformWithHighestLimit || '—'}
+                          {getFormatLineForContentType(
+                            topic?.topicExecution?.contentType ?? (topic as any)?.contentType ?? (topic as any)?.content_type,
+                            topic?.contentTypeGuidance,
+                            topic?.topicExecution?.platformTargets
+                          )}
                         </div>
                       </div>
                     ))}
@@ -5159,16 +5443,45 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
   const isBusy = isLoading || isSchedulingPlan;
   const isRecsChat = context?.toLowerCase().includes('campaign-recommendations');
 
+  // Topic to show in header and placeholder: picked theme from recommendation card, or key message from chat, or campaign name
+  const displayTopic = (() => {
+    const fromCard = (recommendationContext as { topic_from_card?: string | null })?.topic_from_card;
+    if (typeof fromCard === 'string' && fromCard.trim()) return fromCard.trim();
+    const ctx = lastCollectedPlanningContextFromApi ?? prefilledPlanning ?? collectedPlanningContext;
+    const km = (ctx as { key_messages?: string | string[] | null })?.key_messages;
+    if (typeof km === 'string' && km.trim()) return km.trim().split(/\n/)[0]?.slice(0, 80) ?? '';
+    if (Array.isArray(km) && km.length > 0) {
+      const first = typeof km[0] === 'string' ? km[0].trim() : '';
+      return first ? first.slice(0, 80) : '';
+    }
+    return campaignData?.name || 'Campaign';
+  })();
+
   if (!isOpen && !standalone) return null;
 
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget && !standalone) {
+      e.stopPropagation();
+      onClose?.();
+    }
+  };
+
   return (
-    <div className={`flex flex-col ${standalone ? 'h-full w-full min-h-0' : `fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex ${isFullscreen ? 'items-stretch justify-stretch p-0' : 'items-center justify-center p-2 sm:p-4'}`}`}>
-      <div className={`bg-white flex flex-col flex-1 min-h-0 ${standalone ? 'h-full w-full shadow-none rounded-none' : `shadow-2xl ${isFullscreen ? 'h-full w-full max-w-none rounded-none' : 'w-[min(95vw,90rem)] h-[min(90vh,calc(100vh-1rem))] min-w-[20rem] min-h-[20rem] rounded-2xl'}`}`}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      className={`flex flex-col ${standalone ? 'h-full w-full min-h-0' : `fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex ${isFullscreen ? 'items-stretch justify-stretch p-0' : 'items-center justify-center p-2 sm:p-4'}`}`}
+      onClick={standalone ? undefined : handleBackdropClick}
+    >
+      <div
+        className={`bg-white flex flex-col flex-1 min-h-0 ${standalone ? 'h-full w-full shadow-none rounded-none' : `shadow-2xl ${isFullscreen ? 'h-full w-full max-w-none rounded-none' : 'w-[min(95vw,90rem)] h-[min(90vh,calc(100vh-1rem))] min-w-[20rem] min-h-[20rem] rounded-2xl'}`}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className={`text-white p-4 flex items-center justify-between ${isFullscreen ? 'rounded-none' : 'rounded-t-2xl'} ${isRecsChat ? 'bg-gradient-to-r from-emerald-500 to-teal-600' : 'bg-gradient-to-r from-indigo-500 to-purple-600'}`}>
           <div>
             <h3 className="text-lg font-semibold">Campaign AI Assistant</h3>
-            <p className={`text-sm ${isRecsChat ? 'text-emerald-100' : 'text-indigo-100'}`}>{campaignData?.name || 'Campaign'}</p>
+            <p className={`text-sm ${isRecsChat ? 'text-emerald-100' : 'text-indigo-100'}`}>{displayTopic}</p>
           </div>
           <div className="flex items-center gap-1">
             <button
@@ -5192,14 +5505,18 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
             <button
-              onClick={onMinimize}
+              type="button"
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); onMinimize?.(); }}
               className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              aria-label="Minimize"
             >
               <Minimize2 className="h-4 w-4" />
             </button>
             <button
-              onClick={onClose}
+              type="button"
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClose?.(); }}
               className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              aria-label="Close"
             >
               <X className="h-4 w-4" />
             </button>
@@ -5917,22 +6234,72 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               const weeksNum = weeksMatch
                 ? parseInt(weeksMatch[1] || weeksMatch[2] || '0', 10)
                 : (campaignData as { duration_weeks?: number } | undefined)?.duration_weeks ?? initialPlan?.weeks?.length ?? 12;
-              const resolvedWeeks = Number.isFinite(weeksNum) && weeksNum > 0 ? weeksNum : 12;
+              const resolvedWeeks = Math.min(12, Math.max(2, Number.isFinite(weeksNum) && weeksNum > 0 ? weeksNum : 12));
+              const planTiming = getWeeklyPlanTimingByWeeks(resolvedWeeks);
               const finalMessage = `Creating ${resolvedWeeks}-week plan`;
               return (
                 <div className="flex justify-start w-full px-1 sm:px-2">
                   <div className="w-full max-w-md">
                     <AIGenerationProgress
                       isActive={true}
-                      message="Creating weekly plan"
-                      expectedSeconds={50}
+                      message={`Creating ${resolvedWeeks}-week plan`}
+                      expectedSeconds={planTiming.expectedSeconds}
+                      maxSecondsHint={planTiming.maxSecondsHint}
+                      onCancel={() => planAbortRef.current?.abort()}
                       rotatingMessages={[
                         'Validating your inputs…',
-                        'Structuring campaign weeks…',
+                        `Structuring ${resolvedWeeks} weeks…`,
                         'Building weekly themes…',
                         'Assigning content types…',
                         finalMessage,
                       ]}
+                    />
+                  </div>
+                </div>
+              );
+            }
+            if (isSchedulingPlan) {
+              return (
+                <div className="flex justify-start w-full px-1 sm:px-2">
+                  <div className="w-full max-w-md">
+                    <AIGenerationProgress
+                      isActive={true}
+                      message="Scheduling structured plan"
+                      expectedSeconds={45}
+                      maxSecondsHint={90}
+                      rotatingMessages={[
+                        'Applying schedule…',
+                        'Updating calendar…',
+                        'Finishing schedule…',
+                      ]}
+                    />
+                  </div>
+                </div>
+              );
+            }
+            if (modeLoading.generate_plan || modeLoading.refine_day || modeLoading.platform_customize) {
+              const isRefineDay = modeLoading.refine_day;
+              const isPlatformCustomize = modeLoading.platform_customize;
+              const message = isRefineDay
+                ? 'Refining selected day'
+                : isPlatformCustomize
+                  ? 'Customizing platform content'
+                  : 'Refining campaign inputs';
+              const rotating = isRefineDay
+                ? ['Loading week…', 'Generating day content…', 'Applying refinements…']
+                : isPlatformCustomize
+                  ? ['Loading platforms…', 'Customizing per platform…', 'Applying changes…']
+                  : ['Reading your answers…', 'Structuring next steps…', 'Preparing next question…'];
+              return (
+                <div className="flex justify-start w-full px-1 sm:px-2">
+                  <div className="w-full max-w-md">
+                    <AIGenerationProgress
+                      isActive={true}
+                      message={message}
+                      expectedSeconds={isRefineDay ? 60 : isPlatformCustomize ? 45 : 30}
+                      maxSecondsHint={120}
+                      onCancel={() => planAbortRef.current?.abort()}
+                      rotatingMessages={rotating}
                     />
                   </div>
                 </div>
@@ -5952,15 +6319,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                       </div>
                     )}
                     <span className="text-sm text-gray-600">
-                      {isSchedulingPlan
-                        ? 'Scheduling structured plan...'
-                        : modeLoading.generate_plan
-                        ? 'Refining campaign inputs…'
-                        : modeLoading.refine_day
-                        ? 'Refining selected day...'
-                        : modeLoading.platform_customize
-                        ? 'Customizing platform content...'
-                        : selectedProvider === 'demo'
+                      {selectedProvider === 'demo'
                         ? 'Demo AI is analyzing campaign data...'
                         : selectedProvider === 'gpt'
                         ? 'GPT-4 is learning from past campaigns...'
@@ -6076,7 +6435,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                               {topicsWithExecution.map((topic, idx) => (
                                 <div key={`${week.week}-topic-${idx}`} className="rounded border border-gray-200 p-2">
                                   <div className="font-medium text-gray-900">{topic.topicTitle || `Topic ${idx + 1}`}</div>
-                                  <div className="text-gray-600">Writing intent: {topic?.topicContext?.writingIntent || '—'}</div>
+                                  <div className="text-gray-600">{getIntentLabelForContentType(topic?.topicExecution?.contentType ?? (topic as any)?.content_type)}: {topic?.topicContext?.writingIntent || '—'}</div>
                                   <div className="text-gray-600">Platform(s): {(topic.topicExecution.platformTargets || []).join(', ')}</div>
                                   <div className="text-gray-600">Content type: {topic.topicExecution.contentType || '—'}</div>
                                   <div className="text-gray-600">CTA: {topic.topicExecution.ctaType || '—'} • KPI: {topic.topicExecution.kpiFocus || '—'}</div>
@@ -6086,7 +6445,11 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                                   <div className="text-gray-600">Action: {topic.desiredAction || '—'}</div>
                                   <div className="text-gray-600">Style: {topic.narrativeStyle || '—'}</div>
                                   <div className="text-gray-600">
-                                    Format: {topic?.contentTypeGuidance?.primaryFormat || '—'} • Max words: {topic?.contentTypeGuidance?.maxWordTarget ?? '—'} • Highest-limit platform: {topic?.contentTypeGuidance?.platformWithHighestLimit || '—'}
+                                    {getFormatLineForContentType(
+                                      topic?.topicExecution?.contentType ?? (topic as any)?.contentType ?? (topic as any)?.content_type,
+                                      topic?.contentTypeGuidance,
+                                      topic?.topicExecution?.platformTargets
+                                    )}
                                   </div>
                                 </div>
                               ))}
@@ -6277,7 +6640,17 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                   </div>
                   <div className="px-4 pb-4 flex justify-between items-center gap-3">
                     <button onClick={() => setShowPlanOverview(false)} className="text-gray-600 hover:text-gray-800 text-sm">Close</button>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      {context === 'campaign-planning' && onProgramGenerated && campaignId && (
+                        <button
+                          onClick={() => saveDraftAndViewOnCampaign()}
+                          disabled={isSavingDraftForView}
+                          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                        >
+                          {isSavingDraftForView ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                          Save & view on campaign
+                        </button>
+                      )}
                       <button onClick={() => { setShowPlanOverview(false); saveAIContentForPlan(serializeStructuredPlanToText(structuredPlan), structuredPlan); }} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg text-sm font-medium">Save for Later</button>
                       <button onClick={() => commitPlan()} className="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg font-medium">Submit This Plan</button>
                     </div>
@@ -6665,6 +7038,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                 if (n.includes('blog') || n.includes('article')) return 'article';
                 if (n.includes('slide')) return 'slideware';
                 if (n.includes('carousel')) return 'carousel';
+                if (n.includes('image')) return 'image';
                 if (n.includes('song') || n.includes('audio')) return 'song';
                 if (n.includes('thread')) return 'thread';
                 if (n.includes('space')) return 'space';
@@ -6694,7 +7068,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                     <div className="space-y-3 mb-2">
                       {platforms.map((platform) => {
                         const platformName = platformLabels[platform] || platform;
-                        const rawTypesAll = platformContentTypeRawOptions[platform] || [];
+                        const rawTypesAll = getAllSupportedContentTypeKeysForPlatform(platform, platformContentTypeRawOptions, platformContentTypeOptions);
                         const byType = planningPlatformContentRequests?.[platform] || {};
                         const selectedKeys = Object.keys(byType || {}).filter((ct) => {
                           const digits = String((byType as any)?.[ct] ?? '').replace(/\D/g, '');
@@ -6744,12 +7118,14 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                                   const label = prettyContentTypeLabel(ct);
                                   const value = String(byType?.[ct] ?? '');
                                   const checked = value.replace(/\D/g, '').length > 0;
+                                  const checkboxId2 = `platform-${platform}-${ct}-cb-2`;
                                   return (
-                                    <label
+                                    <div
                                       key={ct}
                                       className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-2"
                                     >
                                       <input
+                                        id={checkboxId2}
                                         type="checkbox"
                                         checked={checked}
                                         disabled={isBusy}
@@ -6766,7 +7142,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                                           });
                                         }}
                                       />
-                                      <span className="text-xs text-gray-700 w-44 shrink-0">{label}</span>
+                                      <label htmlFor={checkboxId2} className="text-xs text-gray-700 w-44 shrink-0 cursor-pointer select-none">{label}</label>
                                       <input
                                         type="text"
                                         inputMode="numeric"
@@ -6787,9 +7163,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                                         placeholder="0"
                                         className="w-16 px-2 py-1.5 border border-gray-300 rounded-md text-sm"
                                         disabled={isBusy || !checked}
+                                        onClick={(e) => e.stopPropagation()}
                                       />
                                       <span className="text-xs text-gray-500">/week</span>
-                                    </label>
+                                    </div>
                                   );
                                 })}
                               </div>
@@ -6967,14 +7344,20 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               const { primaryOptions, secondaryByPrimary } = config.progressiveStyle;
               const selectedPrimaries = quickPickPrimaryStyles;
               const secondaries = quickPickSecondaryModifiers;
-              const compatibleSecondaries = selectedPrimaries.length > 0
+              let compatibleSecondaries = selectedPrimaries.length > 0
                 ? Array.from(new Set(selectedPrimaries.flatMap((p) => secondaryByPrimary[p] ?? [])))
                 : [];
+              if (config.key === 'communication_style' && selectedPrimaries.includes('Simple & easy')) {
+                compatibleSecondaries = compatibleSecondaries.filter((s) => s !== 'Deep & thoughtful');
+              }
               const isCta = config.key === 'action_expectation';
               const primaryLabel = isCta ? 'Choose one or more primary CTA intents.' : 'Choose one or more primary communication directions.';
               const modifiersLabel = isCta ? 'Select actions (optional):' : 'Select modifiers (optional):';
               return (
                 <div className="mb-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                  {config.helperText && (
+                    <div className="text-xs text-gray-600 mb-2 pb-2 border-b border-gray-200">{config.helperText}</div>
+                  )}
                   {selectedPrimaries.length === 0 ? (
                     <>
                       <div className="text-xs text-gray-600 mb-2">{primaryLabel}</div>
@@ -7022,7 +7405,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                                 if (next.length === 0) {
                                   setQuickPickSecondaryModifiers([]);
                                 } else {
-                                  const nextCompat = Array.from(new Set(next.flatMap((p) => secondaryByPrimary[p] ?? [])));
+                                  let nextCompat = Array.from(new Set(next.flatMap((p) => secondaryByPrimary[p] ?? [])));
+                                  if (config.key === 'communication_style' && next.includes('Simple & easy')) {
+                                    nextCompat = nextCompat.filter((s) => s !== 'Deep & thoughtful');
+                                  }
                                   setQuickPickSecondaryModifiers((prev) => prev.filter((s) => nextCompat.includes(s)));
                                 }
                               }}
@@ -7091,16 +7477,18 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             return (
               <div className="mb-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
                 <div className="text-xs text-gray-600 mb-2">
-                  {config.multi ? 'Select one or more options, then submit.' : 'Select one option, then submit.'}
+                  {config.helperText ?? (config.multi ? 'Select one or more, then submit.' : 'Pick one, then submit.')}
                 </div>
                 <div className="flex flex-wrap gap-2 mb-2">
                   {config.options.map((option) => {
                     const selected = selectedQuickOptions.includes(option);
+                    const tooltip = config.optionTooltips?.[option] ?? config.optionDescriptions?.[option];
                     return (
                       <button
                         key={option}
                         type="button"
                         disabled={isBusy}
+                        title={tooltip}
                         onClick={() => {
                           if (config.multi) {
                             setSelectedQuickOptions((prev) =>
@@ -7212,7 +7600,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder={`Virality helps you promote "${campaignData?.name || 'your campaign'}"...`}
+              placeholder={`Virality helps you promote "${displayTopic}"...`}
               className={`flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-200 ${isRecsChat ? 'focus:ring-emerald-500' : 'focus:ring-indigo-500'}`}
               disabled={isBusy}
             />

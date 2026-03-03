@@ -98,6 +98,109 @@ export type CompanyProfile = {
   authority_domains?: string[] | null;
   /** User-selected signals that MUST be injected into AI context. */
   forced_context_fields?: Record<string, boolean> | null;
+  /** Company-only context for recommendations; used when generating Trend/Lead recommendations for this company. */
+  recommendation_context?: string | null;
+  /** Content Architect–editable strategic inputs for Trend Campaigns (aspects, offerings by aspect, objectives). */
+  strategic_inputs?: {
+    strategic_aspects?: string[];
+    offerings_by_aspect?: Record<string, string[]>;
+    strategic_objectives?: string[];
+  } | null;
+}
+
+/** Profile fields COMPANY_ADMIN is allowed to see (same set for all companies when company admin views). */
+const COMPANY_ADMIN_VISIBLE_PROFILE_KEYS: (keyof CompanyProfile)[] = [
+  'company_id',
+  'name',
+  'industry',
+  'website_url',
+  'category',
+  'created_at',
+  'updated_at',
+  // Social & links
+  'linkedin_url',
+  'facebook_url',
+  'instagram_url',
+  'x_url',
+  'youtube_url',
+  'tiktok_url',
+  'reddit_url',
+  'blog_url',
+  'other_social_links',
+  'social_profiles',
+  // Geography & lists (identity/brand)
+  'geography',
+  'industry_list',
+  'category_list',
+  'geography_list',
+  'competitors_list',
+  'content_themes_list',
+  'products_services_list',
+  'target_audience_list',
+  'goals_list',
+  'brand_voice_list',
+  // Scalars (identity/brand)
+  'competitors',
+  'content_themes',
+  'products_services',
+  'target_audience',
+  'goals',
+  'brand_voice',
+  'unique_value',
+  // Optional metadata
+  'field_confidence',
+  'overall_confidence',
+  'source_urls',
+  'confidence_score',
+  'source',
+  'last_refined_at',
+  // Commercial strategy (Define Target Customer)
+  'target_customer_segment',
+  'ideal_customer_profile',
+  'pricing_model',
+  'sales_motion',
+  'avg_deal_size',
+  'sales_cycle',
+  'key_metrics',
+  // Campaign purpose & strategic intent
+  'campaign_purpose_intent',
+  // Marketing intelligence
+  'marketing_channels',
+  'content_strategy',
+  'campaign_focus',
+  'key_messages',
+  'brand_positioning',
+  'competitive_advantages',
+  'growth_priorities',
+  // Lock/edit metadata (read-only)
+  'user_locked_fields',
+  'last_edited_by',
+  // Problem & Transformation Intelligence
+  'core_problem_statement',
+  'pain_symptoms',
+  'awareness_gap',
+  'problem_impact',
+  'life_with_problem',
+  'life_after_solution',
+  'desired_transformation',
+  'transformation_mechanism',
+  'authority_domains',
+  'forced_context_fields',
+];
+
+/**
+ * Returns a limited view of the company profile for COMPANY_ADMIN.
+ * Strips strategy, problem transformation, commercial, and marketing intelligence fields.
+ */
+export function toLimitedCompanyProfile(profile: CompanyProfile | null): CompanyProfile | null {
+  if (!profile) return null;
+  const out: Record<string, unknown> = { company_id: profile.company_id };
+  for (const key of COMPANY_ADMIN_VISIBLE_PROFILE_KEYS) {
+    if (key !== 'company_id' && profile[key] !== undefined) {
+      out[key] = profile[key];
+    }
+  }
+  return out as CompanyProfile;
 }
 
 /** Commercial strategy fields; when saved by user they are added to user_locked_fields. */
@@ -2221,6 +2324,8 @@ export async function saveProfile(
     transformation_mechanism: input.transformation_mechanism ?? existing?.transformation_mechanism ?? null,
     authority_domains: input.authority_domains ?? existing?.authority_domains ?? null,
     forced_context_fields: input.forced_context_fields ?? existing?.forced_context_fields ?? null,
+    recommendation_context: input.recommendation_context !== undefined ? input.recommendation_context : existing?.recommendation_context ?? null,
+    strategic_inputs: input.strategic_inputs !== undefined ? input.strategic_inputs : existing?.strategic_inputs ?? null,
   };
 
   const lockedSet = new Set<string>(Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []);

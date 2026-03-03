@@ -105,10 +105,8 @@ describe('Campaign AI Plan API', () => {
     const payload = (res.json as jest.Mock).mock.calls[0][0];
     expect(payload.mode).toBe('generate_plan');
     expect(payload.snapshot_hash).toBe('hash123');
-    expect(String(payload.conversationalResponse || '')).toContain('Who is your primary target audience?');
-    expect(String(payload.conversationalResponse || '')).toContain(
-      'Required missing: target_audience, audience_professional_segment, communication_style, action_expectation, content_depth, topic_continuity, tentative_start, content_capacity, platforms, key_messages'
-    );
+    expect(String(payload.conversationalResponse || '')).toMatch(/Who will see your content\?|Who is your primary target audience\?/);
+    expect(String(payload.conversationalResponse || '')).not.toContain('Required missing:');
     expect(payload.omnivyre_decision.recommendation).toBe('HOLD');
   });
 

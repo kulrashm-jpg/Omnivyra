@@ -1,7 +1,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { saveProblemTransformationAnswers } from '../../../backend/services/companyProfileService';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getUserRole, isSuperAdmin } from '../../../backend/services/rbacService';
+import {
+  saveProblemTransformationAnswers,
+  toLimitedCompanyProfile,
+} from '../../../backend/services/companyProfileService';
+import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -15,17 +17,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!companyId) {
     return res.status(400).json({ error: 'companyId required' });
   }
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    return res.status(401).json({ error: 'UNAUTHORIZED' });
-  }
-  if (!(await isSuperAdmin(user.id))) {
-    const { role, error: roleError } = await getUserRole(user.id, companyId);
-    if (roleError || !role) {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    }
-  }
+  const access = await resolveCompanyAccess(req, res, companyId);
+  if (!access) return;
 
   const rawAnswers = Array.isArray(req.body?.rawAnswers)
     ? req.body.rawAnswers
@@ -36,7 +29,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const profile = await saveProblemTransformationAnswers(companyId, answers);
-    return res.status(200).json({ profile });
+    const responseProfile =
+      access.role === 'COMPANY_ADMIN' ? toLimitedCompanyProfile(profile) ?? profile : profile;
+    return res.status(200).json({ profile: responseProfile });
   } catch (err: any) {
     console.error('Problem transformation save failed:', err);
     return res.status(500).json({

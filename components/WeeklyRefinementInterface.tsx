@@ -508,6 +508,7 @@ export default function WeeklyRefinementInterface({
           campaignData={campaignData}
           onClose={() => setShowDailyPlan(false)}
           onRefresh={() => loadDailyPlans(selectedWeek)}
+          onNotify={notify}
         />
       )}
     </div>
@@ -522,9 +523,10 @@ interface DailyPlanModalProps {
   campaignData: any;
   onClose: () => void;
   onRefresh: () => void;
+  onNotify: (type: 'success' | 'error' | 'info', message: string) => void;
 }
 
-function DailyPlanModal({ weekNumber, dailyPlans, campaignId, campaignData, onClose, onRefresh }: DailyPlanModalProps) {
+function DailyPlanModal({ weekNumber, dailyPlans, campaignId, campaignData, onClose, onRefresh, onNotify }: DailyPlanModalProps) {
   const [isAmending, setIsAmending] = useState(false);
   const [amendmentText, setAmendmentText] = useState('');
   const [isProcessingAmendment, setIsProcessingAmendment] = useState(false);
@@ -549,11 +551,11 @@ function DailyPlanModal({ weekNumber, dailyPlans, campaignId, campaignData, onCl
       if (response.ok) {
         const result = await response.json();
         onRefresh();
-        notify('success', 'Daily plan updated successfully.');
+        onNotify('success', 'Daily plan updated successfully.');
       }
     } catch (error) {
       console.error('Error processing daily amendment:', error);
-      notify('error', 'Failed to process amendment. Please try again.');
+      onNotify('error', 'Failed to process amendment. Please try again.');
     } finally {
       setIsProcessingAmendment(false);
       setIsAmending(false);

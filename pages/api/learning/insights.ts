@@ -3,6 +3,7 @@ import { getProfile } from '../../../backend/services/companyProfileService';
 import { computeAnalytics } from '../../../backend/services/analyticsService';
 import { generateLearningInsights } from '../../../backend/services/learningEngineService';
 import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -11,21 +12,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { companyId, campaignId } = req.body || {};
-    if (!companyId) {
-      return res.status(400).json({ error: 'companyId is required' });
+    const { campaignId } = req.body || {};
+    if (!campaignId || typeof campaignId !== 'string') {
+      return res.status(400).json({ error: 'campaignId is required' });
     }
+    const access = await requireCampaignAccess(req, res, campaignId);
+    if (!access) return;
 
+    const companyId = access.companyId;
     const profile = await getProfile(companyId, { autoRefine: false });
     if (!profile) {
       return res.status(404).json({ error: 'Company profile not found' });
     }
 
-    const analytics = await computeAnalytics({ companyId, campaignId, timeframe: 'latest' });
-    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
+    const analytics = await computeAnalytics({ companyId, campaignId: access.campaignId, timeframe: 'latest' });
+    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, access.campaignId);
     const campaign = campaignVersion?.campaign_snapshot?.campaign ?? {};
     console.debug('Approved strategy used for analytics', {
-      campaignId,
+      campaignId: access.campaignId,
       companyId,
       versionId: campaignVersion?.id,
       status: campaignVersion?.status,
@@ -36,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       companyProfile: profile,
       campaign,
       companyId,
-      campaignId,
+      campaignId: access.campaignId,
     });
     return res.status(200).json(insights);
   } catch (error: any) {

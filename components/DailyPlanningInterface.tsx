@@ -1200,6 +1200,7 @@ export default function DailyPlanningInterface({ week, onSave, campaignId, campa
       topic: anchor.topic,
       description: anchor.description,
       dailyExecutionItem: anchor.dailyExecutionItem || null,
+      source: 'daily' as const,
       schedules: schedules.map((item) => ({
         id: item.id,
         platform: item.platform,

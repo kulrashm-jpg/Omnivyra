@@ -6,8 +6,7 @@ import {
   type CompanyProfile,
   type ProblemTransformationExistingFields,
 } from '../../../backend/services/companyProfileService';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getUserRole, isSuperAdmin } from '../../../backend/services/rbacService';
+import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 
 const normalizeText = (value: string): string =>
   value
@@ -118,19 +117,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ?.content;
   const currentFields = req.body?.currentFields as Record<string, unknown> | undefined;
 
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    return res.status(401).json({ error: 'UNAUTHORIZED' });
-  }
   if (!companyId) {
     return res.status(400).json({ error: 'companyId required' });
   }
-  if (!(await isSuperAdmin(user.id))) {
-    const { role, error: roleError } = await getUserRole(user.id, companyId);
-    if (roleError || !role) {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    }
-  }
+  const access = await resolveCompanyAccess(req, res, companyId);
+  if (!access) return;
 
   try {
     const profile = await getProfile(companyId, { autoRefine: false });

@@ -1,3 +1,13 @@
+/**
+ * Social Platform Publisher (external_api_sources–based publish path)
+ *
+ * @deprecated Publishing has been moved to the canonical platformAdapter pipeline.
+ * Use backend/services/publishNowService.publishNow() or the queue (publishProcessor)
+ * with backend/adapters/platformAdapter.publishToPlatform() for all publish flows.
+ * This module is kept for non-publish use (types, recordPerformance) only.
+ * Do not call publishScheduledPost() or the internal publishToPlatform() for new code.
+ */
+
 import { createHash } from 'crypto';
 import {
   getApiConfigByPlatform,
@@ -149,6 +159,7 @@ const publishToTwitter = async (payload: any, _apiConfig?: any) => {
   };
 };
 
+/** @deprecated Use backend/adapters/platformAdapter.publishToPlatform() for publishing. */
 const publishToPlatform = async (platform: PublishPlatform, payload: any, apiConfig: any) => {
   try {
     if (platform === 'facebook') return await publishToFacebook(payload, apiConfig);
@@ -164,6 +175,10 @@ const publishToPlatform = async (platform: PublishPlatform, payload: any, apiCon
   }
 };
 
+/**
+ * @deprecated Publishing moved to canonical path. Use publishNowService.publishNow() or
+ * queue + platformAdapter. See docs/CANONICAL-SOCIAL-PLATFORM-OPERATIONS-DESIGN.md
+ */
 export async function publishScheduledPost(
   post: PublishScheduledPostInput,
   options: PublishOptions

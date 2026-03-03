@@ -188,11 +188,14 @@ export const hasPermission = async (role: string | null, action: string): Promis
 };
 
 const normalizeRole = (value?: string | null): Role | null => {
-  if (!value) return null;
-  const upper = value.toUpperCase();
-  if (upper === 'ADMIN') return Role.COMPANY_ADMIN;
-  if (upper === 'CONTENT_MANAGER') return Role.CONTENT_CREATOR;
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) return null;
+  const upper = trimmed.toUpperCase().replace(/\s+/g, '_');
+  if (upper === 'ADMIN' || upper === 'COMPANYADMIN') return Role.COMPANY_ADMIN;
+  if (upper === 'COMPANY_ADMIN') return Role.COMPANY_ADMIN;
+  if (upper === 'CONTENT_MANAGER' || upper === 'CONTENTPLANNER') return Role.CONTENT_CREATOR;
   if (upper === 'CONTENT_PLANNER') return Role.CONTENT_CREATOR;
+  if (upper === 'CONTENT_CREATOR') return Role.CONTENT_CREATOR;
   if (upper === 'CONTENT_ENGAGER') return Role.VIEW_ONLY;
   if (upper === 'VIEWER') return Role.VIEW_ONLY;
   return (Role as Record<string, Role>)[upper] || null;
@@ -201,44 +204,70 @@ const normalizeRole = (value?: string | null): Role | null => {
 export const getUserRole = async (
   userId: string,
   companyId: string
-): Promise<{ role: Role | null; error: string | null }> => {
+): Promise<{ role: Role | null; error: string | null; membershipType?: 'EXTERNAL' | 'INTERNAL' }> => {
   const { data: anyRoleRows, error: anyRoleError } = await supabase
     .from('user_company_roles')
     .select('role')
     .eq('user_id', userId);
   if (anyRoleError) {
-    return { role: null, error: null };
+    return { role: null, error: null, membershipType: undefined };
   }
   if (!anyRoleRows || anyRoleRows.length === 0) {
-    return { role: null, error: null };
+    return { role: null, error: null, membershipType: undefined };
   }
 
   const { data, error } = await supabase
     .from('user_company_roles')
-    .select('role, status')
+    .select('role, status, membership_type')
     .eq('user_id', userId)
     .eq('company_id', companyId)
     .eq('status', 'active')
     .limit(1);
   if (error) {
-    return { role: null, error: null };
+    return { role: null, error: null, membershipType: undefined };
   }
   if (!data || data.length === 0) {
     if (anyRoleRows && anyRoleRows.length > 0) {
-      return { role: null, error: 'COMPANY_ACCESS_DENIED' };
+      return { role: null, error: 'COMPANY_ACCESS_DENIED', membershipType: undefined };
     }
-    return { role: null, error: null };
+    return { role: null, error: null, membershipType: undefined };
   }
-  const normalizedRole = normalizeRole(data[0].role);
+  const row = data[0] as { role: string; status?: string; membership_type?: string | null };
+  const rawRole = typeof row.role === 'string' ? row.role.trim() : '';
+  const normalizedRole = normalizeRole(rawRole || row.role);
+  const membershipType =
+    (row.membership_type || '').trim().toUpperCase() === 'EXTERNAL' ? 'EXTERNAL' : 'INTERNAL';
   if (process.env.NODE_ENV !== 'test') {
     console.log('RBAC_CHECK', {
       userId,
       companyId,
+      rawRole: rawRole || row.role,
       role: normalizedRole,
-      status: data[0].status || null,
+      status: row.status || null,
+      membershipType,
     });
   }
-  return { role: normalizedRole, error: null };
+  return { role: normalizedRole, error: null, membershipType };
+};
+
+/**
+ * Returns role for (userId, companyId) including rows with status 'invited'.
+ * Used so company admins can access company profile even before "accepting" the invite.
+ */
+export const getCompanyRoleIncludingInvited = async (
+  userId: string,
+  companyId: string
+): Promise<Role | null> => {
+  const { data, error } = await supabase
+    .from('user_company_roles')
+    .select('role, status')
+    .eq('user_id', userId)
+    .eq('company_id', companyId)
+    .in('status', ['active', 'invited'])
+    .limit(1);
+  if (error || !data || data.length === 0) return null;
+  const row = data[0] as { role: string };
+  return normalizeRole(row.role);
 };
 
 export const getUserCompanyRole = async (
@@ -252,11 +281,24 @@ export const getUserCompanyRole = async (
   if (!companyId) {
     return { role: null, userId: user.userId };
   }
+  if (user.userId === 'content_architect') {
+    return { role: Role.COMPANY_ADMIN, userId: user.userId };
+  }
   const superAdmin = await isSuperAdmin(user.userId);
   if (superAdmin) {
     return { role: Role.SUPER_ADMIN, userId: user.userId };
   }
-  const { role } = await getUserRole(user.userId, companyId);
+  let { role } = await getUserRole(user.userId, companyId);
+  if (!role) {
+    const fallbackRole = await getCompanyRoleIncludingInvited(user.userId, companyId);
+    if (
+      fallbackRole === Role.COMPANY_ADMIN ||
+      fallbackRole === Role.ADMIN ||
+      fallbackRole === Role.SUPER_ADMIN
+    ) {
+      role = fallbackRole;
+    }
+  }
   return { role, userId: user.userId };
 };
 
@@ -298,16 +340,26 @@ export const enforceRole = async (input: {
     input.res.status(400).json({ error: 'companyId required' });
     return null;
   }
+  // Content Architect: platform role with access to all companies (like Super Admin)
+  if (user.userId === 'content_architect' && input.allowedRoles.includes(Role.COMPANY_ADMIN)) {
+    return { userId: 'content_architect', role: Role.COMPANY_ADMIN };
+  }
 
   const superAdmin = await isSuperAdmin(user.userId);
   if (superAdmin && input.allowedRoles.includes(Role.SUPER_ADMIN)) {
     return { userId: user.userId, role: Role.SUPER_ADMIN };
   }
 
-  const { role, error } = await getUserRole(user.userId, companyId);
+  let { role, error } = await getUserRole(user.userId, companyId);
   if (error === 'COMPANY_ACCESS_DENIED') {
     input.res.status(403).json({ error: 'COMPANY_SCOPE_VIOLATION' });
     return null;
+  }
+  if (!role && !error) {
+    const fallbackRole = await getCompanyRoleIncludingInvited(user.userId, companyId);
+    if (fallbackRole && input.allowedRoles.includes(fallbackRole)) {
+      role = fallbackRole;
+    }
   }
   if (error || !role) {
     input.res.status(403).json({ error: 'FORBIDDEN_ROLE' });

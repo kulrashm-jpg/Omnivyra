@@ -260,7 +260,22 @@ export default function SuperAdminPanel() {
         setRbacError(null);
         setIsSuperAdminSession(true);
       } else {
-        setRbacError('Failed to load RBAC configuration');
+        let message = 'Failed to load RBAC configuration';
+        try {
+          const body = await rbacResponse.json();
+          if (body?.error === 'NOT_AUTHORIZED' || body?.error === 'FORBIDDEN_ROLE') {
+            message = 'Access denied. Please log in again from the Super Admin login page.';
+          } else if (body?.message) {
+            message = body.message;
+          } else if (body?.error) {
+            message = String(body.error);
+          }
+        } catch {
+          if (rbacResponse.status === 403) {
+            message = 'Access denied. Please log in again from the Super Admin login page.';
+          }
+        }
+        setRbacError(message);
       }
 
       const healthRes = await fetchWithAuth('/api/external-apis/health-summary');
@@ -659,10 +674,11 @@ export default function SuperAdminPanel() {
   });
 
   const normalizedUserSearch = userSearch.trim().toLowerCase();
-  const scopedUsers = showAllUsers
-    ? appUsers
-    : selectedCompanyId
-      ? appUsers.filter((user) => user.company_id === selectedCompanyId)
+  // When a company is selected, always show that company's users; otherwise respect All Companies / Selected Company toggle
+  const scopedUsers = selectedCompanyId
+    ? appUsers.filter((user) => user.company_id === selectedCompanyId)
+    : showAllUsers
+      ? appUsers
       : [];
   const filteredUsers = scopedUsers.filter((user) => {
     if (!normalizedUserSearch) return true;
@@ -1075,15 +1091,20 @@ export default function SuperAdminPanel() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {filteredCompanies.map((company) => (
-                      <tr key={company.id} className="hover:bg-gray-50">
+                    {filteredCompanies.map((company) => {
+                      const isSelected = selectedCompanyId === company.id;
+                      return (
+                      <tr
+                        key={company.id}
+                        className={`hover:bg-gray-50 ${isSelected ? 'bg-red-50 border-l-4 border-l-red-600' : ''}`}
+                      >
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                           <button
                             onClick={() => {
                               setSelectedCompanyId(company.id);
                               setShowAllUsers(false);
                             }}
-                            className="text-left hover:text-red-600 transition-colors"
+                            className={`text-left transition-colors ${isSelected ? 'text-red-700 font-semibold' : 'hover:text-red-600'}`}
                           >
                             {company.name}
                           </button>
@@ -1140,7 +1161,8 @@ export default function SuperAdminPanel() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1155,9 +1177,11 @@ export default function SuperAdminPanel() {
                       : 'All Users'}
                   </h3>
                   <p className="text-xs text-gray-500">
-                    {showAllUsers
-                      ? 'Manage users across all companies.'
-                      : 'Manage users for the selected company.'}
+                    {selectedCompanyId
+                      ? 'Manage users for the selected company.'
+                      : showAllUsers
+                        ? 'Manage users across all companies. Select a company above to see only its users.'
+                        : 'Select a company above to see its users.'}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">

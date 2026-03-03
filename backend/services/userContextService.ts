@@ -1,13 +1,39 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
-import { resolveUserContext as resolveFromLib, UserContext } from '../lib/userContext';
+import { resolveUserContext as resolveFromLib, UserContext, type MembershipType } from '../lib/userContext';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
-import { normalizePermissionRole, Role } from './rbacService';
+import { getCompanyRoleIncludingInvited, normalizePermissionRole, Role } from './rbacService';
+import { getContentArchitectCompanyId, isContentArchitectSession } from './contentArchitectService';
 
-export type { UserContext };
+export type { UserContext, MembershipType };
+
+const DEFAULT_MEMBERSHIP: MembershipType = 'INTERNAL';
+
+function normalizeMembershipType(value: string | null | undefined): MembershipType {
+  const v = (value || '').trim().toUpperCase();
+  return v === 'EXTERNAL' ? 'EXTERNAL' : 'INTERNAL';
+}
 
 export const resolveUserContext = async (req?: NextApiRequest): Promise<UserContext> => {
   if (!req) return resolveFromLib();
+
+  const archCompanyId = getContentArchitectCompanyId(req);
+  if (archCompanyId) {
+    return {
+      userId: 'content_architect',
+      role: 'admin',
+      companyIds: [archCompanyId],
+      defaultCompanyId: archCompanyId,
+    };
+  }
+  if (isContentArchitectSession(req)) {
+    return {
+      userId: 'content_architect',
+      role: 'admin',
+      companyIds: [],
+      defaultCompanyId: '',
+    };
+  }
 
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user?.id) {
@@ -16,7 +42,7 @@ export const resolveUserContext = async (req?: NextApiRequest): Promise<UserCont
 
   const { data: roleRows, error: roleError } = await supabase
     .from('user_company_roles')
-    .select('company_id, role, status')
+    .select('company_id, role, status, membership_type')
     .eq('user_id', user.id);
 
   if (roleError) {
@@ -37,13 +63,40 @@ export const resolveUserContext = async (req?: NextApiRequest): Promise<UserCont
     return normalized === Role.COMPANY_ADMIN || normalized === Role.SUPER_ADMIN;
   });
 
+  const membershipByCompany: Record<string, MembershipType> = {};
+  for (const row of activeRoles) {
+    if (row.company_id) {
+      membershipByCompany[row.company_id] = normalizeMembershipType(
+        (row as { membership_type?: string | null }).membership_type
+      );
+    }
+  }
+  const defaultCompanyId = companyIds[0] || '';
+  const membershipType =
+    (defaultCompanyId && membershipByCompany[defaultCompanyId]) || DEFAULT_MEMBERSHIP;
+
   return {
     userId: user.id,
     role: isAdmin ? 'admin' : 'user',
     companyIds,
-    defaultCompanyId: companyIds[0] || '',
+    defaultCompanyId,
+    membershipType,
+    membershipByCompany: Object.keys(membershipByCompany).length ? membershipByCompany : undefined,
   };
 };
+
+/** True if the resolved context is an external (agency) member. No permission change; for future visibility filtering. */
+export function isExternalMember(userContext: UserContext): boolean {
+  return userContext.membershipType === 'EXTERNAL';
+}
+
+/** True if user is external for the given company. Use when filtering by company. */
+export function isExternalMemberForCompany(
+  userContext: UserContext,
+  companyId: string
+): boolean {
+  return userContext.membershipByCompany?.[companyId] === 'EXTERNAL';
+}
 
 export const enforceCompanyAccess = async (input: {
   req: NextApiRequest;
@@ -60,15 +113,24 @@ export const enforceCompanyAccess = async (input: {
     return null;
   }
 
-  if (!user.companyIds.includes(input.companyId)) {
-    console.warn('ACCESS_DENIED', {
-      path: input.req.url,
-      companyId: input.companyId,
-      userId: user.userId,
-      role: user.role,
-    });
-    input.res.status(403).json({ error: 'Access denied to company' });
-    return null;
+  const isContentArchitect = user.userId === 'content_architect';
+  const hasActiveAccess = user.companyIds.includes(input.companyId);
+  if (!isContentArchitect && !hasActiveAccess) {
+    const fallbackRole = await getCompanyRoleIncludingInvited(user.userId, input.companyId);
+    const allowedViaInvited =
+      fallbackRole === Role.COMPANY_ADMIN ||
+      fallbackRole === Role.ADMIN ||
+      fallbackRole === Role.SUPER_ADMIN;
+    if (!allowedViaInvited) {
+      console.warn('ACCESS_DENIED', {
+        path: input.req.url,
+        companyId: input.companyId,
+        userId: user.userId,
+        role: user.role,
+      });
+      input.res.status(403).json({ error: 'Access denied to company' });
+      return null;
+    }
   }
 
   if (input.requireCampaignId && !input.campaignId) {

@@ -8,6 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { ALL_ROLES } from '../../../../backend/services/rbacService';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import { resolveEffectiveCampaignRole, type CampaignAuthContext } from '../../../../backend/services/campaignRoleService';
 
 const supabase = createClient(
   process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
@@ -50,6 +51,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         error: 'CAMPAIGN_NOT_IN_COMPANY',
         code: 'CAMPAIGN_NOT_IN_COMPANY',
       });
+    }
+
+    const campaignAuthResult = await resolveEffectiveCampaignRole(
+      access.userId,
+      id,
+      companyId as string
+    );
+    if (campaignAuthResult.error === 'CAMPAIGN_ROLE_REQUIRED') {
+      return res.status(403).json({ error: 'CAMPAIGN_ROLE_REQUIRED' });
+    }
+    if (!campaignAuthResult.error) {
+      const campaignAuth: CampaignAuthContext = {
+        companyRole: campaignAuthResult.companyRole,
+        campaignRole: campaignAuthResult.campaignRole,
+        effectiveRole: campaignAuthResult.effectiveRole,
+        source: campaignAuthResult.source,
+      };
+      (req as NextApiRequest & { campaignAuth?: CampaignAuthContext }).campaignAuth = campaignAuth;
+      if (process.env.NODE_ENV !== 'test') {
+        console.log('CAMPAIGN_AUTH_PROGRESS', { campaignId: id, companyId, ...campaignAuth });
+      }
     }
 
     // Get scheduled posts count

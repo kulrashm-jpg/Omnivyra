@@ -8,6 +8,7 @@ import { getLatestAnalyticsReport } from '../../../backend/db/performanceStore';
 import { generateCampaignForecast } from '../../../backend/services/campaignForecastService';
 import { saveCampaignForecast } from '../../../backend/db/forecastStore';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 const resolvePlaybookReferenceId = (snapshot: any): string | null =>
   snapshot?.virality_playbook_id ?? snapshot?.campaign?.virality_playbook_id ?? null;
@@ -31,30 +32,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { companyId, campaignId } = req.body || {};
-    if (!companyId || !campaignId) {
-      return res.status(400).json({ error: 'companyId and campaignId are required' });
+    const { campaignId } = req.body || {};
+    if (!campaignId || typeof campaignId !== 'string') {
+      return res.status(400).json({ error: 'campaignId is required' });
     }
+    const access = await requireCampaignAccess(req, res, campaignId);
+    if (!access) return;
 
-    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
+    const companyId = access.companyId;
+    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, access.campaignId);
     if (!campaignVersion?.campaign_snapshot) {
       return res.status(404).json({ error: 'Campaign plan not found' });
     }
     console.debug('Approved strategy used for analytics', {
-      campaignId,
+      campaignId: access.campaignId,
       companyId,
       versionId: campaignVersion?.id,
       status: campaignVersion?.status,
     });
-    const platformPlan = await getLatestPlatformExecutionPlan({ companyId, campaignId, weekNumber: 1 });
-    const assets = await listAssetsWithLatestContent({ campaignId });
-    const trends = await getTrendSnapshots(companyId, campaignId);
-    const memory = await getCampaignMemory({ companyId, campaignId });
-    const analytics = await getLatestAnalyticsReport(companyId, campaignId);
+    const platformPlan = await getLatestPlatformExecutionPlan({ companyId, campaignId: access.campaignId, weekNumber: 1 });
+    const assets = await listAssetsWithLatestContent({ campaignId: access.campaignId });
+    const trends = await getTrendSnapshots(companyId, access.campaignId);
+    const memory = await getCampaignMemory({ companyId, campaignId: access.campaignId });
+    const analytics = await getLatestAnalyticsReport(companyId, access.campaignId);
 
     const forecast = await generateCampaignForecast({
       companyId,
-      campaignId,
+      campaignId: access.campaignId,
       campaignPlan: campaignVersion.campaign_snapshot,
       platformExecutionPlan: platformPlan?.plan_json ?? null,
       contentAssets: assets,
@@ -64,11 +68,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     await saveCampaignForecast({
-      campaignId,
+      campaignId: access.campaignId,
       forecast,
       confidence: forecast.confidence,
     });
-    console.log('FORECAST GENERATED', { campaignId });
+    console.log('FORECAST GENERATED', { campaignId: access.campaignId });
 
     const playbookReferenceId = resolvePlaybookReferenceId(campaignVersion.campaign_snapshot);
     const playbookContext = await fetchPlaybookContext(companyId, playbookReferenceId);

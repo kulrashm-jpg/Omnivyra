@@ -48,6 +48,46 @@ import {
 import { enrichRecommendationCards } from './recommendationCardEnrichmentService';
 import { buildFallbackRecommendationSignals } from './recommendationFallbackSignalService';
 
+/** Optional strategic selection from Trend tab; influences context/prompts only, not ranking. */
+export type StrategicPayloadInput = {
+  selected_aspect?: string | null;
+  selected_offerings?: string[];
+  strategic_text?: string;
+  context_mode?: string;
+  /** Hierarchical campaign focus: mapped core types for recommendation engine (from Campaign Focus flow). */
+  mapped_core_types?: string[];
+  primary_campaign_type?: string;
+  context?: 'business' | 'personal' | 'third_party';
+  [key: string]: unknown;
+};
+
+/** Map hierarchical core campaign type to engine CampaignObjective. */
+function mapCoreTypeToObjective(coreType: string): CampaignObjective {
+  const t = String(coreType).trim().toLowerCase();
+  if (t === 'brand_awareness' || t === 'authority_positioning') return 'awareness';
+  if (t === 'engagement_growth' || t === 'network_expansion') return 'engagement';
+  if (t === 'lead_generation') return 'leads';
+  if (t === 'product_promotion') return 'conversions';
+  return 'awareness';
+}
+
+/** Strategy momentum (repetitive usage, diversification). */
+export type StrategyMomentumInput = {
+  dominant_streak_aspect: string | null;
+  dominant_streak_count: number;
+  diversification_score: number;
+};
+
+/** Strategy history for journey context (optional; does not affect ranking). */
+export type StrategyMemoryInput = {
+  campaigns_count: number;
+  aspect_counts: Record<string, number>;
+  intent_tag_counts: Record<string, number>;
+  dominant_aspects: string[];
+  underused_aspects: string[];
+  strategy_momentum?: StrategyMomentumInput | null;
+};
+
 export type RecommendationEngineInput = {
   companyId: string;
   campaignId?: string | null;
@@ -60,6 +100,10 @@ export type RecommendationEngineInput = {
   regions?: string[];
   /** If false, use only stored company profile (skip website crawling / social discovery). */
   enrichmentEnabled?: boolean;
+  /** Optional strategic selection; added to context tokens for prompts only (no ranking change). */
+  strategicPayload?: StrategicPayloadInput | null;
+  /** Optional strategy history (continuation/expansion); context only, no ranking change. */
+  strategyMemory?: StrategyMemoryInput | null;
 };
 
 export type PersonaSummary = {
@@ -987,6 +1031,32 @@ export const generateRecommendations = async (
     recent_campaign_intelligence: recentCampaignIntelligence,
     selected_api_ids: Array.isArray(input.selectedApiIds) ? input.selectedApiIds : null,
   };
+  if (input.strategicPayload && typeof input.strategicPayload === 'object') {
+    recommendationContext.strategic_selection = {
+      selected_aspect: input.strategicPayload.selected_aspect ?? null,
+      selected_offerings: Array.isArray(input.strategicPayload.selected_offerings)
+        ? input.strategicPayload.selected_offerings
+        : [],
+    };
+    if (Array.isArray(input.strategicPayload.mapped_core_types) && input.strategicPayload.mapped_core_types.length > 0) {
+      recommendationContext.campaign_focus = {
+        primary_campaign_type: input.strategicPayload.primary_campaign_type ?? null,
+        context: input.strategicPayload.context ?? null,
+        mapped_core_types: input.strategicPayload.mapped_core_types,
+      };
+    }
+  }
+  if (input.strategyMemory && typeof input.strategyMemory === 'object') {
+    recommendationContext.strategy_memory = {
+      aspect_counts: input.strategyMemory.aspect_counts ?? {},
+      intent_tag_counts: input.strategyMemory.intent_tag_counts ?? {},
+      dominant_aspects: input.strategyMemory.dominant_aspects ?? [],
+      underused_aspects: input.strategyMemory.underused_aspects ?? [],
+    };
+    if (input.strategyMemory.strategy_momentum && typeof input.strategyMemory.strategy_momentum === 'object') {
+      recommendationContext.strategy_momentum = input.strategyMemory.strategy_momentum;
+    }
+  }
   if (input.campaignId) {
     try {
       recommendationContext.learning_signals = await loadLearningSignals(
@@ -1015,7 +1085,13 @@ export const generateRecommendations = async (
     console.warn('Campaign duration not explicitly set; inferring from weeks array.');
     durationWeeks = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
   }
-  const objective: CampaignObjective = (input.objective ?? 'awareness') as CampaignObjective;
+  const mappedCore = Array.isArray(input.strategicPayload?.mapped_core_types) && input.strategicPayload.mapped_core_types.length > 0
+    ? input.strategicPayload.mapped_core_types[0]
+    : null;
+  const rawObjective = input.objective ?? 'awareness';
+  const objective: CampaignObjective = mappedCore
+    ? mapCoreTypeToObjective(mappedCore)
+    : (typeof rawObjective === 'string' && rawObjective.includes('_') ? mapCoreTypeToObjective(rawObjective) : (rawObjective as CampaignObjective));
   const platformStrategies = (await getPlatformStrategies(input.companyId)) || [];
   const platformRules = platformStrategies.reduce<Record<string, { content_types: string[] }>>(
     (acc, strategy) => {

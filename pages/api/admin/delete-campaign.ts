@@ -1,7 +1,12 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isSuperAdmin, getUserRole } from '../../../backend/services/rbacService';
+import {
+  isSuperAdmin,
+  getUserRole,
+  getCompanyRoleIncludingInvited,
+  Role,
+} from '../../../backend/services/rbacService';
 
 async function getCompanyCampaignIds(companyId: string): Promise<string[]> {
   const { data, error } = await supabase
@@ -38,7 +43,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const superAdmin = await isSuperAdmin(user.id);
-    const isCompanyAdmin = companyId ? (await getUserRole(user.id, companyId)).role === 'COMPANY_ADMIN' : false;
+    let isCompanyAdmin = false;
+    if (companyId) {
+      const { role } = await getUserRole(user.id, companyId);
+      if (role === Role.COMPANY_ADMIN || role === Role.ADMIN) isCompanyAdmin = true;
+      if (!isCompanyAdmin) {
+        const fallback = await getCompanyRoleIncludingInvited(user.id, companyId);
+        isCompanyAdmin =
+          fallback === Role.COMPANY_ADMIN || fallback === Role.ADMIN;
+      }
+    }
 
     if (!superAdmin && !isCompanyAdmin) {
       return res.status(403).json({ error: 'Forbidden: Only super admins or company admins can delete campaigns.' });

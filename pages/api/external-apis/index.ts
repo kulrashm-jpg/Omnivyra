@@ -10,9 +10,11 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
+  getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
   isSuperAdmin,
+  Role,
 } from '../../../backend/services/rbacService';
 
 const requireExternalApiAccess = async (
@@ -45,7 +47,18 @@ const requireExternalApiAccess = async (
     });
     return { userId: user.id, role: 'SUPER_ADMIN' };
   }
-  const { role, error: roleError } = await getUserRole(user.id, companyId);
+  let { role, error: roleError } = await getUserRole(user.id, companyId);
+  if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
+    const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+    if (
+      fallbackRole === Role.COMPANY_ADMIN ||
+      fallbackRole === Role.ADMIN ||
+      fallbackRole === Role.SUPER_ADMIN
+    ) {
+      role = fallbackRole;
+      roleError = null;
+    }
+  }
   if (roleError || !role) {
     res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
@@ -195,16 +208,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const enriched = apis.map((api) => {
         const rows = usageByApi[api.id] || [];
-        const nonFeatureRows = rows.filter((row) => !String(row.user_id || '').startsWith('feature:'));
-        const requestCount = nonFeatureRows.reduce(
+        // Include all usage (feature + non-feature) so recommendation/campaign-driven API calls show in analytics
+        const requestCount = rows.reduce(
           (sum, row) => sum + (row.request_count ?? 0),
           0
         );
-        const successCount = nonFeatureRows.reduce(
+        const successCount = rows.reduce(
           (sum, row) => sum + (row.success_count ?? 0),
           0
         );
-        const failureCount = nonFeatureRows.reduce(
+        const failureCount = rows.reduce(
           (sum, row) => sum + (row.failure_count ?? 0),
           0
         );
