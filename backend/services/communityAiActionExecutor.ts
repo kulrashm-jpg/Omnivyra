@@ -7,6 +7,9 @@ import { getToken } from './platformTokenService';
 import { executeRpaTask } from './rpaWorker/rpaWorkerService';
 import { logCommunityAiActionEvent } from './communityAiActionLogService';
 import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
+import { logUsageEvent } from './usageLedgerService';
+import { incrementUsageMeter } from './usageMeterService';
+import { checkUsageBeforeExecution } from './usageEnforcementService';
 
 type CommunityAiAction = {
   id: string;
@@ -27,8 +30,8 @@ type CommunityAiAction = {
 
 type ExecutionResult = {
   ok: boolean;
-  status: 'executed' | 'failed' | 'skipped';
-  error?: string;
+  status: 'executed' | 'failed' | 'skipped' | 'blocked_plan_limit';
+  error?: string | Record<string, unknown>;
   reason?: string;
   response?: any;
 };
@@ -261,6 +264,20 @@ export const executeAction = async (
   if (requiresApproval(action, approved)) {
     return { ok: false, status: 'failed', error: 'APPROVAL_REQUIRED' };
   }
+
+  const enforcement = await checkUsageBeforeExecution({
+    organization_id: action.organization_id,
+    resource_key: 'automation_executions',
+    projected_increment: 1,
+  });
+  if (!enforcement.allowed) {
+    return {
+      ok: false,
+      status: 'blocked_plan_limit',
+      error: { code: 'PLAN_LIMIT_EXCEEDED', ...enforcement },
+    };
+  }
+
   const executionMode = action.execution_mode || 'manual';
   if (executionMode === 'manual') {
     const simulated = simulateManualExecution(action);
@@ -283,6 +300,22 @@ export const executeAction = async (
         metadata: { platform: action.platform, action_type: action.action_type },
       });
     }
+    void logUsageEvent({
+      organization_id: action.organization_id,
+      campaign_id: null,
+      user_id: null,
+      source_type: 'automation_execution',
+      provider_name: action.platform,
+      model_name: null,
+      model_version: null,
+      source_name: `${action.platform}:${action.action_type}`,
+      process_type: 'community_execution',
+      metadata: { action_id: action.id },
+    });
+    void incrementUsageMeter({
+      organization_id: action.organization_id,
+      source_type: 'automation_execution',
+    });
     return simulated;
   }
 
@@ -342,6 +375,22 @@ export const executeAction = async (
         metadata: { platform: action.platform, action_type: action.action_type },
       });
     }
+    void logUsageEvent({
+      organization_id: action.organization_id,
+      campaign_id: null,
+      user_id: null,
+      source_type: 'automation_execution',
+      provider_name: action.platform,
+      model_name: null,
+      model_version: null,
+      source_name: `${action.platform}:${action.action_type}`,
+      process_type: 'community_execution',
+      metadata: { action_id: action.id },
+    });
+    void incrementUsageMeter({
+      organization_id: action.organization_id,
+      source_type: 'automation_execution',
+    });
     return {
       ok: true,
       status: 'executed',
@@ -439,6 +488,22 @@ export const executeAction = async (
         metadata: { platform: action.platform, action_type: action.action_type },
       });
     }
+    void logUsageEvent({
+      organization_id: action.organization_id,
+      campaign_id: null,
+      user_id: null,
+      source_type: 'automation_execution',
+      provider_name: action.platform,
+      model_name: null,
+      model_version: null,
+      source_name: `${action.platform}:${action.action_type}`,
+      process_type: 'community_execution',
+      metadata: { action_id: action.id },
+    });
+    void incrementUsageMeter({
+      organization_id: action.organization_id,
+      source_type: 'automation_execution',
+    });
     return { ok: true, status: 'executed', response };
   } catch (error: any) {
     if (options?.notify !== false) {

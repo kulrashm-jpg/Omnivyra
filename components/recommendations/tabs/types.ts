@@ -22,6 +22,8 @@ export type OpportunityTabProps = {
   onStrategicIntentsChange?: (intents: string[]) => void;
   /** FULL = full strategic card (Content Architect, Super Admin); MINIMAL = decision-focused (company users). */
   viewMode?: 'FULL' | 'MINIMAL';
+  /** Optional campaign ID for strategy intelligence panel (fetches strategy-status when set). */
+  campaignId?: string | null;
 };
 
 /**

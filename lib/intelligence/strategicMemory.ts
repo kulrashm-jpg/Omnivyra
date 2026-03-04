@@ -70,7 +70,10 @@ export function buildStrategicMemoryProfile(
 
   const platform_confidence_average: Record<string, number> = {};
   for (const [platform, { sum, count }] of Object.entries(platformSums)) {
-    if (count > 0) platform_confidence_average[platform] = sum / count;
+    if (count > 0) {
+      const avg = sum / count;
+      platform_confidence_average[platform] = Math.max(0, Math.min(100, avg));
+    }
   }
 
   if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'development' && events.length > 0) {

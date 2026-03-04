@@ -9,7 +9,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import { getQueue } from '../queue/bullmqClient';
+import { getQueue, getEngagementPollingQueue } from '../queue/bullmqClient';
 import { createQueueJob } from '../db/queries';
 import { getCampaignReadiness } from '../services/campaignReadinessService';
 
@@ -146,5 +146,15 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
   }
 
   return { found, created, skipped };
+}
+
+/**
+ * Enqueue one engagement polling job.
+ * Idempotent ingestion; no duplicate check. Call every 10 minutes (e.g. from cron).
+ */
+export async function enqueueEngagementPolling(): Promise<void> {
+  const queue = getEngagementPollingQueue();
+  await queue.add('poll', {}, { jobId: `engagement-poll-${Date.now()}` });
+  console.log('✅ Engagement polling job enqueued');
 }
 

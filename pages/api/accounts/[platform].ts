@@ -120,15 +120,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         break;
 
-      case 'DELETE':
-        // Disconnect account
-        console.log(`Disconnecting ${canonical} account`);
-        
-        res.status(200).json({
+      case 'DELETE': {
+        const deleteUserId = await requireUserId(req, res);
+        if (!deleteUserId) return;
+
+        const { data: accountRow, error: findError } = await supabase
+          .from('social_accounts')
+          .select('id')
+          .eq('user_id', deleteUserId)
+          .in('platform', platformCandidates)
+          .eq('is_active', true)
+          .limit(1)
+          .maybeSingle();
+
+        if (findError) {
+          return res.status(500).json({ success: false, error: findError.message });
+        }
+        if (!accountRow?.id) {
+          return res.status(404).json({ success: false, error: 'Account not found' });
+        }
+
+        const { error: updateError } = await supabase
+          .from('social_accounts')
+          .update({
+            is_active: false,
+            access_token: null,
+            refresh_token: null,
+            token_expires_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', accountRow.id);
+
+        if (updateError) {
+          return res.status(500).json({ success: false, error: updateError.message });
+        }
+
+        return res.status(200).json({
           success: true,
-          message: `${canonical.charAt(0).toUpperCase() + canonical.slice(1)} account disconnected successfully`,
+          message: 'Account disconnected',
         });
-        break;
+      }
 
       default:
         res.setHeader('Allow', ['GET', 'POST', 'DELETE']);

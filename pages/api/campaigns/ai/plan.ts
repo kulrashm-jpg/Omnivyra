@@ -18,7 +18,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { campaignId, companyId, mode, message, durationWeeks, targetDay, platforms, messages: conversationHistory, recommendationContext, optimizationContext, currentPlan, scopeWeeks, chatContext, vetScope, collectedPlanningContext, autopilot } = req.body || {};
+    const body = req.body || {};
+    const {
+      campaignId,
+      companyId,
+      mode: bodyMode,
+      message: bodyMessage,
+      durationWeeks,
+      targetDay,
+      platforms,
+      messages: bodyMessages,
+      recommendationContext,
+      optimizationContext,
+      currentPlan,
+      scopeWeeks,
+      chatContext,
+      vetScope,
+      collectedPlanningContext: bodyCollectedPlanningContext,
+      autopilot,
+      forceFreshPlanningThread,
+      prefilledPlanning: bodyPrefilledPlanning,
+      conversationHistory: bodyConversationHistory,
+      context: bodyContext,
+    } = body;
+
+    const conversationHistory = Array.isArray(bodyConversationHistory)
+      ? bodyConversationHistory
+      : Array.isArray(bodyMessages)
+        ? bodyMessages
+        : [];
+
+    let mode = bodyMode;
+    let message = typeof bodyMessage === 'string' ? bodyMessage : '';
+
+    if (
+      bodyContext === 'campaign-planning' &&
+      forceFreshPlanningThread === true &&
+      Array.isArray(conversationHistory) &&
+      conversationHistory.length > 0
+    ) {
+      mode = mode ?? 'generate_plan';
+      const lastUser = [...conversationHistory].reverse().find((m: any) => m?.type === 'user' || m?.role === 'user');
+      const lastUserText = lastUser && (typeof (lastUser as any).message === 'string' ? (lastUser as any).message : typeof (lastUser as any).content === 'string' ? (lastUser as any).content : null);
+      message = message || lastUserText || 'Yes, generate my full 12-week plan now.';
+    }
+
+    const collectedPlanningContext =
+      bodyPrefilledPlanning != null && typeof bodyPrefilledPlanning === 'object' && !Array.isArray(bodyPrefilledPlanning)
+        ? bodyPrefilledPlanning
+        : bodyCollectedPlanningContext;
 
     if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'campaignId is required' });
@@ -107,7 +155,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const existingCollectedPlanningContext =
-      collectedPlanningContext && typeof collectedPlanningContext === 'object'
+      collectedPlanningContext != null && typeof collectedPlanningContext === 'object' && !Array.isArray(collectedPlanningContext)
         ? (collectedPlanningContext as Record<string, unknown>)
         : undefined;
 

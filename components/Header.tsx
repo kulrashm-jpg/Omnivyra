@@ -112,6 +112,19 @@ const Header: React.FC = () => {
             >
               Home
             </button>
+            <a
+              href="/campaigns"
+              className="bg-white text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-100 transition-colors inline-flex items-center"
+            >
+              Campaigns
+            </a>
+            <a
+              href="/recommendations"
+              className="bg-white text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-100 transition-colors inline-flex items-center"
+              title="Quick campaign from trends — generate themes and build campaign from recommendation cards"
+            >
+              Quick campaign
+            </a>
             <button
               onClick={() => router.push('/community-ai')}
               className="bg-white text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-100 transition-colors"

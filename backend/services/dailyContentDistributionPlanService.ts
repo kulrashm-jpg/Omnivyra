@@ -231,6 +231,7 @@ export async function generateDailyDistributionPlan(
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
   const response = await callDistributionLLM({
     companyId: input.companyId ?? null,
+    campaignId: input.campaignId ?? null,
     model,
     temperature: 0.4,
     response_format: { type: 'json_object' },

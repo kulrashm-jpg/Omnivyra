@@ -2,6 +2,9 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { detectExecutionDrift, type PublishedContent } from '../../../backend/services/executionDriftDetector';
+import type { WeekPlanLike } from '../../../backend/services/executionMomentumTracker';
+import { computeExecutionHealthScore } from '../../../backend/services/executionHealthScorer';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -114,7 +117,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.log('[weekly-debug][api-response-week]', response[0] ?? null);
     }
 
-    res.status(200).json(response);
+    const executionIntelligence =
+      blueprint && typeof blueprint === 'object'
+        ? (blueprint as { executionIntelligence?: { executionPressure?: unknown; executionMomentum?: unknown } }).executionIntelligence
+        : null;
+    const executionPressure =
+      executionIntelligence?.executionPressure ??
+      (blueprint && typeof blueprint === 'object' ? (blueprint as { executionPressure?: unknown }).executionPressure ?? null) ??
+      null;
+    const executionMomentum =
+      executionIntelligence?.executionMomentum ?? null;
+    const executionMomentumRecovery =
+      executionIntelligence && typeof executionIntelligence === 'object'
+        ? (executionIntelligence as { momentumRecovery?: unknown }).momentumRecovery ?? null
+        : null;
+
+    // Execution drift: run when we have planned weeks and can load actual published posts
+    let executionDrift: { state: string; signals: { schedule: number; topic: number; format: number }; driftScore: number; warnings?: string[] } | null = null;
+    const plannedWeeks: WeekPlanLike[] = Array.isArray(blueprint?.weeks) ? blueprint.weeks as WeekPlanLike[] : [];
+    if (plannedWeeks.length > 0) {
+      const { data: campaignRow } = await supabase
+        .from('campaigns')
+        .select('start_date')
+        .eq('id', access.campaignId)
+        .maybeSingle();
+      const campaignStart = campaignRow?.start_date ? new Date(String(campaignRow.start_date)).getTime() : null;
+      const { data: publishedRows } = await supabase
+        .from('scheduled_posts')
+        .select('title, content, content_type, scheduled_for')
+        .eq('campaign_id', access.campaignId)
+        .eq('status', 'published');
+      const actualPosts: PublishedContent[] = (publishedRows ?? []).map((row: { title?: string | null; content?: string | null; content_type?: string | null; scheduled_for?: string | null }) => {
+        let week: number | undefined;
+        if (campaignStart != null && row.scheduled_for) {
+          const postDate = new Date(String(row.scheduled_for)).getTime();
+          const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+          week = Math.floor((postDate - campaignStart) / msPerWeek) + 1;
+        }
+        return {
+          title: row.title ?? null,
+          content: row.content ?? null,
+          content_type: row.content_type ?? null,
+          week: week ?? undefined,
+        };
+      });
+      executionDrift = detectExecutionDrift(plannedWeeks, actualPosts);
+    }
+
+    const executionHealth = computeExecutionHealthScore(
+      executionPressure ?? undefined,
+      executionMomentum ?? undefined,
+      executionDrift ?? undefined
+    );
+
+    res.status(200).json({
+      plans: response,
+      executionPressure,
+      executionMomentum,
+      executionMomentumRecovery,
+      executionDrift,
+      executionHealth,
+    });
 
   } catch (error) {
     console.error('Error in get-weekly-plans API:', error);

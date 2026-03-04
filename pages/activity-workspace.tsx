@@ -6,13 +6,7 @@ import { getAiStrategicConfidence } from '@/lib/aiStrategicConfidence';
 import { getViewMode } from '@/utils/getViewMode';
 import { VIEW_RULES } from '@/utils/viewVisibilityMatrix';
 import { executeMasterContentPipeline, executeVariantImprovement } from '@/lib/planning/executeMasterContentPipeline';
-import { computeVariantConfidence } from '@/lib/planning/variantConfidence';
-import { deriveVariantSuggestions } from '@/lib/planning/variantSuggestions';
-import {
-  getStoredFeedbackEvents,
-  buildStrategicMemoryProfile,
-  appendFeedbackEvent,
-} from '@/lib/intelligence/strategicMemory';
+import { computeVariantIntelligence } from '@/lib/intelligence/executionIntelligence';
 
 type ScheduleItem = {
   id: string;
@@ -25,14 +19,28 @@ type ScheduleItem = {
   title?: string;
 };
 
+/** Align with lib/planning/masterContentDocument so pipeline and payload stay type-safe. */
 type MasterContentDocumentPayload = {
   master_title: string;
   source_execution_id: string;
   platforms: string[];
-  platform_variants: Record<string, { execution_id: string; status: string; content?: string }>;
+  platform_variants: Record<string, { execution_id: string; status: 'PENDING' | 'GENERATED'; content?: string }>;
 };
 
-type WorkspacePayload = {
+/** Week-like fields used by getAiStrategicConfidence / getAiLookingAheadMessage when payload is used as week context. */
+type WorkspacePayloadWeekLike = {
+  planning_adjustments_summary?: unknown;
+  momentum_adjustments?: {
+    momentum_transfer_strength?: string;
+    narrative_recovery?: boolean;
+    absorbed_from_week?: unknown;
+    [key: string]: unknown;
+  } | null;
+  distribution_strategy?: string | null;
+  week_extras?: { recovered_topics?: unknown[] } | null;
+};
+
+type WorkspacePayload = WorkspacePayloadWeekLike & {
   campaignId?: string | null;
   weekNumber?: number;
   day?: string;
@@ -102,7 +110,12 @@ export default function ActivityWorkspacePage() {
   const [improvedByScheduleId, setImprovedByScheduleId] = useState<Record<string, boolean>>({});
   const [isAutoImprovingByScheduleId, setIsAutoImprovingByScheduleId] = useState<Record<string, boolean>>({});
   const [autoAppliedByScheduleId, setAutoAppliedByScheduleId] = useState<Record<string, boolean>>({});
-  const [strategicMemoryProfile, setStrategicMemoryProfile] = useState<ReturnType<typeof buildStrategicMemoryProfile> | null>(null);
+  const [strategicMemoryProfile, setStrategicMemoryProfile] = useState<{
+    campaign_id: string;
+    action_acceptance_rate: Record<string, number>;
+    platform_confidence_average: Record<string, number>;
+    total_events: number;
+  } | null>(null);
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
 
   type VariantIntelligenceStatus = 'pending' | 'generated' | 'adapted' | 'ready';
@@ -137,25 +150,33 @@ export default function ActivityWorkspacePage() {
 
   const variantTabPlatforms = useMemo(() => {
     const set = new Set<string>();
-    schedules.forEach((s) => set.add(normalizeKey(s.platform)));
+    const nk = (v: unknown) => String(v ?? '').trim().toLowerCase();
+    schedules.forEach((s) => set.add(nk(s.platform)));
     return Array.from(set);
   }, [schedules]);
 
+  const platformVariants = useMemo(
+    () =>
+      Array.isArray(asObject(payload?.dailyExecutionItem)?.platform_variants)
+        ? (asObject(payload?.dailyExecutionItem)?.platform_variants as Array<Record<string, unknown>>)
+        : [],
+    [payload?.dailyExecutionItem]
+  );
+
   const confidenceByPlatform = useMemo(() => {
+    const nk = (v: unknown) => String(v ?? '').trim().toLowerCase();
     const out: Record<string, number> = {};
     variantTabPlatforms.forEach((plat) => {
-      const variantsForPlatform = platformVariants.filter(
-        (v) => normalizeKey((v as any)?.platform) === plat
-      );
+      const variantsForPlatform = platformVariants.filter((v) => nk((v as any)?.platform) === plat);
       let maxScore = 0;
       variantsForPlatform.forEach((v) => {
-        const c = computeVariantConfidence(v);
-        if (c.score > maxScore) maxScore = c.score;
+        const intelligence = computeVariantIntelligence(v, plat, strategicMemoryProfile);
+        if (intelligence.confidence_score > maxScore) maxScore = intelligence.confidence_score;
       });
       if (variantsForPlatform.length > 0) out[plat] = maxScore;
     });
     return out;
-  }, [variantTabPlatforms, platformVariants]);
+  }, [variantTabPlatforms, platformVariants, strategicMemoryProfile]);
 
   useEffect(() => {
     if (schedules.length > 0 && !selectedVariantTab && variantTabPlatforms[0]) {
@@ -165,17 +186,25 @@ export default function ActivityWorkspacePage() {
   }, [schedules.length, selectedVariantTab, variantTabPlatforms.join(',')]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const events = getStoredFeedbackEvents();
     const campaignId = payload?.campaignId ?? '';
-    const filtered = campaignId ? events.filter((e) => e.campaign_id === campaignId) : events;
-    setStrategicMemoryProfile(buildStrategicMemoryProfile(filtered));
+    if (!campaignId) {
+      setStrategicMemoryProfile(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(campaignId)}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((profile) => {
+        if (!cancelled && profile) setStrategicMemoryProfile(profile);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, [payload?.campaignId]);
 
-  const aiPreviewMessage = useMemo(() => getAiLookingAheadMessage(payload as any), [payload]);
+  const aiPreviewMessage = useMemo(() => getAiLookingAheadMessage(payload ?? null), [payload]);
   const session = undefined as { role?: string } | undefined;
   const viewMode = getViewMode(session?.role);
-  const aiConfidenceMessage = useMemo(() => getAiStrategicConfidence(payload as any), [payload]);
+  const aiConfidenceMessage = useMemo(() => getAiStrategicConfidence(payload ?? null), [payload]);
 
   useEffect(() => {
     if (!notice) return;
@@ -270,9 +299,6 @@ export default function ActivityWorkspacePage() {
   const effectiveProblemAddressed = String(writerBrief?.whatProblemAreWeAddressing || intent?.pain_point || '').trim() || (topicText ? `Uncertainty about ${topicText}` : '—');
   const masterContentFromPayload = asObject(payload?.dailyExecutionItem && asObject(payload.dailyExecutionItem)?.master_content);
   const masterContent = latestMasterContent || masterContentFromPayload;
-  const platformVariants = Array.isArray(asObject(payload?.dailyExecutionItem)?.platform_variants)
-    ? (asObject(payload?.dailyExecutionItem)?.platform_variants as Array<Record<string, unknown>>)
-    : [];
   const hasMasterGenerated =
     String(masterContent?.generation_status || '').toLowerCase() === 'generated' ||
     String(masterContent?.content || '').trim().length > 0;
@@ -976,13 +1002,13 @@ export default function ActivityWorkspacePage() {
         }
       }
       const mergedVariants = Array.from(mergedByKey.values());
-      const nextPlatformVariantsRecord: Record<string, { execution_id: string; status: string; content?: string }> = { ...(masterDoc?.platform_variants ?? {}) };
+      const nextPlatformVariantsRecord: Record<string, { execution_id: string; status: 'PENDING' | 'GENERATED'; content?: string }> = { ...(masterDoc?.platform_variants ?? {}) };
       for (const v of incomingVariants) {
         const platform = normalizeKey((v as any)?.platform);
         if (!platform) continue;
         const content = String((v as any)?.generated_content ?? (v as any)?.content ?? '').trim();
         const execution_id = (masterDoc?.platform_variants?.[platform] as any)?.execution_id ?? executionId;
-        nextPlatformVariantsRecord[platform] = { execution_id, status: 'GENERATED', content: content || undefined };
+        nextPlatformVariantsRecord[platform] = { execution_id, status: 'GENERATED' as const, content: content || undefined };
       }
       if (result.master_content) {
         setLatestMasterContent(result.master_content as Record<string, unknown>);
@@ -1537,25 +1563,21 @@ export default function ActivityWorkspacePage() {
                             </span>
                           </div>
                           {matchedVariant && (() => {
-                            const confidence = computeVariantConfidence(matchedVariant);
-                            const suggestions = deriveVariantSuggestions(confidence, matchedVariant, item.platform, strategicMemoryProfile);
-                            const shouldShowAutoStrategist =
-                              confidence.level === 'LOW' ||
-                              (confidence.level === 'MEDIUM' && suggestions.length >= 2);
+                            const intelligence = computeVariantIntelligence(matchedVariant, item.platform, strategicMemoryProfile);
                             const levelColor =
-                              confidence.level === 'HIGH'
+                              intelligence.confidence_level === 'HIGH'
                                 ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-                                : confidence.level === 'MEDIUM'
+                                : intelligence.confidence_level === 'MEDIUM'
                                   ? 'text-amber-700 bg-amber-50 border-amber-200'
                                   : 'text-red-700 bg-red-50 border-red-200';
                             return (
                               <>
                                 <div className={`rounded-lg border p-2 text-xs ${levelColor}`}>
                                   <div className="font-semibold mb-1">
-                                    Confidence: {confidence.score}% ({confidence.level})
+                                    Confidence: {intelligence.confidence_score}% ({intelligence.confidence_level})
                                   </div>
                                   <ul className="space-y-0.5">
-                                    {confidence.reasons.map((r, i) => (
+                                    {intelligence.reasons.map((r, i) => (
                                       <li key={i} className="flex items-center gap-2">
                                         {r === 'CTA could be stronger' ? (
                                           <span className="text-amber-600">⚠</span>
@@ -1567,10 +1589,10 @@ export default function ActivityWorkspacePage() {
                                     ))}
                                   </ul>
                                 </div>
-                                {suggestions.length > 0 && (
+                                {intelligence.strategist_suggestions.length > 0 && (
                                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs">
                                     <div className="font-semibold text-slate-700 mb-2">AI Suggestions</div>
-                                    {suggestions.map((s) => {
+                                    {intelligence.strategist_suggestions.map((s) => {
                                       const suggestionKey = `${item.id}-${s.id}`;
                                       const isImproving = improvingSuggestionKey === suggestionKey;
                                       const showImproved = improvedByScheduleId[item.id];
@@ -1616,17 +1638,25 @@ export default function ActivityWorkspacePage() {
                                                       : prev
                                                   );
                                                   setImprovedByScheduleId((prev) => ({ ...prev, [item.id]: true }));
-                                                  appendFeedbackEvent({
-                                                    campaign_id: payload?.campaignId ?? '',
-                                                    execution_id: String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? ''),
-                                                    platform: item.platform,
-                                                    action: s.action,
-                                                    accepted: true,
-                                                    timestamp: new Date().toISOString(),
-                                                  });
-                                                  const events = getStoredFeedbackEvents();
                                                   const cid = payload?.campaignId ?? '';
-                                                  setStrategicMemoryProfile(buildStrategicMemoryProfile(cid ? events.filter((e) => e.campaign_id === cid) : events));
+                                                  if (cid) {
+                                                    fetch('/api/intelligence/strategic-memory', {
+                                                      method: 'POST',
+                                                      headers: { 'Content-Type': 'application/json' },
+                                                      credentials: 'include',
+                                                      body: JSON.stringify({
+                                                        campaign_id: cid,
+                                                        execution_id: payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id,
+                                                        platform: item.platform,
+                                                        action: s.action,
+                                                        accepted: true,
+                                                      }),
+                                                    })
+                                                      .then((r) => r.ok && fetch(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(cid)}`, { credentials: 'include' }))
+                                                      .then((r) => (r && r.ok ? r.json() : null))
+                                                      .then((profile) => profile && setStrategicMemoryProfile(profile))
+                                                      .catch(() => {});
+                                                  }
                                                   notify('success', 'Variant improved.');
                                                 } catch (err) {
                                                   console.error('[AISuggestion]', err);
@@ -1648,12 +1678,12 @@ export default function ActivityWorkspacePage() {
                                     })}
                                   </div>
                                 )}
-                                {shouldShowAutoStrategist && suggestions.length > 0 && (
+                                {intelligence.strategist_trigger_level === 'AUTO_ELIGIBLE' && intelligence.strategist_suggestions.length > 0 && (
                                   <div className="rounded-lg border border-violet-200 bg-gradient-to-br from-violet-50 to-purple-50/50 p-3 text-xs">
                                     <div className="font-semibold text-violet-900 mb-1">✨ Auto Strategist Suggestion</div>
                                     <p className="text-violet-800 mb-2">This variant could be improved automatically.</p>
                                     <ul className="list-disc list-inside text-violet-700 mb-2 space-y-0.5">
-                                      {suggestions.slice(0, 2).map((s) => (
+                                      {intelligence.strategist_suggestions.slice(0, 2).map((s) => (
                                         <li key={s.id}>{s.label}</li>
                                       ))}
                                     </ul>
@@ -1664,7 +1694,7 @@ export default function ActivityWorkspacePage() {
                                         onClick={async () => {
                                           setIsAutoImprovingByScheduleId((prev) => ({ ...prev, [item.id]: true }));
                                           let currentVariant = matchedVariant as Record<string, unknown>;
-                                          const toApply = suggestions.slice(0, 2);
+                                          const toApply = intelligence.strategist_suggestions.slice(0, 2);
                                           let variantsList = [...platformVariants];
                                           try {
                                             for (const s of toApply) {
@@ -1701,19 +1731,29 @@ export default function ActivityWorkspacePage() {
                                             }
                                             setAutoAppliedByScheduleId((prev) => ({ ...prev, [item.id]: true }));
                                             setImprovedByScheduleId((prev) => ({ ...prev, [item.id]: true }));
-                                            for (const s of toApply) {
-                                              appendFeedbackEvent({
-                                                campaign_id: payload?.campaignId ?? '',
-                                                execution_id: String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? ''),
-                                                platform: item.platform,
-                                                action: s.action,
-                                                accepted: true,
-                                                timestamp: new Date().toISOString(),
-                                              });
-                                            }
-                                            const events = getStoredFeedbackEvents();
                                             const cid = payload?.campaignId ?? '';
-                                            setStrategicMemoryProfile(buildStrategicMemoryProfile(cid ? events.filter((e) => e.campaign_id === cid) : events));
+                                            if (cid) {
+                                              Promise.all(
+                                                toApply.map((s) =>
+                                                  fetch('/api/intelligence/strategic-memory', {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    credentials: 'include',
+                                                    body: JSON.stringify({
+                                                      campaign_id: cid,
+                                                      execution_id: payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id,
+                                                      platform: item.platform,
+                                                      action: s.action,
+                                                      accepted: true,
+                                                    }),
+                                                  })
+                                                )
+                                              )
+                                                .then(() => fetch(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(cid)}`, { credentials: 'include' }))
+                                                .then((r) => (r?.ok ? r.json() : null))
+                                                .then((profile) => profile && setStrategicMemoryProfile(profile))
+                                                .catch(() => {});
+                                            }
                                             notify('success', 'Auto improvements applied.');
                                           } catch (err) {
                                             console.error('[AutoStrategist]', err);

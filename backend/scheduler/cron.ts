@@ -20,7 +20,7 @@
  * - CRON_INTERVAL_SECONDS=60 (optional, default 60)
  */
 
-import { findDuePostsAndEnqueue } from './schedulerService';
+import { findDuePostsAndEnqueue, enqueueEngagementPolling } from './schedulerService';
 import { runOpportunitySlotsScheduler } from '../services/opportunitySlotsScheduler';
 import { runAllCompanyAudits } from '../jobs/governanceAuditJob';
 import { runAutoOptimizationForEligibleCampaigns } from '../jobs/autoOptimizationJob';
@@ -29,9 +29,11 @@ const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_SECONDS || '60') * 1
 const OPPORTUNITY_SLOTS_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const GOVERNANCE_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const AUTO_OPTIMIZATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+const ENGAGEMENT_POLLING_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
 let lastOpportunitySlotsRun = 0;
 let lastGovernanceAuditRun = 0;
 let lastAutoOptimizationRun = 0;
+let lastEngagementPollingEnqueue = 0;
 
 let cronInterval: NodeJS.Timeout | null = null;
 
@@ -120,6 +122,16 @@ async function runSchedulerCycle() {
       await runAutoOptimizationForEligibleCampaigns();
     } catch (error: any) {
       console.error('❌ Auto-optimization error:', error.message);
+    }
+  }
+
+  // Enqueue engagement polling every 10 minutes (ingestion only; no evaluation changes)
+  if (Date.now() - lastEngagementPollingEnqueue >= ENGAGEMENT_POLLING_INTERVAL_MS) {
+    lastEngagementPollingEnqueue = Date.now();
+    try {
+      await enqueueEngagementPolling();
+    } catch (error: any) {
+      console.error('❌ Engagement polling enqueue error:', error.message);
     }
   }
 }

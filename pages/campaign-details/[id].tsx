@@ -28,6 +28,7 @@ import {
   Settings,
   GripVertical,
   RotateCcw,
+  Activity,
 } from 'lucide-react';
 import CampaignAIChat from '../../components/CampaignAIChat';
 import AIGenerationProgress from '../../components/AIGenerationProgress';
@@ -213,6 +214,38 @@ export default function CampaignDetails() {
   const session = undefined as { role?: string } | undefined;
   const viewMode = getViewMode(session?.role);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const [campaignMode, setCampaignMode] = useState<string | null>(null);
+  const [executionPressure, setExecutionPressure] = useState<{
+    pressureLevel?: string;
+    aiAssistAdded?: number;
+    formatsAdjusted?: number;
+    postsRedistributed?: number;
+    platformStaggeringSuggested?: boolean;
+    manualReviewRecommended?: boolean;
+  } | null>(null);
+  const [executionMomentum, setExecutionMomentum] = useState<{
+    state?: string;
+    signals?: { continuity?: number; escalation?: number; rhythm?: number };
+    momentumScore?: number;
+    warnings?: string[];
+  } | null>(null);
+  const [executionMomentumRecovery, setExecutionMomentumRecovery] = useState<{
+    suggestions?: string[];
+    recommendedActions?: { adjustWeeks?: number[]; addBridgeContent?: boolean; increaseNarrativeDepth?: boolean };
+  } | null>(null);
+  const [executionDrift, setExecutionDrift] = useState<{
+    state?: string;
+    signals?: { schedule?: number; topic?: number; format?: number };
+    driftScore?: number;
+    warnings?: string[];
+    recoverySuggestions?: string[];
+  } | null>(null);
+  const [executionHealth, setExecutionHealth] = useState<{
+    score?: number;
+    state?: string;
+    signals?: { pressure?: string; momentum?: string; drift?: string };
+    warnings?: string[];
+  } | null>(null);
   const [weeklyPlans, setWeeklyPlans] = useState<WeeklyPlan[]>([]);
   const [dailyPlans, setDailyPlans] = useState<DailyPlan[]>([]);
   const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
@@ -749,6 +782,7 @@ export default function CampaignDetails() {
         const campaignData = await campaignResponse.json();
         const c = campaignData.campaign;
         setCampaign(c);
+        setCampaignMode(campaignData.mode ?? null);
         setRecommendationContext(campaignData.recommendationContext ?? null);
         setPrefilledPlanning(campaignData.prefilledPlanning ?? null);
         const defaultStart = (() => {
@@ -767,8 +801,36 @@ export default function CampaignDetails() {
       );
       if (weeklyResponse.ok) {
         const weeklyData = await weeklyResponse.json();
-        const normalizedWeeklyData = Array.isArray(weeklyData)
-          ? weeklyData.map((week: any) => ({
+        const rawPlans = Array.isArray(weeklyData)
+          ? weeklyData
+          : (weeklyData?.plans ?? []);
+        const executionPressurePayload =
+          !Array.isArray(weeklyData) && weeklyData?.executionPressure != null
+            ? weeklyData.executionPressure
+            : null;
+        const executionMomentumPayload =
+          !Array.isArray(weeklyData) && weeklyData?.executionMomentum != null
+            ? weeklyData.executionMomentum
+            : null;
+        const executionMomentumRecoveryPayload =
+          !Array.isArray(weeklyData) && weeklyData?.executionMomentumRecovery != null
+            ? weeklyData.executionMomentumRecovery
+            : null;
+        setExecutionPressure(executionPressurePayload);
+        setExecutionMomentum(executionMomentumPayload);
+        setExecutionMomentumRecovery(executionMomentumRecoveryPayload);
+        const executionDriftPayload =
+          !Array.isArray(weeklyData) && weeklyData?.executionDrift != null
+            ? weeklyData.executionDrift
+            : null;
+        setExecutionDrift(executionDriftPayload);
+        const executionHealthPayload =
+          !Array.isArray(weeklyData) && weeklyData?.executionHealth != null
+            ? weeklyData.executionHealth
+            : null;
+        setExecutionHealth(executionHealthPayload);
+        const normalizedWeeklyData = Array.isArray(rawPlans)
+          ? rawPlans.map((week: any) => ({
               ...week,
               topics: Array.isArray(week?.topics)
                 ? week.topics
@@ -2059,6 +2121,13 @@ export default function CampaignDetails() {
             </button>
             <div className="flex items-center gap-2">
               <button
+                onClick={() => router.push(`/campaign-health/${campaign.id}`)}
+                className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded-lg hover:bg-slate-800 transition-colors flex items-center gap-1.5"
+              >
+                <Activity className="h-3.5 w-3.5" />
+                View Campaign Health
+              </button>
+              <button
                 onClick={() => router.push(`/campaigns/${campaign.id}/recommendations`)}
                 className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-1.5"
               >
@@ -2089,6 +2158,11 @@ export default function CampaignDetails() {
                 const words = (campaign.name || '').trim().split(/\s+/).filter(Boolean);
                 return words.length > 8 ? words.slice(0, 8).join(' ') + '…' : campaign.name;
               })()}
+              {campaignMode === 'fast' && (
+                <span className="ml-2 text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-800">
+                  ⚡ Fast Mode
+                </span>
+              )}
             </h1>
             <p className="text-xs text-gray-500 mt-1">Content Marketing Plan · ID: {campaign.id}</p>
             <div className="flex flex-wrap items-center gap-2 mt-2">
@@ -2105,7 +2179,155 @@ export default function CampaignDetails() {
                 {campaign.start_date ? new Date(campaign.start_date).toLocaleDateString() : 'Not scheduled'}
                 {campaign.end_date ? ` – ${new Date(campaign.end_date).toLocaleDateString()}` : ''}
               </span>
+              {executionHealth != null && (
+                <span
+                  className={
+                    executionHealth.state === 'EXCELLENT'
+                      ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800'
+                      : executionHealth.state === 'GOOD'
+                        ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700'
+                        : executionHealth.state === 'WARNING'
+                          ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800'
+                          : 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800'
+                  }
+                >
+                  Health: {executionHealth.score ?? 0}% {executionHealth.state ?? '—'}
+                </span>
+              )}
+              {executionPressure?.pressureLevel && (
+                <span
+                  className={
+                    executionPressure.pressureLevel === 'HIGH'
+                      ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800'
+                      : executionPressure.pressureLevel === 'LOW'
+                        ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700'
+                        : 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800'
+                  }
+                >
+                  Pressure: {executionPressure.pressureLevel}
+                  {executionPressure.pressureLevel === 'HIGH' &&
+                  (executionPressure.aiAssistAdded != null ||
+                    executionPressure.formatsAdjusted != null ||
+                    executionPressure.postsRedistributed != null)
+                    ? ' ⚠ Auto-balanced'
+                    : executionPressure.pressureLevel === 'HIGH' && executionPressure.manualReviewRecommended
+                      ? ' — Manual review recommended'
+                      : ''}
+                </span>
+              )}
+              {executionMomentum?.state && (
+                <span
+                  className={
+                    executionMomentum.state === 'WEAK'
+                      ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800'
+                      : executionMomentum.state === 'STRONG'
+                        ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800'
+                        : 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700'
+                  }
+                >
+                  Momentum: {executionMomentum.state}
+                  {executionMomentum.state === 'WEAK' ? ' ⚠' : ''}
+                </span>
+              )}
+              {executionDrift?.state && (
+                <span
+                  className={
+                    executionDrift.state === 'MAJOR'
+                      ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800'
+                      : executionDrift.state === 'MINOR'
+                        ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800'
+                        : 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700'
+                  }
+                >
+                  Drift: {executionDrift.state}
+                  {(executionDrift.state === 'MAJOR' || executionDrift.state === 'MINOR') ? ' ⚠' : ''}
+                </span>
+              )}
             </div>
+            {(executionPressure || executionMomentum || executionMomentumRecovery || executionDrift || executionHealth) &&
+              ((executionPressure &&
+                (executionPressure.aiAssistAdded != null ||
+                  executionPressure.formatsAdjusted != null ||
+                  executionPressure.postsRedistributed != null ||
+                  executionPressure.platformStaggeringSuggested ||
+                  executionPressure.manualReviewRecommended)) ||
+                executionMomentum?.state ||
+                (executionMomentumRecovery?.suggestions && executionMomentumRecovery.suggestions.length > 0) ||
+                executionDrift?.state ||
+                executionHealth != null) && (
+              <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs">
+                <div className="font-semibold text-gray-800 mb-1">Execution Intelligence</div>
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-600">
+                  {executionHealth != null && (
+                    <span>
+                      Health: {executionHealth.score ?? 0}% {executionHealth.state ?? '—'}
+                    </span>
+                  )}
+                  {executionPressure?.pressureLevel != null && (
+                    <span>Pressure: {executionPressure.pressureLevel}</span>
+                  )}
+                  {executionMomentum?.state != null && (
+                    <span>
+                      Momentum: {executionMomentum.state}
+                      {executionMomentum.state === 'WEAK' && ' ⚠'}
+                    </span>
+                  )}
+                  {executionMomentum?.state === 'WEAK' && (
+                    <span className="text-amber-700">Narrative drift detected</span>
+                  )}
+                  {executionMomentum?.warnings && executionMomentum.warnings.length > 0 && (
+                    <span className="text-amber-700">{executionMomentum.warnings[0]}</span>
+                  )}
+                  {executionPressure?.manualReviewRecommended && (
+                    <span className="font-medium text-amber-700">Manual review recommended</span>
+                  )}
+                  {executionPressure?.aiAssistAdded != null && executionPressure.aiAssistAdded > 0 && (
+                    <span>AI Assist Added: {executionPressure.aiAssistAdded} pieces</span>
+                  )}
+                  {executionPressure?.formatsAdjusted != null && executionPressure.formatsAdjusted > 0 && (
+                    <span>Formats Adjusted: {executionPressure.formatsAdjusted}</span>
+                  )}
+                  {executionPressure?.postsRedistributed != null && executionPressure.postsRedistributed > 0 && (
+                    <span>Posts Redistributed: {executionPressure.postsRedistributed}</span>
+                  )}
+                  {executionPressure?.platformStaggeringSuggested && (
+                    <span>Platform staggering suggested</span>
+                  )}
+                  {executionDrift?.state != null && (
+                    <span>
+                      Drift: {executionDrift.state}
+                      {(executionDrift.state === 'MAJOR' || executionDrift.state === 'MINOR') && ' ⚠'}
+                    </span>
+                  )}
+                  {executionDrift?.state === 'MAJOR' && (
+                    <span className="text-red-700">Execution diverging from campaign plan.</span>
+                  )}
+                  {executionDrift?.warnings && executionDrift.warnings.length > 0 && (
+                    <span className="text-amber-700">{executionDrift.warnings[0]}</span>
+                  )}
+                </div>
+                {executionDrift?.recoverySuggestions && executionDrift.recoverySuggestions.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-gray-200">
+                    <div className="font-medium text-gray-700 mb-1">Drift recovery:</div>
+                    <ul className="list-disc list-inside space-y-0.5 text-gray-600">
+                      {executionDrift.recoverySuggestions.map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {executionMomentumRecovery?.suggestions && executionMomentumRecovery.suggestions.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-gray-200">
+                    <div className="font-medium text-gray-700 mb-1">Suggested improvements:</div>
+                    <ul className="list-disc list-inside space-y-0.5 text-gray-600">
+                      {executionMomentumRecovery.suggestions.map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

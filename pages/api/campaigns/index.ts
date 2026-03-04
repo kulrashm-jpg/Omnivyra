@@ -394,6 +394,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (source_strategic_theme && typeof source_strategic_theme === 'object') {
         snapshotPayload.source_strategic_theme = source_strategic_theme;
       }
+      const execution_config = campaignData.execution_config ?? campaignData.executionConfig;
+      if (execution_config != null && typeof execution_config === 'object' && !Array.isArray(execution_config)) {
+        snapshotPayload.execution_config = execution_config;
+      }
+      if (campaignData.mode != null && typeof campaignData.mode === 'string') {
+        snapshotPayload.mode = campaignData.mode;
+      }
       const { error: versionError } = await (supabase as any)
         .from('campaign_versions')
         .insert({
@@ -485,7 +492,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const vRow = versionRow as { campaign_snapshot?: unknown; campaign_types?: string[]; campaign_weights?: Record<string, number> } | null;
       if (campaign && vRow) {
-        const snap = (vRow.campaign_snapshot ?? {}) as { planning_context?: { content_capacity?: Record<string, { perWeek?: number; creationMethod?: string }> }; target_regions?: string[]; context_payload?: { formats?: string[]; platforms?: string[] } };
+        const snap = (vRow.campaign_snapshot ?? {}) as { planning_context?: { content_capacity?: Record<string, { perWeek?: number; creationMethod?: string }> }; target_regions?: string[]; context_payload?: { formats?: string[]; platforms?: string[] }; execution_config?: Record<string, unknown> };
         const pre: Record<string, unknown> = {};
         if (campaign.start_date) pre.tentative_start = campaign.start_date;
         if (campaign.duration_weeks != null) pre.campaign_duration = campaign.duration_weeks;
@@ -505,6 +512,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (payload?.platforms?.length) pre.platforms = payload.platforms.join(', ');
         if (snap.target_regions?.length) pre.target_regions = snap.target_regions.join(', ');
         if (campaign.description) pre.theme_or_description = String(campaign.description).slice(0, 300);
+        if (snap.execution_config != null && typeof snap.execution_config === 'object' && !Array.isArray(snap.execution_config)) {
+          pre.execution_config = snap.execution_config;
+        }
         if (Object.keys(pre).length > 0) prefilledPlanning = pre;
       }
 
@@ -567,6 +577,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         recommendationContext: recommendationContext || undefined,
         prefilledPlanning: prefilledPlanning || undefined,
         sourceRecommendationCard: sourceRecommendationCard || undefined,
+        mode: (snapshot as { mode?: string } | null)?.mode ?? undefined,
       });
     } else if (type === 'goals' && campaignId) {
       // Validate Supabase configuration

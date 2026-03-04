@@ -56,9 +56,30 @@ export async function saveStructuredCampaignPlan(input: {
   weeks: WeeklyBlueprintWeek[];
   omnivyre_decision: DecisionResult;
   raw_plan_text: string;
+  /** Execution pressure from executionPressureBalancer (pressure level + balance report for UI). */
+  executionPressureMetadata?: Record<string, unknown>;
+  /** Execution momentum from executionMomentumTracker (state + signals for UI). */
+  executionMomentumMetadata?: Record<string, unknown>;
+  /** Momentum recovery suggestions when momentum is WEAK (from momentumRecoveryAdvisor). */
+  momentumRecoveryMetadata?: Record<string, unknown>;
 }): Promise<void> {
   const plan = { weeks: input.weeks, campaign_id: input.campaignId };
   const blueprint: CampaignBlueprint = fromStructuredPlan(plan);
+  const hasPressure = input.executionPressureMetadata && Object.keys(input.executionPressureMetadata).length > 0;
+  const hasMomentum = input.executionMomentumMetadata && Object.keys(input.executionMomentumMetadata).length > 0;
+  const hasRecovery = input.momentumRecoveryMetadata && Object.keys(input.momentumRecoveryMetadata).length > 0;
+  const executionIntelligence =
+    hasPressure || hasMomentum || hasRecovery
+      ? {
+          executionPressure: hasPressure ? input.executionPressureMetadata : undefined,
+          executionMomentum: hasMomentum ? input.executionMomentumMetadata : undefined,
+          momentumRecovery: hasRecovery ? input.momentumRecoveryMetadata : undefined,
+        }
+      : undefined;
+  const blueprintToSave =
+    executionIntelligence
+      ? ({ ...blueprint, executionIntelligence } as any)
+      : (blueprint as any);
 
   const { error } = await supabase
     .from('twelve_week_plan')
@@ -70,7 +91,7 @@ export async function saveStructuredCampaignPlan(input: {
       omnivyre_decision: input.omnivyre_decision,
       source: 'ai',
       status: 'draft' as PlanStatus,
-      blueprint: blueprint as any,
+      blueprint: blueprintToSave,
       created_at: new Date().toISOString(),
     } as any);
 

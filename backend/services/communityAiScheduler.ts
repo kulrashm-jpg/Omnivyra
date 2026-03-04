@@ -7,6 +7,7 @@ import { getPlaybookById } from './playbooks/playbookService';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getToken } from './platformTokenService';
 import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
+import { canExecuteAction } from './executionGuardrailService';
 
 type SchedulerResult = {
   processed: number;
@@ -355,6 +356,30 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       }
     }
 
+    const guardrail = await canExecuteAction(
+      {
+        id: action.id,
+        company_id: action.organization_id,
+        tenant_id: action.tenant_id,
+        organization_id: action.organization_id,
+        platform: action.platform,
+        action_type: action.action_type,
+        target_id: action.target_id,
+      },
+      { source: 'scheduler' }
+    );
+    if (!guardrail.allowed) {
+      await supabase
+        .from('community_ai_actions')
+        .update({
+          status: 'skipped_guardrail',
+          skip_reason: guardrail.reason ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', action.id);
+      continue;
+    }
+
     const result = await executeAction(action, true, {
       notify: false,
       webhook: false,
@@ -370,13 +395,17 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
     if (result.ok) executed += 1;
     else if (result.status !== 'skipped') failed += 1;
 
+    const updatePayload: Record<string, unknown> = {
+      status: nextStatus,
+      execution_result: result,
+      updated_at: new Date().toISOString(),
+    };
+    if (nextStatus === 'executed') {
+      updatePayload.executed_at = new Date().toISOString();
+    }
     await supabase
       .from('community_ai_actions')
-      .update({
-        status: nextStatus,
-        execution_result: result,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq('id', action.id);
 
     await logCommunityAiActionEvent({

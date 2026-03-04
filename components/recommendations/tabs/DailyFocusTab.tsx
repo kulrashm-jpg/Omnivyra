@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { useRouter } from 'next/router';
 import { useOpportunities } from './useOpportunities';
 import type { OpportunityTabProps, OpportunityWithPayload } from './types';
 import { payloadHelpers } from './types';
@@ -82,7 +81,6 @@ function DailyItem({
 const VALID_TABS = ['TREND', 'LEAD', 'PULSE', 'SEASONAL', 'INFLUENCER', 'DAILY_FOCUS'];
 
 export default function DailyFocusTab(props: OpportunityTabProps) {
-  const router = useRouter();
   const { companyId, onPromote, onAction, fetchWithAuth, onSwitchTab, onOpenGenerator, overrideText = '', onOverrideChange } = props;
   const { opportunities, loading, error, runEngine, hasRun, refetch, refetchGetOnly } = useOpportunities(
     companyId,
@@ -100,90 +98,70 @@ export default function DailyFocusTab(props: OpportunityTabProps) {
     }
   };
 
-  const displayList = opportunities.slice(0, MAX_ITEMS);
+  const handleMarkReviewed = async (id: string) => {
+    await onAction(id, 'REVIEWED');
+  };
 
   const handleActNow = async (
     id: string,
     actionType: 'OPEN_TAB' | 'CREATE_CAMPAIGN' | 'OPEN_GENERATOR' | null,
     targetType: string | null
   ) => {
-    if (actionType === 'CREATE_CAMPAIGN') {
-      await wrappedOnPromote(id);
-      return;
-    }
-    if (actionType === 'OPEN_TAB' && targetType) {
-      const tab = targetType.toUpperCase();
-      if (onSwitchTab && VALID_TABS.includes(tab)) {
-        onSwitchTab(tab);
-        return;
-      }
-      router.push(`/recommendations?tab=${encodeURIComponent(tab)}`);
+    if (actionType === 'OPEN_TAB' && targetType && VALID_TABS.includes(targetType)) {
+      if (onSwitchTab) onSwitchTab(targetType);
       return;
     }
     if (actionType === 'OPEN_GENERATOR' && targetType) {
-      if (onOpenGenerator) {
-        onOpenGenerator(targetType);
-        return;
-      }
-      router.push(`/recommendations?generator=${encodeURIComponent(targetType)}`);
+      if (onOpenGenerator) onOpenGenerator(targetType);
       return;
     }
-    // Default: create campaign
     await wrappedOnPromote(id);
   };
-  const handleMarkReviewed = async (id: string) => {
-    await onAction(id, 'REVIEWED');
-  };
 
-  if (!companyId) {
-    return (
-      <div className="text-sm text-gray-500 py-4">Select a company to view daily focus.</div>
-    );
-  }
+  const list = opportunities.slice(0, MAX_ITEMS);
 
   return (
     <div className="space-y-4">
-      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
-      <EngineOverridePanel value={overrideText} onChange={onOverrideChange ?? (() => {})} />
-      <div>
-        <button
-          type="button"
-          onClick={() => runEngine()}
-          disabled={loading}
-          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
-        >
-          {loading ? 'Running…' : `Run ${ENGINE_LABEL}`}
-        </button>
+      <EngineOverridePanel
+        engineLabel={ENGINE_LABEL}
+        overrideText={overrideText}
+        onOverrideChange={onOverrideChange}
+      />
+      <EngineContextPanel />
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-gray-800">{ENGINE_LABEL}</h3>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => (hasRun ? refetch() : runEngine())}
+            disabled={loading || !companyId}
+            className="px-3 py-1.5 text-xs font-medium rounded bg-indigo-600 text-white disabled:opacity-50"
+          >
+            {loading ? 'Loading…' : hasRun ? 'Refresh' : 'Load'}
+          </button>
+        </div>
       </div>
-      {error && <div className="text-sm text-red-600">{error}</div>}
-      {!hasRun && !loading && (
-        <div className="text-sm text-gray-500 py-6">Run the engine to see opportunities.</div>
-      )}
-      {hasRun && !loading && (
-        <>
-          <div className="space-y-0 rounded-lg border border-gray-200 overflow-hidden">
-            {displayList.map((opp) => (
-              <DailyItem
-                key={opp.id}
-                opportunity={opp}
-                onActNow={handleActNow}
-                onPromote={wrappedOnPromote}
-                onMarkReviewed={handleMarkReviewed}
-                onActionComplete={refetch}
-              />
-            ))}
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <div className="rounded-lg border border-gray-200 bg-white divide-y divide-gray-100">
+        {list.length === 0 && !loading && (
+          <div className="p-4 text-sm text-gray-500">
+            {hasRun ? 'No daily focus items.' : 'Click Load to fetch daily focus opportunities.'}
           </div>
-          {opportunities.length === 0 && (
-            <div className="text-sm text-gray-500 py-4">No daily focus items.</div>
-          )}
-          {opportunities.length > MAX_ITEMS && (
-            <div className="text-xs text-gray-500 mt-2">
-              Showing first {MAX_ITEMS} of {opportunities.length}.
-            </div>
-          )}
-        </>
+        )}
+        {list.map((opp) => (
+          <DailyItem
+            key={opp.id}
+            opportunity={opp}
+            onActNow={handleActNow}
+            onPromote={wrappedOnPromote}
+            onMarkReviewed={handleMarkReviewed}
+            onActionComplete={refetchGetOnly}
+          />
+        ))}
+      </div>
+      {list.length > 0 && (
+        <p className="text-xs text-gray-500">Showing first {MAX_ITEMS}.</p>
       )}
-      {loading && <div className="text-sm text-gray-500 py-4">Loading daily focus…</div>}
     </div>
   );
 }

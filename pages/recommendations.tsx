@@ -221,8 +221,8 @@ export default function RecommendationsPage() {
   );
   const [detectedPlaybookOpen, setDetectedPlaybookOpen] = useState<Set<string>>(new Set());
   const [detectedReasoningOpen, setDetectedReasoningOpen] = useState<Set<string>>(new Set());
-  const [generatorModalTarget, setGeneratorModalTarget] = useState<string | null>(null);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  const [generatorModalTarget, setGeneratorModalTarget] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<any | null>(null);
@@ -330,7 +330,7 @@ export default function RecommendationsPage() {
         window.localStorage.setItem('company_id', queryCompanyId);
       }
     }
-    if (queryTab && ['TREND', 'LEAD', 'PULSE', 'SEASONAL', 'INFLUENCER', 'DAILY_FOCUS'].includes(queryTab)) {
+    if (queryTab && ['TREND', 'LEAD', 'PULSE', 'SEASONAL', 'INFLUENCER'].includes(queryTab)) {
       setActiveOpportunityTab(queryTab);
     }
     if (queryCampaignId) {
@@ -1343,6 +1343,7 @@ export default function RecommendationsPage() {
                 strategicIntents={trendStrategicIntents}
                 onStrategicIntentsChange={setTrendStrategicIntents}
                 viewMode={viewMode}
+                campaignId={selectedCampaignId || null}
               />
             )}
             {activeOpportunityTab === 'LEAD' && (

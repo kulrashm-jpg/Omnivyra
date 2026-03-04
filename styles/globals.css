@@ -1,3 +1,95 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Omnivyra landing theme */
+:root {
+  --omnivyra-primary-start: #0B5ED7;
+  --omnivyra-primary-end: #1EA7FF;
+  --omnivyra-bg-light: #F5F9FF;
+  --omnivyra-radius: 16px;
+  --omnivyra-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
+  --omnivyra-shadow-glow: 0 0 40px rgba(30, 167, 255, 0.25);
+}
+
+.landing-gradient-bg {
+  background: linear-gradient(135deg, var(--omnivyra-primary-start) 0%, var(--omnivyra-primary-end) 100%);
+}
+
+.landing-btn-primary {
+  background: linear-gradient(180deg, #1a6beb 0%, var(--omnivyra-primary-start) 50%, #084aad 100%);
+  color: white;
+  border-radius: var(--omnivyra-radius);
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.25) inset,
+    0 4px 14px rgba(0, 0, 0, 0.2),
+    0 8px 24px rgba(11, 94, 215, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+.landing-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.3) inset,
+    0 6px 20px rgba(0, 0, 0, 0.25),
+    0 12px 32px rgba(11, 94, 215, 0.4);
+}
+
+.landing-btn-secondary {
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  color: white;
+  border-radius: var(--omnivyra-radius);
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  transition: transform 0.15s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+.landing-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* The Marketing Intelligence Journal – editorial layout */
+.journal-bg {
+  background-color: #fafafa;
+}
+.journal-title {
+  font-family: ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #1a1a1a;
+}
+.journal-body {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  color: #404040;
+  line-height: 1.7;
+}
+.journal-muted {
+  color: #737373;
+}
+.journal-card-shadow {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.journal-card-hover {
+  transition: box-shadow 0.2s ease;
+}
+.journal-card-hover:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+.journal-link {
+  color: #1a1a1a;
+  text-underline-offset: 3px;
+}
+.journal-link:hover {
+  color: #404040;
+  text-decoration: underline;
+}

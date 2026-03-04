@@ -15,6 +15,9 @@ export function isFullRecommendationView(role: string | null): boolean {
 type RecommendationBlueprintCardProps = {
   recommendation: Record<string, unknown>;
   onBuildCampaignBlueprint?: () => Promise<void> | void;
+  onBuildCampaignFast?: () => Promise<void> | void;
+  /** When true, BOLT is in progress for this card (show loading, disable button). */
+  fastLoading?: boolean;
   onMarkLongTerm?: () => Promise<void> | void;
   onArchive?: () => Promise<void> | void;
   /** Journey signal: show small badge (only when campaigns_count > 0). */
@@ -349,7 +352,7 @@ function RecommendationConfidenceBanner(props: {
 }
 
 export default function RecommendationBlueprintCard(props: RecommendationBlueprintCardProps) {
-  const { recommendation, onBuildCampaignBlueprint, onMarkLongTerm, onArchive, strategyStatus, viewMode = 'FULL', isTopPriority, resurfaced } = props;
+  const { recommendation, onBuildCampaignBlueprint, onBuildCampaignFast, fastLoading, onMarkLongTerm, onArchive, strategyStatus, viewMode = 'FULL', isTopPriority, resurfaced } = props;
   const [expanded, setExpanded] = useState(false);
   const [minimized, setMinimized] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -671,6 +674,14 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             </button>
             <button
               type="button"
+              onClick={() => run(onBuildCampaignFast)}
+              disabled={busy || fastLoading || !onBuildCampaignFast}
+              className="min-w-[110px] h-[36px] px-4 py-2 text-sm font-medium rounded-lg border border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50 transition"
+            >
+              {fastLoading ? '⚡ Generating Plan…' : '⚡ BOLT'}
+            </button>
+            <button
+              type="button"
               onClick={() => setExpanded((v) => !v)}
               disabled={minimized}
               className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-600 text-indigo-600 hover:bg-indigo-50"
@@ -861,6 +872,14 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             className={`px-4 py-2 text-sm rounded-lg bg-indigo-600 text-white disabled:opacity-50 ${primaryButtonEmphasis}`}
           >
             {getPrimaryActionLabel(confidenceBannerContent.tier)}
+          </button>
+          <button
+            type="button"
+            onClick={() => run(onBuildCampaignFast)}
+            disabled={busy || fastLoading || !onBuildCampaignFast}
+            className="min-w-[110px] h-[36px] px-4 py-2 text-sm font-medium rounded-lg border border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50 transition"
+          >
+            {fastLoading ? '⚡ Generating Plan…' : '⚡ BOLT'}
           </button>
           <button
             type="button"

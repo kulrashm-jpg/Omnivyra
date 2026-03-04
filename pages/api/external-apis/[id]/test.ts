@@ -83,8 +83,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         request: request.details,
         timeoutMs: DEFAULT_TIMEOUT_MS,
       });
-      latencyMs = result.latencyMs;
-      const { response } = result;
+      if ('status' in result && result.status === 'blocked_plan_limit') {
+        return res.status(403).json({
+          error: 'Plan limit exceeded',
+          code: result.error?.code ?? 'PLAN_LIMIT_EXCEEDED',
+          ...result.error,
+        });
+      }
+      const successResult = result as { response: Response; latencyMs: number };
+      latencyMs = successResult.latencyMs;
+      const { response } = successResult;
       cacheHit = false;
       responseStatus = response.status;
       responseStatusText = response.statusText;

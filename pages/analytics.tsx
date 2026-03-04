@@ -40,12 +40,64 @@ export default function Analytics() {
     setIsLoading(true);
     try {
       setError(null);
+
+      if (id) {
+        const response = await fetch(`/api/campaigns/metrics?campaignId=${encodeURIComponent(id)}`, {
+          credentials: 'include',
+        });
+        if (!response.ok) {
+          setAnalyticsData(null);
+          setError('Failed to load analytics');
+          return;
+        }
+        const json = await response.json();
+        const agg = json?.data?.aggregated ?? {};
+        const totalReach = Number(agg.totalReach) || 0;
+        const totalEngagement =
+          (Number(agg.totalLikes) || 0) + (Number(agg.totalComments) || 0) + (Number(agg.totalShares) || 0);
+        const totalConversions = Number(agg.totalConversions) || 0;
+
+        const weeklyBreakdown = (() => {
+          const wb = agg.weeklyBreakdown ?? {};
+          return Object.entries(wb)
+            .map(([weekNum, row]: [string, any]) => ({
+              week: parseInt(weekNum, 10) || 0,
+              reach: Number(row?.impressions ?? row?.reach ?? 0) || 0,
+              engagement: Number(row?.engagements ?? row?.engagement ?? 0) || 0,
+              conversions: Number(row?.conversions ?? 0) || 0,
+            }))
+            .sort((a, b) => a.week - b.week);
+        })();
+
+        const platformBreakdown = (() => {
+          const pb = agg.platformBreakdown ?? {};
+          const out: Record<string, { reach: number; engagement: number; conversions: number }> = {};
+          for (const [platform, row] of Object.entries(pb) as [string, any][]) {
+            out[platform] = {
+              reach: Number(row?.impressions ?? row?.reach ?? 0) || 0,
+              engagement: Number(row?.engagements ?? row?.engagement ?? 0) || 0,
+              conversions: Number(row?.conversions ?? 0) || 0,
+            };
+          }
+          return out;
+        })();
+
+        setAnalyticsData({
+          totalReach,
+          totalEngagement,
+          totalConversions,
+          weeklyBreakdown,
+          platformBreakdown,
+        });
+        return;
+      }
+
       const response = await fetch('/api/analytics/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           companyId,
-          campaignId: id || undefined,
+          campaignId: undefined,
           timeframe: 'quarter',
         }),
       });

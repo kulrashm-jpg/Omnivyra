@@ -1,4 +1,7 @@
 import OpenAI from 'openai';
+import { logUsageEvent, resolveLlmCost } from '../usageLedgerService';
+
+const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
 export interface LlmJsonResponse<T> {
   data: T;
@@ -21,15 +24,61 @@ export async function runDiagnosticPrompt<T>(
   userPrompt: string
 ): Promise<LlmJsonResponse<T>> {
   const client = getClient();
-
-  const response = await client.chat.completions.create({
-    model: DEFAULT_MODEL,
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
+  const start = Date.now();
+  let response: Awaited<ReturnType<typeof client.chat.completions.create>>;
+  try {
+    response = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    });
+  } catch (error: any) {
+    const latency = Date.now() - start;
+    void logUsageEvent({
+      organization_id: UNKNOWN_ORG,
+      campaign_id: null,
+      user_id: null,
+      source_type: 'llm',
+      provider_name: 'openai',
+      model_name: DEFAULT_MODEL,
+      model_version: null,
+      source_name: `openai:${DEFAULT_MODEL}`,
+      process_type: 'runDiagnosticPrompt',
+      latency_ms: latency,
+      error_flag: true,
+      error_type: error?.response?.status?.toString() ?? error?.message ?? 'unknown',
+      pricing_snapshot: null,
+    });
+    throw error;
+  }
+  const latency = Date.now() - start;
+  const usage = response.usage;
+  const inputTokens = usage?.prompt_tokens ?? 0;
+  const outputTokens = usage?.completion_tokens ?? 0;
+  const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
+  const cost = resolveLlmCost('openai', DEFAULT_MODEL, inputTokens, outputTokens);
+  void logUsageEvent({
+    organization_id: UNKNOWN_ORG,
+    campaign_id: null,
+    user_id: null,
+    source_type: 'llm',
+    provider_name: 'openai',
+    model_name: DEFAULT_MODEL,
+    model_version: null,
+    source_name: `openai:${DEFAULT_MODEL}`,
+    process_type: 'runDiagnosticPrompt',
+    input_tokens: inputTokens || null,
+    output_tokens: outputTokens || null,
+    total_tokens: totalTokens || null,
+    latency_ms: latency,
+    error_flag: false,
+    unit_cost: cost.unit_cost,
+    total_cost: cost.total_cost,
+    pricing_snapshot: cost.pricing_snapshot,
   });
 
   const raw = response.choices[0]?.message?.content?.trim() || '';

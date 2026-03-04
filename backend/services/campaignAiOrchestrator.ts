@@ -17,6 +17,9 @@ import {
 } from './capacityFrequencyValidationGateway';
 import { validateWeeklyNarrativeFlow } from './weeklyNarrativeValidator';
 import { balanceWeeklyExecutionLoad } from './weeklyLoadBalancer';
+import { runExecutionPressureBalancer } from './executionPressureBalancer';
+import { analyzeExecutionMomentum } from './executionMomentumTracker';
+import { generateMomentumRecoverySuggestions } from './momentumRecoveryAdvisor';
 import {
   buildCompanyContext,
   buildForcedCompanyContext,
@@ -35,6 +38,7 @@ import { adjustCampaignMomentum, recoverNarrativeMomentum } from './momentumAdju
 import { inferExecutionMode, type ExecutionMode, isExecutionMode } from './executionModeInference';
 import { buildCreatorInstruction } from './buildCreatorInstruction';
 import { getWeeklyStrategyIntelligence } from './weeklyStrategyIntelligenceService';
+import { computeStrategyBias } from './strategyBiasService';
 
 export type CampaignAiMode = 'generate_plan' | 'refine_day' | 'platform_customize';
 
@@ -373,34 +377,25 @@ export function normalizeCapacityCounts(value: unknown): StructuredCapacityCount
 }
 
 const GATHER_ORDER = [
-  { key: 'target_audience', question: 'Who will see your content? (e.g. professionals, parents, students, small business owners)' },
   {
-    key: 'audience_professional_segment',
-    question: 'Which group fits best? (e.g. managers, job seekers, founders)',
+    key: 'available_content',
+    question:
+      'Do you have existing content (videos, posts, blogs) for this campaign? Answer "no", "none", or describe what you have.',
   },
   {
-    key: 'communication_style',
-    question: 'How should your posts sound? Pick one or two.',
+    key: 'available_content_allocation',
+    question:
+      'For each existing piece, which category/objective and which week(s) should it fill? (Skip if you have no existing content.)',
+    contingentOn: 'available_content',
   },
   {
     key: 'action_expectation',
     question: 'What do you want people to do after reading?',
   },
   {
-    key: 'content_depth',
-    question: 'Short reads or longer pieces? Pick one.',
-  },
-  {
     key: 'topic_continuity',
     question: 'One ongoing story, or different topics each time? Pick one.',
   },
-  { key: 'tentative_start', question: 'When do you want to start? Use a date like 2026-08-15.' },
-  { key: 'campaign_types', question: "What's the main goal? (e.g. get known, get leads, grow engagement, promote a product)" },
-  {
-    key: 'content_capacity',
-    question: '(1) How will you create? Pick one: Manual, AI‑assisted, or Full AI.\n(2) How many pieces per week? (e.g. 2 posts, 1 video). Answer (1) first, then (2).',
-  },
-  { key: 'campaign_duration', question: 'How many weeks? (e.g. 6, 12, or 24)' },
   { key: 'platforms', question: 'Where will you post? (e.g. LinkedIn, Instagram, YouTube, X)' },
   {
     key: 'platform_content_types',
@@ -423,15 +418,9 @@ const GATHER_ORDER = [
 ];
 
 const REQUIRED_EXECUTION_FIELDS = [
-  'target_audience',
-  'audience_professional_segment',
-  'communication_style',
+  'available_content',
   'action_expectation',
-  'content_depth',
   'topic_continuity',
-  'tentative_start',
-  'content_capacity',
-  'campaign_duration',
   'platforms',
   'platform_content_requests',
   'exclusive_campaigns',
@@ -2154,6 +2143,7 @@ function normalizeStructuredPlanForOutput(params: {
 }
 
 async function evaluateWeeklyAlignment(params: {
+  campaignId?: string | null;
   recommendationContext?: RecommendationContext | null;
   campaignStage?: string | null;
   psychologicalGoal?: string | null;
@@ -2169,6 +2159,8 @@ async function evaluateWeeklyAlignment(params: {
   };
 
   const completion = await generateCampaignPlan({
+    companyId: null,
+    campaignId: params.campaignId ?? null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     messages: [
@@ -2420,6 +2412,8 @@ function buildPromptContext(input: {
   planSkeleton?: PlanSkeleton | null;
   /** Optional weekly strategy intelligence (engagement + AI pressure + insights). Read-only enrichment. */
   weeklyStrategyIntelligence?: import('./weeklyStrategyIntelligenceService').WeeklyStrategyIntelligence | null;
+  /** Advisory strategy bias (drift + intelligence + pressure). Attached to context only; not used in prompt or decisions. */
+  strategy_bias?: import('./strategyBiasService').StrategyBiasResult | null;
 }): { system: string; user: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> } {
   const diagnosticsWithBaseline = { ...input.diagnostics };
   if (input.baselineContext && !('unavailable' in input.baselineContext)) {
@@ -2431,8 +2425,14 @@ function buildPromptContext(input: {
     };
   }
 
+  const durationFromExecConfig =
+    input.prefilledPlanning?.execution_config != null &&
+    typeof (input.prefilledPlanning.execution_config as Record<string, unknown>).campaign_duration === 'number'
+      ? toValidWeeks((input.prefilledPlanning.execution_config as Record<string, unknown>).campaign_duration)
+      : null;
   const durationWeeks =
     input.durationWeeks ??
+    (durationFromExecConfig ?? undefined) ??
     (typeof (input.prefilledPlanning?.campaign_duration as number) === 'number'
       ? (input.prefilledPlanning.campaign_duration as number)
       : undefined);
@@ -2480,6 +2480,9 @@ function buildPromptContext(input: {
   if (input.weeklyStrategyIntelligence) {
     userPayload.weekly_strategy_intelligence = input.weeklyStrategyIntelligence;
   }
+  if (input.strategy_bias) {
+    userPayload.strategy_bias = input.strategy_bias;
+  }
 
   const recommendedTopics = input.prefilledPlanning?.recommended_topics;
   const recommendedTopicsList = Array.isArray(recommendedTopics)
@@ -2490,14 +2493,30 @@ function buildPromptContext(input: {
     ? strategicThemes.map((t) => String(t).trim()).filter(Boolean)
     : [];
 
+  const execConfig = input.prefilledPlanning?.execution_config as Record<string, unknown> | null | undefined;
+  const executionConfigBlock =
+    execConfig && typeof execConfig === 'object' && !Array.isArray(execConfig)
+      ? `
+EXECUTION CONFIG (from Trend Execution Configuration bar — do NOT re-ask these):
+- Target Audience: ${String(execConfig.target_audience ?? '—')}
+- Professional Segment: ${String(execConfig.professional_segment ?? '—')}
+- Communication Style: ${Array.isArray(execConfig.communication_style) ? execConfig.communication_style.join(', ') : String(execConfig.communication_style ?? '—')}
+- Content Depth: ${String(execConfig.content_depth ?? '—')}
+- Content Capacity: ${String(execConfig.content_capacity ?? '—')}
+- Campaign Duration: ${String(execConfig.campaign_duration ?? '—')} weeks
+- Tentative Start: ${String(execConfig.tentative_start ?? '—')}
+- Campaign Goal: ${String(execConfig.campaign_goal ?? '—')}
+`
+      : '';
+
   const prefilledBlock =
     input.prefilledPlanning && Object.keys(input.prefilledPlanning).length > 0
       ? `
 ALREADY KNOWN (from campaign setup — do NOT re-ask these):
 ${Object.entries(input.prefilledPlanning)
-  .filter(([k]) => k !== 'preplanning_form_completed' && k !== 'recommended_topics' && k !== 'strategic_themes')
+  .filter(([k]) => k !== 'preplanning_form_completed' && k !== 'recommended_topics' && k !== 'strategic_themes' && k !== 'execution_config')
   .map(([k, v]) => `- ${k}: ${v}`)
-  .join('\n')}
+  .join('\n')}${executionConfigBlock}
 ${strategicThemesList.length > 0 || recommendedTopicsList.length > 0
   ? `
 ${strategicThemesList.length > 0 ? `STRATEGIC THEMES (company content themes — align weekly themes and topics to these): ${strategicThemesList.join(', ')}\n\n` : ''}${recommendedTopicsList.length > 0 ? `RECOMMENDED TOPICS (from company trend data — like Trend campaigns): ${recommendedTopicsList.join(', ')}
@@ -2507,7 +2526,7 @@ Use these topics to seed weekly themes and topics_to_cover. Prefer topics that a
 ${input.prefilledPlanning?.preplanning_form_completed === true
   ? `
 
-PREPLANNING COMPLETE: The user filled the pre-planning form and arrived at a recommended duration. Do NOT re-ask for tentative_start, campaign_duration, available_content, or content_capacity. Proceed to remaining questions (target_audience, campaign_types, platforms, etc.) or offer to create the plan with reasonable defaults if the user prefers.`
+PREPLANNING COMPLETE: The user filled the pre-planning form and arrived at a recommended duration. Do NOT re-ask for tentative_start, campaign_duration, available_content, or content_capacity. Proceed to remaining questions (e.g. platforms, key_messages) or offer to create the plan with reasonable defaults if the user prefers.`
   : ''}
 
 Start from the first required question that is NOT listed above. If most are filled, ask only the missing ones.`
@@ -2601,18 +2620,13 @@ DETERMINISTIC PLAN SKELETON (MANDATORY):
 ` : ''}
 
 REQUIRED INFO TO GATHER (in order, one question at a time — skip any already in ALREADY KNOWN above):
-1. target_audience — Who is your primary target audience?
-2. available_content — Do they have existing content (videos, posts, blogs) for this campaign? VALID "no content" answers: "no", "none", "zero", "I don't have any", "no content", or any message that clearly means no (e.g. "professionals no" when answering after target_audience = the "no" part answers this). Accept and move to next question.
-3. available_content_allocation — ONLY IF they have content: For each piece, ask category/objective and which week(s) to fill.
-4. tentative_start — When do they want to start? Date in YYYY-MM-DD format (e.g., 2026-08-15).
-5. campaign_types — Which matter most: brand awareness, network expansion, lead generation, authority positioning, engagement growth, product promotion?
-6. content_capacity — Per format: how many/week? Creation method: manual, AI-assisted, or full AI?
-7. campaign_duration — How many weeks (e.g., 6, 12, 24)?
-8. platforms — Which platforms will they focus on?
-9. platform_content_requests — Frequency per content type per platform (aligned with capacity); same topic across platforms or different; publish same day, staggered, or AI decide.
-10. exclusive_campaigns — Do they want any platform-exclusive campaigns? If yes: platform + content_type + count_per_week.
-11. key_messages — Key messages or pain points? (USER MAY DEFER: see INFER-AND-PROCEED rule below)
-12. success_metrics — What metrics to track? (USER MAY DEFER: see INFER-AND-PROCEED rule below)
+1. available_content — Do they have existing content (videos, posts, blogs) for this campaign? VALID "no content" answers: "no", "none", "zero", "I don't have any", "no content", or any message that clearly means no. Accept and move to next question.
+2. available_content_allocation — ONLY IF they have content: For each piece, ask category/objective and which week(s) to fill.
+3. platforms — Which platforms will they focus on?
+4. platform_content_requests — Frequency per content type per platform (aligned with capacity); same topic across platforms or different; publish same day, staggered, or AI decide.
+5. exclusive_campaigns — Do they want any platform-exclusive campaigns? If yes: platform + content_type + count_per_week.
+6. key_messages — Key messages or pain points? (USER MAY DEFER: see INFER-AND-PROCEED rule below)
+7. success_metrics — What metrics to track? (USER MAY DEFER: see INFER-AND-PROCEED rule below)
 
 DURATION ASSESSMENT RULE (MANDATORY WHEN DURATION UNKNOWN):
 - If campaign_duration is NOT already known, infer a practical duration recommendation from available_content + content_capacity + campaign_types + platform scope.
@@ -2627,7 +2641,7 @@ CRITICAL RULES:
 - DURATION: If campaign_duration is already known in ALREADY KNOWN, use it exactly and do not re-ask. If not known yet, estimate a reasonable range from available_content + content_capacity and ask user to confirm one number before plan creation.
 - DURATION CONSISTENCY: After user confirms X weeks, never mention a different week count in this thread.
 - VALIDATE each answer against the question asked. If the answer does NOT fit (e.g., a date when you asked for target audience), politely re-ask the SAME question. Do NOT move on until you receive a valid answer.
-- For available_content: "no", "none", "zero", "I don't have any", or messages containing/ending with "no" (e.g. "X no" when X was a prior answer) = valid "no content". Proceed to tentative_start. Do NOT re-ask.
+- For available_content: "no", "none", "zero", "I don't have any", or messages containing/ending with "no" (e.g. "X no" when X was a prior answer) = valid "no content". Proceed to next question (platforms). Do NOT re-ask.
 - After EACH valid user answer, reply with ONLY the next question. Be conversational and warm. Do NOT generate the plan yet.
 - CONFIRMATION OVERRIDE (MUST OBEY): If YOUR last message was "Would you like me to create your week plan now?" (or similar), and the user replies with "yes", "sure", "ok", "okay", "please", "yeah", "yep", "create it", "do it", "go for it" — IMMEDIATELY output BEGIN_12WEEK_PLAN. Do NOT ask any more questions. Do NOT repeat the confirmation. Do NOT ask key_messages or success_metrics after this. GENERATE THE PLAN NOW.
 - ONLY output BEGIN_12WEEK_PLAN when BOTH are true: (a) user has answered required questions (or deferred key_messages/success_metrics), AND (b) user confirms. Valid confirmations: "create my plan", "generate plan", "I'm ready", "go ahead", "yes", "sure", "ok", "share plan", "if you don't have any questions" (meaning generate).
@@ -2963,6 +2977,10 @@ function buildPrefilledPlanning(input: {
     prefilled.target_regions = v.campaign_snapshot.target_regions.join(', ');
   }
   if (c?.description) prefilled.theme_or_description = c.description.slice(0, 300);
+  const execConfig = (v?.campaign_snapshot as Record<string, unknown> | undefined)?.execution_config;
+  if (execConfig != null && typeof execConfig === 'object' && !Array.isArray(execConfig)) {
+    prefilled.execution_config = execConfig;
+  }
   return prefilled;
 }
 
@@ -3345,10 +3363,16 @@ async function runWithContext(
   const hasDeterministicPlanSkeleton = !!(deterministicPlanSkeleton && typeof deterministicPlanSkeleton === 'object');
 
   let weeklyStrategyIntelligence: import('./weeklyStrategyIntelligenceService').WeeklyStrategyIntelligence | null = null;
+  let strategy_bias: import('./strategyBiasService').StrategyBiasResult | null = null;
   try {
     weeklyStrategyIntelligence = await getWeeklyStrategyIntelligence(input.campaignId);
   } catch (_) {
     // Optional enrichment; do not fail plan generation
+  }
+  try {
+    strategy_bias = await computeStrategyBias(input.campaignId);
+  } catch (_) {
+    // Advisory only; do not fail plan generation
   }
 
   const prompt = buildPromptContext({
@@ -3378,9 +3402,12 @@ async function runWithContext(
     vetScope: input.vetScope,
     planSkeleton: ctx.planSkeleton ?? null,
     weeklyStrategyIntelligence: weeklyStrategyIntelligence ?? undefined,
+    strategy_bias: strategy_bias ?? undefined,
   });
 
   const completion = await generateCampaignPlan({
+    companyId: null,
+    campaignId: input.campaignId,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     messages: prompt.messages,
@@ -3510,6 +3537,8 @@ async function runWithContext(
           },
         ];
         const repaired = await generateCampaignPlan({
+          companyId: null,
+          campaignId: input.campaignId,
           model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
           temperature: 0,
           messages: repairPrompt,
@@ -3561,6 +3590,8 @@ async function runWithContext(
       try {
         regenerationTriggered = true;
         const repaired = await generateCampaignPlan({
+          companyId: null,
+          campaignId: input.campaignId,
           model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
           temperature: 0,
           messages: repairPrompt,
@@ -3602,6 +3633,7 @@ async function runWithContext(
   if (input.mode === 'generate_plan') {
     try {
       alignmentResult = await evaluateWeeklyAlignment({
+        campaignId: input.campaignId,
         recommendationContext: input.recommendationContext ?? null,
         campaignStage: ctx.campaignStage ?? null,
         psychologicalGoal: ctx.psychologicalGoal ?? null,
@@ -3636,6 +3668,8 @@ async function runWithContext(
 
       try {
         const regenerated = await generateCampaignPlan({
+          companyId: null,
+          campaignId: input.campaignId,
           model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
           temperature: 0,
           messages: regenPrompt,
@@ -3652,6 +3686,7 @@ async function runWithContext(
           }) as any;
           try {
             const regeneratedAlignment = await evaluateWeeklyAlignment({
+              campaignId: input.campaignId,
               recommendationContext: input.recommendationContext ?? null,
               campaignStage: ctx.campaignStage ?? null,
               psychologicalGoal: ctx.psychologicalGoal ?? null,
@@ -4407,6 +4442,32 @@ async function runWithContext(
 
       validateWeeklyNarrativeFlow((structured as any)?.weeks);
       (structured as any).weeks = balanceWeeklyExecutionLoad((structured as any)?.weeks);
+      const executionConfig =
+        (ctx.prefilledPlanning as any)?.execution_config ?? (ctx.snapshot as any)?.execution_config;
+      const pressureResult = runExecutionPressureBalancer(
+        (structured as any).weeks,
+        executionConfig
+      );
+      (structured as any).weeks = pressureResult.weeks;
+      (structured as any).executionPressureMetadata = {
+        pressureLevel: pressureResult.pressureLevel,
+        ...pressureResult.balanceReport,
+      };
+      const momentumResult = analyzeExecutionMomentum((structured as any).weeks);
+      (structured as any).executionMomentumMetadata = {
+        state: momentumResult.state,
+        signals: momentumResult.signals,
+        momentumScore: momentumResult.momentumScore,
+        warnings: momentumResult.warnings,
+      };
+      const momentumRecovery =
+        momentumResult.state === 'WEAK'
+          ? generateMomentumRecoverySuggestions((structured as any).weeks, momentumResult)
+          : null;
+      (structured as any).momentumRecoveryMetadata =
+        momentumRecovery && momentumRecovery.suggestions.length > 0
+          ? { suggestions: momentumRecovery.suggestions, recommendedActions: momentumRecovery.recommendedActions }
+          : undefined;
       attachDeterministicWriterBriefsToExecutionSlots((structured as any)?.weeks);
       attachPostingExecutionMapsToWeeks((structured as any)?.weeks);
       attachResolvedPostingsToWeeks((structured as any)?.weeks);
@@ -4436,12 +4497,27 @@ async function runWithContext(
   }
 
   try {
+    const executionPressureMetadata = (structured as any).executionPressureMetadata;
+    const executionMomentumMetadata = (structured as any).executionMomentumMetadata;
+    const momentumRecoveryMetadata = (structured as any).momentumRecoveryMetadata;
     await saveStructuredCampaignPlan({
       campaignId: input.campaignId,
       snapshot_hash: ctx.snapshot_hash,
       weeks: structured.weeks,
       omnivyre_decision: ctx.omnivyreDecision,
       raw_plan_text: planText,
+      executionPressureMetadata:
+        executionPressureMetadata && typeof executionPressureMetadata === 'object'
+          ? executionPressureMetadata
+          : undefined,
+      executionMomentumMetadata:
+        executionMomentumMetadata && typeof executionMomentumMetadata === 'object'
+          ? executionMomentumMetadata
+          : undefined,
+      momentumRecoveryMetadata:
+        momentumRecoveryMetadata && typeof momentumRecoveryMetadata === 'object'
+          ? momentumRecoveryMetadata
+          : undefined,
     });
   } catch (saveErr) {
     console.warn('saveStructuredCampaignPlan failed, returning plan anyway:', saveErr);
@@ -4583,10 +4659,17 @@ export async function runCampaignAiPlan(
   const dbDuration = toValidWeeks(campaignRow?.duration_weeks);
   const recommendationSeed = recommendationDurationSeed(input.recommendationContext);
   const explicitConversationDuration = toValidWeeks(fromConversation);
+  const snapshot = versionRow?.campaign_snapshot as Record<string, unknown> | null | undefined;
+  const execConfig = snapshot?.execution_config as Record<string, unknown> | null | undefined;
+  const durationFromExecConfig =
+    execConfig != null && typeof execConfig.campaign_duration === 'number'
+      ? toValidWeeks(execConfig.campaign_duration)
+      : null;
 
-  // duration source of truth
+  // duration source of truth — explicit chat override wins over execution_config
   const sourcedDurationWeeks =
     explicitConversationDuration ??
+    durationFromExecConfig ??
     dbDuration ??
     recommendationSeed ??
     toValidWeeks(input.durationWeeks);

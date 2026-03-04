@@ -6,6 +6,20 @@ module.exports = {
   ],
   theme: {
     extend: {
+      colors: {
+        omnivyra: {
+          start: '#0B5ED7',
+          end: '#1EA7FF',
+          light: '#F5F9FF',
+        },
+      },
+      borderRadius: {
+        'omnivyra': '16px',
+      },
+      boxShadow: {
+        'omnivyra': '0 4px 20px rgba(11, 94, 215, 0.08)',
+        'omnivyra-glow': '0 0 40px rgba(30, 167, 255, 0.25)',
+      },
       animation: {
         'pulse': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'bounce': 'bounce 1s infinite',

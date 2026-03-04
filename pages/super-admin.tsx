@@ -15,7 +15,8 @@ import {
   XCircle,
   Search,
   Trash2,
-  TrendingUp
+  TrendingUp,
+  FileText,
 } from 'lucide-react';
 
 interface DeletionAudit {
@@ -756,18 +757,24 @@ export default function SuperAdminPanel() {
             { id: 'rbac', label: 'RBAC', icon: Key },
             { id: 'community-ai', label: 'Community-AI', icon: Activity },
             { id: 'audit', label: 'Audit Logs', icon: Eye },
+            { id: 'blog', label: 'Blog', icon: FileText },
             ...(canShowExternalApisTab
               ? [{ id: 'external-apis', label: 'External API Control', icon: BarChart3 }]
               : [])
           ].map((tab) => {
             const Icon = tab.icon;
             const isExternalApiControl = tab.id === 'external-apis';
+            const isBlog = tab.id === 'blog';
             return (
               <button
                 key={tab.id}
                 onClick={() => {
                   if (isExternalApiControl) {
                     router.push('/external-apis?mode=platform');
+                    return;
+                  }
+                  if (isBlog) {
+                    router.push('/admin/blog');
                     return;
                   }
                   setActiveTab(tab.id);

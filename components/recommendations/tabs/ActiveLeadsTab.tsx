@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
+import { CheckCircle, XCircle } from 'lucide-react';
 import type { OpportunityTabProps } from './types';
 import EngineContextPanel from '../EngineContextPanel';
 import EngineOverridePanel from '../EngineOverridePanel';
@@ -107,6 +108,41 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
   const [clusterDomainFilter, setClusterDomainFilter] = useState<string | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  /** Set of platform ids that have a connected connector (API returns e.g. 'twitter'; we match by PLATFORMS[].id). null = not loaded or no permission. */
+  const [connectedPlatforms, setConnectedPlatforms] = useState<Set<string> | null>(null);
+
+  const fetchConnectorStatus = useCallback(async () => {
+    if (!companyId || !fetchWithAuth) {
+      setConnectedPlatforms(null);
+      return;
+    }
+    try {
+      const res = await fetchWithAuth(
+        `/api/community-ai/connectors/status?tenant_id=${encodeURIComponent(companyId)}&organization_id=${encodeURIComponent(companyId)}`
+      );
+      if (!res.ok) {
+        setConnectedPlatforms(null);
+        return;
+      }
+      const list = (await res.json()) as { platform: string; connected?: boolean }[];
+      const set = new Set<string>();
+      for (const r of list || []) {
+        if (r.connected !== false && r.platform) {
+          const key = String(r.platform).toLowerCase().trim();
+          set.add(key);
+          if (key === 'twitter') set.add('x');
+          if (key === 'x') set.add('twitter');
+        }
+      }
+      setConnectedPlatforms(set);
+    } catch {
+      setConnectedPlatforms(null);
+    }
+  }, [companyId, fetchWithAuth]);
+
+  useEffect(() => {
+    fetchConnectorStatus();
+  }, [fetchConnectorStatus]);
 
   const { job: polledJob, error: pollError } = useEngineJobPolling<{
     status?: string;
@@ -300,17 +336,31 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
           <div>
             <span className="block text-xs text-gray-500 mb-2">Platforms</span>
             <div className="flex flex-wrap gap-3">
-              {PLATFORMS.map((p) => (
-                <label key={p.id} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={platforms.includes(p.id)}
-                    onChange={() => togglePlatform(p.id)}
-                    className="rounded border-gray-300"
-                  />
-                  <span className="text-sm text-gray-700">{p.label}</span>
-                </label>
-              ))}
+              {PLATFORMS.map((p) => {
+                const isConnected = connectedPlatforms === null ? null : connectedPlatforms.has(p.id);
+                return (
+                  <label key={p.id} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={platforms.includes(p.id)}
+                      onChange={() => togglePlatform(p.id)}
+                      className="rounded border-gray-300"
+                    />
+                    <span className="text-sm text-gray-700">{p.label}</span>
+                    {connectedPlatforms !== null && (
+                      isConnected ? (
+                        <CheckCircle className="h-4 w-4 text-green-600 shrink-0" title="Connected" aria-hidden />
+                      ) : (
+                        <XCircle
+                          className="h-4 w-4 text-red-500 shrink-0"
+                          title="Not connected — connect in Community AI to use this platform"
+                          aria-hidden
+                        />
+                      )
+                    )}
+                  </label>
+                );
+              })}
             </div>
           </div>
           <div>

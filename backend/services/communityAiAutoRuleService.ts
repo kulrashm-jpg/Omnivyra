@@ -6,6 +6,7 @@ import { getPlaybookById, listPlaybooks } from './playbooks/playbookService';
 import { evaluatePlaybookForEvent } from './playbooks/playbookEvaluator';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
+import { canExecuteAction } from './executionGuardrailService';
 
 type AutoRule = {
   id: string;
@@ -495,6 +496,30 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         };
       }
 
+      const guardrail = await canExecuteAction(
+        {
+          id: record.id,
+          company_id: input.organization_id,
+          tenant_id: input.tenant_id,
+          organization_id: input.organization_id,
+          platform: record.platform,
+          action_type: record.action_type,
+          target_id: record.target_id,
+        },
+        { source: 'evaluation' }
+      );
+      if (!guardrail.allowed) {
+        await supabase
+          .from('community_ai_actions')
+          .update({
+            status: 'skipped_guardrail',
+            skip_reason: guardrail.reason ?? null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', record.id);
+        return { ...action, blocked_reason: guardrail.reason ?? 'guardrail' };
+      }
+
       const execution = await executeAction(
         {
           id: record.id,
@@ -521,13 +546,17 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
 
       const nextStatus =
         execution.status === 'skipped' ? 'skipped' : execution.ok ? 'executed' : 'failed';
+      const updatePayload: Record<string, unknown> = {
+        status: nextStatus,
+        execution_result: execution,
+        updated_at: new Date().toISOString(),
+      };
+      if (nextStatus === 'executed') {
+        updatePayload.executed_at = new Date().toISOString();
+      }
       await supabase
         .from('community_ai_actions')
-        .update({
-          status: nextStatus,
-          execution_result: execution,
-          updated_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq('id', record.id);
 
       await logCommunityAiActionEvent({

@@ -476,6 +476,76 @@ export async function refreshTikTokToken(
 }
 
 /**
+ * Refresh token for Reddit
+ *
+ * Reddit OAuth2: POST to /api/v1/access_token with grant_type=refresh_token.
+ * Uses Basic auth (client_id:client_secret). Reddit may not return new refresh_token.
+ */
+export async function refreshRedditToken(
+  socialAccountId: string,
+  currentToken: TokenObject
+): Promise<TokenObject | null> {
+  if (!currentToken.refresh_token) {
+    console.error('❌ No refresh token available for Reddit account:', socialAccountId);
+    return null;
+  }
+
+  const clientId = process.env.REDDIT_CLIENT_ID;
+  const clientSecret = process.env.REDDIT_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    console.error('❌ Reddit credentials not configured');
+    return null;
+  }
+
+  try {
+    const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+    const response = await axios.post(
+      'https://www.reddit.com/api/v1/access_token',
+      new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: currentToken.refresh_token,
+      }),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Authorization: `Basic ${credentials}`,
+          'User-Agent': 'virality/1.0',
+        },
+      }
+    );
+
+    if (!response.data.access_token) {
+      console.error('❌ Reddit refresh: No access token in response');
+      return null;
+    }
+
+    const expiresIn = response.data.expires_in || 3600; // Default 1 hour
+    const newToken: TokenObject = {
+      access_token: response.data.access_token,
+      refresh_token: response.data.refresh_token || currentToken.refresh_token,
+      expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+      token_type: response.data.token_type || 'Bearer',
+    };
+
+    await setToken(socialAccountId, newToken);
+
+    console.log('✅ Reddit token refreshed successfully');
+    return newToken;
+  } catch (error: any) {
+    const errorDetails = error.response?.data || error.message;
+    console.error('❌ Reddit token refresh error:', errorDetails);
+
+    if (error.response?.status === 400 || error.response?.status === 401) {
+      console.error('⚠️ Refresh token may be invalid or expired - user needs to reconnect');
+    }
+
+    return null;
+  }
+}
+
+/**
  * Refresh token for Pinterest
  * 
  * Pinterest OAuth 2.0 refresh token flow
@@ -580,6 +650,9 @@ export async function refreshPlatformToken(
 
     case 'pinterest':
       return refreshPinterestToken(socialAccountId, currentToken);
+
+    case 'reddit':
+      return refreshRedditToken(socialAccountId, currentToken);
 
     default:
       console.warn(`⚠️ Token refresh not implemented for platform: ${platform}`);

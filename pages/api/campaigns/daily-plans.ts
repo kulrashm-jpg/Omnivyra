@@ -8,6 +8,9 @@ import {
 } from '../../../lib/planning/unifiedExecutionAdapter';
 import { applyDistributionForWeek } from '../../../lib/planning/distributionEngine';
 import { detectMasterContentGroups } from '../../../lib/planning/masterContentGrouping';
+import { buildStrategicMemoryProfile } from '../../../lib/intelligence/strategicMemory';
+import type { StrategistAction } from '../../../lib/intelligence/strategicMemory';
+import { logDistributionDecision } from '../../../lib/intelligence/distributionDecisionLogger';
 
 function tryParseJson(value: unknown): any | null {
   if (typeof value !== 'string') return null;
@@ -42,6 +45,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (error) {
       console.error('Error fetching daily plans:', error);
       return res.status(500).json({ error: 'Failed to fetch daily plans' });
+    }
+
+    let memoryProfile: ReturnType<typeof buildStrategicMemoryProfile> | null = null;
+    const { data: memoryRows } = await supabase
+      .from('campaign_strategic_memory')
+      .select('action, platform, accepted, confidence_score, created_at')
+      .eq('campaign_id', access.campaignId)
+      .order('created_at', { ascending: true });
+    if (memoryRows?.length) {
+      const events = memoryRows.map((r: any) => ({
+        campaign_id: access.campaignId,
+        execution_id: '',
+        platform: r.platform ?? undefined,
+        action: r.action as StrategistAction,
+        accepted: Boolean(r.accepted),
+        timestamp: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+      }));
+      const confidenceHistory = (memoryRows as any[])
+        .filter((r) => r.confidence_score != null && Number.isFinite(r.confidence_score) && r.platform)
+        .map((r) => ({
+          platform: String(r.platform).trim().toLowerCase(),
+          confidence: Math.max(0, Math.min(100, Number(r.confidence_score))),
+        }));
+      memoryProfile = buildStrategicMemoryProfile(events, confidenceHistory);
     }
 
     const blueprint = await getUnifiedCampaignBlueprint(access.campaignId);
@@ -188,10 +215,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         momentum_adjustments: weekMomentumAdjustmentsByNumber[weekNumber] ?? undefined,
       };
       const units = weekPlans.map((p: any) => dailyPlanRowToUnifiedExecutionUnit(p));
-      const distributed = applyDistributionForWeek(units, week);
+      const result = applyDistributionForWeek(units, week, memoryProfile);
+      const distributed = result.units;
       detectMasterContentGroups(distributed);
       indices.forEach((idx: number, j: number) => {
         normalizedPlans[idx] = applyUnifiedToDailyPlanResponse(weekPlans[j], distributed[j]);
+      });
+      void logDistributionDecision({
+        campaign_id: access.campaignId,
+        week_number: weekNumber,
+        resolved_strategy: result.meta.resolvedStrategy,
+        auto_detected: result.meta.auto_detected,
+        quality_override: result.meta.quality_override,
+        slot_optimization_applied: result.meta.slot_optimization_applied,
       });
     });
 

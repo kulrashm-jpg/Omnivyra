@@ -1,9 +1,12 @@
 /**
  * Execution trigger: calls existing backend content API (generate_master then generate_variants).
  * No new AI logic; backend contentGenerationPipeline remains the only generation engine.
+ * Optional memory profile: when provided (or fetched), bias instruction is appended to generate_master context.
  */
 
 import type { MasterContentDocument } from './masterContentDocument';
+import { deriveGenerationBias } from '../intelligence/generationBias';
+import type { StrategicMemoryProfile } from '../intelligence/strategicMemory';
 
 type ActivityLike = {
   id?: string;
@@ -24,6 +27,8 @@ export type ExecuteMasterContentPipelineParams = {
   dailyExecutionItem: Record<string, unknown> | null;
   schedules: ScheduleLike[];
   activity?: ActivityLike | null;
+  /** Optional: when set, used to derive bias instruction for generate_master. If unset and campaignId present, fetched from API. */
+  memoryProfile?: StrategicMemoryProfile | null;
 };
 
 export type ExecuteMasterContentPipelineResult = {
@@ -52,6 +57,25 @@ function buildActivityFromItem(
  * Runs the real backend pipeline: generate_master then generate_variants.
  * Uses existing /api/activity-workspace/content; no new AI logic.
  */
+async function getMemoryProfileIfNeeded(
+  campaignId: string,
+  existing: StrategicMemoryProfile | null | undefined
+): Promise<StrategicMemoryProfile | null> {
+  if (existing && typeof existing === 'object') return existing;
+  if (!campaignId || typeof window === 'undefined') return null;
+  try {
+    const res = await fetch(
+      `/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(campaignId)}`,
+      { credentials: 'include' }
+    );
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    return data && typeof data === 'object' ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function executeMasterContentPipeline({
   campaignId,
   executionId,
@@ -59,6 +83,7 @@ export async function executeMasterContentPipeline({
   dailyExecutionItem,
   schedules,
   activity: activityOverride,
+  memoryProfile: memoryProfileOverride,
 }: ExecuteMasterContentPipelineParams): Promise<ExecuteMasterContentPipelineResult> {
   const activity = activityOverride ?? buildActivityFromItem(dailyExecutionItem, executionId);
 
@@ -70,15 +95,25 @@ export async function executeMasterContentPipeline({
     });
   }
 
+  let biasInstruction: string | undefined;
+  const profile = await getMemoryProfileIfNeeded(campaignId, memoryProfileOverride);
+  if (profile) {
+    const bias = deriveGenerationBias(profile);
+    if (bias.extra_instruction) biasInstruction = bias.extra_instruction;
+  }
+
+  const masterPayload: Record<string, unknown> = {
+    action: 'generate_master',
+    activity,
+    schedules,
+    dailyExecutionItem: dailyExecutionItem || {},
+  };
+  if (biasInstruction) masterPayload.extra_instruction = biasInstruction;
+
   const resMaster = await fetch(CONTENT_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'generate_master',
-      activity,
-      schedules,
-      dailyExecutionItem: dailyExecutionItem || {},
-    }),
+    body: JSON.stringify(masterPayload),
   });
 
   if (!resMaster.ok) {

@@ -96,11 +96,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let responseOk = true;
 
     if (!cached) {
-      const { response } = await executeExternalApiRequest({
+      const result = await executeExternalApiRequest({
         source,
         request: request.details,
         timeoutMs: DEFAULT_TIMEOUT_MS,
       });
+      if ('status' in result && result.status === 'blocked_plan_limit') {
+        return res.status(403).json({
+          error: 'Plan limit exceeded',
+          code: result.error?.code ?? 'PLAN_LIMIT_EXCEEDED',
+          ...result.error,
+        });
+      }
+      const { response } = result as { response: Response; latencyMs: number };
       cacheHit = false;
       responseStatus = response.status;
       responseStatusText = response.statusText;

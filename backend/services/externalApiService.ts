@@ -2,6 +2,11 @@ import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { getCachedResponse, setCachedResponse, buildCacheKey, getCacheStats } from './externalApiCacheService';
 import { updateApiHealth, getHealthSnapshot } from './externalApiHealthService';
+import { logUsageEvent } from './usageLedgerService';
+import { incrementUsageMeter } from './usageMeterService';
+import { checkUsageBeforeExecution } from './usageEnforcementService';
+
+const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 import {
   getTrendRanking,
   getTrendRelevance,
@@ -288,17 +293,80 @@ export const executeExternalApiRequest = async (input: {
   request: ExternalApiRequestDetails;
   timeoutMs?: number;
   retryCount?: number;
-}): Promise<{ response: Response; latencyMs: number }> => {
+}): Promise<
+  | { response: Response; latencyMs: number }
+  | { ok: false; status: 'blocked_plan_limit'; error: { code: string; [k: string]: unknown } }
+> => {
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS * 1.6;
   const retryCount = input.retryCount ?? DEFAULT_RETRY_COUNT;
   const startedAt = Date.now();
-  const response = await fetchWithRetry(
-    input.request.url,
-    { method: input.request.method, headers: input.request.headers },
-    retryCount,
-    timeoutMs
-  );
-  return { response, latencyMs: Date.now() - startedAt };
+  const orgId = input.source.company_id ?? UNKNOWN_ORG;
+  const sourceName = input.source.name || 'external_api';
+
+  const enforcement = await checkUsageBeforeExecution({
+    organization_id: orgId,
+    resource_key: 'external_api_calls',
+    projected_increment: 1,
+  });
+  if (!enforcement.allowed) {
+    return {
+      ok: false,
+      status: 'blocked_plan_limit',
+      error: { code: 'PLAN_LIMIT_EXCEEDED', ...enforcement },
+    };
+  }
+
+  try {
+    const response = await fetchWithRetry(
+      input.request.url,
+      { method: input.request.method, headers: input.request.headers },
+      retryCount,
+      timeoutMs
+    );
+    const latencyMs = Date.now() - startedAt;
+    void logUsageEvent({
+      organization_id: orgId,
+      campaign_id: null,
+      user_id: null,
+      source_type: 'external_api',
+      provider_name: 'trend_vendor',
+      model_name: null,
+      model_version: null,
+      source_name: sourceName,
+      process_type: 'external_api_request',
+      latency_ms: latencyMs,
+      error_flag: !response.ok,
+      error_type: response.ok ? null : `HTTP ${response.status}`,
+      total_cost: 0,
+      pricing_snapshot: { fixedCost: 0 },
+    });
+    if (response.ok) {
+      void incrementUsageMeter({
+        organization_id: orgId,
+        source_type: 'external_api',
+        total_cost: 0,
+      });
+    }
+    return { response, latencyMs };
+  } catch (error: any) {
+    const latencyMs = Date.now() - startedAt;
+    void logUsageEvent({
+      organization_id: orgId,
+      campaign_id: null,
+      user_id: null,
+      source_type: 'external_api',
+      provider_name: 'trend_vendor',
+      model_name: null,
+      model_version: null,
+      source_name: sourceName,
+      process_type: 'external_api_request',
+      latency_ms: latencyMs,
+      error_flag: true,
+      error_type: error?.message ?? 'unknown',
+      pricing_snapshot: null,
+    });
+    throw error;
+  }
 };
 
 const isRateLimited = (rateLimitKey: string, limitPerMin: number): boolean => {

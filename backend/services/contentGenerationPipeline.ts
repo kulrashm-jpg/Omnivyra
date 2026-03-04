@@ -964,6 +964,9 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
     global_progression_index: Number.isFinite(Number(item?.global_progression_index))
       ? Number(item.global_progression_index)
       : null,
+    ...(typeof (item as any)?.extra_instruction === 'string' && (item as any).extra_instruction.trim()
+      ? { additional_guidance: (item as any).extra_instruction.trim() }
+      : {}),
   };
 
   try {

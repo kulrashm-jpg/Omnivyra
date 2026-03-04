@@ -25,39 +25,73 @@ const resolveStatus = (record: ConnectorRecord): ConnectorStatus => {
   return new Date(record.expires_at).getTime() < Date.now() ? 'expired' : 'connected';
 };
 
+const DISPLAY_LIST: ConnectorRecord[] = [
+  { platform: 'linkedin', displayName: 'LinkedIn', status: 'disconnected', expires_at: null },
+  { platform: 'facebook', displayName: 'Facebook', status: 'disconnected', expires_at: null },
+  { platform: 'instagram', displayName: 'Instagram', status: 'disconnected', expires_at: null },
+  { platform: 'twitter', displayName: 'Twitter', status: 'disconnected', expires_at: null },
+  { platform: 'reddit', displayName: 'Reddit', status: 'disconnected', expires_at: null },
+];
+
 export default function CommunityAiConnectors() {
   const { selectedCompanyId } = useCompanyContext();
   const router = useRouter();
   const tenantId = selectedCompanyId || '';
-  const [connectors, setConnectors] = useState<ConnectorRecord[]>([
-    { platform: 'linkedin', displayName: 'LinkedIn', status: 'disconnected', expires_at: null },
-    { platform: 'facebook', displayName: 'Facebook', status: 'disconnected', expires_at: null },
-    { platform: 'instagram', displayName: 'Instagram', status: 'disconnected', expires_at: null },
-    { platform: 'twitter', displayName: 'Twitter', status: 'disconnected', expires_at: null },
-    { platform: 'reddit', displayName: 'Reddit', status: 'disconnected', expires_at: null },
-  ]);
-
+  const [connectors, setConnectors] = useState<ConnectorRecord[]>(DISPLAY_LIST);
+  const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const fetchStatus = React.useCallback(async () => {
+    if (!tenantId) {
+      setConnectors(DISPLAY_LIST);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `/api/community-ai/connectors/status?tenant_id=${encodeURIComponent(tenantId)}&organization_id=${encodeURIComponent(tenantId)}`,
+        { credentials: 'include' }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setErrorMessage(body?.error || res.statusText || 'Failed to load status');
+        setConnectors(DISPLAY_LIST);
+        return;
+      }
+      const list = (await res.json()) as { platform: string; expires_at?: string | null; connected: boolean }[];
+      const byPlatform = new Map(list.map((r) => [r.platform.toLowerCase(), r]));
+      setConnectors(
+        DISPLAY_LIST.map((entry) => {
+          const fromDb = byPlatform.get(entry.platform);
+          if (!fromDb) return { ...entry, status: 'disconnected' as const, expires_at: null };
+          return {
+            ...entry,
+            status: 'connected' as const,
+            expires_at: fromDb.expires_at ?? null,
+          };
+        })
+      );
+      setErrorMessage(null);
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : 'Failed to load status');
+      setConnectors(DISPLAY_LIST);
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId]);
+
   useEffect(() => {
+    fetchStatus();
+  }, [fetchStatus]);
+
+  useEffect(() => {
+    const error = typeof router.query.error === 'string' ? router.query.error : null;
+    if (error) setErrorMessage(decodeURIComponent(error));
     const connected = typeof router.query.connected === 'string' ? router.query.connected : null;
     const status = typeof router.query.status === 'string' ? router.query.status : null;
-    const error = typeof router.query.error === 'string' ? router.query.error : null;
-
-    if (error) {
-      setErrorMessage(decodeURIComponent(error));
-    }
-
-    if (connected && status === 'success') {
-      setConnectors((prev) =>
-        prev.map((entry) =>
-          entry.platform === connected
-            ? { ...entry, status: 'connected' }
-            : entry
-        )
-      );
-    }
-  }, [router.query]);
+    if (connected && status === 'success') fetchStatus();
+  }, [router.query, fetchStatus]);
 
   const linkForPlatform = (platform: string) => {
     if (!tenantId) return '#';
@@ -67,12 +101,22 @@ export default function CommunityAiConnectors() {
     )}&organization_id=${encodeURIComponent(tenantId)}&redirect=${redirect}`;
   };
 
-  const handleDisconnect = (platform: string) => {
-    setConnectors((prev) =>
-      prev.map((entry) =>
-        entry.platform === platform ? { ...entry, status: 'disconnected' } : entry
-      )
-    );
+  const handleDisconnect = async (platform: string) => {
+    if (!tenantId) return;
+    try {
+      const res = await fetch(
+        `/api/community-ai/connectors/${encodeURIComponent(platform)}?tenant_id=${encodeURIComponent(tenantId)}&organization_id=${encodeURIComponent(tenantId)}`,
+        { method: 'DELETE', credentials: 'include' }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setErrorMessage(body?.error || res.statusText || 'Disconnect failed');
+        return;
+      }
+      await fetchStatus();
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : 'Disconnect failed');
+    }
   };
 
   const resolved = useMemo(
@@ -139,7 +183,7 @@ export default function CommunityAiConnectors() {
                       <button
                         className="px-2 py-1 text-xs rounded border border-gray-300 text-gray-600"
                         onClick={() => handleDisconnect(entry.platform)}
-                        disabled={entry.resolvedStatus !== 'connected'}
+                        disabled={entry.resolvedStatus === 'disconnected'}
                       >
                         Disconnect
                       </button>

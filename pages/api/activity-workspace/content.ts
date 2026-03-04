@@ -25,6 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const activity = asObject((req.body as any)?.activity) || {};
     const schedules = Array.isArray((req.body as any)?.schedules) ? (req.body as any).schedules : [];
     const dailyExecutionItemRaw = asObject((req.body as any)?.dailyExecutionItem) || {};
+    const extra_instruction = typeof (req.body as any)?.extra_instruction === 'string' ? String((req.body as any).extra_instruction).trim() || undefined : undefined;
 
     if (!action || !['generate_master', 'generate_variants', 'refine_variant', 'improve_variant'].includes(action)) {
       return res.status(400).json({ error: 'Invalid action' });
@@ -137,6 +138,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (dailyExecutionItemRaw as any)?.media_status === 'ready' || (dailyExecutionItemRaw as any)?.media_status === 'missing'
           ? (dailyExecutionItemRaw as any).media_status
           : undefined,
+      ...(extra_instruction ? { extra_instruction } : {}),
     };
 
     if (action === 'generate_master') {

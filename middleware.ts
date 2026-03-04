@@ -25,11 +25,16 @@ export function middleware(request: NextRequest) {
   if (pathname === '/api/super-admin/login' || pathname === '/api/super-admin/content-architect-login') {
     return NextResponse.next();
   }
+  // Public blog: listing, article by slug, RSS, sitemap — no auth required
+  if (pathname === '/api/blog' || pathname.startsWith('/api/blog/')) {
+    return NextResponse.next();
+  }
   // Super admin first: if legacy super-admin cookie is set, allow super-admin APIs and external-apis health (so 401 is not returned when Content Architect cookie is also set)
   const superAdminSession = request.cookies.get('super_admin_session');
   if (superAdminSession?.value === '1') {
     if (pathname.startsWith('/api/super-admin/')) return NextResponse.next();
     if (pathname === '/api/admin/audit-logs') return NextResponse.next();
+    if (pathname.startsWith('/api/admin/blog')) return NextResponse.next();
     if (pathname === '/api/external-apis/health-summary') return NextResponse.next();
   }
   // Content Architect: allow only scoped APIs

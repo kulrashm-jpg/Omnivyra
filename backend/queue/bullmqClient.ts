@@ -63,6 +63,33 @@ function getRedisConnection(): IORedis {
 
 // Queue instance for enqueuing jobs
 let publishQueue: Queue | null = null;
+let engagementPollingQueue: Queue | null = null;
+
+/**
+ * Get or create the engagement-polling queue instance.
+ * attempts: 1, no retry (runs again next interval).
+ */
+export function getEngagementPollingQueue(): Queue {
+  if (!engagementPollingQueue) {
+    const connection = getRedisConnection();
+    engagementPollingQueue = new Queue('engagement-polling', {
+      connection: {
+        host: redisConfig.host,
+        port: redisConfig.port,
+        password: redisConfig.password,
+      },
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: true,
+        removeOnFail: true,
+      },
+    });
+    engagementPollingQueue.on('error', (err) => {
+      console.error('Engagement polling queue error:', err);
+    });
+  }
+  return engagementPollingQueue;
+}
 
 /**
  * Get or create the publish queue instance
@@ -142,12 +169,52 @@ export function getWorker(
 }
 
 /**
+ * Create engagement-polling worker (concurrency 1).
+ * Processes jobs that run engagement ingestion for recently published posts.
+ */
+export function getEngagementPollingWorker(): Worker {
+  const worker = new Worker(
+    'engagement-polling',
+    async () => {
+      const { processEngagementPollingJob } = await import('./jobProcessors/engagementPollingProcessor');
+      await processEngagementPollingJob();
+    },
+    {
+      connection: {
+        host: redisConfig.host,
+        port: redisConfig.port,
+        password: redisConfig.password,
+      },
+      concurrency: 1,
+    }
+  );
+
+  worker.on('completed', (job) => {
+    console.log(`✅ Engagement polling job ${job.id} completed`);
+  });
+
+  worker.on('failed', (job, err) => {
+    console.error(`❌ Engagement polling job ${job?.id} failed:`, err.message);
+  });
+
+  worker.on('error', (err) => {
+    console.error('Engagement polling worker error:', err);
+  });
+
+  return worker;
+}
+
+/**
  * Gracefully close Redis connections
  */
 export async function closeConnections(): Promise<void> {
   if (publishQueue) {
     await publishQueue.close();
     publishQueue = null;
+  }
+  if (engagementPollingQueue) {
+    await engagementPollingQueue.close();
+    engagementPollingQueue = null;
   }
   if (redisConnection) {
     await redisConnection.quit();

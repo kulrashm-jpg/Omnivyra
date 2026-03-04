@@ -81,6 +81,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (source_strategic_theme) {
     updatedSnapshot.source_strategic_theme = source_strategic_theme;
   }
+  const execution_config = body.execution_config;
+  if (execution_config != null && typeof execution_config === 'object' && !Array.isArray(execution_config)) {
+    updatedSnapshot.execution_config = execution_config as Record<string, unknown>;
+  }
+  if (body.mode === 'fast') {
+    updatedSnapshot.mode = 'fast';
+  }
 
   const { error: updateError } = await supabase
     .from('campaign_versions')

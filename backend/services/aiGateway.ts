@@ -1,6 +1,11 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
 import { supabase } from '../db/supabaseClient';
+import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
+import { incrementUsageMeter } from './usageMeterService';
+import { checkUsageBeforeExecution } from './usageEnforcementService';
+
+const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
 type GatewayMetadata = {
   provider: 'direct-openai';
@@ -20,6 +25,7 @@ type GatewayResponse<T> = {
 
 type GatewayRequest = {
   companyId?: string | null;
+  campaignId?: string | null;
   model: string;
   temperature: number;
   response_format?: { type: 'json_object' };
@@ -65,14 +71,107 @@ const runCompletion = async (
     modelName,
   });
   const client = getOpenAiClient();
-  const completion = await client.chat.completions.create({
-    model: request.model,
-    temperature: request.temperature,
-    response_format: request.response_format,
-    messages: request.messages,
+  const start = Date.now();
+
+  const preEnforcement = await checkUsageBeforeExecution({
+    organization_id: request.companyId ?? UNKNOWN_ORG,
+    resource_key: 'llm_tokens',
+    projected_increment: 0,
   });
+  if (!preEnforcement.allowed) {
+    const error = {
+      code: 'PLAN_LIMIT_EXCEEDED',
+      ...preEnforcement,
+    };
+    void logUsageEvent({
+      organization_id: request.companyId ?? UNKNOWN_ORG,
+      campaign_id: request.campaignId ?? null,
+      user_id: null,
+      source_type: 'llm',
+      provider_name: 'openai',
+      model_name: request.model,
+      model_version: null,
+      source_name: `openai:${request.model}`,
+      process_type: request.operation,
+      error_flag: true,
+      error_type: 'PLAN_LIMIT_EXCEEDED',
+    });
+    throw Object.assign(
+      new Error('Monthly LLM token limit exceeded for current plan.'),
+      { enforcement: error }
+    );
+  }
+
+  let completion: Awaited<ReturnType<typeof client.chat.completions.create>>;
+  try {
+    completion = await client.chat.completions.create({
+      model: request.model,
+      temperature: request.temperature,
+      response_format: request.response_format,
+      messages: request.messages,
+    });
+  } catch (error: any) {
+    const latency = Date.now() - start;
+    void logUsageEvent({
+      organization_id: request.companyId ?? UNKNOWN_ORG,
+      campaign_id: request.campaignId ?? null,
+      user_id: null,
+      source_type: 'llm',
+      provider_name: 'openai',
+      model_name: request.model,
+      model_version: null,
+      source_name: `openai:${request.model}`,
+      process_type: request.operation,
+      latency_ms: latency,
+      error_flag: true,
+      error_type: error?.response?.status?.toString() ?? error?.message ?? 'unknown',
+      pricing_snapshot: null,
+    });
+    throw error;
+  }
+  const latency = Date.now() - start;
   const content = completion.choices?.[0]?.message?.content?.trim() || '';
   const metadata = buildMetadata(request.model, completion.usage);
+  const usage = completion.usage;
+  const inputTokens = usage?.prompt_tokens ?? 0;
+  const outputTokens = usage?.completion_tokens ?? 0;
+  const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
+  const cost = resolveLlmCost('openai', request.model, inputTokens, outputTokens);
+  void logUsageEvent({
+    organization_id: request.companyId ?? UNKNOWN_ORG,
+    campaign_id: request.campaignId ?? null,
+    user_id: null,
+    source_type: 'llm',
+    provider_name: 'openai',
+    model_name: request.model,
+    model_version: null,
+    source_name: `openai:${request.model}`,
+    process_type: request.operation,
+    input_tokens: inputTokens || null,
+    output_tokens: outputTokens || null,
+    total_tokens: totalTokens || null,
+    latency_ms: latency,
+    error_flag: false,
+    unit_cost: cost.unit_cost,
+    total_cost: cost.total_cost,
+    pricing_snapshot: cost.pricing_snapshot,
+  });
+  void incrementUsageMeter({
+    organization_id: request.companyId ?? UNKNOWN_ORG,
+    source_type: 'llm',
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    total_cost: cost.total_cost ?? undefined,
+  });
+  const enforcement = await checkUsageBeforeExecution({
+    organization_id: request.companyId ?? UNKNOWN_ORG,
+    resource_key: 'llm_tokens',
+    projected_increment: 0,
+  });
+  if (!enforcement.allowed) {
+    // Do not block this response; future calls will block when pre-checked
+  }
   const contextTypeMap: Record<string, string> = {
     generateRecommendation: 'recommendation',
     generateCampaignPlan: 'campaign_plan',

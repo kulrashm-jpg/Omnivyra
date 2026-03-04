@@ -103,12 +103,22 @@ export default function CampaignDailyPlanPage() {
       const totalFromWeekly = plans.length;
       setTotalWeeks(Math.max(1, durationWeeks ?? 0, totalFromPlan, totalFromWeekly));
 
+      let memoryProfile: { campaign_id: string; action_acceptance_rate: Record<string, number>; platform_confidence_average: Record<string, number>; total_events: number } | null = null;
+      if (id) {
+        try {
+          const profileRes = await fetchWithAuth(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(id)}`);
+          if (profileRes?.ok) memoryProfile = await profileRes.json().catch(() => null);
+        } catch {
+          // non-blocking
+        }
+      }
       const mapped: GridActivity[] = [];
       for (const week of planWeeks) {
         const weekNumber = Number((week as any)?.week ?? (week as any)?.week_number ?? 0) || 0;
         const items = Array.isArray((week as any)?.daily_execution_items) ? (week as any).daily_execution_items : [];
         const units = items.map((item: any) => blueprintItemToUnifiedExecutionUnit(item, week, id));
-        const distributedUnits = applyDistributionForWeek(units, week as Record<string, unknown>);
+        const result = applyDistributionForWeek(units, week as Record<string, unknown>, memoryProfile);
+        const distributedUnits = result.units;
         detectMasterContentGroups(distributedUnits);
         distributedUnits.forEach((unit, itemIndex: number) => {
           const item = items[itemIndex];

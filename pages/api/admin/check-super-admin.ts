@@ -8,6 +8,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    // Super-admin cookie (e.g. from /super-admin/login) grants access without Supabase user
+    if (req.cookies?.super_admin_session === '1') {
+      return res.status(200).json({
+        success: true,
+        isSuperAdmin: true,
+        userId: null,
+      });
+    }
+
     const { user, error: authError } = await getSupabaseUserFromRequest(req);
     if (authError || !user) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });

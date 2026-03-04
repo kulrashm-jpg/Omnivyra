@@ -10,6 +10,7 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
+  getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
   isSuperAdmin,
@@ -72,7 +73,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
       canManageExternalApis = true;
     } else {
-      const { role, error: roleError } = await getUserRole(user.id, companyId);
+      let { role, error: roleError } = await getUserRole(user.id, companyId);
+      if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
+        const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+        if (fallbackRole) {
+          role = fallbackRole;
+          roleError = null;
+        }
+      }
       if (roleError || !role) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }

@@ -1,4 +1,5 @@
 import React from 'react';
+import StrategyIntelligencePanel, { type StrategyStatusPayload } from '../strategy/StrategyIntelligencePanel';
 
 /** Strategic flow state from list-level aggregation (TrendCampaignsTab). */
 export type StrategicFlowState =
@@ -18,6 +19,8 @@ export type WorkspaceCardSignal = {
 export type StrategicWorkspacePanelProps = {
   flowState: StrategicFlowState;
   cardsWithSignals: WorkspaceCardSignal[];
+  /** Optional strategy-status payload for intelligence panel (awareness, drift, trend, bias, AI pressure). */
+  strategyStatusPayload?: StrategyStatusPayload | null;
 };
 
 const POSITION_LABELS: Record<StrategicFlowState, string> = {
@@ -74,7 +77,7 @@ function StrategyMemorySnapshot(props: {
 }
 
 function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
-  const { flowState, cardsWithSignals } = props;
+  const { flowState, cardsWithSignals, strategyStatusPayload } = props;
 
   const executeCount = cardsWithSignals.filter((c) => c.momentumState === 'execute').length;
   const upcomingCount = cardsWithSignals.filter((c) => c.journeyState === 'upcoming').length;
@@ -124,6 +127,7 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
         </div>
       </div>
       <StrategyMemorySnapshot flowState={flowState} cardsWithSignals={cardsWithSignals} />
+      <StrategyIntelligencePanel data={strategyStatusPayload} />
     </div>
   );
 }

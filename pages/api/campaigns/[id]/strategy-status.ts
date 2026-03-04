@@ -65,15 +65,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   let strategy_awareness: import('../../../../backend/services/strategyAwarenessService').StrategyAwareness | undefined;
+  let strategic_drift: import('../../../../backend/services/strategicDriftService').StrategicDriftResult | undefined;
+  let strategy_bias: import('../../../../backend/services/strategyBiasService').StrategyBiasResult | undefined;
+  let strategic_memory_trend: import('../../../../backend/services/strategicMemoryService').StrategicMemoryTrend | undefined;
+  let weekly_strategy_intelligence: import('../../../../backend/services/weeklyStrategyIntelligenceService').WeeklyStrategyIntelligence | undefined;
+
   try {
     const { getStrategyAwareness } = await import('../../../../backend/services/strategyAwarenessService');
     strategy_awareness = await getStrategyAwareness(id);
-  } catch (_) {
-    // Optional enrichment; do not fail the request
-  }
+  } catch (_) {}
+  try {
+    const { detectStrategicDrift } = await import('../../../../backend/services/strategicDriftService');
+    strategic_drift = await detectStrategicDrift(id);
+  } catch (_) {}
+  try {
+    const { computeStrategyBias } = await import('../../../../backend/services/strategyBiasService');
+    strategy_bias = await computeStrategyBias(id);
+  } catch (_) {}
+  try {
+    const { getStrategicMemoryTrend } = await import('../../../../backend/services/strategicMemoryService');
+    strategic_memory_trend = await getStrategicMemoryTrend(id);
+  } catch (_) {}
+  try {
+    const { getWeeklyStrategyIntelligence } = await import('../../../../backend/services/weeklyStrategyIntelligenceService');
+    weekly_strategy_intelligence = await getWeeklyStrategyIntelligence(id);
+  } catch (_) {}
 
   return res.status(200).json({
     status: latestVersion.status ?? 'draft',
     ...(strategy_awareness != null && { strategy_awareness }),
+    ...(strategic_drift != null && { strategic_drift }),
+    ...(strategy_bias != null && { strategy_bias }),
+    ...(strategic_memory_trend != null && { strategic_memory_trend }),
+    ...(weekly_strategy_intelligence != null && { weekly_strategy_intelligence }),
   });
 }

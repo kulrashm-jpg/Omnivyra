@@ -39,6 +39,7 @@ import { optimizeWeek } from './aiGateway';
 
 export async function optimizeWeekPlan(input: {
   companyId?: string | null;
+  campaignId?: string | null;
   profile: CompanyProfile;
   campaign_objective: string;
   week_plan: WeekPlanItem;
@@ -87,6 +88,7 @@ ${JSON.stringify(input.platform_rules ?? {}, null, 2)}
 
   const completion = await optimizeWeek({
     companyId: input.companyId ?? null,
+    campaignId: input.campaignId ?? null,
     model: 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
@@ -161,6 +163,7 @@ export async function optimizeCampaignWeek(input: {
 
   const proposal = await optimizeWeekPlan({
     companyId: input.companyId,
+    campaignId: input.campaignId ?? null,
     profile,
     campaign_objective: input.campaignObjective,
     week_plan: targetWeek,

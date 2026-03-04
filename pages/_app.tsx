@@ -4,16 +4,20 @@ import Head from 'next/head';
 import { CompanyProvider } from '../components/CompanyContext';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
+import LandingNavbar from '../components/landing/LandingNavbar';
+
+const LANDING_PUBLIC_ROUTES = ['/', '/pricing', '/about', '/blog'];
 
 const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const { isAuthenticated, isLoading } = useCompanyContext();
 
-  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/'];
+  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/pricing', '/about', '/blog'];
+  const isBlogRoute = router.pathname === '/blog' || router.pathname.startsWith('/blog/');
+  const isAdminBlogRoute = router.pathname === '/admin/blog' || router.pathname.startsWith('/admin/blog/');
   const isSuperAdminRoute = router.pathname.startsWith('/super-admin');
   const isPlatformExternalApis =
     router.pathname === '/external-apis' && router.asPath.includes('mode=platform');
-  // Content Architect uses cookie auth; allow these so they are not redirected to Supabase login
   const isCompanyProfile = router.pathname === '/company-profile';
   const isContentArchitectHub = router.pathname === '/content-architect';
   const isRecommendationsPage = router.pathname === '/recommendations';
@@ -21,12 +25,16 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     router.pathname.startsWith('/campaigns') || router.pathname.startsWith('/campaign-daily-plan');
   const isPublic =
     publicRoutes.includes(router.pathname) ||
+    isBlogRoute ||
+    isAdminBlogRoute ||
     isSuperAdminRoute ||
     isPlatformExternalApis ||
     isCompanyProfile ||
     isContentArchitectHub ||
     isRecommendationsPage ||
     isCampaignOrPlanRoute;
+
+  const showLandingNavbar = LANDING_PUBLIC_ROUTES.includes(router.pathname) || isBlogRoute;
 
   if (!isPublic && !isAuthenticated && !isLoading) {
     if (typeof window !== 'undefined') {
@@ -35,7 +43,12 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     return null;
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      {showLandingNavbar && <LandingNavbar />}
+      {children}
+    </>
+  );
 };
 
 function MyApp({ Component, pageProps }: AppProps) {
