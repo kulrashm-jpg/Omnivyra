@@ -208,6 +208,37 @@ export default function CmoPortfolioRadarView({
   getDecisionPattern,
   onRecordSelection,
 }: CmoPortfolioRadarViewProps) {
+  const [sortBy, setSortBy] = useState<'risk' | 'name'>('risk');
+  const pattern = useMemo(
+    () => (userId && getDecisionPattern ? getDecisionPattern(userId) : null),
+    [userId, getDecisionPattern]
+  );
+  const lastLoadKeyRef = useRef<string>('');
+  const frozenPatternRef = useRef<UserDecisionPattern | null>(null);
+
+  const campaignCards = portfolio?.campaignCards ?? [];
+  const loadKey = `${campaignCards.length}-${campaignCards[0]?.campaignId ?? ''}`;
+  if (loadKey !== lastLoadKeyRef.current) {
+    lastLoadKeyRef.current = loadKey;
+    frozenPatternRef.current = pattern;
+  }
+
+  const sortedCards = useMemo(() => {
+    const list = [...campaignCards];
+    if (sortBy === 'risk') list.sort((a, b) => b.riskScore - a.riskScore);
+    else list.sort((a, b) => a.campaignName.localeCompare(b.campaignName, undefined, { sensitivity: 'base' }));
+    return list;
+  }, [campaignCards, sortBy]);
+
+  const displayCards = useMemo(() => {
+    const p = frozenPatternRef.current;
+    if (!p) return sortedCards;
+    return sortedCards.map((card) => ({
+      ...card,
+      preventiveActions: reorderOptionsByPreference(card.preventiveActions, p),
+    }));
+  }, [sortedCards]);
+
   if (loading) {
     return (
       <div className="flex flex-col h-full min-h-0 p-4 gap-6 overflow-y-auto">
@@ -231,37 +262,7 @@ export default function CmoPortfolioRadarView({
     );
   }
 
-  const { companyNarrative, campaignCards, attentionFeed } = portfolio;
-  const [sortBy, setSortBy] = useState<'risk' | 'name'>('risk');
-
-  const pattern = useMemo(
-    () => (userId && getDecisionPattern ? getDecisionPattern(userId) : null),
-    [userId, getDecisionPattern]
-  );
-
-  const lastLoadKeyRef = useRef<string>('');
-  const frozenPatternRef = useRef<UserDecisionPattern | null>(null);
-  const loadKey = `${campaignCards.length}-${campaignCards[0]?.campaignId ?? ''}`;
-  if (loadKey !== lastLoadKeyRef.current) {
-    lastLoadKeyRef.current = loadKey;
-    frozenPatternRef.current = pattern;
-  }
-
-  const sortedCards = useMemo(() => {
-    const list = [...campaignCards];
-    if (sortBy === 'risk') list.sort((a, b) => b.riskScore - a.riskScore);
-    else list.sort((a, b) => a.campaignName.localeCompare(b.campaignName, undefined, { sensitivity: 'base' }));
-    return list;
-  }, [campaignCards, sortBy]);
-
-  const displayCards = useMemo(() => {
-    const p = frozenPatternRef.current;
-    if (!p) return sortedCards;
-    return sortedCards.map((card) => ({
-      ...card,
-      preventiveActions: reorderOptionsByPreference(card.preventiveActions, p),
-    }));
-  }, [sortedCards]);
+  const { companyNarrative, attentionFeed } = portfolio;
 
   return (
     <div className="flex flex-col h-full min-h-0 p-4 gap-6 overflow-y-auto">

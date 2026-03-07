@@ -25,6 +25,7 @@ import {
   ChevronUp
 } from 'lucide-react';
 import CampaignAIChat from '../components/CampaignAIChat';
+import { isCreatorDependentContentType } from '../utils/contentTaxonomy';
 
 export default function ContentCreation() {
   const [activeTab, setActiveTab] = useState('overview');
@@ -39,8 +40,8 @@ export default function ContentCreation() {
   const [isGeneratingContent, setIsGeneratingContent] = useState(false);
   const [expandedContent, setExpandedContent] = useState<{ [key: string]: boolean }>({});
 
-  // Platform-specific content types
-  const platformContentTypes = {
+  // Platform-specific content types (creator-dependent only: video, carousel, reel, etc.)
+  const platformContentTypesRaw = {
     linkedin: [
       { type: 'article', label: 'Article', icon: FileText, color: 'from-blue-500 to-cyan-600' },
       { type: 'post', label: 'Post', icon: Edit3, color: 'from-blue-600 to-indigo-600' },
@@ -82,6 +83,12 @@ export default function ContentCreation() {
       { type: 'live', label: 'Live', icon: Play, color: 'from-red-500 to-pink-600' }
     ]
   };
+  const platformContentTypes = Object.fromEntries(
+    Object.entries(platformContentTypesRaw).map(([k, arr]) => [
+      k,
+      arr.filter((t) => isCreatorDependentContentType(t.type)),
+    ])
+  );
 
   const platforms = [
     { id: 'linkedin', name: 'LinkedIn', color: 'bg-blue-600', icon: '💼' },

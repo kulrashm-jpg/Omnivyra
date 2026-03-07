@@ -115,7 +115,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!access) return;
 
     const defaultApiIds = await getCompanyDefaultApiIds(companyId);
-    const profile = await getProfile(companyId, { autoRefine: false });
+    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
     const audienceKeywords = buildAudienceKeywords(profile);
     const profileCategory =
       (profile?.category && String(profile.category)) ||

@@ -131,14 +131,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!access) return;
     const canManageExternalApis =
       access.role === 'SUPER_ADMIN' || (await hasPermission(access.role, 'MANAGE_EXTERNAL_APIS'));
+    const skipCache = req.query?.skipCache === '1' || req.query?.skipCache === 'true';
     try {
       const apis = platformScopeRequested && !companyId
         ? (await supabase
             .from('external_api_sources')
             .select('*')
-            .is('company_id', null)
+            .order('company_id', { ascending: true, nullsFirst: true })
             .order('created_at', { ascending: true })).data || []
-        : await getPlatformConfigs(companyId);
+        : await getPlatformConfigs(companyId, { skipCache });
       const since = new Date();
       since.setDate(since.getDate() - 13);
       const sinceDate = since.toISOString().slice(0, 10);
@@ -164,11 +165,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       }
 
-      const { data: accessRows } = apiIds.length
+      const { data: configRows } = apiIds.length
         ? await supabase
-            .from('external_api_user_access')
-            .select('*')
-            .eq('is_enabled', true)
+            .from('company_api_configs')
+            .select('api_source_id, company_id, daily_limit, signal_limit')
+            .eq('enabled', true)
             .in('api_source_id', apiIds)
         : { data: [] };
 
@@ -180,17 +181,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             .in('api_source_id', apiIds)
         : { data: [] };
 
-      const enabledCountMap = (accessRows || []).reduce<Record<string, number>>((acc, row) => {
+      const enabledCountMap = (configRows || []).reduce<Record<string, number>>((acc, row) => {
         acc[row.api_source_id] = (acc[row.api_source_id] || 0) + 1;
         return acc;
       }, {});
 
-      const enabledCompaniesByApi = (accessRows || []).reduce<Record<string, string[]>>(
+      const enabledCompaniesByApi = (configRows || []).reduce<Record<string, string[]>>(
         (acc, row) => {
-          if (!row.user_id || !String(row.user_id).startsWith('company:')) {
-            return acc;
-          }
-          const companyId = String(row.user_id).slice('company:'.length);
+          const companyId = row.company_id;
+          if (!companyId) return acc;
           acc[row.api_source_id] = acc[row.api_source_id] || [];
           if (!acc[row.api_source_id].includes(companyId)) {
             acc[row.api_source_id].push(companyId);
@@ -219,6 +218,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         );
         const failureCount = rows.reduce(
           (sum, row) => sum + (row.failure_count ?? 0),
+          0
+        );
+        const signalsGenerated = rows.reduce(
+          (sum, row) => sum + (row.signals_generated ?? 0),
           0
         );
         const lastUsedAt = rows.reduce<string | null>((latest, row) => {
@@ -255,12 +258,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             request_count: 0,
             success_count: 0,
             failure_count: 0,
+            signals_generated: 0,
             by_feature: {},
             by_user: {},
           };
           existing.request_count += row.request_count ?? 0;
           existing.success_count += row.success_count ?? 0;
           existing.failure_count += row.failure_count ?? 0;
+          existing.signals_generated = (existing.signals_generated ?? 0) + (row.signals_generated ?? 0);
           if (parsed.kind === 'feature') {
             const featureKey = parsed.feature || 'unknown';
             const feature = existing.by_feature[featureKey] || {
@@ -289,15 +294,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           acc[parsed.companyId] = existing;
           return acc;
         }, {});
+        const companyConfig = companyId
+          ? (configRows || []).find(
+              (r: { api_source_id: string; company_id: string }) =>
+                r.api_source_id === api.id && r.company_id === companyId
+            )
+          : null;
+        const company_limits =
+          companyConfig && companyId
+            ? {
+                daily_limit: (companyConfig as { daily_limit?: number | null }).daily_limit ?? null,
+                signal_limit: (companyConfig as { signal_limit?: number | null }).signal_limit ?? null,
+              }
+            : null;
+
         return {
           ...api,
           health: (api as any).health || healthMap[api.id] || null,
           enabled_user_count: enabledCountMap[api.id] || 0,
           enabled_companies: enabledCompaniesByApi[api.id] || [],
+          company_limits,
           usage_summary: {
             request_count: requestCount,
             success_count: successCount,
             failure_count: failureCount,
+            signals_generated: signalsGenerated,
             last_used_at: lastUsedAt,
             last_failure_at: lastFailureAt,
             last_error_message: lastError.message || null,
@@ -311,6 +332,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             request_count: entry.request_count,
             success_count: entry.success_count,
             failure_count: entry.failure_count,
+            signals_generated: entry.signals_generated ?? 0,
             by_feature: Object.values(entry.by_feature || {}),
             by_user: Object.values(entry.by_user || {}),
           })),
@@ -321,6 +343,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               request_count: row.request_count ?? 0,
               success_count: row.success_count ?? 0,
               failure_count: row.failure_count ?? 0,
+              signals_generated: row.signals_generated ?? 0,
             })),
         };
       });
@@ -332,7 +355,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         permissions: { canManageExternalApis },
       });
     } catch (error) {
-      return res.status(500).json({ error: 'Failed to load external APIs' });
+      return res.status(500).json({
+        error: 'Failed to load external APIs',
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -442,7 +468,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .single();
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to create external API' });
+      return res.status(500).json({
+        error: 'Failed to create external API',
+        detail: error.message,
+      });
     }
     return res.status(201).json({ api: data });
   }

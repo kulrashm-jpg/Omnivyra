@@ -67,7 +67,7 @@ export default function ContentCreationPanel({
   const [showVoiceNotes, setShowVoiceNotes] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState('linkedin');
-  const [selectedContentType, setSelectedContentType] = useState('post');
+  const [selectedContentType, setSelectedContentType] = useState('video');
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [pendingDeleteContentId, setPendingDeleteContentId] = useState<string | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
@@ -88,14 +88,17 @@ export default function ContentCreationPanel({
     { id: 'tiktok', name: 'TikTok', icon: '🎵' }
   ];
 
-  const contentTypes = [
-    { id: 'post', name: 'Post', icon: FileText },
+  const allContentTypes = [
     { id: 'video', name: 'Video', icon: Video },
+    { id: 'carousel', name: 'Carousel', icon: Image },
+    { id: 'reel', name: 'Reel', icon: Video },
+    { id: 'short', name: 'Short', icon: Video },
     { id: 'story', name: 'Story', icon: Image },
-    { id: 'article', name: 'Article', icon: FileText },
-    { id: 'poll', name: 'Poll', icon: Users },
-    { id: 'live', name: 'Live', icon: Video }
+    { id: 'live', name: 'Live', icon: Video },
+    { id: 'audio', name: 'Audio', icon: Mic },
+    { id: 'podcast', name: 'Podcast', icon: Mic },
   ];
+  const contentTypes = allContentTypes;
 
   useEffect(() => {
     if (initialContent.length > 0) {

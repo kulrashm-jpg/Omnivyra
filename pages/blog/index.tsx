@@ -31,12 +31,12 @@ function estimateReadTime(post: BlogPost): number {
 function ArticlePlaceholder({ aspect = '16/9' }: { aspect?: string }) {
   return (
     <div
-      className="w-full bg-neutral-100"
+      className="w-full bg-gradient-to-br from-slate-100 to-slate-200"
       style={{ aspectRatio: aspect }}
       aria-hidden
     >
-      <div className="flex h-full w-full items-center justify-center text-neutral-300">
-        <span className="text-sm font-medium tracking-wide">Image</span>
+      <div className="flex h-full w-full items-center justify-center">
+        <div className="h-12 w-12 rounded-full border-2 border-dashed border-slate-300" />
       </div>
     </div>
   );
@@ -93,15 +93,19 @@ export default function BlogListingPage() {
       </Head>
       <div className="min-h-screen journal-bg">
         {/* Hero */}
-        <header className="border-b border-neutral-200/80 bg-white/60">
-          <div className="mx-auto max-w-3xl px-6 py-16 text-center sm:py-20">
-            <h1 className="journal-title text-4xl tracking-tight sm:text-5xl">
+        <header className="relative overflow-hidden border-b border-slate-200/80 bg-white/90 backdrop-blur-sm">
+          <div className="absolute inset-0 bg-gradient-to-b from-white/50 to-transparent" aria-hidden />
+          <div className="relative mx-auto max-w-3xl px-6 py-20 text-center sm:py-24">
+            <span className="inline-block text-xs font-semibold uppercase tracking-[0.2em] text-[#0B5ED7]">
+              Insights
+            </span>
+            <h1 className="journal-title mt-3 text-4xl tracking-tight sm:text-5xl lg:text-[2.75rem]">
               The Marketing Intelligence Journal
             </h1>
-            <p className="mt-4 text-lg journal-body text-neutral-600 sm:text-xl">
+            <p className="mt-5 text-lg journal-body text-slate-600 sm:text-xl">
               Strategic insight on campaign architecture, execution intelligence, and momentum modeling.
             </p>
-            <div className="mx-auto mt-8 max-w-2xl space-y-3 text-base journal-body text-neutral-500">
+            <div className="mx-auto mt-8 max-w-2xl space-y-3 text-base journal-body text-slate-500/90">
               {EDITORIAL_INTRO.map((line, i) => (
                 <p key={i}>{line}</p>
               ))}
@@ -123,24 +127,32 @@ export default function BlogListingPage() {
                     href={`/blog/${encodeURIComponent(featured.slug)}`}
                     className="group block"
                   >
-                    <div className="overflow-hidden rounded-lg journal-card-shadow journal-card-hover bg-white">
-                      <div className="aspect-[16/9] w-full overflow-hidden bg-neutral-100">
+                    <div className="overflow-hidden rounded-2xl border border-slate-200/60 bg-white journal-featured-card journal-card-hover">
+                      <div className="relative aspect-[16/9] w-full overflow-hidden bg-slate-100">
                         {featured.featured_image_url ? (
-                          <img
-                            src={featured.featured_image_url}
-                            alt=""
-                            className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
-                          />
+                          <>
+                            <img
+                              src={featured.featured_image_url}
+                              alt=""
+                              className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" aria-hidden />
+                          </>
                         ) : (
                           <ArticlePlaceholder />
                         )}
                       </div>
                       <div className="px-8 py-8 sm:px-10 sm:py-10">
-                        <h2 className="journal-title text-2xl leading-tight text-neutral-900 sm:text-3xl group-hover:text-neutral-700">
+                        {featured.category && (
+                          <span className="inline-block text-xs font-semibold uppercase tracking-wider text-[#0B5ED7]">
+                            {featured.category}
+                          </span>
+                        )}
+                        <h2 className="journal-title mt-2 text-2xl leading-tight text-slate-900 sm:text-3xl group-hover:text-[#0B5ED7] transition-colors">
                           {featured.title}
                         </h2>
                         {featured.excerpt && (
-                          <p className="mt-4 max-w-2xl text-base journal-body text-neutral-600 line-clamp-3">
+                          <p className="mt-4 max-w-2xl text-base journal-body text-slate-600 line-clamp-3">
                             {featured.excerpt}
                           </p>
                         )}
@@ -156,8 +168,9 @@ export default function BlogListingPage() {
                           </time>
                           <span>{estimateReadTime(featured)} min read</span>
                         </div>
-                        <p className="mt-4 text-sm font-medium journal-link underline-offset-2 group-hover:underline">
-                          Read Article →
+                        <p className="mt-5 inline-flex items-center gap-2 text-sm font-semibold journal-link">
+                          Read Article
+                          <span className="transition-transform group-hover:translate-x-1">→</span>
                         </p>
                       </div>
                     </div>
@@ -167,28 +180,36 @@ export default function BlogListingPage() {
 
               {/* Three supporting articles */}
               {supporting.length > 0 && (
-                <section className="grid gap-10 sm:grid-cols-3">
+                <section className="grid grid-cols-1 gap-8 sm:grid-cols-3">
                   {supporting.map((post) => (
-                    <article key={post.id} className="flex flex-col">
-                      <Link href={`/blog/${encodeURIComponent(post.slug)}`} className="group block flex flex-1 flex-col">
-                        <div className="overflow-hidden rounded-lg journal-card-shadow journal-card-hover bg-white">
-                          <div className="aspect-[16/9] w-full overflow-hidden bg-neutral-100">
+                    <article key={post.id} className="flex h-full min-h-0 flex-col">
+                      <Link href={`/blog/${encodeURIComponent(post.slug)}`} className="group flex min-h-full flex-1 flex-col">
+                        <div className="flex min-h-full flex-col overflow-hidden rounded-2xl border border-slate-200/60 bg-white journal-card-shadow journal-card-hover">
+                          <div className="relative aspect-[16/9] w-full shrink-0 overflow-hidden bg-slate-100">
                             {post.featured_image_url ? (
-                              <img
-                                src={post.featured_image_url}
-                                alt=""
-                                className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
-                              />
+                              <>
+                                <img
+                                  src={post.featured_image_url}
+                                  alt=""
+                                  className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.05]"
+                                />
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/10 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" aria-hidden />
+                              </>
                             ) : (
                               <ArticlePlaceholder />
                             )}
                           </div>
                           <div className="flex flex-1 flex-col p-6">
-                            <h3 className="journal-title text-lg leading-snug text-neutral-900 group-hover:text-neutral-700">
+                            {post.category && (
+                              <span className="text-xs font-semibold uppercase tracking-wider text-[#0B5ED7]">
+                                {post.category}
+                              </span>
+                            )}
+                            <h3 className="journal-title mt-1.5 line-clamp-2 text-lg leading-snug text-slate-900 group-hover:text-[#0B5ED7] transition-colors">
                               {post.title}
                             </h3>
                             {post.excerpt && (
-                              <p className="mt-3 line-clamp-2 text-sm journal-body text-neutral-600">
+                              <p className="mt-3 line-clamp-2 text-sm journal-body text-slate-600">
                                 {post.excerpt}
                               </p>
                             )}
@@ -204,8 +225,9 @@ export default function BlogListingPage() {
                               </time>
                               <span>{estimateReadTime(post)} min read</span>
                             </div>
-                            <p className="mt-4 text-sm font-medium journal-link underline-offset-2 group-hover:underline">
-                              Read Article →
+                            <p className="mt-auto pt-4 inline-flex items-center gap-1.5 text-sm font-semibold journal-link">
+                              Read
+                              <span className="transition-transform group-hover:translate-x-0.5">→</span>
                             </p>
                           </div>
                         </div>
@@ -226,11 +248,11 @@ export default function BlogListingPage() {
           )}
 
           {/* Subtle footer reinforcement */}
-          <footer className="mt-20 border-t border-neutral-200/80 pt-10 text-center">
+          <footer className="mt-20 border-t border-slate-200/80 pt-10 text-center">
             <p className="text-sm journal-muted">
-              <a href="/blog/rss.xml" className="hover:text-neutral-900">RSS</a>
+              <a href="/blog/rss.xml" className="transition-colors hover:text-[#0B5ED7]">RSS</a>
               {' · '}
-              <a href="/blog/sitemap.xml" className="hover:text-neutral-900">Sitemap</a>
+              <a href="/blog/sitemap.xml" className="transition-colors hover:text-[#0B5ED7]">Sitemap</a>
             </p>
           </footer>
         </main>

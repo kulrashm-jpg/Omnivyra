@@ -202,6 +202,7 @@ function weeksForDbFromBlueprint(blueprint: CampaignBlueprint) {
     posting_execution_map: Array.isArray((w as any).posting_execution_map) ? (w as any).posting_execution_map : undefined,
     resolved_postings: Array.isArray((w as any).resolved_postings) ? (w as any).resolved_postings : undefined,
     week_extras: w.week_extras ?? undefined,
+    distribution_insights: Array.isArray((w as any).distribution_insights) ? (w as any).distribution_insights : undefined,
   }));
 }
 

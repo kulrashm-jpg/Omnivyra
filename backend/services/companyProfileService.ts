@@ -1,5 +1,6 @@
-import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
+import { runCompletionWithOperation } from './aiGateway';
+import { refineLanguageOutput } from './languageRefinementService';
 import { z } from 'zod';
 import { supabase } from '../db/supabaseClient';
 
@@ -522,13 +523,12 @@ export async function refineProblemTransformationAnswers(
   rawAnswers: (string | null | undefined)[],
   options?: { companyId?: string; profile?: CompanyProfile | null; existingFields?: ProblemTransformationExistingFields }
 ): Promise<ProblemTransformationRefinedOutput> {
-  const client = getOpenAiClient();
+  const profile = options?.profile ?? null;
+  const companyId = options?.companyId ?? (profile?.company_id ? String(profile.company_id) : null);
   const qaPairs = PROBLEM_TRANSFORMATION_QUESTIONS.map((q, i) => ({
     question: q,
     answer: rawAnswers[i] ?? '',
   }));
-
-  const profile = options?.profile ?? null;
   const existingFields = options?.existingFields ?? {};
   const useStrategic = !!profile || options?.companyId;
 
@@ -553,21 +553,25 @@ export async function refineProblemTransformationAnswers(
       '\n\nGenerate ALL 9 fields. Output JSON only.';
   }
 
-  const callLLM = (retryStrict = false) =>
-    client.chat.completions.create({
+  const runLLM = async (retryStrict: boolean) => {
+    const result = await runCompletionWithOperation({
+      companyId,
+      campaignId: null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0,
       response_format: { type: 'json_object' },
+      operation: 'refineProblemTransformation',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: retryStrict ? userPrompt + '\n\nReturn ONLY valid JSON. No markdown, no commentary.' : userPrompt },
       ],
     });
+    return result.output?.trim() || '{}';
+  };
 
   let raw = '';
   try {
-    const completion = await callLLM(false);
-    raw = completion.choices[0]?.message?.content?.trim() || '{}';
+    raw = await runLLM(false);
   } catch {
     return mergeWithExisting(EMPTY_PT_OUTPUT, existingFields);
   }
@@ -577,8 +581,7 @@ export async function refineProblemTransformationAnswers(
     parsed = JSON.parse(raw);
   } catch {
     try {
-      const retry = await callLLM(true);
-      raw = retry.choices[0]?.message?.content?.trim() || '{}';
+      raw = await runLLM(true);
       parsed = JSON.parse(raw);
     } catch {
       return mergeWithExisting(EMPTY_PT_OUTPUT, existingFields);
@@ -1240,14 +1243,6 @@ const shouldOverwriteField = (field?: EnrichmentField): boolean => {
 
 // Enrichment pass removed in favor of a single normalization prompt.
 
-const getOpenAiClient = (): OpenAI => {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing OPENAI_API_KEY');
-  }
-  return new OpenAI({ apiKey });
-};
-
 const shouldSkipUrl = (url: string): boolean => {
   const lower = url.toLowerCase();
   return (
@@ -1731,7 +1726,7 @@ const crawlWebsiteSources = async (
 };
 
 const cleanEvidenceWithAi = async (
-  client: OpenAI,
+  companyId: string | null,
   summaries: Array<{ label: string; url: string; summary: string }>
 ): Promise<Array<{ label: string; url: string; summary: string }>> => {
   if (summaries.length === 0) return [];
@@ -1755,17 +1750,20 @@ const cleanEvidenceWithAi = async (
     '\n\nText:\n' +
     JSON.stringify(summaries);
 
-  const completion = await client.chat.completions.create({
+  const result = await runCompletionWithOperation({
+    companyId,
+    campaignId: null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
+    operation: 'profileEnrichment',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content?.trim() || '{}';
+  const raw = result.output?.trim() || '{}';
   const parsed = JSON.parse(raw);
   const cleaned = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.evidence) ? parsed.evidence : [];
   const deduped = new Map<string, { label: string; url: string; summary: string }>();
@@ -1829,7 +1827,7 @@ const buildExtractionPrompt = (
 };
 
 const generateMissingFieldQuestions = async (
-  client: OpenAI,
+  companyId: string | null,
   extraction: CompanyProfileExtractionOutput
 ): Promise<Array<{ field: string; question: string; options: string[]; allow_multiple?: boolean }>> => {
   const systemPrompt =
@@ -1862,17 +1860,20 @@ const generateMissingFieldQuestions = async (
     ],
   });
 
-  const completion = await client.chat.completions.create({
+  const result = await runCompletionWithOperation({
+    companyId,
+    campaignId: null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
+    operation: 'profileEnrichment',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content?.trim() || '{}';
+  const raw = result.output?.trim() || '{}';
   const parsed = JSON.parse(raw);
   return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.questions) ? parsed.questions : [];
 };
@@ -2372,18 +2373,66 @@ export async function saveProfile(
 
 export async function getProfile(
   companyId?: string,
-  options?: { autoRefine?: boolean }
+  options?: { autoRefine?: boolean; languageRefine?: boolean }
 ): Promise<CompanyProfile | null> {
   const resolvedCompanyId = normalizeCompanyId(companyId);
   const profile = await fetchProfileRaw(resolvedCompanyId);
   if (!profile) return null;
 
   const autoRefine = options?.autoRefine ?? true;
+  let result: CompanyProfile | null = profile;
   if (autoRefine && shouldRefineProfile(profile.last_refined_at)) {
-    return refineProfileWithAI(profile, { force: true });
+    result = await refineProfileWithAI(profile, { force: true });
   }
 
-  return profile;
+  const languageRefine = options?.languageRefine ?? false;
+  if (languageRefine && result) {
+    result = await refineProfileForPrompts(result);
+  }
+
+  return result;
+}
+
+/** Refine profile text fields before they enter AI prompts. Rule-based; runs once per profile load. */
+async function refineProfileField(value: string | null | undefined): Promise<string | null> {
+  if (value == null || typeof value !== 'string') return value ?? null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const r = await refineLanguageOutput({
+      content: trimmed,
+      card_type: 'general',
+    });
+    return (r.refined as string) || trimmed;
+  } catch (err) {
+    console.warn('[company-profile] refineProfileField failed, using original:', err instanceof Error ? err.message : String(err));
+    return trimmed;
+  }
+}
+
+/** Refines profile text fields used in prompts. Ensures normalized input context for AI. */
+export async function refineProfileForPrompts(
+  profile: CompanyProfile | null
+): Promise<CompanyProfile | null> {
+  if (!profile) return null;
+  const out = { ...profile };
+  const fields: Array<keyof CompanyProfile> = [
+    'target_audience',
+    'brand_voice',
+    'unique_value',
+    'brand_positioning',
+    'key_messages',
+    'competitive_advantages',
+    'ideal_customer_profile',
+    'target_customer_segment',
+  ];
+  for (const key of fields) {
+    const val = out[key];
+    if (typeof val === 'string' && val.trim()) {
+      (out as Record<string, unknown>)[key] = await refineProfileField(val);
+    }
+  }
+  return out;
 }
 
 const runProfileRefinement = async (
@@ -2403,7 +2452,7 @@ const runProfileRefinement = async (
     return { profile, details };
   }
 
-  const client = getOpenAiClient();
+  const companyId = profile.company_id ? String(profile.company_id) : null;
   let workingProfile = { ...profile };
   console.log('Profile before refine:', workingProfile);
   let discoveredSources: Array<{ label: string; url: string }> = [];
@@ -2462,25 +2511,28 @@ const runProfileRefinement = async (
 
   const evidenceWithSocial = [...summarizedSources, ...socialEvidence];
 
-  const cleanedEvidence = await cleanEvidenceWithAi(client, evidenceWithSocial);
+  const cleanedEvidence = await cleanEvidenceWithAi(companyId, evidenceWithSocial);
   const evidenceForExtraction = cleanedEvidence.length > 0 ? cleanedEvidence : evidenceWithSocial;
   const extractionPrompt = buildExtractionPrompt(evidenceForExtraction, workingProfile);
 
-  const extractionCompletion = await client.chat.completions.create({
+  const extractionResult = await runCompletionWithOperation({
+    companyId,
+    campaignId: null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
+    operation: 'profileExtraction',
     messages: [
       { role: 'system', content: extractionPrompt.systemPrompt },
       { role: 'user', content: extractionPrompt.userPrompt },
     ],
   });
 
-  const extractionRaw = extractionCompletion.choices[0]?.message?.content?.trim() || '{}';
+  const extractionRaw = extractionResult.output?.trim() || '{}';
   const extractionParsed = JSON.parse(extractionRaw);
   let extraction = buildExtractionWithDefaults(extractionParsed);
   console.log('CLEANED EVIDENCE:', cleanedEvidence);
-  console.log('AI EXTRACTION RAW:', extractionCompletion);
+  console.log('AI EXTRACTION RAW:', extractionResult);
   console.log('PARSED EXTRACTION:', extraction);
   console.log('Extraction result:', extraction);
   if (!extraction.missing_fields || extraction.missing_fields.length === 0) {
@@ -2488,7 +2540,7 @@ const runProfileRefinement = async (
   }
   let missingFieldQuestions: Array<{ field: string; question: string; options: string[]; allow_multiple?: boolean }> = [];
   try {
-    missingFieldQuestions = await generateMissingFieldQuestions(client, extraction);
+    missingFieldQuestions = await generateMissingFieldQuestions(companyId, extraction);
   } catch (error) {
     console.warn('Missing-field questionnaire generation failed.');
   }

@@ -16,6 +16,11 @@
   background: linear-gradient(135deg, var(--omnivyra-primary-start) 0%, var(--omnivyra-primary-end) 100%);
 }
 
+/* Hero section: refined gradient for a more professional look */
+.hero-section-bg {
+  background: linear-gradient(152deg, #0a56c7 0%, var(--omnivyra-primary-start) 24%, var(--omnivyra-primary-end) 100%);
+}
+
 .landing-btn-primary {
   background: linear-gradient(180deg, #1a6beb 0%, var(--omnivyra-primary-start) 50%, #084aad 100%);
   color: white;
@@ -58,38 +63,57 @@
   display: none;
 }
 
-/* The Marketing Intelligence Journal – editorial layout */
+/* The Marketing Intelligence Journal – premium editorial layout */
 .journal-bg {
-  background-color: #fafafa;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 50%, #e2e8f0 100%);
 }
 .journal-title {
   font-family: ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
   font-weight: 600;
   letter-spacing: -0.02em;
-  color: #1a1a1a;
+  color: #0f172a;
 }
 .journal-body {
   font-family: ui-sans-serif, system-ui, sans-serif;
-  color: #404040;
-  line-height: 1.7;
+  color: #475569;
+  line-height: 1.75;
 }
 .journal-muted {
-  color: #737373;
+  color: #64748b;
 }
 .journal-card-shadow {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 16px rgba(0, 0, 0, 0.06),
+    0 0 0 1px rgba(0, 0, 0, 0.03);
 }
 .journal-card-hover {
-  transition: box-shadow 0.2s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .journal-card-hover:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+  transform: translateY(-2px);
 }
 .journal-link {
-  color: #1a1a1a;
+  color: #0B5ED7;
   text-underline-offset: 3px;
+  transition: color 0.2s ease;
 }
 .journal-link:hover {
-  color: #404040;
+  color: #094db8;
   text-decoration: underline;
+}
+.journal-featured-card {
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.08),
+    0 0 0 1px rgba(0, 0, 0, 0.04),
+    0 0 80px rgba(11, 94, 215, 0.04);
+}
+.journal-featured-card:hover {
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.12),
+    0 0 0 1px rgba(0, 0, 0, 0.06),
+    0 0 80px rgba(11, 94, 215, 0.08);
 }

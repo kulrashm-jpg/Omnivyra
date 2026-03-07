@@ -349,13 +349,13 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
                     <span className="text-sm text-gray-700">{p.label}</span>
                     {connectedPlatforms !== null && (
                       isConnected ? (
-                        <CheckCircle className="h-4 w-4 text-green-600 shrink-0" title="Connected" aria-hidden />
+                        <span title="Connected" aria-hidden>
+                          <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
+                        </span>
                       ) : (
-                        <XCircle
-                          className="h-4 w-4 text-red-500 shrink-0"
-                          title="Not connected — connect in Community AI to use this platform"
-                          aria-hidden
-                        />
+                        <span title="Not connected — connect in Community AI to use this platform" aria-hidden>
+                          <XCircle className="h-4 w-4 text-red-500 shrink-0" />
+                        </span>
                       )
                     )}
                   </label>

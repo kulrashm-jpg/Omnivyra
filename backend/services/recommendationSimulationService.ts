@@ -10,7 +10,7 @@ export const simulateRecommendations = async (input: {
 }) => {
   const { companyId, campaignId, draftPolicyWeights } = input;
 
-  const profile = await getProfile(companyId, { autoRefine: false });
+  const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
   const geoHint = profile?.geography_list?.[0] ?? profile?.geography ?? undefined;
   const categoryHint = profile?.industry_list?.[0] ?? profile?.category ?? undefined;
   const defaultApiIds = companyId ? await getCompanyDefaultApiIds(companyId) : [];

@@ -1,4 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
+import { refineLanguageOutput } from '@/backend/services/languageRefinementService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -50,10 +51,19 @@ Format your response as a structured amendment that can be applied to the week.`
     }
 
     const aiResponse = await response.json();
-    
+    let amendment = aiResponse?.response ?? '';
+
+    if (typeof amendment === 'string' && amendment.trim()) {
+      const refined = await refineLanguageOutput({
+        content: amendment,
+        card_type: 'weekly_plan',
+      });
+      amendment = (refined.refined as string) || amendment;
+    }
+
     res.status(200).json({
       success: true,
-      amendment: aiResponse.response,
+      amendment,
       weekNumber,
       timestamp: new Date().toISOString()
     });

@@ -105,7 +105,7 @@ export async function getStrategyHistoryForCompany(
 
   let strategic_aspects: string[] = [];
   try {
-    const profile = await getProfile(companyId, { autoRefine: false });
+    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
     const inputs = (profile as { strategic_inputs?: { strategic_aspects?: string[] } })?.strategic_inputs;
     if (Array.isArray(inputs?.strategic_aspects) && inputs.strategic_aspects.length > 0) {
       strategic_aspects = inputs.strategic_aspects;

@@ -394,7 +394,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     insights,
   };
 
-  const profile = await getProfile(scope.organizationId, { autoRefine: false });
+  const profile = await getProfile(scope.organizationId, { autoRefine: false, languageRefine: true });
   const companyName = profile?.name || null;
   const logoUrl =
     (profile as any)?.logo_url ||

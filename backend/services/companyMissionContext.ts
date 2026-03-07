@@ -151,7 +151,7 @@ export async function buildCompanyMissionContext(
 ): Promise<CompanyMissionContext | null> {
   if (mode === 'NONE') return null;
 
-  const profile = await getProfile(companyId, { autoRefine: false });
+  const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
   if (!profile) return null;
 
   const cpi = profile.campaign_purpose_intent;

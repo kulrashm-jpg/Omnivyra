@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Calendar, Clock, Send, AlertCircle, CheckCircle, Plus, Settings, Sparkles, Eye, EyeOff, Zap, TrendingUp, Users, BarChart3, Image, Video, FileText, Hash, Globe, Smartphone, Monitor, Wand2, Brain, Rocket, Star, Heart, MessageCircle, Share, Target, Activity, ExternalLink } from "lucide-react";
+import PlatformIcon from "@/components/ui/PlatformIcon";
 
 export default function CreativeScheduler() {
   const router = useRouter();
@@ -367,13 +368,6 @@ export default function CreativeScheduler() {
                       {['linkedin', 'twitter', 'instagram', 'facebook', 'youtube'].map(platform => {
                         const account = connectedAccounts.find(acc => acc.platform === platform);
                         const isConnected = account && account.is_active;
-                        const platformIcons = {
-                          linkedin: '💼',
-                          twitter: '🐦',
-                          instagram: '📸',
-                          facebook: '👥',
-                          youtube: '📺'
-                        };
                         const platformColors = {
                           linkedin: 'blue',
                           twitter: 'sky',
@@ -398,10 +392,9 @@ export default function CreativeScheduler() {
                                     ? `bg-${platformColors[platform]}-500/30` 
                                     : 'bg-gray-500/20'
                                 }`}>
-                                  <span className="text-2xl">{platformIcons[platform]}</span>
+                                  <PlatformIcon platform={platform} size={20} showLabel />
                                 </div>
                                 <div>
-                                  <div className="text-lg font-semibold text-white capitalize">{platform}</div>
                                   <div className={`text-sm ${
                                     isConnected ? 'text-green-400' : 'text-gray-400'
                                   }`}>

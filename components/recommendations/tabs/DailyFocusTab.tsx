@@ -122,12 +122,8 @@ export default function DailyFocusTab(props: OpportunityTabProps) {
 
   return (
     <div className="space-y-4">
-      <EngineOverridePanel
-        engineLabel={ENGINE_LABEL}
-        overrideText={overrideText}
-        onOverrideChange={onOverrideChange}
-      />
-      <EngineContextPanel />
+      <EngineOverridePanel value={overrideText} onChange={onOverrideChange ?? (() => {})} />
+      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-gray-800">{ENGINE_LABEL}</h3>
         <div className="flex gap-2">

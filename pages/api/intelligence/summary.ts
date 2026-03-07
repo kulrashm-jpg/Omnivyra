@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingResponse';
 import { buildStrategicMemoryProfile } from '../../../lib/intelligence/strategicMemory';
 import type { StrategistAction } from '../../../lib/intelligence/strategicMemory';
 import { getActiveGenerationBiasFlags } from '../../../lib/intelligence/generationBias';
@@ -102,7 +103,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.log('[CampaignIntelligenceSummary]', summary);
     }
 
-    return res.status(200).json(summary);
+    const refinedSummary = await refineUserFacingResponse(summary);
+    return res.status(200).json(refinedSummary);
   } catch (err) {
     console.error('[CampaignIntelligenceSummary]', err);
     return res.status(500).json({ error: 'Internal server error' });

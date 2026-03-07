@@ -8,13 +8,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { username, password } = req.body || {};
   const expectedUser = process.env.SUPER_ADMIN_USERNAME || 'superadmin';
-  const expectedPass = process.env.SUPER_ADMIN_PASSWORD ;
-
-  // 🔍 TEMP DEBUG LOGS (add these)
-console.log("EXPECTED USER:", expectedUser);
-console.log("EXPECTED PASS EXISTS:", !!expectedPass);
-console.log("INPUT USER:", username);
-console.log("INPUT PASS:", password);
+  const expectedPass = process.env.SUPER_ADMIN_PASSWORD;
 
   const ipAddress =
     (req.headers['x-forwarded-for'] as string | undefined) ||
@@ -50,6 +44,13 @@ console.log("INPUT PASS:", password);
     'SameSite=Lax',
     'Max-Age=86400',
   ].join('; ');
-  res.setHeader('Set-Cookie', cookie);
+  const clearContentArchitect = [
+    'content_architect_session=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ].join('; ');
+  res.setHeader('Set-Cookie', [cookie, clearContentArchitect]);
   return res.status(200).json({ success: true });
 }

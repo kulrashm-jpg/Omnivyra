@@ -1,6 +1,16 @@
 import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
-import { getCachedResponse, setCachedResponse, buildCacheKey, getCacheStats } from './externalApiCacheService';
+import {
+  getCachedResponse,
+  setCachedResponse,
+  buildCacheKey,
+  getCacheStats,
+  isRateLimited as redisIsRateLimited,
+  addRateLimitedSource,
+  getLastRateLimitedSources,
+  clearLastRateLimitedSources,
+  resetExternalApiRuntime as redisResetExternalApiRuntime,
+} from './redisExternalApiCache';
 import { updateApiHealth, getHealthSnapshot } from './externalApiHealthService';
 import { logUsageEvent } from './usageLedgerService';
 import { incrementUsageMeter } from './usageMeterService';
@@ -14,6 +24,7 @@ import {
   TrendSignalInput,
 } from './omnivyraClientV1';
 import { getProfile } from './companyProfileService';
+import { insertFromTrendApiResults } from './intelligenceSignalStore';
 
 export type ExternalApiSource = {
   id: string;
@@ -46,7 +57,6 @@ export type ExternalApiUserAccess = {
   id: string;
   api_source_id: string;
   user_id: string;
-  is_enabled: boolean;
   api_key_env_name?: string | null;
   headers_override?: Record<string, any> | null;
   query_params_override?: Record<string, any> | null;
@@ -134,8 +144,6 @@ const sourceReliabilityWeights: Record<string, number> = {
   other: 0.6,
 };
 
-const rateLimitState = new Map<string, number[]>();
-let lastRateLimitedSources: string[] = [];
 let lastSignalConfidenceSummary: { average: number; min: number; max: number } | null = null;
 
 // External APIs are owned by Virality.
@@ -144,6 +152,20 @@ const buildUsageUserId = (userId?: string | null, companyId?: string | null) =>
   `${userId || 'system'}:${companyId || 'global'}`;
 
 const buildCompanyAccessUserId = (companyId: string) => `company:${companyId}`;
+
+/**
+ * Single source of truth for API enablement: company_api_configs.enabled.
+ * external_api_user_access no longer determines API availability (only user-level overrides).
+ * Uses in-memory cache (TTL 5 min); invalidate on config change.
+ */
+export async function getEnabledApiIdsFromCompanyConfig(
+  companyId: string,
+  options?: { skipCache?: boolean }
+): Promise<string[]> {
+  const { getCompanyConfigRows } = await import('./companyApiConfigCache');
+  const rows = await getCompanyConfigRows(companyId, options);
+  return rows.filter((r) => r.enabled).map((r) => r.api_source_id);
+}
 
 const buildFeatureUsageUserId = (feature: string, companyId: string) =>
   `feature:${feature}|company:${companyId}`;
@@ -159,7 +181,7 @@ const buildProfileRuntimeValues = async (
 ): Promise<Record<string, string>> => {
   if (!companyId) return {};
   try {
-    const profile = await getProfile(companyId, { autoRefine: false });
+    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
     if (!profile) return {};
     const category =
       (profile.category && profile.category.trim()) ||
@@ -369,18 +391,8 @@ export const executeExternalApiRequest = async (input: {
   }
 };
 
-const isRateLimited = (rateLimitKey: string, limitPerMin: number): boolean => {
-  const now = Date.now();
-  const windowMs = 60 * 1000;
-  const entries = rateLimitState.get(rateLimitKey) || [];
-  const recent = entries.filter((timestamp) => now - timestamp < windowMs);
-  if (recent.length >= limitPerMin) {
-    rateLimitState.set(rateLimitKey, recent);
-    return true;
-  }
-  recent.push(now);
-  rateLimitState.set(rateLimitKey, recent);
-  return false;
+const isRateLimited = async (rateLimitKey: string, limitPerMin: number): Promise<boolean> => {
+  return redisIsRateLimited(rateLimitKey, limitPerMin);
 };
 
 const getSourceWeight = (source?: string) => {
@@ -758,7 +770,6 @@ export async function getEnabledApis(companyId?: string | null): Promise<Externa
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return [];
   }
-  console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
   const createQuery = () =>
     supabase
       .from('external_api_sources')
@@ -767,40 +778,34 @@ export async function getEnabledApis(companyId?: string | null): Promise<Externa
       .order('created_at', { ascending: true });
 
   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
-  const applyPresetSelections = async (sources: ExternalApiSource[]) => {
-    const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
-    const companySpecific = companyScoped
-      ? sources.filter((row) => row.company_id === companyId)
-      : sources.filter((row) => !row.is_preset);
-    const globalPresets = sources.filter((row) => row.is_preset && (!companyScoped || !row.company_id));
+  const sources: ExternalApiSource[] = scopedResult.error ? [] : (scopedResult.data || []);
+  if (scopedResult.error && !scopedResult.error.message?.toLowerCase().includes('company_id')) {
+    console.warn('getEnabledApis scoped query failed', { companyId, message: scopedResult.error.message });
+    const fallback = await createQuery();
+    if (fallback.error) {
+      console.warn('getEnabledApis fallback query failed', { companyId, message: fallback.error.message });
+      return [];
+    }
+    sources.push(...(fallback.data || []));
+  } else if (scopedResult.error) {
+    const fallback = await createQuery();
+    if (fallback.error) {
+      console.warn('getEnabledApis fallback query failed', { companyId, message: fallback.error.message });
+      return [];
+    }
+    sources.push(...(fallback.data || []));
+  }
 
-    const { data: accessRows } = await supabase
-      .from('external_api_user_access')
-      .select('api_source_id, is_enabled')
-      .eq('user_id', buildCompanyAccessUserId(companyId));
-    const accessMap = (accessRows || []).reduce<Record<string, boolean>>((acc, row) => {
-      acc[row.api_source_id] = row.is_enabled === true;
-      return acc;
-    }, {});
-    const hasSelections = Object.keys(accessMap).length > 0;
-    const selectedPresets = hasSelections
-      ? globalPresets.filter((preset) => accessMap[preset.id])
-      : globalPresets;
-    return [...companySpecific, ...selectedPresets];
-  };
+  const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+  const companySpecific = companyScoped
+    ? sources.filter((row) => row.company_id === companyId)
+    : sources.filter((row) => !row.is_preset);
+  const globalPresets = sources.filter((row) => row.is_preset && (!companyScoped || !row.company_id));
 
-  if (!scopedResult.error) {
-    return applyPresetSelections(scopedResult.data || []);
-  }
-  const message = scopedResult.error.message || '';
-  if (!message.toLowerCase().includes('company_id')) {
-    throw new Error(`Failed to load external APIs: ${message}`);
-  }
-  const fallbackResult = await createQuery();
-  if (fallbackResult.error) {
-    throw new Error(`Failed to load external APIs: ${fallbackResult.error.message}`);
-  }
-  return applyPresetSelections(fallbackResult.data || []);
+  const enabledIds = await getEnabledApiIdsFromCompanyConfig(companyId);
+  const enabledSet = new Set(enabledIds);
+  const selectedPresets = globalPresets.filter((preset) => enabledSet.has(preset.id));
+  return [...companySpecific, ...selectedPresets];
 }
 
 export async function getAvailableApis(companyId?: string | null): Promise<ExternalApiSource[]> {
@@ -824,11 +829,12 @@ export async function getAvailableApis(companyId?: string | null): Promise<Exter
   }
   const message = scoped.error.message || '';
   if (!message.toLowerCase().includes('company_id')) {
-    throw new Error(`Failed to load external APIs: ${message}`);
+    console.warn('getAvailableApis scoped query failed', { companyId, message });
   }
   const fallback = await baseQuery();
   if (fallback.error) {
-    throw new Error(`Failed to load external APIs: ${fallback.error.message}`);
+    console.warn('getAvailableApis fallback query failed', { companyId, message: fallback.error.message });
+    return [];
   }
   const rows = fallback.data || [];
   const companySpecific = rows.filter((row) => row.company_id === companyId);
@@ -837,17 +843,7 @@ export async function getAvailableApis(companyId?: string | null): Promise<Exter
 }
 
 export async function getCompanyDefaultApiIds(companyId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('external_api_user_access')
-    .select('api_source_id, is_enabled')
-    .eq('user_id', buildCompanyAccessUserId(companyId));
-  if (error) {
-    console.warn('Failed to load company default API access', { companyId });
-    return [];
-  }
-  return (data || [])
-    .filter((row) => row.is_enabled === true)
-    .map((row) => row.api_source_id);
+  return getEnabledApiIdsFromCompanyConfig(companyId);
 }
 
 export async function getUserApiAccess(userId: string): Promise<ExternalApiUserAccess[]> {
@@ -857,7 +853,8 @@ export async function getUserApiAccess(userId: string): Promise<ExternalApiUserA
     .eq('user_id', userId);
 
   if (error) {
-    throw new Error(`Failed to load user API access: ${error.message}`);
+    console.warn('getUserApiAccess failed', { userId, message: error.message });
+    return [];
   }
 
   return data || [];
@@ -908,13 +905,11 @@ export async function getExternalApiSourcesForUser(
     return acc;
   }, {});
 
-  const filtered = sources
-    .filter((source) => accessMap[source.id]?.is_enabled)
-    .map((source) => mergeSourceWithAccess(source, accessMap[source.id]));
+  const merged = sources.map((source) => mergeSourceWithAccess(source, accessMap[source.id]));
   if (Array.isArray(selectedApiIds)) {
-    return filtered.filter((source) => selectedApiIds.includes(source.id));
+    return merged.filter((source) => selectedApiIds.includes(source.id));
   }
-  return filtered;
+  return merged;
 }
 
 export async function logExternalApiUsage(input: {
@@ -1007,6 +1002,85 @@ export async function logExternalApiUsage(input: {
     }
   } catch (error) {
     console.warn('API usage log failed', { apiSourceId: input.apiSourceId, userId: input.userId });
+  }
+}
+
+/**
+ * Increment signals_generated in external_api_usage (e.g. after inserting into intelligence_signals).
+ * Call from intelligence polling worker or any path that inserts signals.
+ */
+export async function addSignalsGenerated(input: {
+  apiSourceId: string;
+  userId: string;
+  count: number;
+  feature?: string | null;
+  companyId?: string | null;
+}): Promise<void> {
+  if (input.count <= 0) return;
+  try {
+    const usageDate = resolveUsageDate();
+    const nowIso = new Date().toISOString();
+    const { data } = await supabase
+      .from('external_api_usage')
+      .select('signals_generated, request_count, success_count, failure_count, last_used_at')
+      .eq('api_source_id', input.apiSourceId)
+      .eq('user_id', input.userId)
+      .eq('usage_date', usageDate)
+      .maybeSingle();
+
+    const current = (data?.signals_generated ?? 0) + input.count;
+    const { error: upsertError } = await supabase.from('external_api_usage').upsert(
+      {
+        api_source_id: input.apiSourceId,
+        user_id: input.userId,
+        usage_date: usageDate,
+        signals_generated: current,
+        request_count: data?.request_count ?? 0,
+        success_count: data?.success_count ?? 0,
+        failure_count: data?.failure_count ?? 0,
+        last_used_at: data?.last_used_at ?? nowIso,
+        updated_at: nowIso,
+      },
+      { onConflict: 'api_source_id,user_id,usage_date' }
+    );
+
+    if (upsertError) {
+      console.warn('Failed to update signals_generated', {
+        apiSourceId: input.apiSourceId,
+        userId: input.userId,
+      });
+    }
+
+    if (input.feature && input.companyId) {
+      const featureUserId = buildFeatureUsageUserId(input.feature, input.companyId);
+      const { data: featureData } = await supabase
+        .from('external_api_usage')
+        .select('signals_generated, request_count, success_count, failure_count, last_used_at')
+        .eq('api_source_id', input.apiSourceId)
+        .eq('user_id', featureUserId)
+        .eq('usage_date', usageDate)
+        .maybeSingle();
+      const featureCurrent = (featureData?.signals_generated ?? 0) + input.count;
+      await supabase.from('external_api_usage').upsert(
+        {
+          api_source_id: input.apiSourceId,
+          user_id: featureUserId,
+          usage_date: usageDate,
+          signals_generated: featureCurrent,
+          request_count: featureData?.request_count ?? 0,
+          success_count: featureData?.success_count ?? 0,
+          failure_count: featureData?.failure_count ?? 0,
+          last_used_at: featureData?.last_used_at ?? nowIso,
+          updated_at: nowIso,
+        },
+        { onConflict: 'api_source_id,user_id,usage_date' }
+      );
+    }
+  } catch (error) {
+    console.warn('addSignalsGenerated failed', {
+      apiSourceId: input.apiSourceId,
+      userId: input.userId,
+    });
   }
 }
 
@@ -1122,12 +1196,33 @@ export async function saveTenantPlatformConfig(
   return result.data as ExternalApiSource;
 }
 
-export async function getPlatformConfigs(companyId?: string | null): Promise<PlatformConfig[]> {
+async function fetchHealthMapForApiIds(
+  apiIds: string[]
+): Promise<Record<string, ExternalApiHealth>> {
+  if (apiIds.length === 0) return {};
+  const { data: healthData, error: healthError } = await supabase
+    .from('external_api_health')
+    .select('*')
+    .in('api_source_id', apiIds);
+  if (healthError || !healthData) return {};
+  return healthData.reduce<Record<string, ExternalApiHealth>>((acc, row: any) => {
+    acc[row.api_source_id] = {
+      api_source_id: row.api_source_id,
+      freshness_score: row.freshness_score ?? 1,
+      reliability_score: row.reliability_score ?? 1,
+    };
+    return acc;
+  }, {});
+}
+
+export async function getPlatformConfigs(
+  companyId?: string | null,
+  options?: { skipCache?: boolean }
+): Promise<PlatformConfig[]> {
   if (!companyId) {
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return [];
   }
-  console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
   const createQuery = () =>
     supabase
       .from('external_api_sources')
@@ -1135,82 +1230,52 @@ export async function getPlatformConfigs(companyId?: string | null): Promise<Pla
       .order('created_at', { ascending: true });
 
   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
-  const applyPresetSelections = async (sources: any[]) => {
-    const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
-    const companySpecific = companyScoped
-      ? sources.filter((row) => row.company_id === companyId)
-      : sources.filter((row) => !row.is_preset);
-    const globalPresets = sources.filter((row) => row.is_preset && (!companyScoped || !row.company_id));
-
-    const { data: accessRows } = await supabase
-      .from('external_api_user_access')
-      .select('api_source_id, is_enabled')
-      .eq('user_id', `company:${companyId}`);
-    const accessMap = (accessRows || []).reduce<Record<string, boolean>>((acc, row) => {
-      acc[row.api_source_id] = row.is_enabled === true;
-      return acc;
-    }, {});
-    const hasSelections = Object.keys(accessMap).length > 0;
-    const selectedPresets = hasSelections
-      ? globalPresets.filter((preset) => accessMap[preset.id])
-      : globalPresets;
-    return [...companySpecific, ...selectedPresets];
-  };
-
-  if (!scopedResult.error) {
-    const data = await applyPresetSelections(scopedResult.data || []);
-    const apiIds = data.map((row: any) => row.id);
-    let healthMap: Record<string, ExternalApiHealth> = {};
-    if (apiIds.length > 0) {
-      const { data: healthData, error: healthError } = await supabase
-        .from('external_api_health')
-        .select('*')
-        .in('api_source_id', apiIds);
-      if (!healthError && healthData) {
-        healthMap = healthData.reduce((acc: Record<string, ExternalApiHealth>, row: any) => {
-          acc[row.api_source_id] = {
-            api_source_id: row.api_source_id,
-            freshness_score: row.freshness_score ?? 1,
-            reliability_score: row.reliability_score ?? 1,
-          };
-          return acc;
-        }, {});
-      }
-    }
-
-    return data.map((row: any) => ({
-      ...row,
-      health: healthMap[row.id] || null,
-    }));
+  let sources: any[] = scopedResult.error ? [] : (scopedResult.data || []);
+  if (scopedResult.error && !scopedResult.error.message?.toLowerCase().includes('company_id')) {
+    throw new Error(`Failed to load platform configs: ${scopedResult.error.message}`);
   }
-  const message = scopedResult.error.message || '';
-  if (!message.toLowerCase().includes('company_id')) {
-    throw new Error(`Failed to load platform configs: ${message}`);
+  if (scopedResult.error) {
+    const fallbackResult = await createQuery();
+    if (fallbackResult.error) throw new Error(`Failed to load platform configs: ${fallbackResult.error.message}`);
+    sources = fallbackResult.data || [];
   }
-  const fallbackResult = await createQuery();
-  if (fallbackResult.error) {
-    throw new Error(`Failed to load platform configs: ${fallbackResult.error.message}`);
+
+  const companyScoped = sources.some((row: any) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
+  const companySpecific = companyScoped
+    ? sources.filter((row: any) => row.company_id === companyId)
+    : sources.filter((row: any) => !row.is_preset);
+  const globalPresets = sources.filter((row: any) => row.is_preset && (!companyScoped || !row.company_id));
+  let enabledIds = await getEnabledApiIdsFromCompanyConfig(companyId, options);
+  if (enabledIds.length === 0 && (sources.length > 0 || companyId)) {
+    enabledIds = await getEnabledApiIdsFromCompanyConfig(companyId, { ...options, skipCache: true });
   }
-  const data = await applyPresetSelections(fallbackResult.data || []);
+  const enabledSet = new Set(enabledIds);
+  let selectedPresets = globalPresets.filter((preset: any) => enabledSet.has(preset.id));
+
+  if (enabledIds.length > 0 && selectedPresets.length === 0) {
+    const { data: enabledSources } = await supabase
+      .from('external_api_sources')
+      .select('*')
+      .eq('is_active', true)
+      .in('id', enabledIds);
+    const fetched = (enabledSources || []).filter(
+      (row: any) => !companySpecific.some((c: any) => c.id === row.id)
+    );
+    selectedPresets = fetched;
+  }
+
+  let data = [...companySpecific, ...selectedPresets];
+  if (companyId && data.length === 0 && enabledIds.length > 0) {
+    const { data: fallbackSources } = await supabase
+      .from('external_api_sources')
+      .select('*')
+      .eq('is_active', true)
+      .in('id', enabledIds);
+    data = fallbackSources || [];
+  }
 
   const apiIds = data.map((row: any) => row.id);
-  let healthMap: Record<string, ExternalApiHealth> = {};
-  if (apiIds.length > 0) {
-    const { data: healthData, error: healthError } = await supabase
-      .from('external_api_health')
-      .select('*')
-      .in('api_source_id', apiIds);
-    if (!healthError && healthData) {
-      healthMap = healthData.reduce((acc: Record<string, ExternalApiHealth>, row: any) => {
-        acc[row.api_source_id] = {
-          api_source_id: row.api_source_id,
-          freshness_score: row.freshness_score ?? 1,
-          reliability_score: row.reliability_score ?? 1,
-        };
-        return acc;
-      }, {});
-    }
-  }
+  const healthMap = await fetchHealthMapForApiIds(apiIds);
 
   return data.map((row: any) => ({
     ...row,
@@ -1297,8 +1362,12 @@ export function validatePlatformConfig(input: Partial<ExternalApiSource>): {
   ok: boolean;
   message?: string;
 } {
-  if (!input.name || !input.base_url || !input.platform_type) {
-    return { ok: false, message: 'Missing required fields' };
+  const missing: string[] = [];
+  if (!input.name?.trim()) missing.push('name');
+  if (!input.base_url?.trim()) missing.push('base_url');
+  if (!input.platform_type?.trim()) missing.push('platform_type');
+  if (missing.length > 0) {
+    return { ok: false, message: `Missing required fields: ${missing.join(', ')}` };
   }
   if (input.method && !['GET', 'POST'].includes(String(input.method).toUpperCase())) {
     return { ok: false, message: 'method must be GET or POST' };
@@ -1525,7 +1594,7 @@ export async function fetchTrendsFromApis(
   }> = [];
   const recordHealth = options?.recordHealth ?? true;
   const minReliability = options?.minReliability ?? 0;
-  lastRateLimitedSources = [];
+  clearLastRateLimitedSources();
 
   for (const source of sources) {
     try {
@@ -1541,8 +1610,8 @@ export async function fetchTrendsFromApis(
 
       const limitPerMin = source.rate_limit_per_min ?? DEFAULT_RATE_LIMIT_PER_MIN;
       const rateLimitKey = `${source.id}:${usageUserId}`;
-      if (isRateLimited(rateLimitKey, limitPerMin)) {
-        lastRateLimitedSources.push(source.name);
+      if (await isRateLimited(rateLimitKey, limitPerMin)) {
+        addRateLimitedSource(source.name);
         if (recordHealth) {
           await updateApiHealth({ apiId: source.id, success: false, latencyMs: 0 });
         }
@@ -1587,7 +1656,7 @@ export async function fetchTrendsFromApis(
       }
 
       const cacheKey = buildCacheKey({ apiId: source.id, geo, category, userId: usageUserId });
-      const cached = getCachedResponse<any>(cacheKey, source.id);
+      const cached = await getCachedResponse<any>(cacheKey, source.id);
       if (cached) {
         logCacheEvent('CACHE_HIT', { source: source.name });
         const healthUpdate = recordHealth
@@ -1641,7 +1710,7 @@ export async function fetchTrendsFromApis(
       }
 
       const payload = await response.json();
-      setCachedResponse(cacheKey, payload, DEFAULT_CACHE_TTL_MS);
+      await setCachedResponse(cacheKey, payload, DEFAULT_CACHE_TTL_MS);
       const healthUpdate = recordHealth
         ? await updateApiHealth({ apiId: source.id, success: true, latencyMs })
         : null;
@@ -1675,6 +1744,13 @@ export async function fetchTrendsFromApis(
         companyId: companyId ?? null,
       });
     }
+  }
+
+  // Optional: persist to unified intelligence signal store (fire-and-forget)
+  if (results.length > 0) {
+    void insertFromTrendApiResults(results, companyId ?? null).catch((err) => {
+      console.warn('intelligenceSignalStore.insertFromTrendApiResults failed', err?.message ?? err);
+    });
   }
 
   const normalized = normalizeTrendSignals(results);
@@ -1770,7 +1846,7 @@ export async function fetchExternalTrends(
   const missingEnv: string[] = [];
   const recordHealth = options?.recordHealth ?? true;
   const minReliability = options?.minReliability ?? 0;
-  lastRateLimitedSources = [];
+  clearLastRateLimitedSources();
 
   const profileRuntimeValues = await buildProfileRuntimeValues(companyId);
   const runtimeValues = {
@@ -1797,8 +1873,8 @@ export async function fetchExternalTrends(
 
       const limitPerMin = source.rate_limit_per_min ?? DEFAULT_RATE_LIMIT_PER_MIN;
       const rateLimitKey = `${source.id}:${usageUserId}`;
-      if (isRateLimited(rateLimitKey, limitPerMin)) {
-        lastRateLimitedSources.push(source.name);
+      if (await isRateLimited(rateLimitKey, limitPerMin)) {
+        addRateLimitedSource(source.name);
         if (recordHealth) {
           await updateApiHealth({ apiId: source.id, success: false, latencyMs: 0 });
         }
@@ -1852,7 +1928,7 @@ export async function fetchExternalTrends(
       }
 
       const cacheKey = buildCacheKey({ apiId: source.id, geo, category, userId: usageUserId });
-      const cached = getCachedResponse<any>(cacheKey, source.id);
+      const cached = await getCachedResponse<any>(cacheKey, source.id);
       if (cached) {
         logCacheEvent('CACHE_HIT', { source: source.name });
         const healthUpdate = recordHealth
@@ -1907,7 +1983,7 @@ export async function fetchExternalTrends(
       }
 
       const payload = await response.json();
-      setCachedResponse(cacheKey, payload, DEFAULT_CACHE_TTL_MS);
+      await setCachedResponse(cacheKey, payload, DEFAULT_CACHE_TTL_MS);
       const healthUpdate = recordHealth
         ? await updateApiHealth({ apiId: source.id, success: true, latencyMs })
         : null;
@@ -1948,7 +2024,7 @@ export async function fetchExternalTrends(
     results,
     missing_env_placeholders: buildMissingEnvPlaceholders(missingEnv),
     cache_stats: getCacheStats(),
-    rate_limited_sources: [...lastRateLimitedSources],
+    rate_limited_sources: [...getLastRateLimitedSources()],
     signal_confidence_summary: lastSignalConfidenceSummary,
   };
 }
@@ -1968,6 +2044,306 @@ export async function fetchExternalApis(
   }
 ): Promise<ExternalApiFetchSummary> {
   return fetchExternalTrends(companyId, geo, category, options);
+}
+
+/** User id used for usage/health when intelligence polling worker runs (no real user). */
+export const INTELLIGENCE_POLLER_USER_ID = 'intelligence-polling';
+
+/**
+ * Check company_api_configs daily_limit and signal_limit for a company+source.
+ * Used by intelligence polling worker when companyId is set (per-company jobs).
+ * Returns { allowed: false, reason } when over limit so the worker can skip fetch/insert.
+ */
+export async function checkCompanyApiLimitsForPolling(
+  companyId: string,
+  apiSourceId: string
+): Promise<{ allowed: boolean; reason?: string }> {
+  const { data: configRow, error: configErr } = await supabase
+    .from('company_api_configs')
+    .select('daily_limit, signal_limit')
+    .eq('company_id', companyId)
+    .eq('api_source_id', apiSourceId)
+    .eq('enabled', true)
+    .maybeSingle();
+
+  if (configErr || !configRow) return { allowed: true };
+  const dailyLimit = (configRow as { daily_limit?: number | null }).daily_limit;
+  const signalLimit = (configRow as { signal_limit?: number | null }).signal_limit;
+  if (dailyLimit == null && signalLimit == null) return { allowed: true };
+
+  const today = new Date().toISOString().slice(0, 10);
+  const featureUserId = buildFeatureUsageUserId('intelligence_polling', companyId);
+  const { data: usageRow } = await supabase
+    .from('external_api_usage')
+    .select('request_count, signals_generated')
+    .eq('api_source_id', apiSourceId)
+    .eq('user_id', featureUserId)
+    .eq('usage_date', today)
+    .maybeSingle();
+
+  const requests = (usageRow as { request_count?: number } | null)?.request_count ?? 0;
+  const signals = (usageRow as { signals_generated?: number } | null)?.signals_generated ?? 0;
+  if (dailyLimit != null && requests >= dailyLimit) {
+    return { allowed: false, reason: `daily_limit (${requests}/${dailyLimit})` };
+  }
+  if (signalLimit != null && signals >= signalLimit) {
+    return { allowed: false, reason: `signal_limit (${signals}/${signalLimit})` };
+  }
+  return { allowed: true };
+}
+
+/**
+ * Load a single external API source by id (for intelligence polling).
+ * Returns only if is_active = true; no company filter.
+ */
+export async function getExternalApiSourceById(
+  apiSourceId: string
+): Promise<ExternalApiSource | null> {
+  const { data, error } = await supabase
+    .from('external_api_sources')
+    .select('*')
+    .eq('id', apiSourceId)
+    .eq('is_active', true)
+    .single();
+  if (error || !data) return null;
+  return data as ExternalApiSource;
+}
+
+export type FetchSingleSourceResult = {
+  results: Array<{
+    source: ExternalApiSource;
+    payload: any;
+    health?: { freshness_score: number; reliability_score: number } | null;
+  }>;
+  queryHash?: string | null;
+  queryContext?: {
+    topic?: string | null;
+    competitor?: string | null;
+    product?: string | null;
+    region?: string | null;
+    keyword?: string | null;
+  } | null;
+};
+
+/**
+ * Fetch a single source with query builder expansion (Phase 1).
+ * Used by intelligence polling worker. Runs query builder, builds request, fetches.
+ */
+export async function fetchSingleSourceWithQueryBuilder(
+  apiSourceId: string,
+  companyId?: string | null
+): Promise<FetchSingleSourceResult> {
+  const source = await getExternalApiSourceById(apiSourceId);
+  if (!source) return { results: [] };
+
+  const { expand } = await import('./intelligenceQueryBuilder');
+  const profileRuntimeValues = companyId
+    ? await buildProfileRuntimeValues(companyId)
+    : {};
+  const expanded = await expand({
+    source,
+    companyId: companyId ?? null,
+    topic: profileRuntimeValues.topic ?? profileRuntimeValues.category ?? undefined,
+    competitor: profileRuntimeValues.competitor,
+    product: profileRuntimeValues.product,
+    region: profileRuntimeValues.region ?? profileRuntimeValues.geo,
+    keyword: profileRuntimeValues.keywords ?? profileRuntimeValues.keyword,
+  });
+
+  const health = await getHealthForSource(source);
+  const request = buildExternalApiRequest(source, {
+    queryParams: expanded.queryParams,
+    runtimeValues: { ...profileRuntimeValues, ...expanded.runtimeValues },
+  });
+
+  if (request.missingEnv.length > 0) {
+    await updateApiHealth({ apiId: source.id, success: false, latencyMs: 0 });
+    await logExternalApiUsage({
+      apiSourceId: source.id,
+      userId: INTELLIGENCE_POLLER_USER_ID,
+      success: false,
+      errorCode: 'missing_env',
+      errorMessage: 'Missing API credentials',
+      feature: 'intelligence_polling',
+      companyId: companyId ?? null,
+    });
+    return { results: [] };
+  }
+
+  const timeoutMs = source.timeout_ms ?? DEFAULT_TIMEOUT_MS * 1.6;
+  const retryCount = source.retry_count ?? DEFAULT_RETRY_COUNT;
+
+  try {
+    const startedAt = Date.now();
+    const response = await fetchWithRetry(
+      request.details.url,
+      { method: request.details.method, headers: request.details.headers },
+      retryCount,
+      timeoutMs
+    );
+    const latencyMs = Date.now() - startedAt;
+
+    if (!response.ok) {
+      await updateApiHealth({ apiId: source.id, success: false, latencyMs });
+      await logExternalApiUsage({
+        apiSourceId: source.id,
+        userId: INTELLIGENCE_POLLER_USER_ID,
+        success: false,
+        errorCode: `http_${response.status}`,
+        errorMessage: mapHttpErrorMessage(response.status),
+        feature: 'intelligence_polling',
+        companyId: companyId ?? null,
+      });
+      return { results: [] };
+    }
+
+    const payload = await response.json();
+    const healthUpdate = await updateApiHealth({ apiId: source.id, success: true, latencyMs });
+    await logExternalApiUsage({
+      apiSourceId: source.id,
+      userId: INTELLIGENCE_POLLER_USER_ID,
+      success: true,
+      feature: 'intelligence_polling',
+      companyId: companyId ?? null,
+    });
+
+    return {
+      results: [
+        {
+          source,
+          payload,
+          health: healthUpdate
+            ? {
+                freshness_score: healthUpdate.freshness_score,
+                reliability_score: healthUpdate.reliability_score,
+              }
+            : health ?? undefined,
+        },
+      ],
+      queryHash: expanded.queryHash,
+      queryContext: {
+        topic: expanded.runtimeValues.topic || null,
+        competitor: expanded.runtimeValues.competitor || null,
+        product: expanded.runtimeValues.product || null,
+        region: expanded.runtimeValues.region || null,
+        keyword: expanded.runtimeValues.keyword || null,
+      },
+    };
+  } catch (error: any) {
+    await updateApiHealth({ apiId: source.id, success: false, latencyMs: 0 });
+    await logExternalApiUsage({
+      apiSourceId: source.id,
+      userId: INTELLIGENCE_POLLER_USER_ID,
+      success: false,
+      errorCode: 'exception',
+      errorMessage: error?.message ?? 'Request failed',
+      feature: 'intelligence_polling',
+      companyId: companyId ?? null,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Fetch a single source for the intelligence polling pipeline.
+ * Updates health and usage under INTELLIGENCE_POLLER_USER_ID.
+ * Returns results array suitable for insertFromTrendApiResults (0 or 1 element).
+ */
+export async function fetchSingleSourceForIntelligencePolling(
+  apiSourceId: string,
+  companyId?: string | null
+): Promise<
+  Array<{
+    source: ExternalApiSource;
+    payload: any;
+    health?: { freshness_score: number; reliability_score: number } | null;
+  }>
+> {
+  const source = await getExternalApiSourceById(apiSourceId);
+  if (!source) return [];
+
+  const profileRuntimeValues = companyId
+    ? await buildProfileRuntimeValues(companyId)
+    : {};
+  const health = await getHealthForSource(source);
+  const request = buildExternalApiRequest(source, {
+    queryParams: { geo: undefined, category: undefined },
+    runtimeValues: profileRuntimeValues,
+  });
+
+  if (request.missingEnv.length > 0) {
+    await updateApiHealth({ apiId: source.id, success: false, latencyMs: 0 });
+    await logExternalApiUsage({
+      apiSourceId: source.id,
+      userId: INTELLIGENCE_POLLER_USER_ID,
+      success: false,
+      errorCode: 'missing_env',
+      errorMessage: 'Missing API credentials',
+      feature: 'intelligence_polling',
+      companyId: companyId ?? null,
+    });
+    return [];
+  }
+
+  const timeoutMs = source.timeout_ms ?? DEFAULT_TIMEOUT_MS * 1.6;
+  const retryCount = source.retry_count ?? DEFAULT_RETRY_COUNT;
+
+  try {
+    const startedAt = Date.now();
+    const response = await fetchWithRetry(
+      request.details.url,
+      { method: request.details.method, headers: request.details.headers },
+      retryCount,
+      timeoutMs
+    );
+    const latencyMs = Date.now() - startedAt;
+
+    if (!response.ok) {
+      await updateApiHealth({ apiId: source.id, success: false, latencyMs });
+      await logExternalApiUsage({
+        apiSourceId: source.id,
+        userId: INTELLIGENCE_POLLER_USER_ID,
+        success: false,
+        errorCode: `http_${response.status}`,
+        errorMessage: mapHttpErrorMessage(response.status),
+        feature: 'intelligence_polling',
+        companyId: companyId ?? null,
+      });
+      return [];
+    }
+
+    const payload = await response.json();
+    const healthUpdate = await updateApiHealth({ apiId: source.id, success: true, latencyMs });
+    await logExternalApiUsage({
+      apiSourceId: source.id,
+      userId: INTELLIGENCE_POLLER_USER_ID,
+      success: true,
+      feature: 'intelligence_polling',
+      companyId: companyId ?? null,
+    });
+
+    return [
+      {
+        source,
+        payload,
+        health: healthUpdate
+          ? { freshness_score: healthUpdate.freshness_score, reliability_score: healthUpdate.reliability_score }
+          : health ?? undefined,
+      },
+    ];
+  } catch (error: any) {
+    await updateApiHealth({ apiId: source.id, success: false, latencyMs: 0 });
+    await logExternalApiUsage({
+      apiSourceId: source.id,
+      userId: INTELLIGENCE_POLLER_USER_ID,
+      success: false,
+      errorCode: 'exception',
+      errorMessage: error?.message ?? 'Request failed',
+      feature: 'intelligence_polling',
+      companyId: companyId ?? null,
+    });
+    throw error;
+  }
 }
 
 export async function validateExternalApiSource(
@@ -2019,13 +2395,12 @@ export const getExternalApiRuntimeSnapshot = async (apiIds: string[]) => {
   return {
     health_snapshot: health,
     cache_stats: getCacheStats(),
-    rate_limited_sources: [...lastRateLimitedSources],
+    rate_limited_sources: [...getLastRateLimitedSources()],
     signal_confidence_summary: lastSignalConfidenceSummary,
   };
 };
 
-export const resetExternalApiRuntime = () => {
-  rateLimitState.clear();
-  lastRateLimitedSources = [];
+export const resetExternalApiRuntime = async () => {
+  await redisResetExternalApiRuntime();
   lastSignalConfidenceSummary = null;
 };

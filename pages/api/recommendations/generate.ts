@@ -21,13 +21,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       campaignId,
       enrichmentEnabled,
       objective,
-      durationWeeks,
+      durationWeeks: bodyDurationWeeks,
       simulate,
       chat,
       selected_api_ids,
       manual_context,
       strategicPayload,
     } = req.body || {};
+
+    const durationWeeks =
+      (typeof bodyDurationWeeks === 'number' && bodyDurationWeeks >= 4 && bodyDurationWeeks <= 12)
+        ? bodyDurationWeeks
+        : (strategicPayload?.execution_config != null &&
+            typeof strategicPayload.execution_config === 'object' &&
+            typeof (strategicPayload.execution_config as Record<string, unknown>).campaign_duration === 'number' &&
+            (strategicPayload.execution_config as Record<string, unknown>).campaign_duration >= 4 &&
+            (strategicPayload.execution_config as Record<string, unknown>).campaign_duration <= 12)
+          ? (strategicPayload.execution_config as Record<string, unknown>).campaign_duration as number
+          : 12;
+    if (typeof bodyDurationWeeks === 'number' && (bodyDurationWeeks < 4 || bodyDurationWeeks > 12)) {
+      return res.status(400).json({
+        error: 'Campaign duration must be between 4 and 12 weeks.',
+      });
+    }
+    const execDuration = (strategicPayload?.execution_config as Record<string, unknown> | undefined)?.campaign_duration;
+    if (typeof execDuration === 'number' && (execDuration < 4 || execDuration > 12)) {
+      return res.status(400).json({
+        error: 'Campaign duration must be between 4 and 12 weeks.',
+      });
+    }
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
@@ -140,7 +162,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (!process.env.OPENAI_API_KEY) {
           console.warn('OPENAI_API_KEY_MISSING_FOR_OPPORTUNITY_ANALYSIS');
         } else {
-          const profile = await getProfile(companyId, { autoRefine: false });
+          const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
           const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
           const message =
             'Evaluate this opportunity against the company profile.\n' +

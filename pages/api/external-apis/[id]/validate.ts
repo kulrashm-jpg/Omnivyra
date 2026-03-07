@@ -21,7 +21,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       reliability_score: health?.reliability_score ?? 1,
     });
   } catch (error: any) {
-    return res.status(500).json({ error: 'Failed to validate API' });
+    return res.status(500).json({
+      error: 'Failed to validate API',
+      detail: error?.message ?? String(error),
+    });
   }
 }
 

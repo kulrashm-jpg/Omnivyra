@@ -1,4 +1,13 @@
-import { generateCampaignPlan } from './aiGateway';
+import { generateCampaignPlan, runCompletionWithOperation } from './aiGateway';
+import { refineLanguageOutput } from './languageRefinementService';
+import { getCachedBlueprint, setCachedBlueprint, type ContentBlueprint } from './contentBlueprintCache';
+import {
+  getContentBlueprintPromptWithFingerprint,
+  CONTENT_MASTER_SYSTEM,
+  PLATFORM_VARIANTS_SYSTEM,
+  CONTENT_GENERATION_PROMPT_VERSION,
+} from '../prompts';
+import { validateContentBlueprint, validatePlatformVariants } from './aiOutputValidationService';
 import { getDiscoverabilityTargets } from './discoverabilityRules';
 import { getAlgorithmicFormattingRules } from './platformAlgorithmFormattingRules';
 import { getMediaIntentDescriptor } from './mediaIntentDescriptorRules';
@@ -144,6 +153,9 @@ type DailyExecutionItemLike = {
 };
 
 const MEDIA_DEPENDENT_TYPES = new Set(['video', 'reel', 'short', 'carousel', 'slides', 'song']);
+const MAX_WORDS_MASTER = 180;
+const MAX_WORDS_VARIANT = 120;
+const X_CHAR_LIMIT = 280;
 const DISCOVERABILITY_STOPWORDS = new Set([
   'about',
   'after',
@@ -869,6 +881,261 @@ export function isAiGeneratedMasterContent(master: unknown): boolean {
   return Boolean(content) && !isPlaceholderLikeContent(content);
 }
 
+/** Convert blueprint to full master text for backward compatibility. */
+function blueprintToFullText(bp: ContentBlueprint): string {
+  const body = Array.isArray(bp.key_points) && bp.key_points.length > 0
+    ? bp.key_points.join('\n\n')
+    : '';
+  const parts = [nonEmpty(bp.hook), body, nonEmpty(bp.cta)].filter(Boolean);
+  return parts.join('\n\n');
+}
+
+/** Truncate text to maxChars at word boundary. */
+function truncateAtWordBoundary(text: string, maxChars: number): string {
+  const s = String(text ?? '').trim();
+  if (s.length <= maxChars) return s;
+  const cut = s.slice(0, maxChars);
+  const lastSpace = cut.lastIndexOf(' ');
+  if (lastSpace > maxChars * 0.6) return cut.slice(0, lastSpace).trim();
+  return cut.trim();
+}
+
+/** Strip excessive hashtags (keep max 2 for X). */
+function stripExcessiveHashtags(text: string, maxHashtags: number): string {
+  const parts = String(text ?? '').split(/(\s+#\w+)/g);
+  const hashtags: string[] = [];
+  const rest: string[] = [];
+  for (const p of parts) {
+    if (/^\s*#\w+/.test(p)) {
+      hashtags.push(p.trim());
+    } else {
+      rest.push(p);
+    }
+  }
+  const kept = hashtags.slice(0, maxHashtags);
+  return [...rest.filter(Boolean), ...kept].join(' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Shorten long sentences for X (split by period, trim). */
+function shortenSentences(text: string): string {
+  return String(text ?? '')
+    .split(/[.!?]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join('. ')
+    .trim();
+}
+
+/** LinkedIn: full text, allow bullet formatting, maintain spacing. */
+export function renderLinkedInVariant(masterText: string): string {
+  return String(masterText ?? '').trim();
+}
+
+/** Extract CTA-like ending (last sentence often contains CTA). */
+function extractCtaFromText(text: string): string | null {
+  const s = String(text ?? '').trim();
+  if (!s) return null;
+  const sentences = s.split(/[.!?]+/).map((x) => x.trim()).filter(Boolean);
+  if (sentences.length === 0) return null;
+  const last = sentences[sentences.length - 1] ?? '';
+  if (last.length < 10) return null;
+  const ctaMarkers = ['learn more', 'book', 'contact', 'start', 'join', 'subscribe', 'follow', 'try', 'download', 'link in bio', 'click'];
+  const lower = last.toLowerCase();
+  if (ctaMarkers.some((m) => lower.includes(m))) return last;
+  return null;
+}
+
+/** X/Twitter: truncate 280, remove excessive hashtags (>2), preserve CTA if truncated away. */
+export function renderXVariant(masterText: string, cta?: string | null): string {
+  let out = shortenSentences(masterText ?? '');
+  out = stripExcessiveHashtags(out, 2);
+  let result = truncateAtWordBoundary(out, X_CHAR_LIMIT);
+  const extractedCta = cta ?? extractCtaFromText(masterText);
+  if (extractedCta && !result.toLowerCase().includes(extractedCta.toLowerCase().slice(0, 20))) {
+    const append = ` ${extractedCta}`.trim();
+    const withCta = truncateAtWordBoundary(result + append, X_CHAR_LIMIT);
+    if (withCta.length > result.length) result = withCta;
+  }
+  return result;
+}
+
+/** Instagram: append hashtags from discoverability, allow emoji. */
+export function renderInstagramVariant(
+  masterText: string,
+  discoverabilityMeta?: DiscoverabilityMeta,
+  maxLength?: number | null
+): string {
+  let out = String(masterText ?? '').trim();
+  if (discoverabilityMeta?.hashtags?.length) {
+    const tags = discoverabilityMeta.hashtags.slice(0, 8).join(' ');
+    const candidate = `${out}\n\n${tags}`.trim();
+    const limit = maxLength ?? 2200;
+    out = candidate.length <= limit ? candidate : out;
+  }
+  return out;
+}
+
+/** Facebook: reuse LinkedIn variant (same format). */
+export function renderFacebookVariant(masterText: string): string {
+  return renderLinkedInVariant(masterText);
+}
+
+/**
+ * Deterministic platform rendering rules.
+ * LinkedIn → full text; X → truncate 280, strip hashtags, preserve CTA; Instagram → append hashtags; Facebook → LinkedIn.
+ */
+function renderDeterministicVariant(
+  masterText: string,
+  platform: string,
+  maxLength?: number | null,
+  discoverabilityMeta?: DiscoverabilityMeta,
+  cta?: string | null
+): string {
+  const p = nonEmpty(platform).toLowerCase();
+  if (p === 'linkedin') return renderLinkedInVariant(masterText);
+  if (p === 'x' || p === 'twitter') return renderXVariant(masterText, cta);
+  if (p === 'instagram') return renderInstagramVariant(masterText, discoverabilityMeta, maxLength);
+  if (p === 'facebook') return renderFacebookVariant(masterText);
+  if (maxLength && maxLength > 0) return truncateAtWordBoundary(masterText, maxLength);
+  return String(masterText ?? '').trim();
+}
+
+/** Carousel: slide_1=hook, slide_2-4=key_points, slide_5=cta. */
+export function renderCarouselFromBlueprint(bp: ContentBlueprint): string[] {
+  const slides: string[] = [];
+  if (nonEmpty(bp.hook)) slides.push(bp.hook);
+  const pts = Array.isArray(bp.key_points) ? bp.key_points.filter(Boolean) : [];
+  for (const pt of pts) slides.push(String(pt ?? '').trim());
+  if (nonEmpty(bp.cta)) slides.push(bp.cta);
+  return slides.length > 0 ? slides : [blueprintToFullText(bp)];
+}
+
+/** Short video script: intro=hook, body=key_points, ending=cta. */
+export function renderVideoScriptFromBlueprint(bp: ContentBlueprint): string {
+  const intro = nonEmpty(bp.hook) ? `[INTRO]\n${bp.hook}` : '';
+  const body = Array.isArray(bp.key_points) && bp.key_points.length > 0
+    ? `[BODY]\n${bp.key_points.map((p) => `• ${p}`).join('\n')}`
+    : '';
+  const ending = nonEmpty(bp.cta) ? `[ENDING]\n${bp.cta}` : '';
+  const parts = [intro, body, ending].filter(Boolean);
+  return parts.length > 0 ? parts.join('\n\n') : blueprintToFullText(bp);
+}
+
+/** Platforms that can be derived deterministically from LinkedIn-style full text. */
+const DETERMINISTIC_DERIVABLE = new Set(['x', 'twitter', 'facebook', 'instagram']);
+
+/** Check if platform can use deterministic rendering from a source (e.g. linkedin). */
+function canDeriveDeterministically(platform: string): boolean {
+  return DETERMINISTIC_DERIVABLE.has(nonEmpty(platform).toLowerCase());
+}
+
+/**
+ * Generates structured content blueprint (hook, key_points, cta) instead of full master content.
+ * Lighter AI call; used for two-stage pipeline.
+ */
+export async function generateContentBlueprint(item: DailyExecutionItemLike): Promise<ContentBlueprint> {
+  const companyId = nonEmpty((item as any)?.company_id) || 'default';
+  const theme = nonEmpty(item.topic) || nonEmpty(item.title) || 'TBD';
+  const contentType = nonEmpty(item.content_type).toLowerCase() || 'post';
+  const intent = asObject(item.intent);
+  const brief = asObject(item.writer_content_brief);
+  const audience =
+    nonEmpty(intent?.target_audience) ||
+    nonEmpty(brief?.whoAreWeWritingFor) ||
+    'General audience';
+
+  const cached = getCachedBlueprint(companyId, theme, contentType, audience);
+  if (cached) return cached;
+
+  const contextPayload = {
+    topic: theme,
+    objective: nonEmpty(intent?.objective) || nonEmpty(brief?.whatShouldReaderLearn) || 'TBD objective',
+    target_audience: audience,
+    pain_point: nonEmpty(intent?.pain_point) || nonEmpty(brief?.whatProblemAreWeAddressing) || 'Audience challenge',
+    outcome_promise: nonEmpty(intent?.outcome_promise) || nonEmpty(brief?.expectedOutcome) || 'Clear improvement',
+    tone: nonEmpty(brief?.narrativeStyle) || nonEmpty(brief?.toneGuidance) || 'Neutral, practical',
+    cta_type: nonEmpty(intent?.cta_type) || 'Soft CTA',
+    key_points: Array.isArray(brief?.key_points)
+      ? (brief.key_points as unknown[]).map((v) => nonEmpty(v)).filter(Boolean)
+      : [],
+  };
+
+  const { content: systemPrompt, template_name, template_version, template_hash } = getContentBlueprintPromptWithFingerprint();
+  console.info('Prompt executed', { prompt: 'content_blueprint', version: CONTENT_GENERATION_PROMPT_VERSION });
+  const result = await runCompletionWithOperation({
+    companyId: null,
+    campaignId: null,
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    operation: 'generateContentBlueprint',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: JSON.stringify(contextPayload) },
+    ],
+    prompt_template_name: template_name,
+    prompt_template_version: template_version,
+    prompt_template_hash: template_hash,
+  });
+
+  const raw = typeof result?.output === 'string' ? result.output : '';
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  let parsed: Partial<ContentBlueprint> = {};
+  try {
+    parsed = JSON.parse(trimmed || '{}');
+  } catch {
+    parsed = {};
+  }
+
+  const blueprint: ContentBlueprint = {
+    hook: nonEmpty(parsed.hook) || `Topic: ${theme}`,
+    key_points: Array.isArray(parsed.key_points)
+      ? parsed.key_points.map((v) => String(v ?? '')).filter(Boolean)
+      : [contextPayload.objective],
+    cta: nonEmpty(parsed.cta) || '— Learn more when you\'re ready.',
+  };
+
+  // Blueprint → refined → master content assembly. No unrefined blueprint language propagates downstream.
+  if (blueprint.hook) {
+    const r = await refineLanguageOutput({
+      content: blueprint.hook,
+      card_type: 'master_content',
+    });
+    blueprint.hook = (r.refined as string) || blueprint.hook;
+  }
+  if (Array.isArray(blueprint.key_points) && blueprint.key_points.length > 0) {
+    const r = await refineLanguageOutput({
+      content: blueprint.key_points,
+      card_type: 'master_content',
+    });
+    if (Array.isArray(r.refined)) {
+      blueprint.key_points = r.refined;
+    }
+  }
+  if (blueprint.cta) {
+    const r = await refineLanguageOutput({
+      content: blueprint.cta,
+      card_type: 'master_content',
+    });
+    blueprint.cta = (r.refined as string) || blueprint.cta;
+  }
+
+  const validatedBlueprint = validateContentBlueprint(blueprint) ?? blueprint;
+  setCachedBlueprint(companyId, theme, contentType, audience, validatedBlueprint);
+  return validatedBlueprint;
+}
+
+/** Content quality guard: blueprint must have at least 2 key points and hook ≥ 6 words. */
+export function isBlueprintQualitySufficient(bp: ContentBlueprint): boolean {
+  const keyPointsOk = Array.isArray(bp.key_points) && bp.key_points.length >= 2;
+  const hookWords = String(bp.hook ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  const hookOk = hookWords >= 6;
+  return keyPointsOk && hookOk;
+}
+
 export async function generateMasterContentFromIntent(item: DailyExecutionItemLike): Promise<MasterContentPayload> {
   const itemId = sanitizeIdPart(item.execution_id || item.title || item.topic || item.platform || 'daily-item');
   const nowIso = new Date().toISOString();
@@ -970,6 +1237,8 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
   };
 
   try {
+    const systemPrompt = CONTENT_MASTER_SYSTEM;
+    console.info('Prompt executed', { prompt: 'content_generation', version: CONTENT_GENERATION_PROMPT_VERSION });
     const aiResult = await generateCampaignPlan({
       companyId: null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -977,16 +1246,15 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
       messages: [
         {
           role: 'system',
-          content:
-            'Write publish-ready universal master content from the provided JSON context. Keep it neutral and non-platform-specific. Maintain weekly narrative intent. Output plain text only.',
+          content: systemPrompt,
         },
         {
           role: 'user',
-          content: JSON.stringify(contextPayload),
+          content: JSON.stringify({ ...contextPayload, max_words: MAX_WORDS_MASTER }),
         },
       ],
     });
-    const aiContent = nonEmpty(aiResult?.output);
+    let aiContent = nonEmpty(aiResult?.output);
     if (!aiContent) {
       console.warn('[content-generation-pipeline][empty-ai-master-content]', {
         execution_id: item.execution_id ?? null,
@@ -1001,6 +1269,11 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
         decision_trace: decisionTrace,
       };
     }
+    const refinedMaster = await refineLanguageOutput({
+      content: aiContent,
+      card_type: 'master_content',
+    });
+    aiContent = (refinedMaster.refined as string) || aiContent;
     return {
       id: `master-${itemId}`,
       generated_at: nowIso,
@@ -1025,6 +1298,294 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
       decision_trace: decisionTrace,
     };
   }
+}
+
+/** Platform style hints for batch variant generation (structured). */
+const PLATFORM_STYLE_MAP: Record<string, string> = {
+  linkedin: 'Professional tone, clear structure, slightly longer form with practical insight.',
+  facebook: 'Conversational voice, engagement-focused flow, short paragraphs.',
+  x: 'Concise and punchy style, high information density.',
+  twitter: 'Concise and punchy style, high information density.',
+  instagram: 'Emotionally resonant and visually descriptive tone, hashtag-friendly ending.',
+  youtube: 'Title + description orientation, SEO-friendly structure, include metadata hints naturally.',
+};
+
+/**
+ * Generates platform variants in a single AI call. Returns map of "platform_contenttype" -> raw content.
+ * Use when 2+ text-based targets to reduce token usage and latency.
+ * @param masterContentOrBlueprints - Single master string or array of blueprints for batch (one call, batched outputs).
+ */
+async function generatePlatformVariantsInOneCall(
+  masterContentOrBlueprints: string | ContentBlueprint[],
+  targets: Array<{ platform: string; content_type: string; max_length?: number; discoverabilityMeta?: DiscoverabilityMeta }>,
+  context: { writer_content_brief?: Record<string, unknown>; intent?: Record<string, unknown> }
+): Promise<Record<string, string> | Array<Record<string, string>>> {
+  const isBatch = Array.isArray(masterContentOrBlueprints);
+  const blueprints = isBatch ? (masterContentOrBlueprints as ContentBlueprint[]) : null;
+  const masterContent = isBatch
+    ? (blueprints as ContentBlueprint[]).map((bp) => blueprintToFullText(bp)).join('\n\n---\n\n')
+    : (masterContentOrBlueprints as string);
+  if (targets.length === 0) return isBatch ? [] : {};
+  if (targets.length === 0) return {};
+  const platformConfig = targets.map((t) => ({
+    key: `${t.platform}_${t.content_type}`,
+    platform: t.platform,
+    content_type: t.content_type,
+    style: PLATFORM_STYLE_MAP[t.platform] ?? 'Neutral adaptation with clear readability.',
+    max_chars: t.max_length ?? null,
+    hashtags: t.discoverabilityMeta?.hashtags?.slice(0, 5) ?? [],
+  }));
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const systemPrompt = PLATFORM_VARIANTS_SYSTEM;
+  console.info('Prompt executed', { prompt: 'platform_variants', version: CONTENT_GENERATION_PROMPT_VERSION });
+  const result = await runCompletionWithOperation({
+    companyId: null,
+    campaignId: null,
+    model,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    operation: 'generatePlatformVariants',
+    messages: [
+      {
+        role: 'system',
+        content: systemPrompt,
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(
+          isBatch
+            ? {
+                batch_mode: true,
+                content_pieces: (blueprints as ContentBlueprint[]).map((bp) => blueprintToFullText(bp)),
+                platform_config: platformConfig,
+                writer_brief: context.writer_content_brief ?? null,
+                intent: context.intent ?? null,
+                output_format: 'Object with keys "0","1",... — each value is { "platform_contenttype": "content" } per platform_config keys.',
+              }
+            : {
+                master_content: masterContent,
+                platform_config: platformConfig,
+                writer_brief: context.writer_content_brief ?? null,
+                intent: context.intent ?? null,
+                output_format: Object.fromEntries(platformConfig.map((p) => [p.key, '<adapted content for this platform>'])),
+              }
+        ),
+      },
+    ],
+  });
+  const raw = typeof result?.output === 'string' ? result.output : '';
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  try {
+    const parsed = JSON.parse(trimmed || '{}');
+    if (isBatch) {
+      const items: Record<string, string>[] = [];
+      for (let i = 0; i < (blueprints?.length ?? 0); i++) {
+        const key = String(i);
+        items.push((parsed[key] && typeof parsed[key] === 'object') ? parsed[key] : {});
+      }
+      return items;
+    }
+    return (parsed as Record<string, string>) || {};
+  } catch {
+    return isBatch ? [] : {};
+  }
+}
+
+/**
+ * Renders platform variants from a content blueprint. Uses deterministic rules when possible:
+ * LinkedIn → full text; X → truncate 280; Facebook → full; Instagram → append hashtags.
+ * Uses AI only when deterministic transformation is insufficient (e.g. YouTube).
+ */
+export async function renderPlatformVariantsFromBlueprint(
+  blueprint: ContentBlueprint,
+  item: DailyExecutionItemLike
+): Promise<PlatformVariantPayload[]> {
+  const targets = resolvePlatformTargets(item);
+  if (targets.length === 0) return [];
+
+  const fullText = blueprintToFullText(blueprint);
+  const masterPayload: MasterContentPayload = {
+    id: `master-${sanitizeIdPart(item.execution_id || item.topic || 'item')}`,
+    generated_at: new Date().toISOString(),
+    content: fullText,
+    generation_status: 'generated',
+    generation_source: 'ai',
+    content_type_mode: 'text',
+  };
+
+  const mediaTargets = targets.filter((t) => isMediaDependentContentType(t.content_type));
+  const textTargets = targets.filter((t) => !isMediaDependentContentType(t.content_type));
+
+  const built: PlatformVariantPayload[] = [];
+
+  for (const target of mediaTargets) {
+    const placeholder = await generatePlatformVariantFromMaster(masterPayload, target.platform, {
+      content_type: target.content_type,
+      max_length: target.max_length,
+      generation_overrides: target.generation_overrides,
+      writer_content_brief: asObject(item?.writer_content_brief) || undefined,
+      intent: asObject(item?.intent) || undefined,
+      discoverabilityMeta: undefined,
+      existingMediaSearchIntent: undefined,
+    });
+    built.push(placeholder);
+  }
+
+  const deterministicTargets = textTargets.filter((t) => canDeriveDeterministically(t.platform));
+  const aiTargets = textTargets.filter((t) => !canDeriveDeterministically(t.platform));
+
+  for (const target of deterministicTargets) {
+    const discoverabilityMeta = await optimizeDiscoverabilityForPlatform(
+      fullText,
+      target.platform,
+      target.content_type
+    );
+    const rawContent = renderDeterministicVariant(
+      fullText,
+      target.platform,
+      target.platform === 'x' || target.platform === 'twitter' ? X_CHAR_LIMIT : target.max_length,
+      discoverabilityMeta,
+      blueprint.cta ? String(blueprint.cta).trim() : null
+    );
+    let bounded = target.max_length ? rawContent.slice(0, target.max_length) : rawContent;
+    bounded = appendHashtagsToVariantContent(bounded, discoverabilityMeta, target.max_length);
+    const formatted = applyAlgorithmicFormatting(bounded, target.platform);
+    bounded = target.max_length ? formatted.content.slice(0, target.max_length) : formatted.content;
+    const refined = await refineLanguageOutput({
+      content: bounded,
+      card_type: 'platform_variant',
+      platform: target.platform,
+    });
+    bounded = (refined.refined as string) || bounded;
+    bounded = target.max_length ? bounded.slice(0, target.max_length) : bounded;
+    const mediaSearchIntent = buildMediaSearchIntent(
+      target.platform,
+      target.content_type,
+      fullText,
+      asObject(item?.intent) || null
+    );
+    built.push({
+      platform: target.platform,
+      content_type: target.content_type,
+      generated_content: bounded,
+      generation_status: 'generated',
+      locked_variant: false,
+      adapted_from_master: true,
+      adaptation_style: 'platform_specific',
+      requires_media: false,
+      generation_overrides: target.generation_overrides,
+      adaptation_trace: {
+        platform: target.platform,
+        style_strategy: 'deterministic',
+        character_limit_used: target.platform === 'x' || target.platform === 'twitter' ? X_CHAR_LIMIT : target.max_length ?? null,
+        target_length_used: null,
+        actual_length_used: bounded.length,
+        format_family: 'text',
+        media_constraints_applied: false,
+        adaptation_reason: `Deterministic: ${target.platform} from blueprint.`,
+      },
+      discoverability_meta: discoverabilityMeta,
+      algorithmic_formatting_meta: formatted.meta,
+      media_intent: getMediaIntentDescriptor(target.platform),
+      media_search_intent: mediaSearchIntent,
+    });
+  }
+
+  if (aiTargets.length > 0) {
+    const discoverabilityMetas = await Promise.all(
+      aiTargets.map((t) => optimizeDiscoverabilityForPlatform(fullText, t.platform, t.content_type))
+    );
+    const aiTargetsWithMeta = aiTargets.map((t, i) => ({ ...t, discoverabilityMeta: discoverabilityMetas[i] }));
+    const batchRaw =
+      aiTargets.length >= 2
+        ? await generatePlatformVariantsInOneCall(fullText, aiTargetsWithMeta, {
+            writer_content_brief: asObject(item?.writer_content_brief) || undefined,
+            intent: asObject(item?.intent) || undefined,
+          })
+        : null;
+
+    for (let i = 0; i < aiTargets.length; i++) {
+      const target = aiTargets[i]!;
+      const discoverabilityMeta = discoverabilityMetas[i];
+      const batchKey = `${target.platform}_${target.content_type}`;
+      let rawContent: string | null =
+        batchRaw && typeof batchRaw === 'object' && !Array.isArray(batchRaw)
+          ? (batchRaw as Record<string, string>)[batchKey] ?? null
+          : null;
+
+      if (!rawContent && aiTargets.length === 1) {
+        const single = await generatePlatformVariantFromMaster(masterPayload, target.platform, {
+          content_type: target.content_type,
+          max_length: target.max_length,
+          generation_overrides: target.generation_overrides,
+          writer_content_brief: asObject(item?.writer_content_brief) || undefined,
+          intent: asObject(item?.intent) || undefined,
+          discoverabilityMeta,
+        });
+        built.push(single);
+        continue;
+      }
+
+      if (!rawContent) {
+        const fallback = await generatePlatformVariantFromMaster(masterPayload, target.platform, {
+          content_type: target.content_type,
+          max_length: target.max_length,
+          writer_content_brief: asObject(item?.writer_content_brief) || undefined,
+          intent: asObject(item?.intent) || undefined,
+          discoverabilityMeta,
+        });
+        built.push(fallback);
+        continue;
+      }
+
+      const maxLength = toPositiveNumber(target.max_length);
+      let bounded = maxLength ? rawContent.slice(0, maxLength) : rawContent;
+      bounded = appendHashtagsToVariantContent(bounded, discoverabilityMeta, maxLength);
+      const formatted = applyAlgorithmicFormatting(bounded, target.platform);
+      bounded = maxLength ? formatted.content.slice(0, maxLength) : formatted.content;
+      const refined = await refineLanguageOutput({
+        content: bounded,
+        card_type: 'platform_variant',
+        platform: target.platform,
+      });
+      bounded = (refined.refined as string) || bounded;
+      bounded = maxLength ? bounded.slice(0, maxLength) : bounded;
+      const mediaSearchIntent = buildMediaSearchIntent(
+        target.platform,
+        target.content_type,
+        fullText,
+        asObject(item?.intent) || null
+      );
+      built.push({
+        platform: target.platform,
+        content_type: target.content_type,
+        generated_content: bounded,
+        generation_status: 'generated',
+        locked_variant: false,
+        adapted_from_master: true,
+        adaptation_style: 'platform_specific',
+        requires_media: false,
+        generation_overrides: target.generation_overrides,
+        adaptation_trace: {
+          platform: target.platform,
+          style_strategy: PLATFORM_STYLE_MAP[target.platform] ?? 'AI adaptation',
+          character_limit_used: maxLength ?? null,
+          target_length_used: maxLength ? Math.floor(maxLength * 0.9) : null,
+          actual_length_used: bounded.length,
+          format_family: 'text',
+          media_constraints_applied: false,
+          adaptation_reason: `AI-adapted for ${target.platform}.`,
+        },
+        discoverability_meta: discoverabilityMeta,
+        algorithmic_formatting_meta: formatted.meta,
+        media_intent: getMediaIntentDescriptor(target.platform),
+        media_search_intent: mediaSearchIntent,
+      });
+    }
+  }
+
+  const validatedVariants = validatePlatformVariants(built);
+  return validatedVariants;
 }
 
 export async function generatePlatformVariantFromMaster(
@@ -1184,6 +1745,13 @@ export async function generatePlatformVariantFromMaster(
         bounded = expandedBounded;
       }
     }
+    const refinedVariant = await refineLanguageOutput({
+      content: bounded,
+      card_type: 'platform_variant',
+      platform: normalizedPlatform,
+    });
+    bounded = (refinedVariant.refined as string) || bounded;
+    bounded = maxLength ? bounded.slice(0, maxLength) : bounded;
     const traceWithLength = {
       ...adaptationTrace,
       actual_length_used: bounded.length,
@@ -1234,7 +1802,8 @@ export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLi
     console.warn('[content-generation-pipeline][missing-platform-targets]', {
       execution_id: item.execution_id ?? null,
     });
-    return Array.isArray(item.platform_variants) ? item.platform_variants : [];
+    const existing = Array.isArray(item.platform_variants) ? item.platform_variants : [];
+    return validatePlatformVariants(existing);
   }
 
   if (!item.master_content) {
@@ -1250,42 +1819,202 @@ export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLi
     if (key !== '::') existingByKey.set(key, variant);
   }
 
+  const mediaTargets = targets.filter((t) => isMediaDependentContentType(t.content_type));
+  const textTargets = targets.filter((t) => !isMediaDependentContentType(t.content_type));
+
   const built: PlatformVariantPayload[] = [];
-  for (const target of targets) {
+
+  // Batch path: one AI call for all text-based platform variants (2+ targets)
+  if (textTargets.length >= 1) {
+    const discoverabilityMetas = await Promise.all(
+      textTargets.map((t) =>
+        optimizeDiscoverabilityForPlatform(nonEmpty(master?.content), t.platform, t.content_type)
+      )
+    );
+    const textTargetsWithMeta = textTargets.map((t, i) => ({
+      ...t,
+      discoverabilityMeta: discoverabilityMetas[i],
+    }));
+
+    const batchRaw =
+      textTargets.length >= 2
+        ? await generatePlatformVariantsInOneCall(nonEmpty(master?.content) || '', textTargetsWithMeta, {
+            writer_content_brief: asObject(item?.writer_content_brief) || undefined,
+            intent: asObject(item?.intent) || undefined,
+          })
+        : null;
+
+    for (let i = 0; i < textTargets.length; i++) {
+      const target = textTargets[i]!;
+      const discoverabilityMeta = discoverabilityMetas[i];
+      const key = `${target.platform}::${target.content_type}`;
+      const batchKey = `${target.platform}_${target.content_type}`;
+      const existingVariant = existingByKey.get(key);
+
+      if (existingVariant?.locked_variant) {
+        built.push(existingVariant);
+        continue;
+      }
+
+      let rawContent: string | null = null;
+      if (batchRaw && batchRaw[batchKey]) {
+        rawContent = nonEmpty(batchRaw[batchKey]);
+      }
+      if (!rawContent && textTargets.length === 1) {
+        try {
+          const single = await generatePlatformVariantFromMaster(master, target.platform, {
+            content_type: target.content_type,
+            max_length: target.max_length,
+            generation_overrides: target.generation_overrides,
+            writer_content_brief: asObject(item?.writer_content_brief) || undefined,
+            intent: asObject(item?.intent) || undefined,
+            discoverabilityMeta,
+            existingMediaSearchIntent: existingVariant?.media_search_intent,
+          });
+          built.push(single);
+        } catch {
+          const fallbackVariant =
+            existingVariant ??
+            existing.find(
+              (v) =>
+                nonEmpty(v?.platform).toLowerCase() === target.platform &&
+                nonEmpty(v?.content_type).toLowerCase() === target.content_type
+            );
+          if (fallbackVariant) {
+            built.push(fallbackVariant);
+          } else {
+            built.push({
+              platform: target.platform,
+              content_type: target.content_type,
+              generated_content: '[PLATFORM ADAPTATION FAILED]\nBased on master content.',
+              generation_status: 'failed',
+              locked_variant: false,
+              adapted_from_master: true,
+              adaptation_style: 'platform_specific',
+              requires_media: false,
+              generation_overrides: target.generation_overrides,
+              adaptation_trace: {
+                platform: target.platform,
+                style_strategy: PLATFORM_STYLE_MAP[target.platform] ?? 'Neutral',
+                character_limit_used: target.max_length ?? null,
+                target_length_used: null,
+                actual_length_used: null,
+                format_family: 'text',
+                media_constraints_applied: false,
+                adaptation_reason: `Adaptation failed for ${target.platform}.`,
+              },
+            });
+          }
+        }
+        continue;
+      }
+      if (!rawContent) {
+        let fallback: PlatformVariantPayload;
+        try {
+          fallback = await generatePlatformVariantFromMaster(master, target.platform, {
+            content_type: target.content_type,
+            max_length: target.max_length,
+            generation_overrides: target.generation_overrides,
+            writer_content_brief: asObject(item?.writer_content_brief) || undefined,
+            intent: asObject(item?.intent) || undefined,
+            discoverabilityMeta,
+            existingMediaSearchIntent: existingVariant?.media_search_intent,
+          });
+        } catch {
+          fallback = existingVariant && nonEmpty(existingVariant.generated_content).length > 0
+            ? existingVariant
+            : {
+                platform: target.platform,
+                content_type: target.content_type,
+                generated_content: '[PLATFORM ADAPTATION FAILED]\nBased on master content.',
+                generation_status: 'failed' as const,
+                locked_variant: false,
+                adapted_from_master: true,
+                adaptation_style: 'platform_specific',
+                requires_media: false,
+                generation_overrides: target.generation_overrides,
+                adaptation_trace: {
+                  platform: target.platform,
+                  style_strategy: PLATFORM_STYLE_MAP[target.platform] ?? 'Neutral',
+                  character_limit_used: target.max_length ?? null,
+                  target_length_used: null,
+                  actual_length_used: null,
+                  format_family: 'text',
+                  media_constraints_applied: false,
+                  adaptation_reason: `Adaptation failed for ${target.platform}.`,
+                },
+              };
+        }
+        built.push(
+          fallback.generation_status === 'failed' && existingVariant && nonEmpty(existingVariant.generated_content).length > 0
+            ? existingVariant
+            : fallback
+        );
+        continue;
+      }
+
+      const maxLength = toPositiveNumber(target.max_length);
+      let bounded = maxLength ? rawContent.slice(0, maxLength) : rawContent;
+      bounded = appendHashtagsToVariantContent(bounded, discoverabilityMeta, maxLength);
+      const formatted = applyAlgorithmicFormatting(bounded, target.platform);
+      bounded = maxLength ? formatted.content.slice(0, maxLength) : formatted.content;
+      const refined = await refineLanguageOutput({
+        content: bounded,
+        card_type: 'platform_variant',
+        platform: target.platform,
+      });
+      bounded = (refined.refined as string) || bounded;
+      bounded = maxLength ? bounded.slice(0, maxLength) : bounded;
+
+      const mediaSearchIntent =
+        normalizeLegacyMediaSearchIntent(existingVariant?.media_search_intent) ||
+        buildMediaSearchIntent(target.platform, target.content_type, nonEmpty(master?.content), asObject(item?.intent) || null);
+      built.push({
+        platform: target.platform,
+        content_type: target.content_type,
+        generated_content: bounded,
+        generation_status: 'generated',
+        locked_variant: false,
+        adapted_from_master: true,
+        adaptation_style: 'platform_specific',
+        requires_media: false,
+        generation_overrides: target.generation_overrides,
+        adaptation_trace: {
+          platform: target.platform,
+          style_strategy: PLATFORM_STYLE_MAP[target.platform] ?? 'Neutral adaptation',
+          character_limit_used: maxLength ?? null,
+          target_length_used: maxLength ? Math.floor(maxLength * 0.9) : null,
+          actual_length_used: bounded.length,
+          format_family: 'text',
+          media_constraints_applied: false,
+          adaptation_reason: `Adapted from master for ${target.platform} (batch).`,
+        },
+        discoverability_meta: discoverabilityMeta,
+        algorithmic_formatting_meta: formatted.meta,
+        media_intent: getMediaIntentDescriptor(target.platform),
+        media_search_intent: mediaSearchIntent,
+      });
+    }
+  }
+
+  // Media-dependent targets: placeholder (no AI)
+  for (const target of mediaTargets) {
     const key = `${target.platform}::${target.content_type}`;
     const existingVariant = existingByKey.get(key);
     if (existingVariant?.locked_variant) {
       built.push(existingVariant);
       continue;
     }
-
-    const discoverabilityMeta =
-      isMediaDependentContentType(target.content_type)
-        ? undefined
-        : await optimizeDiscoverabilityForPlatform(
-            nonEmpty(master?.content),
-            target.platform,
-            target.content_type
-          );
-
-    const regenerated = await generatePlatformVariantFromMaster(master, target.platform, {
+    const placeholder = await generatePlatformVariantFromMaster(master, target.platform, {
       content_type: target.content_type,
       max_length: target.max_length,
       generation_overrides: target.generation_overrides,
       writer_content_brief: asObject(item?.writer_content_brief) || undefined,
       intent: asObject(item?.intent) || undefined,
-      discoverabilityMeta,
+      discoverabilityMeta: undefined,
       existingMediaSearchIntent: existingVariant?.media_search_intent,
     });
-    if (
-      regenerated.generation_status === 'failed' &&
-      existingVariant &&
-      nonEmpty(existingVariant.generated_content).length > 0
-    ) {
-      built.push(existingVariant);
-      continue;
-    }
-    built.push(regenerated);
+    built.push(placeholder);
   }
 
   // Preserve extra existing variants not represented by current targets.
@@ -1293,7 +2022,8 @@ export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLi
     const key = `${nonEmpty(variant?.platform).toLowerCase()}::${nonEmpty(variant?.content_type).toLowerCase()}`;
     if (!built.some((v) => `${v.platform}::${v.content_type}` === key)) built.push(variant);
   }
-  return built;
+  const validatedVariants = validatePlatformVariants(built);
+  return validatedVariants;
 }
 
 export async function attachGenerationPipelineToDailyItems(weeks: any[]): Promise<any[]> {
@@ -1314,9 +2044,46 @@ export async function attachGenerationPipelineToDailyItems(weeks: any[]): Promis
 
       const existingMaster = asObject(item?.master_content);
       const existingMasterGenerated = nonEmpty(existingMaster?.generation_status).toLowerCase() === 'generated';
-      if (!existingMasterGenerated) {
-        item.master_content = await generateMasterContentFromIntent(item);
-      } else if (!Array.isArray(item?.platform_variants) || item.platform_variants.length === 0) {
+      const isMedia = isMediaDependentContentType(item?.content_type);
+
+      if (isMedia) {
+        if (!existingMasterGenerated) {
+          item.master_content = await generateMasterContentFromIntent(item);
+        }
+      } else {
+        const useBlueprintFlow = !existingMasterGenerated;
+        if (useBlueprintFlow) {
+          const blueprint = await generateContentBlueprint(item);
+          if (!isBlueprintQualitySufficient(blueprint)) {
+            item.master_content = await generateMasterContentFromIntent(item);
+            item.platform_variants = await buildPlatformVariantsFromMaster(item);
+          } else {
+          const fullText = blueprintToFullText(blueprint);
+          const itemId = sanitizeIdPart(item.execution_id || item.title || item.topic || item.platform || 'daily-item');
+          item.master_content = {
+            id: `master-${itemId}`,
+            generated_at: new Date().toISOString(),
+            content: fullText,
+            generation_status: 'generated',
+            generation_source: 'ai',
+            content_type_mode: 'text',
+            decision_trace: {
+              source_topic: nonEmpty(item.topic) || nonEmpty(item.title) || 'TBD',
+              objective: nonEmpty(asObject(item.intent)?.objective) || 'TBD',
+              pain_point: 'From blueprint',
+              outcome_promise: 'From blueprint',
+              writing_angle: 'From blueprint',
+              tone_used: 'From blueprint',
+              narrative_role: 'support',
+              progression_step: null,
+            },
+          };
+          item.platform_variants = await renderPlatformVariantsFromBlueprint(blueprint, item);
+          }
+        }
+      }
+
+      if (!existingMasterGenerated && !isMedia && !item.platform_variants) {
         console.warn('[content-generation-pipeline][master-without-variants]', { execution_id });
       }
       if (
@@ -1330,13 +2097,15 @@ export async function attachGenerationPipelineToDailyItems(weeks: any[]): Promis
       if (mediaStatus) {
         item.media_status = mediaStatus;
       }
-      if (item.master_content && isMediaDependentContentType(item?.content_type)) {
+      if (item.master_content && isMedia) {
         item.master_content.content_type_mode = 'media_blueprint';
         item.master_content.required_media = true;
         item.master_content.media_status = mediaStatus ?? 'missing';
       }
 
-      item.platform_variants = await buildPlatformVariantsFromMaster(item);
+      if (isMedia || existingMasterGenerated) {
+        item.platform_variants = await buildPlatformVariantsFromMaster(item);
+      }
       item.execution_readiness = buildExecutionReadiness(item);
       item.execution_jobs = buildExecutionJobsFromItem(item);
       const variants = Array.isArray(item?.platform_variants) ? item.platform_variants : [];

@@ -192,7 +192,7 @@ export function computeCampaignPlanningQAState(params: {
     if (!n) return null;
     // Prefer key_messages / pain points before generic "target audience" so "What are your key messages..."
     // never matches target_audience (e.g. when "target" appears in "to address" or in required missing list).
-    if (n.includes('key messages') || n.includes('pain points') || n.includes('one thing you want people to remember')) return 'key_messages';
+    if (n.includes('key messages') || n.includes('pain points') || n.includes('one thing you want people to remember') || n.includes('core message') || n.includes('audience to remember')) return 'key_messages';
     if (n.includes('who is your primary target audience') || n.includes('primary target audience') || n.includes('who will see your content') || n.includes('target audience')) return 'target_audience';
     if ((n.includes('which professionals') && n.includes('mainly speaking')) || n.includes('which group fits')) return 'audience_professional_segment';
     if (n.includes('how do you want your content to sound') || n.includes('how should your posts sound')) return 'communication_style';
@@ -212,7 +212,11 @@ export function computeCampaignPlanningQAState(params: {
       n.includes('content capacity') ||
       n.includes('how much content') ||
       n.includes('how will you create') ||
-      n.includes('how many pieces per week')
+      n.includes('how many pieces per week') ||
+      n.includes('create per week') ||
+      n.includes('creator-dependent pieces') ||
+      n.includes('how many can you create per week') ||
+      n.includes('how many can you and your team create every week')
     ) {
       return 'content_capacity';
     }

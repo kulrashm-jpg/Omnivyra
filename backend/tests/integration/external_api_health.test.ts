@@ -3,7 +3,7 @@ import {
   getExternalApiRuntimeSnapshot,
   resetExternalApiRuntime,
 } from '../../services/externalApiService';
-import { resetCacheStats, getCacheStats } from '../../services/externalApiCacheService';
+import { resetCacheStats, getCacheStats } from '../../services/redisExternalApiCache';
 import { supabase } from '../../db/supabaseClient';
 
 jest.mock('../../db/supabaseClient', () => ({
@@ -77,11 +77,11 @@ const buildQuery = (table: string) => {
 };
 
 describe('External API health + cache + rate limit', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
     healthStore.clear();
     resetCacheStats();
-    resetExternalApiRuntime();
+    await resetExternalApiRuntime();
     jest.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useCompanyContext } from '../components/CompanyContext';
 import { supabase } from '../utils/supabaseClient';
 
@@ -61,6 +62,7 @@ export default function SocialPlatformsPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [canManageConnectors, setCanManageConnectors] = useState(false);
   const [constraintsText, setConstraintsText] = useState<string>('{}');
   const canManage = isAdmin || hasPermission('MANAGE_EXTERNAL_APIS');
 
@@ -139,6 +141,26 @@ export default function SocialPlatformsPage() {
   useEffect(() => {
     loadConfigs();
   }, [isAdmin, selectedCompanyId]);
+
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setCanManageConnectors(false);
+      return;
+    }
+    const loadConnectorPermission = async () => {
+      try {
+        const response = await fetchWithAuth(
+          `/api/community-ai/actions?tenant_id=${encodeURIComponent(selectedCompanyId)}&organization_id=${encodeURIComponent(selectedCompanyId)}`
+        );
+        if (!response.ok) return;
+        const data = await response.json();
+        setCanManageConnectors(!!data?.permissions?.canManageConnectors);
+      } catch {
+        setCanManageConnectors(false);
+      }
+    };
+    loadConnectorPermission();
+  }, [selectedCompanyId]);
 
   useEffect(() => {
     const loadContentTypes = async () => {
@@ -260,9 +282,18 @@ export default function SocialPlatformsPage() {
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="bg-white rounded-lg shadow p-6">
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Social Platform Settings</h1>
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-gray-600 mb-4">
             Configure platform APIs and posting rules. Admin access required to edit.
           </p>
+          {canManageConnectors && (
+            <Link
+              href="/community-ai/connectors"
+              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+            >
+              Manage Connectors
+              <span aria-hidden>→</span>
+            </Link>
+          )}
         </div>
 
         {errorMessage && (

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
@@ -56,6 +57,7 @@ type ApiSource = {
   is_active: boolean;
   method?: string;
   auth_type: string;
+  platform_type?: string;
   api_key_name?: string | null;
   api_key_env_name?: string | null;
   headers?: Record<string, string> | null;
@@ -155,7 +157,9 @@ export default function ExternalApisPage() {
   const router = useRouter();
   const {
     selectedCompanyId,
+    companies,
     isLoading: isCompanyLoading,
+    isAuthenticated,
     userRole,
     hasPermission,
     setSelectedCompanyId,
@@ -215,7 +219,9 @@ export default function ExternalApisPage() {
   const modeParam = Array.isArray(router.query?.mode)
     ? router.query?.mode[0]
     : router.query?.mode;
-  const isPlatformCatalogMode = modeParam === 'platform';
+  // Use asPath fallback: router.query can be empty on first client render after navigation
+  const isPlatformCatalogMode =
+    modeParam === 'platform' || (router.asPath || '').includes('mode=platform');
   const isPlatformAdminView = isPlatformCatalogMode;
   const canManageExternalApis = isPlatformCatalogMode
     ? true
@@ -227,20 +233,12 @@ export default function ExternalApisPage() {
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
-    if (token) {
-      return fetch(input, {
-        ...init,
-        headers: {
-          ...(init?.headers || {}),
-          Authorization: `Bearer ${token}`,
-        },
-      });
-    }
     return fetch(input, {
       ...init,
       credentials: 'include',
       headers: {
         ...(init?.headers || {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
   };
@@ -270,7 +268,7 @@ export default function ExternalApisPage() {
     }
   };
 
-  const loadApis = async () => {
+  const loadApis = async (skipCache = false) => {
     try {
       if (!companyContextId && !isPlatformCatalogMode) {
         console.warn('No company selected yet, skipping external API load');
@@ -278,16 +276,25 @@ export default function ExternalApisPage() {
       }
       setIsLoading(true);
       const url = companyContextId
-        ? `/api/external-apis?companyId=${companyContextId}`
+        ? `/api/external-apis?companyId=${companyContextId}${skipCache ? '&skipCache=1' : ''}`
         : '/api/external-apis?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
       const response = await fetchWithAuth(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
-        if (isPlatformCatalogMode && [401, 403].includes(response.status)) {
+        const errMsg = errorBody?.error || 'Failed to load APIs';
+        if (response.status === 401) {
+          setPlatformAccessDenied(true);
+          if (!isPlatformCatalogMode) {
+            setErrorMessage('Please sign in to access external APIs.');
+          }
+          return;
+        }
+        if (isPlatformCatalogMode && response.status === 403) {
           setPlatformAccessDenied(true);
         }
-        throw new Error(errorBody?.error || 'Failed to load APIs');
+        setErrorMessage(errMsg);
+        return;
       }
       const data = await response.json();
       setApis(data.apis || []);
@@ -312,7 +319,14 @@ export default function ExternalApisPage() {
       const response = await fetchWithAuth(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
-        if (isPlatformCatalogMode && [401, 403].includes(response.status)) {
+        if (response.status === 401) {
+          setPlatformAccessDenied(true);
+          if (!isPlatformCatalogMode) {
+            setErrorMessage('Please sign in to access external APIs.');
+          }
+          return null;
+        }
+        if (isPlatformCatalogMode && response.status === 403) {
           setPlatformAccessDenied(true);
         }
         const msg = errorBody?.error === 'FORBIDDEN_ROLE'
@@ -420,28 +434,39 @@ export default function ExternalApisPage() {
     }
     const selectable = presets.filter((preset) => preset.id);
     setIsSavingPresetSelection(true);
+    resetMessages();
     try {
-      await Promise.all(
-        selectable.map((preset) =>
-          fetchWithAuth('/api/external-apis/access', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              companyId: companyContextId,
-              api_source_id: preset.id,
-              is_enabled: presetSelection.has(preset.id),
-              scope: 'company',
-            }),
-          })
-        )
-      );
+      if (selectable.length === 0) {
+        setSuccessMessage(
+          'No APIs in the catalog to update. Ask a platform admin to add global presets first, then you can select and configure them here.'
+        );
+        setShowPresetModal(false);
+        await loadPresets();
+        await loadApis();
+        return;
+      }
+      const desiredIds = selectable.filter((p) => presetSelection.has(p.id)).map((p) => p.id);
+      const response = await fetchWithAuth(`/api/external-apis/access?companyId=${encodeURIComponent(companyContextId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: companyContextId,
+          company_default_api_ids: desiredIds,
+          scope: 'company',
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setErrorMessage(data?.error || data?.detail || `Failed to save (${response.status})`);
+        return;
+      }
       setSuccessMessage('Preset selection saved.');
       setShowPresetModal(false);
       await loadPresets();
-      await loadApis();
+      await loadApis(true);
     } catch (error) {
       console.error('Error updating preset selection:', error);
-      setErrorMessage('Failed to update preset selection.');
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to update preset selection.');
     } finally {
       setIsSavingPresetSelection(false);
     }
@@ -458,14 +483,22 @@ export default function ExternalApisPage() {
       const response = await fetchWithAuth(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
-        if (isPlatformCatalogMode && [401, 403].includes(response.status)) {
+        if (response.status === 401) {
+          setPlatformAccessDenied(true);
+          if (!isPlatformCatalogMode) {
+            setErrorMessage('Please sign in to access external APIs.');
+          }
+          return;
+        }
+        if (isPlatformCatalogMode && response.status === 403) {
           setPlatformAccessDenied(true);
         }
         if (errorBody?.error === 'FORBIDDEN_ROLE') {
           setRequests([]);
           return;
         }
-        throw new Error(errorBody?.error || 'Failed to load requests');
+        setErrorMessage(errorBody?.error || 'Failed to load requests');
+        return;
       }
       const data = await response.json();
       setRequests(data.requests || []);
@@ -477,13 +510,23 @@ export default function ExternalApisPage() {
   };
 
   useEffect(() => {
+    // Company mode: auto-select first company when none selected
+    if (!isPlatformCatalogMode && isAuthenticated && companies.length > 0 && !selectedCompanyId) {
+      setSelectedCompanyId(companies[0].company_id);
+      return;
+    }
+  }, [isAuthenticated, companies, selectedCompanyId, isPlatformCatalogMode, setSelectedCompanyId]);
+
+  useEffect(() => {
+    // Platform catalog mode: allow loads for legacy super admin (cookie-only, no Supabase session)
+    if (!isAuthenticated && !isPlatformCatalogMode) return;
     if (isPlatformCatalogMode && isPlatformAdminView) {
       loadPlatformCompanies();
     }
     loadApis();
     loadPresets();
     loadRequests();
-  }, [selectedCompanyId, platformCompanyId, isPlatformCatalogMode, isPlatformAdminView]);
+  }, [isAuthenticated, selectedCompanyId, platformCompanyId, isPlatformCatalogMode, isPlatformAdminView]);
 
   useEffect(() => {
     if (!isPlatformCatalogMode && !companyContextId) return;
@@ -827,6 +870,10 @@ export default function ExternalApisPage() {
         setErrorMessage('Select a company before testing an API.');
         return;
       }
+      if (!form.base_url?.trim()) {
+        setErrorMessage('Base URL is required. Enter a URL or load a preset.');
+        return;
+      }
       const resolved = resolveEditorPayload();
       if (!resolved.ok) {
         setErrorMessage(resolved.message || 'Invalid headers/query params.');
@@ -834,6 +881,8 @@ export default function ExternalApisPage() {
       }
       const payload = {
         ...form,
+        base_url: form.base_url?.trim(),
+        platform_type: form.platform_type || 'social',
         headers: resolved.headers,
         query_params: resolved.queryParams,
       };
@@ -848,13 +897,15 @@ export default function ExternalApisPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data?.error || 'Failed to test API');
+        const msg = data?.error || 'Failed to test API';
+        const missing = Array.isArray(data?.missing) ? data.missing : [];
+        throw new Error(missing.length > 0 ? `${msg}: ${missing.join(', ')}` : msg);
       }
       setTestResult(data);
       setSuccessMessage('Test fetch completed.');
     } catch (error) {
       console.error('Error fetching trends:', error);
-      setErrorMessage('Failed to test API.');
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to test API.');
     }
   };
 
@@ -887,13 +938,15 @@ export default function ExternalApisPage() {
       setTestResult(data);
       setApiTestResults((prev) => ({ ...prev, [id]: data }));
       if (!response.ok) {
-        throw new Error(data?.error || 'Failed to test API');
+        const msg = data?.error || 'Failed to test API';
+        const missing = Array.isArray(data?.missing) ? data.missing : [];
+        throw new Error(missing.length > 0 ? `${msg}: ${missing.join(', ')}` : msg);
       }
       setSuccessMessage('Test fetch completed.');
       await loadApis();
     } catch (error) {
       console.error('Error testing API:', error);
-      setErrorMessage('Failed to test API.');
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to test API.');
     }
   };
 
@@ -1055,8 +1108,29 @@ export default function ExternalApisPage() {
     return (
       <div className="min-h-screen bg-gray-50">
         <Header />
-        <div className="p-6 text-gray-500">
-          Select a company to manage external APIs.
+        <div className="max-w-5xl mx-auto p-6 space-y-4">
+          <h1 className="text-2xl font-bold text-gray-900">External API Sources</h1>
+          {companies.length > 0 ? (
+            <div className="bg-white rounded-lg shadow p-6">
+              <p className="text-sm text-gray-600 mb-4">Select a company to manage external APIs.</p>
+              <select
+                className="border rounded-lg px-3 py-2 text-sm bg-white cursor-pointer min-w-[240px]"
+                value={selectedCompanyId}
+                onChange={(e) => setSelectedCompanyId(e.target.value)}
+              >
+                <option value="">Choose company…</option>
+                {companies.map((c) => (
+                  <option key={c.company_id} value={c.company_id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="p-6 text-gray-500">
+              No companies available. You need access to a company before managing external APIs.
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1111,7 +1185,17 @@ export default function ExternalApisPage() {
 
         {isPlatformCatalogMode && platformAccessDenied && (
           <div className="bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg p-3">
-            You are not authorized to manage the platform catalog.
+            <p className="font-medium">You are not authorized to manage the platform catalog.</p>
+            <p className="mt-2 text-red-700">
+              Super Admins must sign in at{' '}
+              <Link
+                href="/super-admin/login"
+                className="font-semibold underline hover:text-red-900"
+              >
+                Super Admin Login
+              </Link>{' '}
+              first, then return here.
+            </p>
           </div>
         )}
 
@@ -1176,55 +1260,68 @@ export default function ExternalApisPage() {
                     Add Blank API
                   </button>
                   <select
-                    className="border rounded-lg px-3 py-2 text-sm"
+                    className="border rounded-lg px-3 py-2 text-sm min-w-[220px] bg-white cursor-pointer"
                     value={selectedCatalogPreset}
                     onChange={(e) => setSelectedCatalogPreset(e.target.value)}
                   >
-                    <option value="" disabled>
-                      Add preset to catalog
+                    <option value="">
+                      {isLoadingPresets
+                        ? 'Loading presets…'
+                        : presets.length > 0 && presets.filter((p) => !p.id).length === 0
+                          ? 'All presets already in catalog'
+                          : 'Add preset to catalog'}
                     </option>
                     {presets
                       .filter((preset) => !preset.id)
                       .map((preset) => (
-                        <option key={preset.name} value={preset.name}>
-                          {preset.name}
+                        <option key={preset.name} value={preset.name} title={preset.description}>
+                          {preset.name} — {preset.description ? String(preset.description).slice(0, 40) + (String(preset.description).length > 40 ? '…' : '') : preset.name}
                         </option>
                       ))}
                   </select>
                   <button
                     onClick={() => {
-                      const preset = presets.find((item) => item.name === selectedCatalogPreset);
-                      if (preset) {
-                        addPresetToCatalog(preset);
-                      }
+                      const preset =
+                        presets.find((item) => item.name === selectedCatalogPreset) ||
+                        (selectedPreset && !selectedPreset.id ? selectedPreset : null);
+                      if (preset) addPresetToCatalog(preset);
                     }}
-                    disabled={!selectedCatalogPreset}
-                    className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50"
+                    disabled={!selectedCatalogPreset && !(selectedPreset && !selectedPreset.id)}
+                    className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Add Preset
                   </button>
                   <select
-                    className="border rounded-lg px-3 py-2 text-sm"
-                    value=""
+                    className="border rounded-lg px-3 py-2 text-sm min-w-[220px] bg-white cursor-pointer"
+                    value={presets.some((p) => p.name === selectedPreset?.name) ? selectedPreset?.name ?? '' : ''}
                     onChange={(e) => {
-                      const preset = presets.find((item) => item.name === e.target.value);
-                      if (preset) {
-                        applyPreset(preset);
-                      }
+                      const v = e.target.value;
+                      if (!v) return;
+                      const preset = presets.find((item) => item.name === v);
+                      if (preset) applyPreset(preset);
                     }}
                   >
-                    <option value="" disabled>
-                      Load preset into editor
+                    <option value="">
+                      {isLoadingPresets ? 'Loading…' : presets.length === 0 ? 'No presets loaded' : 'Load preset into editor'}
                     </option>
                     {presets.map((preset) => (
-                      <option key={preset.name} value={preset.name}>
-                        {preset.name}
+                      <option key={preset.name} value={preset.name} title={preset.description}>
+                        {preset.name} — {preset.description ? String(preset.description).slice(0, 40) + (String(preset.description).length > 40 ? '…' : '') : preset.name}
                       </option>
                     ))}
                   </select>
+                  {presets.length === 0 && !isLoadingPresets && (
+                    <button
+                      type="button"
+                      onClick={() => loadPresets()}
+                      className="text-sm text-indigo-600 hover:text-indigo-800"
+                    >
+                      Retry load
+                    </button>
+                  )}
                   {selectedPreset && (
                     <span className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-1">
-                      Preset loaded
+                      Loaded: {selectedPreset.name}
                     </span>
                   )}
                 </>
@@ -1545,9 +1642,7 @@ export default function ExternalApisPage() {
           {(() => {
             const readyApis = apis.filter((api) => {
               if (!api.is_active) return false;
-              if (isPlatformCatalogMode) {
-                return api.is_preset || Boolean(api.company_id);
-              }
+              if (isPlatformCatalogMode) return true; // Show all active APIs in platform catalog
               return true;
             });
             return (
@@ -1561,8 +1656,11 @@ export default function ExternalApisPage() {
                   </span>
                 </div>
                 {readyApis.length === 0 ? (
-                  <div className="text-sm text-gray-500 mt-2">
-                    No active APIs are currently visible to companies.
+                  <div className="text-sm text-gray-500 mt-2 space-y-1">
+                    <p>No active APIs are currently visible to companies.</p>
+                    <p className="text-xs text-gray-400">
+                      If you expect APIs here, a platform admin may need to add global presets to the catalog first (Platform catalog mode).
+                    </p>
                   </div>
                 ) : (
                   <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1787,7 +1885,12 @@ export default function ExternalApisPage() {
               );
             })}
               {apis.length === 0 && (
-                <div className="text-sm text-gray-500">No API sources configured.</div>
+                <div className="text-sm text-gray-500 space-y-1">
+                  <p>No API sources configured.</p>
+                  <p className="text-xs text-gray-400">
+                    Select &quot;Select Global Presets&quot; to enable APIs for this company. If the list there is empty, a platform admin must add global presets to the catalog first.
+                  </p>
+                </div>
               )}
             </div>
           )}

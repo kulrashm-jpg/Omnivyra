@@ -1,5 +1,6 @@
 jest.mock('../../services/aiGateway', () => ({
   generateCampaignPlan: jest.fn(),
+  runCompletionWithOperation: jest.fn(),
 }));
 
 import {
@@ -10,9 +11,10 @@ import {
   isMediaDependentContentType,
   resolveMediaStatus,
 } from '../../services/contentGenerationPipeline';
-import { generateCampaignPlan } from '../../services/aiGateway';
+import { generateCampaignPlan, runCompletionWithOperation } from '../../services/aiGateway';
 
 const mockedGenerateCampaignPlan = generateCampaignPlan as jest.MockedFunction<typeof generateCampaignPlan>;
+const mockedRunCompletionWithOperation = runCompletionWithOperation as jest.MockedFunction<typeof runCompletionWithOperation>;
 
 describe('contentGenerationPipeline', () => {
   beforeEach(() => {
@@ -24,6 +26,19 @@ describe('contentGenerationPipeline', () => {
         model: 'gpt-4o-mini',
         token_usage: null,
         reasoning_trace_id: 'test-trace-default',
+      },
+    });
+    mockedRunCompletionWithOperation.mockReset();
+    mockedRunCompletionWithOperation.mockResolvedValue({
+      output: JSON.stringify({
+        linkedin_post: 'LinkedIn adapted content body.',
+        x_thread: 'X thread adapted content.',
+      }),
+      metadata: {
+        provider: 'direct-openai',
+        model: 'gpt-4o-mini',
+        token_usage: null,
+        reasoning_trace_id: 'test-trace-batch',
       },
     });
   });
@@ -120,7 +135,7 @@ describe('contentGenerationPipeline', () => {
     expect(variants.length).toBeGreaterThanOrEqual(2);
     const xVariant = variants.find((v) => v.platform === 'x' && v.content_type === 'thread');
     expect(xVariant?.generated_content).toBe('LOCKED EXISTING VARIANT');
-    expect(mockedGenerateCampaignPlan).toHaveBeenCalledTimes(1);
+    expect(mockedRunCompletionWithOperation).toHaveBeenCalledTimes(1);
   });
 
   it('attaches master first and uses planned targets fallback when active missing', async () => {
@@ -331,7 +346,7 @@ describe('contentGenerationPipeline', () => {
     expect(mockedGenerateCampaignPlan).not.toHaveBeenCalled();
   });
 
-  it('variant adaptation fallback keeps previous deterministic variant when AI fails', async () => {
+  it('variant adaptation fallback returns failed payload when AI fails', async () => {
     mockedGenerateCampaignPlan.mockRejectedValue(new Error('variant adapt fail'));
     const variants = await buildPlatformVariantsFromMaster({
       execution_id: 'wk8-exec-3',
@@ -344,17 +359,10 @@ describe('contentGenerationPipeline', () => {
         generation_source: 'ai',
       },
       active_platform_targets: [{ platform: 'facebook', content_type: 'post' }],
-      platform_variants: [
-        {
-          platform: 'facebook',
-          content_type: 'post',
-          generated_content: '[FACEBOOK POST VARIANT]\nLegacy deterministic output.',
-          generation_status: 'generated',
-          locked_variant: false,
-        },
-      ],
     });
-    expect(variants[0]?.generated_content).toContain('Legacy deterministic output.');
+    expect(variants.length).toBeGreaterThanOrEqual(1);
+    expect(variants[0]?.generation_status).toBe('failed');
+    expect(variants[0]?.generated_content).toContain('[PLATFORM ADAPTATION FAILED]');
   });
 
   it('decision_trace exists for generated master', async () => {

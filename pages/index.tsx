@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import HeroSection from '../components/landing/HeroSection';
 import ReadinessModal from '../components/landing/ReadinessModal';
-import HowItWorks from '../components/landing/HowItWorks';
+import MarketingLifecycle from '../components/landing/MarketingLifecycle';
+import FreeAuditSection from '../components/FreeAuditSection';
 import TestimonialsSection from '../components/landing/TestimonialsSection';
 import PricingPreview from '../components/landing/PricingPreview';
 import Footer from '../components/landing/Footer';
@@ -13,9 +14,10 @@ export default function Home() {
     <div className="min-h-screen bg-[#F5F9FF]">
       <main>
         <HeroSection onCheckReadiness={() => setReadinessModalOpen(true)} />
-        <HowItWorks />
-        <TestimonialsSection />
+        <MarketingLifecycle />
+        <FreeAuditSection />
         <PricingPreview />
+        <TestimonialsSection />
         <Footer />
       </main>
       <ReadinessModal open={readinessModalOpen} onClose={() => setReadinessModalOpen(false)} />

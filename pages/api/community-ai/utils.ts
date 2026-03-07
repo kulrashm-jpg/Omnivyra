@@ -41,7 +41,7 @@ export const requireTenantScope = async (
 };
 
 export const resolveBrandVoice = async (organizationId: string): Promise<string> => {
-  const profile = await getProfile(organizationId, { autoRefine: false });
+  const profile = await getProfile(organizationId, { autoRefine: false, languageRefine: true });
   const listEntry = Array.isArray(profile?.brand_voice_list) ? profile.brand_voice_list[0] : null;
   const voice = (listEntry || profile?.brand_voice || '').toString().trim();
   return voice.length > 0 ? voice : 'professional';

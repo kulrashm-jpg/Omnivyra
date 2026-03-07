@@ -17,6 +17,7 @@ import {
   Trash2,
   TrendingUp,
   FileText,
+  DollarSign,
 } from 'lucide-react';
 
 interface DeletionAudit {
@@ -114,7 +115,8 @@ export default function SuperAdminPanel() {
   const { userRole } = useCompanyContext();
   const isSuperAdmin = userRole === 'SUPER_ADMIN';
   const [isSuperAdminSession, setIsSuperAdminSession] = useState(false);
-  const canShowExternalApisTab = isSuperAdmin || isSuperAdminSession;
+  const isSuperAdminRoute = router.pathname?.startsWith('/super-admin');
+  const canShowExternalApisTab = isSuperAdminRoute || isSuperAdmin || isSuperAdminSession;
   useEffect(() => {
     if (canShowExternalApisTab) {
       console.debug('Super Admin External API tab visible', userRole);
@@ -147,6 +149,12 @@ export default function SuperAdminPanel() {
   const [pendingPolicy, setPendingPolicy] = useState<CommunityAiPolicy | null>(null);
   const [pendingPolicyLabel, setPendingPolicyLabel] = useState('');
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [pricingPlans, setPricingPlans] = useState<Array<{ id: string; plan_key: string; name: string; description?: string | null; monthly_price?: number | null }>>([]);
+  const [plansLimits, setPlansLimits] = useState<Record<string, Record<string, number | null>>>({});
+  const [plansDraftLimits, setPlansDraftLimits] = useState<Record<string, Record<string, string>>>({});
+  const [isSavingPlan, setIsSavingPlan] = useState<string | null>(null);
+  const [plansSaveError, setPlansSaveError] = useState<string | null>(null);
+  const [plansSaveSuccess, setPlansSaveSuccess] = useState<string | null>(null);
   const [externalApisHealth, setExternalApisHealth] = useState<{ healthy: number; warning: number; failed: number; status: string } | null>(null);
   const [showCreateCompanyModal, setShowCreateCompanyModal] = useState(false);
   const [showCreateCompanyAdminModal, setShowCreateCompanyAdminModal] = useState(false);
@@ -285,6 +293,28 @@ export default function SuperAdminPanel() {
         setExternalApisHealth(healthData);
       } else {
         setExternalApisHealth(null);
+      }
+
+      const plansRes = await fetchWithAuth('/api/super-admin/plans/list');
+      if (plansRes.ok) {
+        const plansData = await plansRes.json();
+        setPricingPlans(plansData.plans || []);
+        setPlansLimits(plansData.limitsByPlan || {});
+        const draft: Record<string, Record<string, string>> = {};
+        for (const plan of plansData.plans || []) {
+          const lims = plansData.limitsByPlan?.[plan.id] || {};
+          draft[plan.id] = {
+            llm_tokens: lims.llm_tokens != null ? String(lims.llm_tokens) : '',
+            external_api_calls: lims.external_api_calls != null ? String(lims.external_api_calls) : '',
+            automation_executions: lims.automation_executions != null ? String(lims.automation_executions) : '',
+            max_campaign_duration_weeks: lims.max_campaign_duration_weeks != null ? String(lims.max_campaign_duration_weeks) : '',
+          };
+        }
+        setPlansDraftLimits(draft);
+      } else {
+        setPricingPlans([]);
+        setPlansLimits({});
+        setPlansDraftLimits({});
       }
     } catch (error) {
       console.error('Error loading super admin data:', error);
@@ -442,6 +472,61 @@ export default function SuperAdminPanel() {
       setShowPolicyConfirm(false);
       setPendingPolicy(null);
       setPendingPolicyLabel('');
+    }
+  };
+
+  const setPlanDraftLimit = (planId: string, resourceKey: string, value: string) => {
+    setPlansDraftLimits((prev) => ({
+      ...prev,
+      [planId]: {
+        ...(prev[planId] || {}),
+        [resourceKey]: value,
+      },
+    }));
+    setPlansSaveError(null);
+    setPlansSaveSuccess(null);
+  };
+
+  const handleSavePlanLimits = async (plan: { id: string; plan_key: string; name: string }) => {
+    setIsSavingPlan(plan.id);
+    setPlansSaveError(null);
+    setPlansSaveSuccess(null);
+    try {
+      const draft = plansDraftLimits[plan.id] || {};
+      const limits: Record<string, number | null> = {};
+      for (const key of ['llm_tokens', 'external_api_calls', 'automation_executions', 'max_campaign_duration_weeks']) {
+        const v = draft[key];
+        if (v == null || String(v).trim() === '') {
+          limits[key] = null;
+        } else {
+          const n = parseInt(String(v).trim(), 10);
+          limits[key] = Number.isFinite(n) ? n : null;
+        }
+      }
+      const response = await fetchWithAuth('/api/super-admin/plans/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plan_key: plan.plan_key,
+          name: plan.name,
+          description: plan.description ?? null,
+          monthly_price: plan.monthly_price ?? null,
+          limits,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result?.error || 'Failed to update plan');
+      }
+      setPlansSaveSuccess(`${plan.name} limits updated.`);
+      setPlansLimits((prev) => ({
+        ...prev,
+        [plan.id]: limits,
+      }));
+    } catch (error: unknown) {
+      setPlansSaveError(error instanceof Error ? error.message : 'Failed to update plan');
+    } finally {
+      setIsSavingPlan(null);
     }
   };
 
@@ -754,12 +839,13 @@ export default function SuperAdminPanel() {
             { id: 'analytics', label: 'Analytics', icon: BarChart3 },
             { id: 'campaign-health', label: 'Campaign Health', icon: TrendingUp },
             { id: 'company-users', label: 'Companies & Users', icon: Users },
+            { id: 'plans', label: 'Pricing & Plans', icon: DollarSign },
             { id: 'rbac', label: 'RBAC', icon: Key },
             { id: 'community-ai', label: 'Community-AI', icon: Activity },
             { id: 'audit', label: 'Audit Logs', icon: Eye },
             { id: 'blog', label: 'Blog', icon: FileText },
             ...(canShowExternalApisTab
-              ? [{ id: 'external-apis', label: 'External API Control', icon: BarChart3 }]
+              ? [{ id: 'external-apis', label: 'External API Control', icon: Key }]
               : [])
           ].map((tab) => {
             const Icon = tab.icon;
@@ -855,19 +941,22 @@ export default function SuperAdminPanel() {
               </div>
             </div>
 
-            {externalApisHealth != null && (
-              <button
-                type="button"
-                onClick={() => router.push('/external-apis?mode=platform')}
-                className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
-                  externalApisHealth.status === 'healthy'
+            {canShowExternalApisTab && (
+              <a
+                href="/external-apis?mode=platform"
+                className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors no-underline ${
+                  externalApisHealth?.status === 'healthy'
                     ? 'bg-green-50 border-green-200 text-green-800 hover:bg-green-100'
-                    : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                    : externalApisHealth != null
+                    ? 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                    : 'bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100'
                 }`}
               >
                 <Key className="h-4 w-4" />
-                External APIs: {externalApisHealth.status === 'healthy' ? 'HEALTHY' : 'ATTENTION REQUIRED'}
-              </button>
+                {externalApisHealth != null
+                  ? `External APIs: ${externalApisHealth.status === 'healthy' ? 'HEALTHY' : 'ATTENTION REQUIRED'}`
+                  : 'External API Control — Configure & Approval Queue'}
+              </a>
             )}
 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200">
@@ -1316,6 +1405,105 @@ export default function SuperAdminPanel() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'plans' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+                <h3 className="text-lg font-semibold text-gray-900">Pricing & Plan Limits</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  Right-size plan limits including max campaign duration (weeks). Changes apply to all orgs on that plan.
+                </p>
+              </div>
+              <div className="p-6 space-y-4">
+                {plansSaveError && (
+                  <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">{plansSaveError}</div>
+                )}
+                {plansSaveSuccess && (
+                  <div className="rounded-md bg-green-50 border border-green-200 p-3 text-sm text-green-700">{plansSaveSuccess}</div>
+                )}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Plan</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">LLM Tokens</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Ext. API Calls</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Automation Exec.</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Max Duration (wks)</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-700">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {pricingPlans.map((plan) => (
+                        <tr key={plan.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3">
+                            <span className="font-medium text-gray-900">{plan.name}</span>
+                            <span className="ml-2 text-gray-500">({plan.plan_key})</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="number"
+                              min={0}
+                              value={plansDraftLimits[plan.id]?.llm_tokens ?? ''}
+                              onChange={(e) => setPlanDraftLimit(plan.id, 'llm_tokens', e.target.value)}
+                              placeholder="—"
+                              className="w-28 border border-gray-300 rounded px-2 py-1 text-gray-900"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="number"
+                              min={0}
+                              value={plansDraftLimits[plan.id]?.external_api_calls ?? ''}
+                              onChange={(e) => setPlanDraftLimit(plan.id, 'external_api_calls', e.target.value)}
+                              placeholder="—"
+                              className="w-28 border border-gray-300 rounded px-2 py-1 text-gray-900"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="number"
+                              min={0}
+                              value={plansDraftLimits[plan.id]?.automation_executions ?? ''}
+                              onChange={(e) => setPlanDraftLimit(plan.id, 'automation_executions', e.target.value)}
+                              placeholder="—"
+                              className="w-28 border border-gray-300 rounded px-2 py-1 text-gray-900"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="number"
+                              min={1}
+                              max={12}
+                              value={plansDraftLimits[plan.id]?.max_campaign_duration_weeks ?? ''}
+                              onChange={(e) => setPlanDraftLimit(plan.id, 'max_campaign_duration_weeks', e.target.value)}
+                              placeholder="4–12"
+                              title="Max campaign duration in weeks (4–12)"
+                              className="w-20 border border-gray-300 rounded px-2 py-1 text-gray-900"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <button
+                              onClick={() => handleSavePlanLimits(plan)}
+                              disabled={isSavingPlan === plan.id}
+                              className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-lg disabled:opacity-50"
+                            >
+                              {isSavingPlan === plan.id ? 'Saving...' : 'Save'}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {pricingPlans.length === 0 && (
+                  <p className="text-sm text-gray-500 py-4">No plans found. Create plans via POST /api/super-admin/plans/create.</p>
+                )}
               </div>
             </div>
           </div>

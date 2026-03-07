@@ -1,4 +1,30 @@
 import { NextApiRequest, NextApiResponse } from 'next';
+import { refineLanguageOutput } from '@/backend/services/languageRefinementService';
+
+async function refineFields(obj: unknown): Promise<unknown> {
+  if (obj == null) return obj;
+  if (typeof obj === 'number' || typeof obj === 'boolean') return obj;
+
+  if (typeof obj === 'string') {
+    if (!obj.trim()) return obj;
+    const r = await refineLanguageOutput({ content: obj, card_type: 'general' });
+    return (r.refined as string) || obj;
+  }
+
+  if (Array.isArray(obj)) {
+    return Promise.all(obj.map((item) => refineFields(item)));
+  }
+
+  if (typeof obj === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      out[key] = await refineFields(value);
+    }
+    return out;
+  }
+
+  return obj;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -37,9 +63,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Invalid content type' });
     }
 
+    const refinedContent = content != null ? await refineFields(content) : content;
+
     res.status(200).json({
       success: true,
-      content,
+      content: refinedContent,
       provider,
       timestamp: new Date().toISOString()
     });

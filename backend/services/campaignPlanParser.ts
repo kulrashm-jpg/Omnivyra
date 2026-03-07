@@ -1,5 +1,5 @@
-import OpenAI from 'openai';
 import { z } from 'zod';
+import { runCompletionWithOperation } from './aiGateway';
 
 const CTA_TYPES = ['None', 'Soft CTA', 'Engagement CTA', 'Authority CTA', 'Direct Conversion CTA'] as const;
 const KPI_FOCUS_OPTIONS = ['Reach growth', 'Engagement rate', 'Follower growth', 'Leads generated', 'Bookings'] as const;
@@ -88,14 +88,6 @@ const platformCustomizationSchema = z.object({
   day: z.string(),
   platforms: z.record(z.string()),
 });
-
-function getOpenAiClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing OPENAI_API_KEY');
-  }
-  return new OpenAI({ apiKey });
-}
 
 const BLUEPRINT_SCHEMA_DESC = `
 { weeks: Array<{
@@ -277,8 +269,6 @@ function buildLooseWeeksFromText(planText: string): WeeklyBlueprintWeek[] {
 }
 
 export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> {
-  const client = getOpenAiClient();
-
   const system =
     'You are a campaign plan parser. Convert free-form weekly blueprint plans into structured JSON only. Extract platform allocation numbers and map to lowercase platform keys.';
   const user =
@@ -287,17 +277,20 @@ export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> 
     '\nReturn JSON only. No prose.\n' +
     `Plan Text:\n${planText}`;
 
-  const completion = await client.chat.completions.create({
+  const result = await runCompletionWithOperation({
+    companyId: null,
+    campaignId: null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
+    operation: 'parsePlanToWeeks',
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content?.trim() || '';
+  const raw = result.output?.trim() || '';
   const parsed = JSON.parse(raw);
 
   const blueprintValidation = blueprintPlanSchema.safeParse(parsed);
@@ -383,8 +376,6 @@ export async function parseAiRefinedDay(planText: string): Promise<{
   effort_score?: number;
   success_projection?: number;
 }> {
-  const client = getOpenAiClient();
-
   const system =
     'You are a campaign plan parser. Convert free-form day refinements into structured JSON only.';
   const user =
@@ -393,17 +384,20 @@ export async function parseAiRefinedDay(planText: string): Promise<{
     'Return JSON only. No prose.\n' +
     `Plan Text:\n${planText}`;
 
-  const completion = await client.chat.completions.create({
+  const result = await runCompletionWithOperation({
+    companyId: null,
+    campaignId: null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
+    operation: 'parseRefinedDay',
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content?.trim() || '';
+  const raw = result.output?.trim() || '';
   const parsed = JSON.parse(raw);
   const validation = refinedDaySchema.safeParse(parsed);
   if (!validation.success) {
@@ -435,8 +429,6 @@ export async function parseAiPlatformCustomization(planText: string): Promise<{
   day: string;
   platforms: Record<string, string>;
 }> {
-  const client = getOpenAiClient();
-
   const system =
     'You are a campaign plan parser. Convert platform customizations into structured JSON only.';
   const user =
@@ -445,17 +437,20 @@ export async function parseAiPlatformCustomization(planText: string): Promise<{
     'Return JSON only. No prose.\n' +
     `Plan Text:\n${planText}`;
 
-  const completion = await client.chat.completions.create({
+  const result = await runCompletionWithOperation({
+    companyId: null,
+    campaignId: null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
+    operation: 'parsePlatformCustomization',
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content?.trim() || '';
+  const raw = result.output?.trim() || '';
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw || '{}');

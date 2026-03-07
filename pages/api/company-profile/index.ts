@@ -15,6 +15,7 @@ import { generateStrategicIntelligence } from '../../../backend/services/strateg
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveCompanyAccess, getContentArchitectCompanyId, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
+import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
@@ -28,9 +29,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'GET') {
     try {
       if (mode === 'list') {
+        // Legacy super admin takes precedence: when both super_admin_session and content_architect_session
+        // exist (e.g. stale content architect cookie), treat as super admin so external-apis etc. work.
+        const legacySuperAdmin = getLegacySuperAdminSession(req);
+        if (legacySuperAdmin) {
+          const { data: companyRows } = await supabase
+            .from('companies')
+            .select('id, name')
+            .order('created_at', { ascending: false });
+          const companyIds = new Set((companyRows || []).map((r: { id: string }) => r.id));
+          const { data: profileRows } = await supabase
+            .from('company_profiles')
+            .select('company_id, name')
+            .order('created_at', { ascending: false });
+          const profiles = profileRows || [];
+          const companies: Array<{ company_id: string; name: string }> = [];
+          (companyRows || []).forEach((r: { id: string; name?: string }) => {
+            companies.push({ company_id: r.id, name: r.name || r.id });
+          });
+          profiles.forEach((p: { company_id: string; name?: string }) => {
+            if (p.company_id && !companyIds.has(p.company_id)) {
+              companies.push({
+                company_id: p.company_id,
+                name: (p as { name?: string }).name || p.company_id,
+              });
+              companyIds.add(p.company_id);
+            }
+          });
+          const rolesByCompany = companies.map((c) => ({
+            company_id: c.company_id,
+            role: 'SUPER_ADMIN',
+          }));
+          return res.status(200).json({ companies, rolesByCompany });
+        }
         const archCompanyId = getContentArchitectCompanyId(req);
         if (archCompanyId) {
-          const profile = await getProfile(archCompanyId, { autoRefine: false });
+          const profile = await getProfile(archCompanyId, { autoRefine: false, languageRefine: true });
           return res.status(200).json({
             companies: [{ company_id: archCompanyId, name: profile?.name || archCompanyId }],
             rolesByCompany: [{ company_id: archCompanyId, role: 'CONTENT_ARCHITECT' }],
@@ -71,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }));
         const profiles = await Promise.all(
           companyIds.map(async (id) => {
-            const profile = await getProfile(id, { autoRefine: false });
+            const profile = await getProfile(id, { autoRefine: false, languageRefine: true });
             return profile || { company_id: id, name: id };
           })
         );
@@ -87,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const access = await resolveCompanyAccess(req, res, companyId);
       if (!access) return;
 
-      const profile = await getProfile(companyId, { autoRefine: false });
+      const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
       const resolvedProfile = profile || await saveProfile({ company_id: companyId });
       const isCompanyAdminOnly = access.role === 'COMPANY_ADMIN';
       const responseProfile = isCompanyAdminOnly

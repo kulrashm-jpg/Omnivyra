@@ -7,6 +7,7 @@ import { getViewMode } from '@/utils/getViewMode';
 import { VIEW_RULES } from '@/utils/viewVisibilityMatrix';
 import { executeMasterContentPipeline, executeVariantImprovement } from '@/lib/planning/executeMasterContentPipeline';
 import { computeVariantIntelligence } from '@/lib/intelligence/executionIntelligence';
+import PlatformIcon from '@/components/ui/PlatformIcon';
 
 type ScheduleItem = {
   id: string;
@@ -17,6 +18,10 @@ type ScheduleItem = {
   status?: string;
   description?: string;
   title?: string;
+  /** 1-based index in the distribution list for this topic */
+  sequence_index?: number;
+  /** Total number of distributions for this topic */
+  total_distributions?: number;
 };
 
 /** Align with lib/planning/masterContentDocument so pipeline and payload stay type-safe. */
@@ -42,6 +47,7 @@ type WorkspacePayloadWeekLike = {
 
 type WorkspacePayload = WorkspacePayloadWeekLike & {
   campaignId?: string | null;
+  companyId?: string | null;
   weekNumber?: number;
   day?: string;
   activityId?: string;
@@ -116,7 +122,11 @@ export default function ActivityWorkspacePage() {
     platform_confidence_average: Record<string, number>;
     total_events: number;
   } | null>(null);
+  const [showAddVariantForm, setShowAddVariantForm] = useState(false);
+  const [addVariantContentType, setAddVariantContentType] = useState('');
+  const [addVariantPlatform, setAddVariantPlatform] = useState('');
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+  const normalizeKey = (value: unknown) => String(value || '').trim().toLowerCase();
 
   type VariantIntelligenceStatus = 'pending' | 'generated' | 'adapted' | 'ready';
   const getVariantIntelligenceStatus = (variant: Record<string, unknown> | null | undefined, scheduleId: string): VariantIntelligenceStatus => {
@@ -154,6 +164,8 @@ export default function ActivityWorkspacePage() {
     schedules.forEach((s) => set.add(nk(s.platform)));
     return Array.from(set);
   }, [schedules]);
+  /** Selected variant tab is a schedule id (one tab per platform+contentType variant). */
+  const selectedScheduleId = selectedVariantTab && schedules.some((s) => s.id === selectedVariantTab) ? selectedVariantTab : schedules[0]?.id ?? '';
 
   const platformVariants = useMemo(
     () =>
@@ -179,11 +191,21 @@ export default function ActivityWorkspacePage() {
   }, [variantTabPlatforms, platformVariants, strategicMemoryProfile]);
 
   useEffect(() => {
-    if (schedules.length > 0 && !selectedVariantTab && variantTabPlatforms[0]) {
-      setSelectedVariantTab(variantTabPlatforms[0]);
-      fetchPlatformRules(variantTabPlatforms[0]);
+    if (schedules.length > 0 && !selectedScheduleId) {
+      setSelectedVariantTab(schedules[0].id);
+      if (schedules[0]) fetchPlatformRules(schedules[0].platform);
     }
-  }, [schedules.length, selectedVariantTab, variantTabPlatforms.join(',')]);
+  }, [schedules.length, selectedScheduleId, schedules]);
+  useEffect(() => {
+    if (schedules.length > 0 && selectedVariantTab && !schedules.some((s) => s.id === selectedVariantTab)) {
+      setSelectedVariantTab(schedules[0].id);
+      if (schedules[0]) fetchPlatformRules(schedules[0].platform);
+    }
+  }, [schedules, selectedVariantTab]);
+  const schedulePlatformsKey = useMemo(() => [...new Set(schedules.map((s) => normalizeKey(s.platform)))].sort().join(','), [schedules]);
+  useEffect(() => {
+    schedules.forEach((s) => { fetchPlatformRules(s.platform); });
+  }, [schedulePlatformsKey]);
 
   useEffect(() => {
     const campaignId = payload?.campaignId ?? '';
@@ -306,7 +328,6 @@ export default function ActivityWorkspacePage() {
   /** When opened from daily view topic click: no delete, show add platform only. */
   const isDailyTopicView = payload?.source === 'daily';
 
-  const normalizeKey = (value: unknown) => String(value || '').trim().toLowerCase();
   const allPlatformOptions = ['linkedin', 'facebook', 'instagram', 'x', 'youtube', 'tiktok', 'reddit', 'pinterest'];
   /** Suggested social media platforms for this activity (from execution item + current schedules). Same list shown in Writer Context and used in Platform Schedules. */
   const suggestedPlatforms = (() => {
@@ -343,6 +364,27 @@ export default function ActivityWorkspacePage() {
     const defaults = ['post', 'article', 'white_paper', 'video', 'carousel'];
     return contentTypeOptionsByPlatform[key] || defaults;
   };
+  /** Video-dominant content types: for these, X (Twitter) is excluded when adding. Text types: YouTube excluded when adding. */
+  const videoContentTypes = new Set(['video', 'short', 'reel', 'story', 'live', 'description']);
+  const isVideoContentType = (ct: string) => videoContentTypes.has(normalizeKey(ct));
+  /** Platforms that can be added for a given content type (aligned to content type: text → no YouTube, video → no X). */
+  const getAddablePlatformsForContentType = (contentType: string) => {
+    const ct = normalizeKey(contentType);
+    const isVideo = isVideoContentType(ct);
+    return allPlatformOptions.filter((platform) => {
+      const opts = getContentTypeOptions(platform);
+      if (!opts.map(normalizeKey).includes(ct)) return false;
+      if (isVideo && (platform === 'x' || platform === 'twitter')) return false;
+      if (!isVideo && platform === 'youtube') return false;
+      return true;
+    });
+  };
+  /** All content types across platforms (for add-variant flow). */
+  const allContentTypesForAdd = useMemo(() => {
+    const set = new Set<string>();
+    Object.values(contentTypeOptionsByPlatform).forEach((opts) => opts.forEach((c) => set.add(normalizeKey(c))));
+    return Array.from(set).sort();
+  }, []);
   const labelize = (value: string) =>
     String(value || '')
       .replace(/[_-]+/g, ' ')
@@ -887,16 +929,16 @@ export default function ActivityWorkspacePage() {
     notify('success', 'Changes saved to daily planner.');
   };
 
-  /** Build URL to week plan (campaign-planning-hierarchical) so back goes to the week plan view. */
+  /** Build URL to campaign details (weekly/daily views); hierarchical planning screen removed. */
   const getBackToWeekPlanUrl = (): string | null => {
     const cid = String(payload?.campaignId || '').trim();
     if (!cid) return null;
     const params = new URLSearchParams();
-    params.set('campaignId', cid);
-    const weekNum = payload?.weekNumber;
-    if (weekNum != null && Number.isFinite(weekNum)) params.set('week', String(weekNum));
+    const companyId = payload?.companyId != null ? String(payload.companyId) : '';
+    if (companyId) params.set('companyId', companyId);
+    if (payload?.weekNumber != null && Number.isFinite(payload.weekNumber)) params.set('week', String(payload.weekNumber));
     const qs = params.toString();
-    return `/campaign-planning-hierarchical${qs ? `?${qs}` : ''}`;
+    return `/campaign-details/${cid}${qs ? `?${qs}` : ''}`;
   };
 
   const handleBackToWeekPlan = () => {
@@ -1328,9 +1370,9 @@ export default function ActivityWorkspacePage() {
             Repurposed output will appear under each platform schedule inside Master Content Reference.
           </p>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* LEFT: Master Content (single source) */}
-            <div className="space-y-3">
+          <div className="flex flex-col gap-6 w-full max-w-full">
+            {/* Master Content (single source) — 1 column full width */}
+            <div className="space-y-3 w-full">
               <h3 className="text-base font-semibold text-gray-900">Master Content</h3>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -1364,49 +1406,54 @@ export default function ActivityWorkspacePage() {
               )}
             </div>
 
-            {/* RIGHT: Platform variants (tabs) + rules transparency */}
-            <div className="space-y-3">
+            {/* Platform variants (tabs only) — one tab per variant (platform + contentType), X to delete; rules shown per row below */}
+            <div className="space-y-3 w-full">
               <h3 className="text-base font-semibold text-gray-900">Platform Variants</h3>
-              {variantTabPlatforms.length > 0 && (
+              {schedules.length > 0 && (
                 <div className="flex flex-wrap gap-1 border-b border-gray-200 pb-2">
-                  {variantTabPlatforms.map((plat) => {
-                    const isSelected = (selectedVariantTab || variantTabPlatforms[0]) === plat;
+                  {schedules.map((schedule, idx) => {
+                    const isSelected = selectedScheduleId === schedule.id;
+                    const seq = schedule.sequence_index ?? idx + 1;
+                    const total = schedule.total_distributions ?? schedules.length;
+                    const confidence = (() => {
+                      const v = platformVariants.find(
+                        (variant) =>
+                          normalizeKey((variant as any)?.platform) === normalizeKey(schedule.platform) &&
+                          normalizeKey((variant as any)?.content_type) === normalizeKey(schedule.contentType)
+                      );
+                      return v ? computeVariantIntelligence(v, schedule.platform, strategicMemoryProfile).confidence_score : null;
+                    })();
                     return (
-                      <button
-                        key={plat}
-                        type="button"
-                        onClick={() => { setSelectedVariantTab(plat); fetchPlatformRules(plat); }}
-                        className={`px-3 py-1.5 rounded-t text-sm font-medium ${isSelected ? 'bg-indigo-100 text-indigo-800 border border-b-0 border-gray-200 -mb-px' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                      <div
+                        key={schedule.id}
+                        className={`inline-flex items-center gap-1 rounded-t text-sm font-medium border border-b-0 -mb-px ${
+                          isSelected ? 'bg-indigo-100 text-indigo-800 border-gray-200' : 'bg-gray-100 text-gray-600 border-transparent'
+                        }`}
                       >
-                        {labelize(plat)}
-                        {confidenceByPlatform[plat] != null && (
-                          <span className="ml-1 opacity-90">• {confidenceByPlatform[plat]}%</span>
-                        )}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedVariantTab(schedule.id); fetchPlatformRules(schedule.platform); }}
+                          className="px-3 py-1.5 hover:bg-indigo-50 rounded-t text-left inline-flex items-center gap-1.5"
+                        >
+                          {total > 1 && <span className="text-xs text-gray-500">{seq}/{total}</span>}
+                          <PlatformIcon platform={schedule.platform} size={14} showLabel />
+                          <span>{labelize(schedule.contentType)}</span>
+                          {confidence != null && <span className="ml-1 opacity-90">• {confidence}%</span>}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); removeScheduleRow(schedule.id); }}
+                          className="p-1.5 rounded hover:bg-red-100 text-gray-500 hover:text-red-600 mr-1"
+                          title="Remove this platform variant"
+                          aria-label="Remove platform variant"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
               )}
-              {schedules.length > 0 && (() => {
-                const activePlatform = selectedVariantTab || variantTabPlatforms[0];
-                if (activePlatform && !platformRulesByPlatform[activePlatform]?.guidelines?.length) fetchPlatformRules(activePlatform);
-                const rules = platformRulesByPlatform[activePlatform];
-                return rules?.guidelines?.length > 0 ? (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
-                    <div className="text-sm font-medium text-emerald-900 mb-2">
-                      {labelize(activePlatform)} rules applied
-                    </div>
-                    <ul className="space-y-1 text-sm text-emerald-800">
-                      {rules.guidelines.map((g, i) => (
-                        <li key={i} className="flex items-center gap-2">
-                          <span className="text-emerald-600">✔</span>
-                          {g}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null;
-              })()}
             </div>
           </div>
 
@@ -1415,24 +1462,79 @@ export default function ActivityWorkspacePage() {
               {masterContent ? 'Platform Schedules (linked to this master content)' : 'Platform Schedules'}
             </div>
             <div className="mb-3">
-              <button
-                type="button"
-                onClick={addScheduleRow}
-                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                {isDailyTopicView
-                  ? 'Add social media platform'
-                  : 'Add Content Format (white paper, video, carousel...)'}
-              </button>
+              {!showAddVariantForm ? (
+                <button
+                  type="button"
+                  onClick={() => { setShowAddVariantForm(true); setAddVariantContentType(allContentTypesForAdd[0] || ''); setAddVariantPlatform(''); }}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {isDailyTopicView ? 'Add social media platform' : 'Add Content Format (white paper, video, carousel...)'}
+                </button>
+              ) : (
+                <div className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-2">
+                  <span className="text-xs text-gray-600">Content type:</span>
+                  <select
+                    value={addVariantContentType}
+                    onChange={(e) => { setAddVariantContentType(e.target.value); setAddVariantPlatform(''); }}
+                    className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700"
+                  >
+                    {allContentTypesForAdd.map((ct) => (
+                      <option key={ct} value={ct}>{labelize(ct)}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-gray-600">Platform:</span>
+                  <select
+                    value={addVariantPlatform}
+                    onChange={(e) => setAddVariantPlatform(e.target.value)}
+                    className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700"
+                  >
+                    <option value="">Select platform</option>
+                    {getAddablePlatformsForContentType(addVariantContentType).map((p) => (
+                      <option key={p} value={p}>{labelize(p)}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!addVariantPlatform) return;
+                      const first = schedules[0];
+                      const row: ScheduleItem = {
+                        id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                        platform: addVariantPlatform,
+                        contentType: addVariantContentType,
+                        date: first?.date || '',
+                        time: first?.time || '09:00',
+                        status: 'planned',
+                        title: payload?.title,
+                        description: payload?.description,
+                      };
+                      setSchedules((prev) => [...prev, row]);
+                      setShowAddVariantForm(false);
+                      setAddVariantContentType('');
+                      setAddVariantPlatform('');
+                      setSelectedVariantTab(row.id);
+                    }}
+                    disabled={!addVariantPlatform}
+                    className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowAddVariantForm(false); setAddVariantContentType(''); setAddVariantPlatform(''); }}
+                    className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
             </div>
             {schedules.length === 0 ? (
-              <p className="text-sm text-gray-600">No platform schedule rows. Add one above to set platform, format, date/time and repurpose content.</p>
+              <p className="text-sm text-gray-600">No platform variants. Add one above; each variant has a fixed platform and content type with its own Repurpose action.</p>
             ) : (
               <div className="space-y-3">
-                {schedules
-                  .filter((item) => normalizeKey(item.platform) === (selectedVariantTab || variantTabPlatforms[0]))
-                  .map((item) => {
+                {schedules.map((item) => {
                       const matchedVariant = findVariantForSchedule(item);
                       const marketing = buildMarketingSupport(
                         item.platform,
@@ -1454,38 +1556,12 @@ export default function ActivityWorkspacePage() {
                                 Schedule
                               </button>
                             )}
-                            <select
-                              value={item.platform}
-                              onChange={(e) => {
-                                const nextPlatform = normalizeKey(e.target.value);
-                                const allowed = getContentTypeOptions(nextPlatform);
-                                const nextType = allowed.includes(normalizeKey(item.contentType))
-                                  ? normalizeKey(item.contentType)
-                                  : allowed[0];
-                                updateSchedule(item.id, {
-                                  platform: nextPlatform,
-                                  contentType: nextType,
-                                });
-                              }}
-                              className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700"
-                            >
-                              {platformOptions.map((p) => (
-                                <option key={p} value={p}>
-                                  {labelize(p)}
-                                </option>
-                              ))}
-                            </select>
-                            <select
-                              value={item.contentType}
-                              onChange={(e) => updateSchedule(item.id, { contentType: normalizeKey(e.target.value) })}
-                              className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700"
-                            >
-                              {getContentTypeOptions(item.platform).map((ct) => (
-                                <option key={ct} value={ct}>
-                                  {labelize(ct)}
-                                </option>
-                              ))}
-                            </select>
+                            <span className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 inline-flex items-center gap-1">
+                              <PlatformIcon platform={item.platform} size={12} showLabel />
+                            </span>
+                            <span className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700">
+                              {labelize(item.contentType)}
+                            </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <button
@@ -1534,6 +1610,21 @@ export default function ActivityWorkspacePage() {
                             )}
                           </div>
                         </div>
+                        {platformRulesByPlatform[normalizeKey(item.platform)]?.guidelines?.length > 0 && (
+                          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 mt-2">
+                            <div className="text-sm font-medium text-emerald-900 mb-2">
+                              {labelize(item.platform)} rules applied (repurposed for this platform)
+                            </div>
+                            <ul className="space-y-1 text-sm text-emerald-800">
+                              {platformRulesByPlatform[normalizeKey(item.platform)].guidelines.map((g, i) => (
+                                <li key={i} className="flex items-center gap-2">
+                                  <span className="text-emerald-600">✔</span>
+                                  {g}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <label className="text-xs text-gray-600">
                             Date
@@ -1902,5 +1993,10 @@ export default function ActivityWorkspacePage() {
       </div>
     </div>
   );
+}
+
+/** Force server-side rendering so the page is not served from a static .html file (avoids ENOENT when the file is missing). */
+export async function getServerSideProps() {
+  return { props: {} };
 }
 

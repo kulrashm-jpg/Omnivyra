@@ -5,11 +5,13 @@ import { assessVirality } from './viralityAdvisorService';
 import { buildCampaignSnapshotWithHash, canonicalJsonStringify } from './viralitySnapshotBuilder';
 import { DecisionResult } from './omnivyreClient';
 import { parseAiPlanToWeeks, parseAiRefinedDay, parseAiPlatformCustomization } from './campaignPlanParser';
+import { validateWeeklyPlan } from './aiOutputValidationService';
 import { getPlatformStrategies } from './externalApiService';
 import { saveStructuredCampaignPlan, saveStructuredCampaignPlanDayUpdate, savePlatformCustomizedContent } from '../db/campaignPlanStore';
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
 import { getLatestSnapshotsPerPlatform } from '../db/platformMetricsSnapshotStore';
 import { getProfile } from './companyProfileService';
+import { getAvailablePlatformsFromProfile } from '../utils/platformEligibility';
 import { buildDeterministicWeeklySkeleton, DeterministicWeeklySkeletonError } from './deterministicWeeklySkeleton';
 import {
   validateCapacityAndFrequency,
@@ -20,6 +22,7 @@ import { balanceWeeklyExecutionLoad } from './weeklyLoadBalancer';
 import { runExecutionPressureBalancer } from './executionPressureBalancer';
 import { analyzeExecutionMomentum } from './executionMomentumTracker';
 import { generateMomentumRecoverySuggestions } from './momentumRecoveryAdvisor';
+import { refineLanguageOutput } from './languageRefinementService';
 import {
   buildCompanyContext,
   buildForcedCompanyContext,
@@ -37,8 +40,21 @@ import {
 import { adjustCampaignMomentum, recoverNarrativeMomentum } from './momentumAdjustmentService';
 import { inferExecutionMode, type ExecutionMode, isExecutionMode } from './executionModeInference';
 import { buildCreatorInstruction } from './buildCreatorInstruction';
+import { assignWeeklySchedule } from './weeklyScheduleAllocator';
+import { getEnrichedDistributionInsights } from './contentDistributionIntelligence';
 import { getWeeklyStrategyIntelligence } from './weeklyStrategyIntelligenceService';
 import { computeStrategyBias } from './strategyBiasService';
+import { getStrategyMemory } from './campaignStrategyMemoryService';
+import { getCachedStrategyProfile } from './strategyProfileCache';
+import {
+  buildCampaignContext,
+  setCampaignContext,
+  formatStrategyProfileForPrompt,
+  type CampaignContext,
+} from './contextCompressionService';
+import { PROMPT_REGISTRY, generatePromptFingerprint } from '../prompts';
+import { getSegmentWithCache, PROMPT_BLOCK_NAMES } from './promptSegmentation';
+import type { StrategyProfile } from './campaignStrategyLearner';
 
 export type CampaignAiMode = 'generate_plan' | 'refine_day' | 'platform_customize';
 
@@ -81,6 +97,8 @@ export interface CampaignAiPlanInput {
   collectedPlanningContext?: Record<string, unknown>;
   /** Optional one-click orchestration: generation + adaptation + scheduling */
   autopilot?: boolean;
+  /** For bolt pipeline observability: correlate AI calls to bolt_execution_runs */
+  bolt_run_id?: string | null;
 }
 
 export interface CampaignAiPlanResult {
@@ -208,6 +226,17 @@ const EMPTY_CAPACITY_COUNTS: StructuredCapacityCounts = {
 function clampInt(n: number): number {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.floor(n));
+}
+
+/** Parse Trend page frequency string (e.g. "1/w", "5/w", "Daily") to posts per week. */
+function parseFrequencyPerWeek(s: string): number {
+  const t = String(s || '').trim().toLowerCase();
+  const m = t.match(/^(\d+)\s*\/?\s*w/);
+  if (m) return clampInt(parseInt(m[1] || '0', 10));
+  if (/^daily$/i.test(t) || /^daily\b/.test(t)) return 5; // ~5 weekdays
+  const n = parseInt(t, 10);
+  if (Number.isFinite(n) && n >= 0) return clampInt(n);
+  return 0;
 }
 
 function parseCountsFromText(text: string): StructuredCapacityCounts {
@@ -361,16 +390,58 @@ export function normalizeCapacityCountsWithBreakdown(value: unknown): Structured
   return { ...EMPTY_CAPACITY_COUNTS };
 }
 
+/** Planning UI labels (from content capacity form) map to internal capacity keys. */
+const PLANNING_LABEL_TO_KEY: Record<string, keyof StructuredCapacityCounts> = {
+  Posts: 'post',
+  'Text posts': 'post',
+  'Text post': 'post',
+  Post: 'post',
+  posts: 'post',
+  Videos: 'video',
+  Video: 'video',
+  'Long Videos': 'video',
+  Reels: 'video',
+  Shorts: 'video',
+  Songs: 'video',
+  Audio: 'video',
+  Podcasts: 'video',
+  Spaces: 'video',
+  Carousels: 'post',
+  Images: 'post',
+  Image: 'post',
+  Blogs: 'blog',
+  Blog: 'blog',
+  Articles: 'blog',
+  Article: 'blog',
+  'White Papers': 'blog',
+  Newsletters: 'blog',
+  Webinars: 'blog',
+  Slides: 'blog',
+  Slideware: 'blog',
+  Stories: 'story',
+  Story: 'story',
+  Threads: 'thread',
+  Thread: 'thread',
+};
+
 export function normalizeCapacityCounts(value: unknown): StructuredCapacityCounts {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const obj = value as Record<string, unknown>;
-    return {
-      post: clampInt(typeof obj.post === 'number' ? obj.post : Number(obj.post)),
-      video: clampInt(typeof obj.video === 'number' ? obj.video : Number(obj.video)),
-      blog: clampInt(typeof obj.blog === 'number' ? obj.blog : Number(obj.blog)),
-      story: clampInt(typeof obj.story === 'number' ? obj.story : Number(obj.story)),
-      thread: clampInt(typeof obj.thread === 'number' ? obj.thread : Number(obj.thread)),
-    };
+    const out: StructuredCapacityCounts = { ...EMPTY_CAPACITY_COUNTS };
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'breakdown' || k === '_declared_none' || k === 'declared_none' || k === 'declaredNone') continue;
+      const n = clampInt(typeof v === 'number' ? v : Number(v));
+      if (n <= 0) continue;
+      const key = PLANNING_LABEL_TO_KEY[k] ?? (k.toLowerCase() as keyof StructuredCapacityCounts);
+      if (key && key in out) {
+        out[key] += n;
+      } else if (['post', 'video', 'blog', 'story', 'thread'].includes(String(k).toLowerCase())) {
+        out[k.toLowerCase() as keyof StructuredCapacityCounts] += n;
+      } else {
+        out.post += n;
+      }
+    }
+    return out;
   }
   if (typeof value === 'string') return parseCountsFromText(value);
   return { ...EMPTY_CAPACITY_COUNTS };
@@ -380,13 +451,18 @@ const GATHER_ORDER = [
   {
     key: 'available_content',
     question:
-      'Do you have existing content (videos, posts, blogs) for this campaign? Answer "no", "none", or describe what you have.',
+      'Do you have existing content (videos, posts, blogs) for this campaign? Answer "no", "none", or describe what you have. (e.g., 3 videos, 10 posts, 2 blogs)',
   },
   {
     key: 'available_content_allocation',
     question:
       'For each existing piece, which category/objective and which week(s) should it fill? (Skip if you have no existing content.)',
     contingentOn: 'available_content',
+  },
+  {
+    key: 'content_capacity',
+    question:
+      'How many can you and your team create every week? (e.g., 3 videos, 10 posts, 2 blogs)',
   },
   {
     key: 'action_expectation',
@@ -413,12 +489,13 @@ const GATHER_ORDER = [
     question: 'Anything only for one platform? (e.g. a LinkedIn-only series, or no)',
     contingentOn: 'platforms',
   },
-  { key: 'key_messages', question: "What's the one thing you want people to remember? (e.g. one short line)" },
+  { key: 'key_messages', question: 'What is the core message you want your audience to remember?' },
   { key: 'success_metrics', question: 'What would you like to see improve? (e.g. more likes, more sign-ups, more reach)' },
 ];
 
 const REQUIRED_EXECUTION_FIELDS = [
   'available_content',
+  'content_capacity',
   'action_expectation',
   'topic_continuity',
   'platforms',
@@ -485,7 +562,9 @@ function detectAskedKeyFromAiMessage(aiMessage: string): string | null {
     n.includes('content capacity') ||
     n.includes('how much content') ||
     n.includes('how will you create') ||
-    n.includes('how many pieces per week')
+    n.includes('how many pieces per week') ||
+    n.includes('how many can you create per week') ||
+    n.includes('how many can you and your team create every week')
   )
     return 'content_capacity';
   if ((n.includes('how many') && n.includes('week')) || n.includes('campaign run') || n.includes('duration') || n.includes('how many weeks')) return 'campaign_duration';
@@ -496,7 +575,7 @@ function detectAskedKeyFromAiMessage(aiMessage: string): string | null {
   if (n.includes('set how often') || n.includes('same topic across platforms') || n.includes('publish same day on all platforms') || n.includes('let AI decide')) return 'platform_content_requests';
   if (n.includes('content types') && n.includes('platform')) return 'platform_content_types';
   if (n.includes('what will you post on each') || n.includes('which content types will you use') || n.includes('for each platform you selected')) return 'platform_content_types';
-  if (n.includes('key messages') || n.includes('pain points') || n.includes('one thing you want people to remember')) return 'key_messages';
+  if (n.includes('key messages') || n.includes('pain points') || n.includes('one thing you want people to remember') || n.includes('core message') || n.includes('audience to remember')) return 'key_messages';
   if (n.includes('success metrics') || (n.includes('metrics') && n.includes('track')) || n.includes('like to see improve')) return 'success_metrics';
   return null;
 }
@@ -2414,6 +2493,12 @@ function buildPromptContext(input: {
   weeklyStrategyIntelligence?: import('./weeklyStrategyIntelligenceService').WeeklyStrategyIntelligence | null;
   /** Advisory strategy bias (drift + intelligence + pressure). Attached to context only; not used in prompt or decisions. */
   strategy_bias?: import('./strategyBiasService').StrategyBiasResult | null;
+  /** Strategy learning profile from historical campaign performance. Use as guidance; do not override themes. */
+  strategy_learning_profile?: StrategyProfile | null;
+  /** Confidence score of strategy learning (0–1). Affects adjustment limits. */
+  strategy_learning_confidence?: number | null;
+  /** Compressed campaign context (topic, tone, themes, top_platforms, top_content_types) for token-efficient reuse. */
+  campaign_context?: CampaignContext | null;
 }): { system: string; user: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> } {
   const diagnosticsWithBaseline = { ...input.diagnostics };
   if (input.baselineContext && !('unavailable' in input.baselineContext)) {
@@ -2454,10 +2539,18 @@ function buildPromptContext(input: {
     execution_field_classification: EXECUTION_FIELD_CLASSIFICATION,
   };
   if (input.companyContext) {
-    userPayload.company_context = input.companyContext;
+    const companyResult = getSegmentWithCache(
+      PROMPT_BLOCK_NAMES.company_profile_context,
+      input.companyContext
+    );
+    userPayload.company_context = companyResult.content;
   }
   if (input.forcedContextBlock) {
-    userPayload.forced_context = input.forcedContextBlock;
+    const forcedResult = getSegmentWithCache(
+      PROMPT_BLOCK_NAMES.forced_context,
+      input.forcedContextBlock
+    );
+    userPayload.forced_context = forcedResult.content;
   }
   if (input.strategyDNA) {
     userPayload.strategy_dna = input.strategyDNA;
@@ -2483,6 +2576,20 @@ function buildPromptContext(input: {
   if (input.strategy_bias) {
     userPayload.strategy_bias = input.strategy_bias;
   }
+  if (input.campaign_context) {
+    userPayload.campaign_context = input.campaign_context;
+    const entry = PROMPT_REGISTRY.weekly_plan;
+    const guidance = entry.build(input.campaign_context);
+    const cached = getSegmentWithCache(PROMPT_BLOCK_NAMES.weekly_plan_context, guidance);
+    userPayload.compressed_strategy_guidance = cached.content;
+    const fingerprint = generatePromptFingerprint(guidance);
+    console.info('Prompt executed', {
+      prompt: entry.metadata.name,
+      version: entry.metadata.version,
+      fingerprint,
+      cacheHit: cached.cacheHit,
+    });
+  }
 
   const recommendedTopics = input.prefilledPlanning?.recommended_topics;
   const recommendedTopicsList = Array.isArray(recommendedTopics)
@@ -2494,18 +2601,32 @@ function buildPromptContext(input: {
     : [];
 
   const execConfig = input.prefilledPlanning?.execution_config as Record<string, unknown> | null | undefined;
+  const targetAudience = String(execConfig?.target_audience ?? input.prefilledPlanning?.target_audience ?? '').trim();
+  const contentDepth = String(execConfig?.content_depth ?? input.prefilledPlanning?.content_depth ?? '').trim();
+  const campaignGoal = String(execConfig?.campaign_goal ?? input.prefilledPlanning?.campaign_goal ?? '').trim();
+  const hasObjectiveGuidance = !!(targetAudience || contentDepth || campaignGoal);
+
+  const campaignObjectiveGuidanceBlock =
+    hasObjectiveGuidance
+      ? `
+CAMPAIGN OBJECTIVE GUIDANCE (use these to shape the plan):
+- Target audience, content depth, and campaign goal must guide: weekly objectives, tone and messaging, content format selection, and depth of explanation.
+- Align each week's primary_objective and content_focus to the target audience and campaign goal. Match content_depth to format choices (e.g. shallow → quick posts, deep → articles, tutorials).`
+      : '';
+
   const executionConfigBlock =
     execConfig && typeof execConfig === 'object' && !Array.isArray(execConfig)
       ? `
-EXECUTION CONFIG (from Trend Execution Configuration bar — do NOT re-ask these):
+EXECUTION CONFIG (from Trend Execution Configuration bar — do NOT re-ask these; never ask about content capacity — it is set here):
 - Target Audience: ${String(execConfig.target_audience ?? '—')}
 - Professional Segment: ${String(execConfig.professional_segment ?? '—')}
 - Communication Style: ${Array.isArray(execConfig.communication_style) ? execConfig.communication_style.join(', ') : String(execConfig.communication_style ?? '—')}
 - Content Depth: ${String(execConfig.content_depth ?? '—')}
-- Content Capacity: ${String(execConfig.content_capacity ?? '—')}
+- Desired frequency per week: ${String(execConfig.frequency_per_week ?? execConfig.content_capacity ?? '—')}
 - Campaign Duration: ${String(execConfig.campaign_duration ?? '—')} weeks
 - Tentative Start: ${String(execConfig.tentative_start ?? '—')}
 - Campaign Goal: ${String(execConfig.campaign_goal ?? '—')}
+${campaignObjectiveGuidanceBlock}
 `
       : '';
 
@@ -2516,7 +2637,7 @@ ALREADY KNOWN (from campaign setup — do NOT re-ask these):
 ${Object.entries(input.prefilledPlanning)
   .filter(([k]) => k !== 'preplanning_form_completed' && k !== 'recommended_topics' && k !== 'strategic_themes' && k !== 'execution_config')
   .map(([k, v]) => `- ${k}: ${v}`)
-  .join('\n')}${executionConfigBlock}
+  .join('\n')}${executionConfigBlock}${!executionConfigBlock && campaignObjectiveGuidanceBlock ? campaignObjectiveGuidanceBlock : ''}
 ${strategicThemesList.length > 0 || recommendedTopicsList.length > 0
   ? `
 ${strategicThemesList.length > 0 ? `STRATEGIC THEMES (company content themes — align weekly themes and topics to these): ${strategicThemesList.join(', ')}\n\n` : ''}${recommendedTopicsList.length > 0 ? `RECOMMENDED TOPICS (from company trend data — like Trend campaigns): ${recommendedTopicsList.join(', ')}
@@ -2625,7 +2746,7 @@ REQUIRED INFO TO GATHER (in order, one question at a time — skip any already i
 3. platforms — Which platforms will they focus on?
 4. platform_content_requests — Frequency per content type per platform (aligned with capacity); same topic across platforms or different; publish same day, staggered, or AI decide.
 5. exclusive_campaigns — Do they want any platform-exclusive campaigns? If yes: platform + content_type + count_per_week.
-6. key_messages — Key messages or pain points? (USER MAY DEFER: see INFER-AND-PROCEED rule below)
+6. key_messages — What is the core message you want your audience to remember? Use examples from company profile when available. (USER MAY DEFER: see INFER-AND-PROCEED rule below)
 7. success_metrics — What metrics to track? (USER MAY DEFER: see INFER-AND-PROCEED rule below)
 
 DURATION ASSESSMENT RULE (MANDATORY WHEN DURATION UNKNOWN):
@@ -2638,6 +2759,7 @@ INFER-AND-PROCEED: For key_messages and success_metrics, if the user says "you d
 
 CRITICAL RULES:
 - NEVER re-ask for information already in ALREADY KNOWN or in GOVERNANCE "Do NOT re-ask". Repetitive questions frustrate users — skip to the next missing item.
+- CONTENT CAPACITY: Content capacity (how many you can develop per week) is collected in the chat. Ask if not yet provided. Use value from ALREADY KNOWN if present; otherwise ask. Trend page provides desired frequency only; capacity comes from AI Chat.
 - DURATION: If campaign_duration is already known in ALREADY KNOWN, use it exactly and do not re-ask. If not known yet, estimate a reasonable range from available_content + content_capacity and ask user to confirm one number before plan creation.
 - DURATION CONSISTENCY: After user confirms X weeks, never mention a different week count in this thread.
 - VALIDATE each answer against the question asked. If the answer does NOT fit (e.g., a date when you asked for target audience), politely re-ask the SAME question. Do NOT move on until you receive a valid answer.
@@ -3193,6 +3315,10 @@ async function runWithContext(
     distributionReason?: string;
     /** When true, skip alignment regeneration to reduce latency. */
     fastPath?: boolean;
+    strategyMemory?: { preferred_tone?: string | null; preferred_platforms?: string[] } | null;
+    strategyLearningProfile?: StrategyProfile | null;
+    strategyLearningFromCache?: boolean;
+    campaignContext?: CampaignContext | null;
   }
 ): Promise<CampaignAiPlanResult> {
   let didParseFail = false;
@@ -3403,6 +3529,9 @@ async function runWithContext(
     planSkeleton: ctx.planSkeleton ?? null,
     weeklyStrategyIntelligence: weeklyStrategyIntelligence ?? undefined,
     strategy_bias: strategy_bias ?? undefined,
+    strategy_learning_profile: ctx.strategyLearningProfile ?? null,
+    strategy_learning_confidence: ctx.strategyLearningProfile?.confidence_score ?? null,
+    campaign_context: ctx.campaignContext ?? null,
   });
 
   const completion = await generateCampaignPlan({
@@ -3411,6 +3540,7 @@ async function runWithContext(
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     messages: prompt.messages,
+    ...(input.bolt_run_id ? { bolt_run_id: input.bolt_run_id } : {}),
   });
 
   let raw = completion.output?.trim() || '';
@@ -3439,8 +3569,8 @@ async function runWithContext(
       let authoritativeResponse = raw;
       if (waitingForConfirmation) {
         authoritativeResponse = confirmationQuestion;
-      } else if (forcedNextQuestion && !isQuestionAligned(raw, forcedNextQuestion)) {
-        // Server-side question authority: backend controls next required question.
+      } else if (forcedNextQuestion) {
+        // Server-side question authority: always use backend's exact question (includes profile-based examples).
         authoritativeResponse = forcedNextQuestion;
       }
       return {
@@ -3542,11 +3672,13 @@ async function runWithContext(
           model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
           temperature: 0,
           messages: repairPrompt,
+          ...(input.bolt_run_id ? { bolt_run_id: input.bolt_run_id } : {}),
         });
         const repairedRaw = repaired.output?.trim() || '';
         const repairedMatch = repairedRaw.match(/BEGIN_12WEEK_PLAN([\s\S]*?)END_12WEEK_PLAN/);
         const repairedText = repairedMatch ? repairedMatch[1].trim() : repairedRaw;
         structured = await parseAiPlanToWeeks(repairedText);
+        structured = validateWeeklyPlan(structured);
       } catch (regenParseErr) {
         console.warn('Plan parse + regeneration failed, using deterministic placeholder fallback:', regenParseErr);
         fallbackTriggered = true;
@@ -3567,6 +3699,8 @@ async function runWithContext(
       };
     }
   }
+
+  structured = validateWeeklyPlan(structured);
 
   if (input.mode === 'generate_plan' && ctx.planSkeleton) {
     const validation = validatePlanAgainstSkeleton(structured, ctx.planSkeleton);
@@ -3595,11 +3729,13 @@ async function runWithContext(
           model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
           temperature: 0,
           messages: repairPrompt,
+          ...(input.bolt_run_id ? { bolt_run_id: input.bolt_run_id } : {}),
         });
         const repairedRaw = repaired.output?.trim() || '';
         const repairedMatch = repairedRaw.match(/BEGIN_12WEEK_PLAN([\s\S]*?)END_12WEEK_PLAN/);
         const repairedText = repairedMatch ? repairedMatch[1].trim() : repairedRaw;
         structured = await parseAiPlanToWeeks(repairedText);
+        structured = validateWeeklyPlan(structured);
         const repairedValidation = validatePlanAgainstSkeleton(structured, ctx.planSkeleton);
         if (!repairedValidation.ok) {
           validationReasons = repairedValidation.reasons;
@@ -3673,11 +3809,13 @@ async function runWithContext(
           model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
           temperature: 0,
           messages: regenPrompt,
+          ...(input.bolt_run_id ? { bolt_run_id: input.bolt_run_id } : {}),
         });
         const regeneratedRaw = regenerated.output?.trim() || '';
         const regeneratedMatch = regeneratedRaw.match(/BEGIN_12WEEK_PLAN([\s\S]*?)END_12WEEK_PLAN/);
         const regeneratedText = regeneratedMatch ? regeneratedMatch[1].trim() : regeneratedRaw;
         let regeneratedStructured = await parseAiPlanToWeeks(regeneratedText);
+        regeneratedStructured = validateWeeklyPlan(regeneratedStructured);
         const regenValidation = validatePlanAgainstSkeleton(regeneratedStructured, ctx.planSkeleton);
         if (regenValidation.ok) {
           regeneratedStructured = normalizeStructuredPlanForOutput({
@@ -4019,7 +4157,20 @@ async function runWithContext(
           const totalSlots = baseExecutionItems.reduce((sum, it) => sum + (Number(it?.count_per_week ?? 0) || 0), 0);
           const allSlots = weightedAssignment(topicsWithWeights, totalSlots);
           let cursor = 0;
-          const campaignIdForMasterContent = String(input.campaignId ?? '').trim() || 'campaign';
+            const campaignIdForMasterContent = String(input.campaignId ?? '').trim() || 'campaign';
+          /** Deterministic day assignment in weekly plan — no daily distribution logic. Spread slots across Mon–Sun. */
+          const spreadDaysForCount = (n: number, days = 7): number[] => {
+            const c = Math.max(0, Math.floor(n));
+            if (c <= 0) return [];
+            if (c === 1) return [1];
+            const out: number[] = [];
+            for (let i = 0; i < c; i += 1) {
+              const idx0 = Math.round(((i + 0.5) * days) / c - 0.5);
+              const clamped = Math.min(days - 1, Math.max(0, idx0));
+              out.push(clamped + 1);
+            }
+            return out;
+          };
           const execution_items = baseExecutionItems.map((it, execIdx: number) => {
             const count = Number(it?.count_per_week ?? 0) || 0;
             const c = Math.max(0, Math.floor(count));
@@ -4031,6 +4182,7 @@ async function runWithContext(
             if (slotTopics.length !== c) {
               throw new Error('DETERMINISTIC_TOPIC_SLOT_COUNT_MISMATCH');
             }
+            const dayIndices = spreadDaysForCount(c, 7);
 
             const contentTypeForId = String(it?.content_type ?? 'post').toLowerCase().replace(/\s+/g, '_');
             const objective = ensureNonEmptyString(w?.primary_objective ?? w?.objective);
@@ -4106,10 +4258,12 @@ async function runWithContext(
                   execution_mode === 'CREATOR_REQUIRED' || execution_mode === 'CONDITIONAL_AI'
                     ? buildCreatorInstruction(topicString, intent, String(it?.content_type ?? 'post'), execution_mode)
                     : undefined;
+                const day_index = dayIndices[slotIndex] ?? 1;
                 return {
                   topic: topicString,
                   progression_step: slotIndex + 1,
                   global_progression_index: 0,
+                  day_index,
                   // strategic enrichment (deterministic)
                   intent,
                   master_content_id,
@@ -4249,6 +4403,40 @@ async function runWithContext(
           globalCounter += 1;
           s.slot.global_progression_index = globalCounter;
         }
+      }
+
+      // Assign schedule metadata (single source of truth). No other service should assign schedule.
+      const weeksForSchedule = Array.isArray((structured as any)?.weeks) ? ((structured as any).weeks as any[]) : [];
+      if (weeksForSchedule.length > 0) {
+        const region =
+          (effectivePrefilledPlanning as any)?.target_regions
+            ? (Array.isArray((effectivePrefilledPlanning as any).target_regions)
+                ? (effectivePrefilledPlanning as any).target_regions
+                : String((effectivePrefilledPlanning as any).target_regions ?? '').split(/[,\s;]+/).map((s: string) => s.trim()).filter(Boolean))
+            : (input.recommendationContext as any)?.target_regions ?? undefined;
+        assignWeeklySchedule({
+          weeklyActivities: weeksForSchedule,
+          campaignStartDate: undefined,
+          region,
+        });
+        const [versionForSignals, campaignForSignals] = await Promise.all([
+          supabase.from('campaign_versions').select('company_id').eq('campaign_id', input.campaignId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+          supabase.from('campaigns').select('start_date').eq('id', input.campaignId).maybeSingle(),
+        ]);
+        const signalCompanyId = (versionForSignals.data as { company_id?: string } | null)?.company_id ?? null;
+        const signalCampaignStart = (campaignForSignals.data as { start_date?: string } | null)?.start_date ?? null;
+
+        await Promise.all(
+          weeksForSchedule.map(async (w) => {
+            if (!w || typeof w !== 'object') return;
+            const weekNum = Number((w as any).week ?? (w as any).week_number ?? 1);
+            (w as any).distribution_insights = await getEnrichedDistributionInsights(w, {
+              companyId: signalCompanyId ?? undefined,
+              campaignStartDate: signalCampaignStart ?? undefined,
+              weekNumber: weekNum,
+            });
+          })
+        );
       }
 
       // Build writer-ready week details from deterministic execution_items.
@@ -4496,6 +4684,59 @@ async function runWithContext(
     }
   }
 
+  // Apply strategy mapping, momentum recovery, and language refinement BEFORE save
+  // so the database stores refined weekly plan text (Weekly Plan → refined → Daily Distribution → BOLT)
+  if (input.mode === 'generate_plan' && Array.isArray(structured?.weeks) && structured.weeks.length > 0) {
+    const strategy = ctx.distributionStrategy ?? 'AI_OPTIMIZED';
+    const reason = ctx.distributionReason ?? undefined;
+    const validationResult = (ctx.prefilledPlanning as any)?.validation_result ?? undefined;
+    const planningAdjustmentReason = validationResult?.planning_adjustment_reason ?? undefined;
+    const planningAdjustmentsSummary = validationResult?.planning_adjustments_summary ?? undefined;
+    let weeks = structured.weeks.map((w: any) => ({
+      ...w,
+      distribution_strategy: w.distribution_strategy ?? strategy,
+      ...(reason != null ? { distribution_reason: w.distribution_reason ?? reason } : {}),
+      ...(planningAdjustmentReason != null ? { planning_adjustment_reason: w.planning_adjustment_reason ?? planningAdjustmentReason } : {}),
+      ...(planningAdjustmentsSummary != null ? { planning_adjustments_summary: w.planning_adjustments_summary ?? planningAdjustmentsSummary } : {}),
+    }));
+    weeks = adjustCampaignMomentum({ weeks, validation_result: validationResult });
+    structured = { ...structured, weeks };
+    structured.weeks = recoverNarrativeMomentum(structured.weeks);
+
+    const campaignTone =
+      (effectivePrefilledPlanning as any)?.communication_style ??
+      (ctx.prefilledPlanning as any)?.communication_style ??
+      (ctx as any).strategyMemory?.preferred_tone;
+    for (const week of structured.weeks as any[]) {
+      if (typeof week.theme === 'string' && week.theme.trim()) {
+        const r = await refineLanguageOutput({
+          content: week.theme,
+          card_type: 'weekly_plan',
+          campaign_tone: campaignTone,
+        });
+        week.theme = (r.refined as string) || week.theme;
+      }
+      if (typeof week.primary_objective === 'string' && week.primary_objective.trim()) {
+        const r = await refineLanguageOutput({
+          content: week.primary_objective,
+          card_type: 'weekly_plan',
+          campaign_tone: campaignTone,
+        });
+        week.primary_objective = (r.refined as string) || week.primary_objective;
+      }
+      if (Array.isArray(week.topics_to_cover) && week.topics_to_cover.length > 0) {
+        const r = await refineLanguageOutput({
+          content: week.topics_to_cover.filter((t: unknown) => typeof t === 'string').map((t: unknown) => String(t).trim()).filter(Boolean),
+          card_type: 'weekly_plan',
+          campaign_tone: campaignTone,
+        });
+        if (Array.isArray(r.refined)) {
+          week.topics_to_cover = r.refined;
+        }
+      }
+    }
+  }
+
   try {
     const executionPressureMetadata = (structured as any).executionPressureMetadata;
     const executionMomentumMetadata = (structured as any).executionMomentumMetadata;
@@ -4548,24 +4789,6 @@ async function runWithContext(
       generationMode,
       validationReasons,
     });
-  }
-
-  if (input.mode === 'generate_plan' && Array.isArray(structured?.weeks) && structured.weeks.length > 0) {
-    const strategy = ctx.distributionStrategy ?? 'AI_OPTIMIZED';
-    const reason = ctx.distributionReason ?? undefined;
-    const validationResult = (ctx.prefilledPlanning as any)?.validation_result ?? undefined;
-    const planningAdjustmentReason = validationResult?.planning_adjustment_reason ?? undefined;
-    const planningAdjustmentsSummary = validationResult?.planning_adjustments_summary ?? undefined;
-    let weeks = structured.weeks.map((w: any) => ({
-      ...w,
-      distribution_strategy: w.distribution_strategy ?? strategy,
-      ...(reason != null ? { distribution_reason: w.distribution_reason ?? reason } : {}),
-      ...(planningAdjustmentReason != null ? { planning_adjustment_reason: w.planning_adjustment_reason ?? planningAdjustmentReason } : {}),
-      ...(planningAdjustmentsSummary != null ? { planning_adjustments_summary: w.planning_adjustments_summary ?? planningAdjustmentsSummary } : {}),
-    }));
-    weeks = adjustCampaignMomentum({ weeks, validation_result: validationResult });
-    structured = { ...structured, weeks };
-    structured.weeks = recoverNarrativeMomentum(structured.weeks);
   }
 
   return {
@@ -4673,7 +4896,7 @@ export async function runCampaignAiPlan(
     dbDuration ??
     recommendationSeed ??
     toValidWeeks(input.durationWeeks);
-  const resolvedDurationWeeks = sourcedDurationWeeks ?? 12;
+  const resolvedDurationWeeks = Math.min(12, sourcedDurationWeeks ?? 12);
 
   const inputWithDuration = { ...input, durationWeeks: resolvedDurationWeeks };
   const buildMode = versionRow?.build_mode ?? BACKWARD_COMPAT_DEFAULTS.build_mode;
@@ -4706,7 +4929,7 @@ export async function runCampaignAiPlan(
   let strategyDNA: ReturnType<typeof buildCompanyStrategyDNA> | null = null;
   if (!useFastPath && versionRow?.company_id && (buildMode === 'full_context' || buildMode === 'focused_context')) {
     try {
-      const profile = await getProfile(versionRow.company_id, { autoRefine: false });
+      const profile = await getProfile(versionRow.company_id, { autoRefine: false, languageRefine: true });
       companyContext = buildCompanyContextBlock(profile, buildMode, contextScope);
       strategyDNA = buildCompanyStrategyDNA(profile);
       if (profile?.forced_context_fields && Object.keys(profile.forced_context_fields).length > 0) {
@@ -4841,6 +5064,69 @@ export async function runCampaignAiPlan(
     prefilledPlanning = { ...prefilledPlanning, ...incomingCollectedPlanningContext };
   }
 
+  // Promote execution_config fields to top-level. Trend page now sends frequency_per_week (not capacity).
+  // Backward compat: content_capacity in exec_config (legacy) still promoted. AI Chat overwrites all.
+  const prefilledExecConfig = (prefilledPlanning as any)?.execution_config;
+  if (prefilledExecConfig != null && typeof prefilledExecConfig === 'object' && !Array.isArray(prefilledExecConfig)) {
+    const ec = prefilledExecConfig as Record<string, unknown>;
+    const hasTopLevelAvailable = (prefilledPlanning as any)?.available_content != null;
+    const execAvailable = ec.available_content;
+    const hasExecAvailable =
+      execAvailable != null &&
+      (typeof execAvailable === 'string'
+        ? String(execAvailable).trim().length > 0
+        : typeof execAvailable === 'object');
+    if (!hasTopLevelAvailable && hasExecAvailable) {
+      prefilledPlanning = { ...prefilledPlanning, available_content: execAvailable };
+    }
+    // Legacy: some campaigns may still have content_capacity in execution_config
+    const hasTopLevelCapacity =
+      (prefilledPlanning as any)?.content_capacity != null || (prefilledPlanning as any)?.weekly_capacity != null;
+    const execContentCapacity = ec.content_capacity;
+    const hasExecCapacity =
+      execContentCapacity != null &&
+      (typeof execContentCapacity === 'string'
+        ? String(execContentCapacity).trim().length > 0
+        : typeof execContentCapacity === 'object' || typeof execContentCapacity === 'number');
+    if (!hasTopLevelCapacity && hasExecCapacity) {
+      prefilledPlanning = {
+        ...prefilledPlanning,
+        content_capacity: execContentCapacity,
+        weekly_capacity: execContentCapacity,
+      };
+    }
+    // When platform_content_requests is missing, derive from frequency_per_week (Trend page).
+    const hasPlatformRequests =
+      (prefilledPlanning as any)?.platform_content_requests != null &&
+      (Array.isArray((prefilledPlanning as any).platform_content_requests)
+        ? (prefilledPlanning as any).platform_content_requests.length > 0
+        : Object.keys((prefilledPlanning as any).platform_content_requests || {}).length > 0);
+    const freqRaw = ec.frequency_per_week;
+    const hasFreq =
+      freqRaw != null &&
+      typeof freqRaw === 'string' &&
+      String(freqRaw).trim().length > 0;
+    if (!hasPlatformRequests && hasFreq) {
+      const n = parseFrequencyPerWeek(String(freqRaw).trim());
+      if (n > 0) {
+        // Promote frequency_per_week to weekly_capacity so validation passes: user said they want n/week = they can produce n.
+        const hasTopLevelCapacity =
+          (prefilledPlanning as any)?.content_capacity != null || (prefilledPlanning as any)?.weekly_capacity != null;
+        const capacityFromFreq = hasTopLevelCapacity ? undefined : { post: n };
+        prefilledPlanning = {
+          ...prefilledPlanning,
+          platform_content_requests: [
+            { platform: 'linkedin', content_type: 'post', count_per_week: n },
+          ],
+          ...(capacityFromFreq != null && {
+            weekly_capacity: capacityFromFreq,
+            content_capacity: capacityFromFreq,
+          }),
+        };
+      }
+    }
+  }
+
   // IMPORTANT: prefilledPlanning is later augmented with normalized defaults (e.g., empty capacity objects).
   // For Q&A gating, we must only treat keys as "answered" if they were truly provided (not injected defaults).
   const rawAvailableContent = (prefilledPlanning as any)?.available_content;
@@ -4903,24 +5189,37 @@ export async function runCampaignAiPlan(
   };
   const computeQaPrefilledKeys = (values: Record<string, unknown>) =>
     Object.keys(values || {}).filter((k) => {
-      if (k === 'available_content') return incomingHasAvailableContent || hasExplicitCapacityAnswer(rawAvailableContent);
-      if (k === 'weekly_capacity' || k === 'content_capacity') return incomingHasWeeklyCapacity || hasExplicitCapacityAnswer(rawWeeklyCapacity);
+      if (k === 'available_content') return incomingHasAvailableContent || fromHistoryHasAvailableContent;
+      if (k === 'weekly_capacity' || k === 'content_capacity')
+        return incomingHasWeeklyCapacity || fromHistoryHasContentCapacity;
       if (k === 'tentative_start') return isFutureIsoDate((values as any)?.tentative_start);
       return (values as any)?.[k] != null;
     });
 
-  // Normalize capacity data deterministically into structured objects (preserving optional breakdown).
+  // Normalize capacity data. AI Chat overwrites all; no Trend ceiling.
   const normalizedAvailableContent = normalizeCapacityCountsWithBreakdown((prefilledPlanning as any)?.available_content);
   const normalizedWeeklyCapacity = normalizeCapacityCountsWithBreakdown(
     (prefilledPlanning as any)?.weekly_capacity ?? (prefilledPlanning as any)?.content_capacity
   );
+
   prefilledPlanning = {
     ...prefilledPlanning,
     available_content: normalizedAvailableContent,
     weekly_capacity: normalizedWeeklyCapacity,
-    // Keep legacy key present for QA + downstream expectations, but store structured JSON.
     content_capacity: normalizedWeeklyCapacity,
   };
+
+  // When execution_config exists (from Trend page), user-set capacity can be shared across platforms.
+  // Default cross_platform_sharing to enabled so 5 pieces supports 5 postings per platform (e.g. same content on LinkedIn + Facebook).
+  if (
+    (prefilledPlanning as any)?.cross_platform_sharing == null &&
+    prefilledExecConfig != null
+  ) {
+    prefilledPlanning = {
+      ...prefilledPlanning,
+      cross_platform_sharing: { enabled: true },
+    };
+  }
 
   const validation_result =
     input.mode === 'generate_plan'
@@ -4930,6 +5229,8 @@ export async function runCampaignAiPlan(
           exclusive_campaigns: (prefilledPlanning as any)?.exclusive_campaigns,
           platform_content_requests: (prefilledPlanning as any)?.platform_content_requests,
           cross_platform_sharing: (prefilledPlanning as any)?.cross_platform_sharing,
+          content_repurposing: (prefilledPlanning as any)?.content_repurposing ?? { enabled: true },
+          campaign_duration_weeks: (prefilledPlanning as any)?.campaign_duration ?? (prefilledPlanning as any)?.duration_weeks,
           message: input.message,
           override_confirmed: Boolean((prefilledPlanning as any)?.validation_result?.override_confirmed),
         })
@@ -5011,16 +5312,57 @@ export async function runCampaignAiPlan(
     prefilledPlanning = { ...prefilledPlanning, ...fromHistory };
   }
 
+  // QA prefilled: ONLY treat available_content and content_capacity as "answered" when the USER provided them (incoming or fromHistory).
+  // Never use campaign_snapshot/recommendation defaults — always ask BOTH in all scenarios (even when user says "none", they share capacity).
+  const fromHistoryHasAvailableContent = Boolean(
+    fromHistory?.available_content != null &&
+      (hasExplicitCapacityAnswer(fromHistory.available_content) ||
+        /^(no|none|zero|don'?t have|do not have|no content|not yet)\b/i.test(String(fromHistory.available_content).trim()))
+  );
+  const fromHistoryHasContentCapacity = Boolean(
+    fromHistory?.content_capacity != null && hasExplicitCapacityAnswer(fromHistory.content_capacity)
+  );
+
   const qaPrefilledKeys = computeQaPrefilledKeys(prefilledPlanning || {});
+
+  // Build gatherOrder; for key_messages, inject company profile examples when available
+  let gatherOrderForQa = GATHER_ORDER.map((g) => ({
+    key: g.key,
+    question: g.question,
+    contingentOn: (g as { contingentOn?: string }).contingentOn,
+  }));
+  if (input.mode === 'generate_plan' && versionRow?.company_id) {
+    try {
+      const profileForExamples = await getProfile(versionRow.company_id, { autoRefine: false, languageRefine: true });
+      const km = profileForExamples?.key_messages;
+      const desiredTransformation = (profileForExamples as { desired_transformation?: string | null })?.desired_transformation;
+      const lifeAfterSolution = (profileForExamples as { life_after_solution?: string | null })?.life_after_solution;
+      let examplePart = '';
+      if (typeof km === 'string' && km.trim()) {
+        examplePart = ` (e.g. ${km.trim().slice(0, 120)}${km.length > 120 ? '…' : ''})`;
+      } else if (Array.isArray(km) && km.length > 0 && typeof km[0] === 'string' && String(km[0]).trim()) {
+        examplePart = ` (e.g. ${String(km[0]).trim().slice(0, 120)}${String(km[0]).length > 120 ? '…' : ''})`;
+      } else if (typeof desiredTransformation === 'string' && desiredTransformation.trim()) {
+        examplePart = ` (e.g. Desired Transformation: ${desiredTransformation.trim().slice(0, 100)}${desiredTransformation.length > 100 ? '…' : ''})`;
+      } else if (typeof lifeAfterSolution === 'string' && lifeAfterSolution.trim()) {
+        examplePart = ` (e.g. Life After Solution: ${lifeAfterSolution.trim().slice(0, 100)}${lifeAfterSolution.length > 100 ? '…' : ''})`;
+      }
+      if (examplePart) {
+        gatherOrderForQa = gatherOrderForQa.map((g) =>
+          g.key === 'key_messages'
+            ? { ...g, question: g.question + examplePart }
+            : g
+        );
+      }
+    } catch {
+      // keep base question without profile examples
+    }
+  }
 
   const qaState =
     input.mode === 'generate_plan'
       ? computeCampaignPlanningQAState({
-          gatherOrder: GATHER_ORDER.map((g) => ({
-            key: g.key,
-            question: g.question,
-            contingentOn: (g as { contingentOn?: string }).contingentOn,
-          })),
+          gatherOrder: gatherOrderForQa,
           prefilledKeys: qaPrefilledKeys,
           prefilledValues: prefilledPlanning || {},
           requiredKeys: REQUIRED_EXECUTION_FIELDS as unknown as string[],
@@ -5089,10 +5431,106 @@ export async function runCampaignAiPlan(
     distributionReason = strategyResult.reason;
   }
 
+  let strategyMemory: { preferred_tone?: string | null; preferred_platforms?: string[] } | null = null;
+  let strategyLearningProfile: StrategyProfile | null = null;
+  let strategyLearningFromCache = false;
+  if (versionRow?.company_id) {
+    try {
+      strategyMemory = await getStrategyMemory(versionRow.company_id);
+    } catch {
+      // Optional; proceed without strategy memory
+    }
+    try {
+      const { profile, fromCache } = await getCachedStrategyProfile(versionRow.company_id);
+      strategyLearningProfile = profile;
+      strategyLearningFromCache = fromCache;
+    } catch {
+      // Optional; proceed without strategy learning profile
+    }
+  }
+
+  let campaignContext: CampaignContext | null = null;
+  const strategicThemesRaw = (prefilledPlanning as any)?.strategic_themes ?? (prefilledPlanning as any)?.recommended_topics ?? [];
+  const themeList = Array.isArray(strategicThemesRaw) ? strategicThemesRaw.map((t) => String(t ?? '').trim()).filter(Boolean) : [];
+  const hasStrategicThemes = themeList.length > 0;
+  const execConfigForCtx = (prefilledPlanning as any)?.execution_config as Record<string, unknown> | undefined;
+
+  const shouldBuildCampaignContext =
+    input.mode === 'generate_plan' && versionRow?.company_id
+      ? true
+      : !!(strategyMemory || strategyLearningProfile || hasStrategicThemes);
+
+  if (shouldBuildCampaignContext) {
+    let eligiblePlatforms: string[] | undefined =
+      (prefilledPlanning as any)?.platforms
+        ? String((prefilledPlanning as any).platforms).split(',').map((p: string) => p.trim()).filter(Boolean)
+        : undefined;
+    if (!eligiblePlatforms?.length && versionRow?.company_id) {
+      try {
+        const profile = await getProfile(versionRow.company_id, { autoRefine: false, languageRefine: true });
+        eligiblePlatforms = getAvailablePlatformsFromProfile(profile);
+      } catch {
+        // Optional; proceed without company platforms
+      }
+    }
+    const topicFallback =
+      (prefilledPlanning as any)?.theme_or_description ??
+      (prefilledPlanning as any)?.polished_title ??
+      (prefilledPlanning as any)?.topic ??
+      'Campaign';
+    const effectiveThemes =
+      themeList.length > 0
+        ? themeList
+        : typeof topicFallback === 'string' && topicFallback !== 'Campaign'
+          ? [topicFallback]
+          : undefined;
+    campaignContext = buildCampaignContext({
+      topic: typeof topicFallback === 'string' ? topicFallback : 'Campaign',
+      tone: strategyMemory?.preferred_tone ?? undefined,
+      themes: effectiveThemes,
+      strategyMemory: strategyMemory
+        ? {
+            preferred_platforms: strategyMemory.preferred_platforms ?? [],
+            preferred_content_types: (strategyMemory as { preferred_content_types?: string[] }).preferred_content_types ?? [],
+          }
+        : undefined,
+      strategyLearningProfile: strategyLearningProfile ?? undefined,
+      eligiblePlatforms,
+      target_audience:
+        typeof (prefilledPlanning as any)?.target_audience === 'string'
+          ? (prefilledPlanning as any).target_audience
+          : typeof execConfigForCtx?.target_audience === 'string'
+            ? execConfigForCtx.target_audience
+            : undefined,
+      content_depth:
+        typeof (prefilledPlanning as any)?.content_depth === 'string'
+          ? (prefilledPlanning as any).content_depth
+          : typeof execConfigForCtx?.content_depth === 'string'
+            ? execConfigForCtx.content_depth
+            : undefined,
+      campaign_goal:
+        typeof (prefilledPlanning as any)?.campaign_goal === 'string'
+          ? (prefilledPlanning as any).campaign_goal
+          : typeof execConfigForCtx?.campaign_goal === 'string'
+            ? execConfigForCtx.campaign_goal
+            : undefined,
+    });
+    // Augment for weekly planning: strategic theme progression, duration, learning profile
+    campaignContext.strategic_themes = effectiveThemes ?? undefined;
+    campaignContext.campaign_duration_weeks = resolvedDurationWeeks;
+    campaignContext.strategy_learning_profile =
+      strategyLearningProfile != null ? formatStrategyProfileForPrompt(strategyLearningProfile) : undefined;
+    setCampaignContext(input.campaignId, campaignContext);
+  }
+
   const result = await runWithContext(inputWithDuration, {
     ...ctx,
     fastPath: useFastPath,
     prefilledPlanning,
+    strategyMemory,
+    strategyLearningProfile,
+    strategyLearningFromCache,
+    campaignContext,
     distributionStrategy,
     distributionReason,
     planSkeleton:

@@ -7,8 +7,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { username, password } = req.body || {};
-  const expectedUser = process.env.CONTENT_ARCHITECT_USERNAME || '';
-  const expectedPass = process.env.CONTENT_ARCHITECT_PASSWORD || '';
+  const u = String(username ?? '').trim();
+  const p = String(password ?? '').trim();
+  const expectedUser = (process.env.CONTENT_ARCHITECT_USERNAME || '').trim();
+  const expectedPass = (process.env.CONTENT_ARCHITECT_PASSWORD || '').trim();
 
   if (!expectedUser || !expectedPass) {
     return res.status(500).json({
@@ -16,10 +18,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  if (username !== expectedUser || password !== expectedPass) {
+  if (u !== expectedUser || p !== expectedPass) {
     try {
       await supabase.from('super_admin_audit_logs').insert({
-        username: String(username || 'unknown'),
+        username: u || 'unknown',
         action: 'content_architect_failed_login',
         ip_address:
           (req.headers['x-forwarded-for'] as string) ||
@@ -35,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await supabase.from('super_admin_audit_logs').insert({
-      username: String(username || expectedUser),
+      username: u || expectedUser,
       action: 'content_architect_login',
       ip_address:
         (req.headers['x-forwarded-for'] as string) ||
@@ -54,6 +56,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     'SameSite=Lax',
     'Max-Age=86400',
   ].join('; ');
-  res.setHeader('Set-Cookie', sessionCookie);
+  const clearSuperAdmin = [
+    'super_admin_session=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ].join('; ');
+  res.setHeader('Set-Cookie', [sessionCookie, clearSuperAdmin]);
   return res.status(200).json({ success: true });
 }

@@ -139,7 +139,7 @@ export async function optimizeCampaignWeek(input: {
   change_summary: string;
   confidence: number;
 }> {
-  const profile = await getProfile(input.companyId, { autoRefine: false });
+  const profile = await getProfile(input.companyId, { autoRefine: false, languageRefine: true });
   if (!profile) {
     throw new Error('Company profile not found');
   }

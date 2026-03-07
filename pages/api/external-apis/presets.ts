@@ -129,7 +129,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         : null;
       const fallbackData = resultData ? await resultData : null;
       if (scopedResult.error && !fallbackData) {
-        return res.status(500).json({ error: 'Failed to load presets' });
+        return res.status(500).json({
+          error: 'Failed to load presets',
+          detail: scopedResult.error?.message ?? 'Unknown error',
+        });
       }
       const rows = scopedResult.error ? fallbackData?.data || [] : scopedResult.data || [];
       const globalOnly = rows.filter((row: any) => row.company_id == null);
@@ -204,10 +207,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     let hiddenIds = new Set<string>();
     const hiddenResult = await supabase
-      .from('external_api_user_access')
+      .from('company_api_configs')
       .select('api_source_id')
-      .eq('user_id', `company:${companyId}`)
-      .eq('is_enabled', false);
+      .eq('company_id', companyId)
+      .eq('enabled', false);
     if (hiddenResult.error) {
       console.warn('FAILED_TO_LOAD_HIDDEN_PRESETS', hiddenResult.error.message);
     } else {

@@ -1,18 +1,7 @@
 /**
- * Fetches Unsplash images for the About page. Use server-side only (getStaticProps, API route).
- * Set UNSPLASH_ACCESS_KEY in .env.local. Get key: https://unsplash.com/developers
+ * Hardcoded Unsplash images for the About page. Use server-side only (getStaticProps, API route).
+ * No API key required.
  */
-
-type UnsplashPhoto = {
-  id: string;
-  urls: { regular: string; full: string };
-  user: { name: string; username: string; links: { html: string } };
-  links: { html: string };
-};
-
-type UnsplashSearchResult = {
-  results: UnsplashPhoto[];
-};
 
 export type AboutImage = {
   url: string;
@@ -21,39 +10,26 @@ export type AboutImage = {
   photoUrl: string;
 };
 
-async function fetchOne(
-  query: string,
-  orientation: 'landscape' = 'landscape'
-): Promise<AboutImage | null> {
-  const key = process.env.UNSPLASH_ACCESS_KEY;
-  if (!key) return null;
-  try {
-    const res = await fetch(
-      `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=1&orientation=${orientation}&client_id=${key}`,
-      { next: { revalidate: 86400 } }
-    );
-    if (!res.ok) return null;
-    const data: UnsplashSearchResult = await res.json();
-    const photo = data.results?.[0];
-    if (!photo?.urls?.regular) return null;
-    return {
-      url: photo.urls.regular,
-      credit: photo.user?.name || 'Unsplash',
-      userUrl: photo.user?.links?.html || 'https://unsplash.com',
-      photoUrl: photo.links?.html || 'https://unsplash.com',
-    };
-  } catch {
-    return null;
-  }
-}
+const ARCHITECTURAL_IMAGE: AboutImage = {
+  url: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?w=1280&q=80',
+  credit: 'Denys Nevozhai',
+  userUrl: 'https://unsplash.com/@dnevozhai',
+  photoUrl: 'https://unsplash.com/photos/592deb58ef4e',
+};
+
+const SYSTEMS_IMAGE: AboutImage = {
+  url: 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1280&q=80',
+  credit: 'Luke Chesser',
+  userUrl: 'https://unsplash.com/@lukechesser',
+  photoUrl: 'https://unsplash.com/photos/black-and-gray-dashboard-displaying-graphs-and-charts-bebda4e38f71',
+};
 
 export async function getAboutImages(): Promise<{
   architectural: AboutImage | null;
   systems: AboutImage | null;
 }> {
-  const [architectural, systems] = await Promise.all([
-    fetchOne('architecture blueprint abstract minimal'),
-    fetchOne('network data structure systems abstract'),
-  ]);
-  return { architectural: architectural || null, systems: systems || null };
+  return {
+    architectural: ARCHITECTURAL_IMAGE,
+    systems: SYSTEMS_IMAGE,
+  };
 }

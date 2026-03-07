@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
+import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingResponse';
 
 /**
  * GET /api/campaigns/retrieve-plan?campaignId=...
@@ -124,11 +125,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
     }
 
-    return res.status(200).json({
-      savedPlan,
-      committedPlan,
-      draftPlan,
-    });
+    const responseData = { savedPlan, committedPlan, draftPlan };
+    const refinedResponse = await refineUserFacingResponse(responseData);
+    return res.status(200).json(refinedResponse);
   } catch (error) {
     console.error('Error in retrieve-plan API:', error);
     return res.status(500).json({

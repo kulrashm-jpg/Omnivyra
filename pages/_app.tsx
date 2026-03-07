@@ -6,7 +6,7 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
 
-const LANDING_PUBLIC_ROUTES = ['/', '/pricing', '/about', '/blog'];
+const LANDING_PUBLIC_ROUTES = ['/', '/pricing', '/about', '/blog', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
 
 const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
@@ -23,9 +23,11 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isRecommendationsPage = router.pathname === '/recommendations';
   const isCampaignOrPlanRoute =
     router.pathname.startsWith('/campaigns') || router.pathname.startsWith('/campaign-daily-plan');
+  const isAuditRoute = router.pathname.startsWith('/audit') || router.pathname.startsWith('/free-audit');
   const isPublic =
     publicRoutes.includes(router.pathname) ||
     isBlogRoute ||
+    isAuditRoute ||
     isAdminBlogRoute ||
     isSuperAdminRoute ||
     isPlatformExternalApis ||
@@ -34,7 +36,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     isRecommendationsPage ||
     isCampaignOrPlanRoute;
 
-  const showLandingNavbar = LANDING_PUBLIC_ROUTES.includes(router.pathname) || isBlogRoute;
+  const showLandingNavbar = LANDING_PUBLIC_ROUTES.includes(router.pathname) || isBlogRoute || isAuditRoute;
 
   if (!isPublic && !isAuthenticated && !isLoading) {
     if (typeof window !== 'undefined') {

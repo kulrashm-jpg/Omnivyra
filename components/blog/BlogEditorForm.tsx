@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Plus, X } from 'lucide-react';
+import rehypeRaw from 'rehype-raw';
+import { Plus, X, Bold, Italic, Heading1, Heading2, Heading3, List, ListOrdered, Quote, Minus, Type } from 'lucide-react';
 import type { MediaBlockItem } from './BlogMediaBlock';
 
 const CATEGORY_OPTIONS = [
@@ -98,6 +99,8 @@ export function BlogEditorForm({
   const [showPreview, setShowPreview] = useState(false);
   const [newMediaType, setNewMediaType] = useState<MediaBlockItem['type']>('youtube');
   const [newMediaUrl, setNewMediaUrl] = useState('');
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const contentRef = useRef<HTMLTextAreaElement>(null);
 
   const update = useCallback((updates: Partial<BlogFormState>) => {
     setState((prev) => ({ ...prev, ...updates }));
@@ -137,6 +140,78 @@ export function BlogEditorForm({
     e.preventDefault();
     onSubmit(state);
   };
+
+  const applyFormat = useCallback(
+    (
+      before: string,
+      after: string,
+      options?: { blockPrefix?: string; blockSuffix?: string; placeholder?: string }
+    ) => {
+      const ta = contentRef.current;
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const text = state.content_markdown;
+      const selected = text.slice(start, end);
+
+      if (options?.blockPrefix !== undefined) {
+        const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+        const lineEnd = text.indexOf('\n', end) === -1 ? text.length : text.indexOf('\n', end);
+        const line = text.slice(lineStart, lineEnd);
+        const newLine = options.blockPrefix + line + (options.blockSuffix || '');
+        const newValue = text.slice(0, lineStart) + newLine + text.slice(lineEnd);
+        update({ content_markdown: newValue });
+        ta.focus();
+        requestAnimationFrame(() => {
+          ta.setSelectionRange(lineStart, lineStart + newLine.length);
+        });
+        return;
+      }
+
+      const replacement = selected
+        ? `${before}${selected}${after}`
+        : `${before}${options?.placeholder || 'text'}${after}`;
+      const newValue = text.slice(0, start) + replacement + text.slice(end);
+      update({ content_markdown: newValue });
+      ta.focus();
+      requestAnimationFrame(() => {
+        const newStart = start + before.length;
+        const newEnd = selected
+          ? newStart + selected.length
+          : newStart + (options?.placeholder || 'text').length;
+        ta.setSelectionRange(newStart, newEnd);
+      });
+    },
+    [state.content_markdown, update]
+  );
+
+  const insertAtCursor = useCallback(
+    (insertion: string) => {
+      const ta = contentRef.current;
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const text = state.content_markdown;
+      const newValue = text.slice(0, start) + insertion + text.slice(ta.selectionEnd);
+      update({ content_markdown: newValue });
+      ta.focus();
+      requestAnimationFrame(() => {
+        ta.setSelectionRange(start + insertion.length, start + insertion.length);
+      });
+    },
+    [state.content_markdown, update]
+  );
+
+  const COLORS = [
+    { name: 'Red', value: '#dc2626' },
+    { name: 'Orange', value: '#ea580c' },
+    { name: 'Amber', value: '#d97706' },
+    { name: 'Green', value: '#16a34a' },
+    { name: 'Blue', value: '#2563eb' },
+    { name: 'Indigo', value: '#4f46e5' },
+    { name: 'Purple', value: '#7c3aed' },
+    { name: 'Pink', value: '#db2777' },
+    { name: 'Gray', value: '#4b5563' },
+  ];
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8">
@@ -257,16 +332,147 @@ export function BlogEditorForm({
         </div>
         {showPreview ? (
           <div className="mt-1 min-h-[200px] rounded-lg border border-gray-300 bg-gray-50 p-4 prose prose-sm max-w-none">
-            <ReactMarkdown>{state.content_markdown || '*No content*'}</ReactMarkdown>
+            <ReactMarkdown rehypePlugins={[rehypeRaw]}>{state.content_markdown || '*No content*'}</ReactMarkdown>
           </div>
         ) : (
-          <textarea
-            value={state.content_markdown}
-            onChange={(e) => update({ content_markdown: e.target.value })}
-            rows={14}
-            className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm"
-            placeholder="Write in Markdown..."
-          />
+          <>
+            <div className="mt-1 flex flex-wrap items-center gap-1 rounded-t-lg border-x border-t border-gray-300 bg-gray-100 px-2 py-1.5">
+              <button
+                type="button"
+                onClick={() => applyFormat('**', '**', { placeholder: 'bold text' })}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Bold"
+              >
+                <Bold className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat('*', '*', { placeholder: 'italic text' })}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Italic"
+              >
+                <Italic className="h-4 w-4" />
+              </button>
+              <span className="mx-1 h-4 w-px bg-gray-300" />
+              <button
+                type="button"
+                onClick={() => applyFormat('', '', { blockPrefix: '# ', blockSuffix: '' })}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Heading 1"
+              >
+                <Heading1 className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat('', '', { blockPrefix: '## ', blockSuffix: '' })}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Heading 2"
+              >
+                <Heading2 className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat('', '', { blockPrefix: '### ', blockSuffix: '' })}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Heading 3"
+              >
+                <Heading3 className="h-4 w-4" />
+              </button>
+              <span className="mx-1 h-4 w-px bg-gray-300" />
+              <button
+                type="button"
+                onClick={() => applyFormat('', '', { blockPrefix: '- ', blockSuffix: '' })}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Bullet list"
+              >
+                <List className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat('', '', { blockPrefix: '1. ', blockSuffix: '' })}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Numbered list"
+              >
+                <ListOrdered className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat('', '', { blockPrefix: '> ', blockSuffix: '' })}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Block quote"
+              >
+                <Quote className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => insertAtCursor('\n\n---\n\n')}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Horizontal rule (spacing)"
+              >
+                <Minus className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => insertAtCursor('\n\n')}
+                className="rounded p-1.5 hover:bg-gray-200"
+                title="Paragraph spacing"
+              >
+                <Type className="h-4 w-4" />
+              </button>
+              <span className="mx-1 h-4 w-px bg-gray-300" />
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowColorPicker(!showColorPicker)}
+                  className="flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200"
+                  title="Text color"
+                >
+                  <span className="inline-block h-4 w-4 rounded border border-gray-400" style={{ backgroundColor: '#dc2626' }} />
+                  Color
+                </button>
+                {showColorPicker && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-10"
+                      onClick={() => setShowColorPicker(false)}
+                      aria-hidden
+                    />
+                    <div className="absolute left-0 top-full z-20 mt-1 flex flex-wrap gap-1 rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
+                      {COLORS.map((c) => (
+                        <button
+                          key={c.value}
+                          type="button"
+                          onClick={() => {
+                            applyFormat(
+                              `<span style="color:${c.value}">`,
+                              '</span>',
+                              { placeholder: 'colored text' }
+                            );
+                            setShowColorPicker(false);
+                          }}
+                          className="rounded p-1 hover:bg-gray-100"
+                          title={c.name}
+                        >
+                          <span
+                            className="block h-6 w-6 rounded border border-gray-300"
+                            style={{ backgroundColor: c.value }}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+            <textarea
+              ref={contentRef}
+              value={state.content_markdown}
+              onChange={(e) => update({ content_markdown: e.target.value })}
+              rows={14}
+              className="w-full rounded-b-lg border border-gray-300 px-3 py-2 font-mono text-sm"
+              placeholder="Write in Markdown... Select text and use the toolbar to format."
+            />
+          </>
         )}
       </div>
 

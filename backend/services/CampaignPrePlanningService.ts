@@ -82,7 +82,7 @@ export async function runPrePlanning(input: PrePlanningInput): Promise<DurationE
   const [contentAssets, campaignVersion, profile, campaignResult] = await Promise.all([
     listAssetsWithLatestContent({ campaignId }),
     getLatestCampaignVersion(companyId, campaignId),
-    getProfile(companyId, { autoRefine: false }),
+    getProfile(companyId, { autoRefine: false, languageRefine: true }),
     supabase.from('campaigns').select('id, budget, start_date, end_date, priority_level, execution_status, blueprint_status, duration_locked').eq('id', campaignId).maybeSingle(),
   ]);
 

@@ -33,7 +33,7 @@ export const leadQueueConnection = getConnection();
 export const leadQueue = new Queue('lead-jobs', {
   connection: leadQueueConnection,
   defaultJobOptions: {
-    attempts: 3,
+    attempts: 1,
     backoff: {
       type: 'exponential',
       delay: 60000,

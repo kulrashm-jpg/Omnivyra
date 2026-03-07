@@ -30,6 +30,12 @@ type GatewayRequest = {
   temperature: number;
   response_format?: { type: 'json_object' };
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  /** For bolt pipeline observability: correlate AI calls to bolt_execution_runs. */
+  bolt_run_id?: string | null;
+  /** For prompt change tracking and token debugging. */
+  prompt_template_name?: string | null;
+  prompt_template_version?: string | null;
+  prompt_template_hash?: string | null;
 };
 
 const getOpenAiClient = (): OpenAI => {
@@ -182,6 +188,17 @@ const runCompletion = async (
     chatModeration: 'chat_moderation',
     generateDailyPlan: 'daily_plan',
     generateDailyDistributionPlan: 'daily_distribution_plan',
+    generateContentForDay: 'content_for_day',
+    regenerateContent: 'regenerate_content',
+    parsePlanToWeeks: 'parse_plan',
+    parseRefinedDay: 'parse_refined_day',
+    parsePlatformCustomization: 'parse_platform_customization',
+    generateCampaignRecommendations: 'campaign_recommendations',
+    refineProblemTransformation: 'profile_refinement',
+    profileEnrichment: 'profile_enrichment',
+    profileExtraction: 'profile_extraction',
+    generatePlatformVariants: 'platform_variants',
+    generateContentBlueprint: 'content_blueprint',
   };
   try {
     await supabase.from('audit_logs').insert({
@@ -195,6 +212,10 @@ const runCompletion = async (
         reasoning_trace_id: metadata.reasoning_trace_id,
         operation: request.operation,
         context_type: contextTypeMap[request.operation] || 'unknown',
+        ...(request.bolt_run_id ? { bolt_run_id: request.bolt_run_id } : {}),
+        ...(request.prompt_template_name ? { prompt_template_name: request.prompt_template_name } : {}),
+        ...(request.prompt_template_version ? { prompt_template_version: request.prompt_template_version } : {}),
+        ...(request.prompt_template_hash ? { prompt_template_hash: request.prompt_template_hash } : {}),
       },
       created_at: new Date().toISOString(),
     });
@@ -233,6 +254,16 @@ export const generateCampaignPlan = async (
   request: GatewayRequest
 ): Promise<GatewayResponse<string>> => {
   return runCompletion({ ...request, operation: 'generateCampaignPlan' });
+};
+
+/**
+ * Generic completion with custom operation name for logging.
+ * Use for services that previously used direct OpenAI (contentGenerationService, campaignPlanParser, etc.)
+ */
+export const runCompletionWithOperation = async (
+  request: GatewayRequest & { operation: string }
+): Promise<GatewayResponse<string>> => {
+  return runCompletion(request);
 };
 
 /**

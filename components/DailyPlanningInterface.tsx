@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import ContentCreationPanel from './ContentCreationPanel';
 import VoiceNotesComponent from './VoiceNotesComponent';
+import PlatformIcon from './ui/PlatformIcon';
 import AIGenerationProgress from './AIGenerationProgress';
 import { parseDailyExecutionMetadata } from '../lib/dailyExecutionMetadata';
 
@@ -2018,8 +2019,8 @@ export default function DailyPlanningInterface({ week, onSave, campaignId, campa
                         <div className="text-sm font-medium text-gray-900">{activity.title}</div>
                         <div className="text-xs text-gray-500">{activity.time}</div>
                       </div>
-                      <div className="mt-1 text-xs text-gray-600">
-                        {activity.platform} • {activity.contentType} • {activity.status}
+                      <div className="mt-1 text-xs text-gray-600 flex items-center gap-1.5 flex-wrap">
+                        <PlatformIcon platform={activity.platform} size={12} showLabel /> • {activity.contentType} • {activity.status}
                       </div>
 
                       {activity.description && (
@@ -2110,7 +2111,7 @@ export default function DailyPlanningInterface({ week, onSave, campaignId, campa
               {selectedActivityScheduleGroup.map((item) => (
                 <div key={`activity-schedule-${item.id}`} className="rounded-lg border border-gray-200 p-3 bg-gray-50">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="text-sm font-medium text-gray-900 capitalize">{item.platform}</div>
+                    <div className="text-sm font-medium text-gray-900"><PlatformIcon platform={item.platform} size={14} showLabel /></div>
                     <div className="text-xs text-gray-500">{item.contentType}</div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

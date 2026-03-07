@@ -1,7 +1,8 @@
-import OpenAI from 'openai';
 import { z } from 'zod';
 import { CompanyProfile } from './companyProfileService';
 import { detectContentOverlap } from './contentOverlapService';
+import { refineLanguageOutput } from './languageRefinementService';
+import { runCompletionWithOperation } from './aiGateway';
 
 const contentSchema = z.object({
   headline: z.string(),
@@ -15,14 +16,6 @@ const contentSchema = z.object({
   trendUsed: z.string().optional(),
   reasoning: z.string(),
 });
-
-const getOpenAiClient = (): OpenAI => {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing OPENAI_API_KEY');
-  }
-  return new OpenAI({ apiKey });
-};
 
 const platformTone = (platform: string): string => {
   const lower = platform.toLowerCase();
@@ -53,7 +46,6 @@ export async function generateContentForDay(input: {
     pastContentSummaries: string[];
   };
 }): Promise<z.infer<typeof contentSchema>> {
-  const client = getOpenAiClient();
   const tone = platformTone(input.platform);
   const systemPrompt =
     'You are a content generation engine. Return JSON only. No prose.';
@@ -89,18 +81,21 @@ Platform Style:
 ${tone}
 `;
 
-  const completion = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
+  const result = await runCompletionWithOperation({
+    companyId: input.companyProfile?.company_id ?? null,
+    campaignId: null,
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
+    operation: 'generateContentForDay',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content ?? '{}';
-  const parsed = contentSchema.parse(JSON.parse(raw));
+  const raw = result.output?.trim() ?? '{}';
+  let parsed = contentSchema.parse(JSON.parse(raw));
   if (input.campaignMemory) {
     const overlap = await detectContentOverlap({
       companyId: input.companyProfile.company_id,
@@ -113,8 +108,22 @@ ${tone}
         existingContent: parsed,
         instruction: 'Create a fresh angle not used in previous campaigns.',
         platform: input.platform,
+        companyId: input.companyProfile.company_id,
       });
     }
+  }
+  const keysToRefine = ['headline', 'caption', 'hook', 'callToAction', 'reasoning', 'script', 'blogDraft'] as const;
+  const toRefine = keysToRefine.filter((k) => parsed[k]?.trim());
+  if (toRefine.length > 0) {
+    const r = await refineLanguageOutput({
+      content: toRefine.map((k) => parsed[k] as string),
+      card_type: 'platform_variant',
+      platform: input.platform,
+    });
+    const refined = Array.isArray(r.refined) ? r.refined : [r.refined];
+    toRefine.forEach((k, i) => {
+      parsed = { ...parsed, [k]: refined[i] || parsed[k] };
+    });
   }
   return {
     ...parsed,
@@ -126,8 +135,9 @@ export async function regenerateContent(input: {
   existingContent: any;
   instruction: string;
   platform: string;
+  companyId?: string | null;
+  campaignId?: string | null;
 }): Promise<z.infer<typeof contentSchema>> {
-  const client = getOpenAiClient();
   const systemPrompt =
     'You are a content regeneration engine. Return JSON only. No prose.';
   const userPrompt = `
@@ -142,17 +152,33 @@ Existing Content:
 ${JSON.stringify(input.existingContent, null, 2)}
 `;
 
-  const completion = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
+  const result = await runCompletionWithOperation({
+    companyId: input.companyId ?? null,
+    campaignId: input.campaignId ?? null,
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
+    operation: 'regenerateContent',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content ?? '{}';
-  const parsed = contentSchema.parse(JSON.parse(raw));
+  const raw = result.output?.trim() ?? '{}';
+  let parsed = contentSchema.parse(JSON.parse(raw));
+  const keysToRefine = ['headline', 'caption', 'hook', 'callToAction', 'reasoning', 'script', 'blogDraft'] as const;
+  const toRefine = keysToRefine.filter((k) => parsed[k]?.trim());
+  if (toRefine.length > 0) {
+    const r = await refineLanguageOutput({
+      content: toRefine.map((k) => parsed[k] as string),
+      card_type: 'platform_variant',
+      platform: input.platform,
+    });
+    const refined = Array.isArray(r.refined) ? r.refined : [r.refined];
+    toRefine.forEach((k, i) => {
+      parsed = { ...parsed, [k]: refined[i] || parsed[k] };
+    });
+  }
   return parsed;
 }

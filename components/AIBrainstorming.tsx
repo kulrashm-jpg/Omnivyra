@@ -9,11 +9,6 @@ import {
   X,
   MessageCircle,
   Lightbulb,
-  Image as ImageIcon,
-  Hash,
-  Users,
-  Video,
-  Globe,
   Sparkles,
   RefreshCw,
   CheckCircle,
@@ -23,7 +18,9 @@ import {
   FileText,
   Camera,
   Wand2,
+  Image as ImageIcon,
 } from 'lucide-react';
+import PlatformIcon from '@/components/ui/PlatformIcon';
 
 interface BrainstormSession {
   id: string;
@@ -84,14 +81,6 @@ export default function AIBrainstorming({ platform, initialTopic, onComplete, on
   const [isTyping, setIsTyping] = useState(false);
   const [activeTab, setActiveTab] = useState('conversation');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  const platformIcons = {
-    linkedin: <Users className="h-4 w-4" />,
-    twitter: <Hash className="h-4 w-4" />,
-    instagram: <ImageIcon className="h-4 w-4" />,
-    youtube: <Video className="h-4 w-4" />,
-    facebook: <Globe className="h-4 w-4" />,
-  };
 
   const platformColors = {
     linkedin: 'blue',
@@ -206,12 +195,12 @@ export default function AIBrainstorming({ platform, initialTopic, onComplete, on
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className={`p-2 rounded-lg bg-${platformColors[platform as keyof typeof platformColors]}-500/20`}>
-                {platformIcons[platform as keyof typeof platformIcons]}
+                <PlatformIcon platform={platform} size={16} showLabel />
               </div>
               <div>
                 <CardTitle className="text-2xl font-bold text-white">AI Brainstorming Session</CardTitle>
                 <p className="text-purple-200 text-sm">
-                  Refining "{initialTopic}" for {platform.charAt(0).toUpperCase() + platform.slice(1)}
+                  Refining &quot;{initialTopic}&quot; for {platform.charAt(0).toUpperCase() + platform.slice(1)}
                 </p>
               </div>
             </div>

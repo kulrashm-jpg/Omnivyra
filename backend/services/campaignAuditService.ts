@@ -129,7 +129,7 @@ export async function generateCampaignAuditReport(
     return { status: 'blocked', reason: 'campaign not found' };
   }
 
-  const profile = await getProfile(resolvedCompanyId, { autoRefine: false });
+  const profile = await getProfile(resolvedCompanyId, { autoRefine: false, languageRefine: true });
   const gate = validateCompanyProfile(profile);
   if (gate.status === 'blocked') {
     return { status: 'blocked', missing_fields: gate.missing_fields };

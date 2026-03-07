@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingResponse';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -70,14 +71,16 @@ async function getWeeklyRefinement(campaignId: string, weekNumber: string, res: 
 
     if (contentError) throw contentError;
 
-    res.status(200).json({
+    const data = {
       refinement: refinement || null,
       weeklyContent,
       totalItems: weeklyContent.length,
       canEnhance: !refinement?.ai_enhancement_applied,
       canFinalize: refinement?.manual_edits_applied || refinement?.ai_enhancement_applied,
       canPopulateDaily: refinement?.finalized && !refinement?.daily_plan_populated
-    });
+    };
+    const refined = await refineUserFacingResponse(data);
+    res.status(200).json(refined);
 
   } catch (error) {
     console.error('Error getting weekly refinement:', error);
@@ -96,7 +99,7 @@ async function getRefinementStatus(campaignId: string, res: NextApiResponse) {
 
     if (error) throw error;
 
-    res.status(200).json({
+    const data = {
       weeks: statusData,
       summary: {
         totalWeeks: statusData.length,
@@ -105,7 +108,9 @@ async function getRefinementStatus(campaignId: string, res: NextApiResponse) {
         finalized: statusData.filter(w => w.finalized).length,
         dailyPopulated: statusData.filter(w => w.daily_plan_populated).length
       }
-    });
+    };
+    const refined = await refineUserFacingResponse(data);
+    res.status(200).json(refined);
 
   } catch (error) {
     console.error('Error getting refinement status:', error);
@@ -135,12 +140,14 @@ async function getDailyPlans(campaignId: string, weekNumber: string, res: NextAp
       return acc;
     }, {});
 
-    res.status(200).json({
+    const data = {
       dailyPlans,
       dailyPlansByDay,
       totalPlans: dailyPlans.length,
       weekNumber: parseInt(weekNumber)
-    });
+    };
+    const refined = await refineUserFacingResponse(data);
+    res.status(200).json(refined);
 
   } catch (error) {
     console.error('Error getting daily plans:', error);

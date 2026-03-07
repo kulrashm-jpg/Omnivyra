@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { buildExternalApiRequest, executeExternalApiRequest, validatePlatformConfig } from '../../../backend/services/externalApiService';
-import { buildCacheKey, getCacheStats, getCachedResponse, setCachedResponse } from '../../../backend/services/externalApiCacheService';
+import { buildCacheKey, getCacheStats, getCachedResponse, setCachedResponse } from '../../../backend/services/redisExternalApiCache';
 import { normalizeExternalTrends } from '../../../backend/services/trendNormalizationService';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { Role } from '../../../backend/services/rbacService';
@@ -158,7 +158,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ error: normalizeError(error) });
+    return res.status(500).json({
+      error: 'Failed to test API',
+      detail: normalizeError(error),
+    });
   }
 }
 

@@ -29,7 +29,7 @@ const normalizeBaseUrl = (value: string) => {
 export async function generateTrackingLink(
   input: TrackingLinkInput
 ): Promise<TrackingLinkResult> {
-  const profile = await getProfile(input.companyId, { autoRefine: false });
+  const profile = await getProfile(input.companyId, { autoRefine: false, languageRefine: true });
   const baseUrl = normalizeBaseUrl(
     profile?.website_url || ''
   );

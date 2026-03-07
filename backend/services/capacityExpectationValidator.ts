@@ -41,6 +41,41 @@ function normalizeContentType(raw: unknown): string {
   return String(raw ?? '').trim().toLowerCase();
 }
 
+/** Map platform content_type to capacity key (post, video, blog, story, thread). */
+function contentTypeToCapacityKey(ct: string): keyof CapacityByType {
+  const n = ct.replace(/[\s_-]+/g, '').toLowerCase();
+  if (n === 'post' || n === 'posts' || n === 'textpost' || n === 'textposts' || n === 'text post' || n === 'text posts' ||
+      n === 'carousel' || n === 'carousels' || n === 'image' || n === 'images') return 'post';
+  if (n === 'video' || n === 'videos' || n === 'reel' || n === 'reels' || n === 'short' || n === 'shorts' ||
+      n === 'podcast' || n === 'podcasts' || n === 'song' || n === 'songs' || n === 'audio' || n === 'space' || n === 'spaces') return 'video';
+  if (n === 'blog' || n === 'blogs' || n === 'article' || n === 'articles' || n === 'newsletter' || n === 'newsletters' ||
+      n === 'whitepaper' || n === 'slide' || n === 'slides' || n === 'slideware' || n === 'webinar' || n === 'webinars') return 'blog';
+  if (n === 'story' || n === 'stories') return 'story';
+  if (n === 'thread' || n === 'threads') return 'thread';
+  return 'post';
+}
+
+type CapacityByType = { post: number; video: number; blog: number; story: number; thread: number };
+
+const EMPTY_BY_TYPE: CapacityByType = { post: 0, video: 0, blog: 0, story: 0, thread: 0 };
+
+function parseCapacityByType(value: unknown): CapacityByType {
+  if (value == null) return { ...EMPTY_BY_TYPE };
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    const out = { ...EMPTY_BY_TYPE };
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'breakdown' || k === '_declared_none' || k === 'declared_none' || k === 'declaredNone') continue;
+      const n = toNonNegativeInt(v);
+      if (n <= 0) continue;
+      const key = contentTypeToCapacityKey(k);
+      out[key] += n;
+    }
+    return out;
+  }
+  return { ...EMPTY_BY_TYPE };
+}
+
 function coerceTotalCount(value: unknown): number {
   if (value == null) return 0;
   if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
@@ -118,6 +153,18 @@ function computePlatformPostingTotals(rows: Array<{ platform: string; content_ty
   return { total, byPlatform };
 }
 
+/**
+ * Two scenarios for capacity calculation:
+ *
+ * 1. NO SHARING (everything unique): requested = sum of all platform postings.
+ *    Each platform slot needs its own piece. Simple addition.
+ *
+ * 2. SHARING ENABLED: 1 unique piece can fill N platform slots (N = platforms that support that content type).
+ *    - Look at which platforms the user selected and which content types each supports.
+ *    - 1 post across 4 post-supporting platforms = 1 capacity unit fills 4 slots.
+ *    - So: requested_unique = max per content_type across platforms (that request that type).
+ *    - Example: 2 posts/week on each of 4 platforms → need 2 unique posts (2 × 4 slots filled).
+ */
 function computeUniqueWeeklyTotal(rows: Array<{ platform: string; content_type: string; count_per_week: number }>, sharingEnabled: boolean): number {
   if (rows.length === 0) return 0;
   if (!sharingEnabled) {
@@ -144,12 +191,26 @@ function isOverrideConfirmedFromMessage(message: string): boolean {
   );
 }
 
+/** When content repurposing is enabled, 1 source piece can be adapted for multiple platforms (e.g. 1 article → post, thread, fb post, x post). */
+const REPURPOSING_FACTOR = 4;
+
+/**
+ * Per-content-type validation. For each type:
+ * - Supply = available[type] + (weekly_capacity[type] × campaign_weeks)
+ * - Platforms supporting type = from platform_content_requests (only platforms that request that type)
+ * - With sharing: 1 piece fills N platform slots → demand_unique = max per platform
+ * - Without sharing: demand_unique = sum of all postings for that type
+ * Valid when supply >= demand_unique for EVERY type.
+ */
 export function validateCapacityVsExpectation(input: {
   available_content: unknown;
   weekly_capacity: unknown;
   exclusive_campaigns: unknown;
   platform_content_requests: unknown;
   cross_platform_sharing?: unknown;
+  content_repurposing?: unknown;
+  /** Campaign duration in weeks. Supply = available + (capacity × weeks). Default 1 when missing. */
+  campaign_duration_weeks?: number | null;
   message?: string;
   override_confirmed?: boolean;
 }): CapacityValidationResult | null {
@@ -162,20 +223,72 @@ export function validateCapacityVsExpectation(input: {
       ? (input.cross_platform_sharing as any).enabled
       : false
   );
-  const requested_total = computeUniqueWeeklyTotal(rows, sharingEnabled);
+  const repurposingEnabled = Boolean(
+    (typeof input.content_repurposing === 'object' && input.content_repurposing != null && (input.content_repurposing as any).enabled !== undefined)
+      ? (input.content_repurposing as any).enabled
+      : input.content_repurposing === true
+  );
+  const campaignWeeks = Math.max(1, toNonNegativeInt(input.campaign_duration_weeks) || 1);
+
+  const availableByType = parseCapacityByType(input.available_content);
+  const capacityByType = parseCapacityByType(input.weekly_capacity);
+  const exclusive_campaigns_total = coerceExclusiveTotal(input.exclusive_campaigns);
+  const totalCapacity = (capacityByType.post + capacityByType.video + capacityByType.blog + capacityByType.story + capacityByType.thread) * campaignWeeks;
+  const exclusiveShare = (typeCapacity: number) =>
+    totalCapacity > 0 ? Math.max(0, exclusive_campaigns_total * (typeCapacity * campaignWeeks) / totalCapacity) : 0;
+
+  const demandByType: Record<keyof CapacityByType, { total: number; maxPerPlatform: number; platforms: Set<string> }> = {
+    post: { total: 0, maxPerPlatform: 0, platforms: new Set() },
+    video: { total: 0, maxPerPlatform: 0, platforms: new Set() },
+    blog: { total: 0, maxPerPlatform: 0, platforms: new Set() },
+    story: { total: 0, maxPerPlatform: 0, platforms: new Set() },
+    thread: { total: 0, maxPerPlatform: 0, platforms: new Set() },
+  };
+  const maxByTypeAndPlatform: Record<string, Record<keyof CapacityByType, number>> = {};
+  for (const r of rows) {
+    const key = contentTypeToCapacityKey(r.content_type) as keyof CapacityByType;
+    const d = demandByType[key];
+    d.total += r.count_per_week;
+    d.platforms.add(r.platform);
+    if (!maxByTypeAndPlatform[r.platform]) maxByTypeAndPlatform[r.platform] = { ...EMPTY_BY_TYPE };
+    maxByTypeAndPlatform[r.platform][key] = Math.max(maxByTypeAndPlatform[r.platform][key] ?? 0, r.count_per_week);
+    d.maxPerPlatform = Math.max(d.maxPerPlatform, maxByTypeAndPlatform[r.platform][key]);
+  }
+
+  let worstDeficit = 0;
+  let failingType: keyof CapacityByType | null = null;
+  const types: (keyof CapacityByType)[] = ['post', 'video', 'blog', 'story', 'thread'];
+  for (const t of types) {
+    const demand = demandByType[t];
+    if (demand.total <= 0) continue;
+    const demandUniqueForCampaign = sharingEnabled
+      ? demand.maxPerPlatform * campaignWeeks
+      : demand.total * campaignWeeks;
+    const typeCapacity = capacityByType[t] * campaignWeeks;
+    const typeExclusive = exclusiveShare(capacityByType[t]);
+    const supply = availableByType[t] + Math.max(0, typeCapacity - typeExclusive);
+    const deficit = Math.max(0, demandUniqueForCampaign - supply);
+    if (deficit > worstDeficit) {
+      worstDeficit = deficit;
+      failingType = t;
+    }
+  }
+
+  const baselineUnique = computeUniqueWeeklyTotal(rows, sharingEnabled);
+  const repurposingImplied = Math.max(1, Math.ceil(requested_platform_postings_total / REPURPOSING_FACTOR));
+  const requested_total = repurposingEnabled
+    ? Math.min(baselineUnique, repurposingImplied)
+    : baselineUnique;
 
   const weekly_capacity_total = coerceTotalCount(input.weekly_capacity);
   const available_content_total = coerceTotalCount(input.available_content);
-  const exclusive_campaigns_total = coerceExclusiveTotal(input.exclusive_campaigns);
-
-  // Exclusive campaigns consume capacity first (not availability).
-  const effective_capacity_total = Math.max(0, weekly_capacity_total - exclusive_campaigns_total);
-  const supply_total = available_content_total + effective_capacity_total;
+  const effective_capacity_total = Math.max(0, weekly_capacity_total * campaignWeeks - exclusive_campaigns_total);
+  const supply_total = available_content_total + Math.max(0, (weekly_capacity_total * campaignWeeks) - exclusive_campaigns_total);
 
   const override_confirmed =
     Boolean(input.override_confirmed) || (typeof input.message === 'string' && isOverrideConfirmedFromMessage(input.message));
 
-  const deficit = Math.max(0, requested_total - supply_total);
+  const deficit = worstDeficit > 0 ? worstDeficit : Math.max(0, requested_total - supply_total);
   const status: CapacityValidationStatus = deficit > 0 ? 'invalid' : 'valid';
 
   let suggested_requested_by_platform: Record<string, number> | undefined;

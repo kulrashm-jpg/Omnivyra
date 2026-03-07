@@ -5,6 +5,7 @@ import {
   optimizeDiscoverabilityForPlatform,
 } from '@/backend/services/contentGenerationPipeline';
 import { generateCampaignPlan } from '@/backend/services/aiGateway';
+import { refineLanguageOutput } from '@/backend/services/languageRefinementService';
 
 type WorkspaceAction = 'generate_master' | 'generate_variants' | 'refine_variant' | 'improve_variant';
 type ImprovementType = 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
@@ -89,10 +90,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           },
         ],
       });
-      const revised = String(aiResult?.output || '').trim();
+      let revised = String(aiResult?.output || '').trim();
       if (!revised) {
         return res.status(500).json({ error: 'Improvement returned empty output' });
       }
+      const refinedImprove = await refineLanguageOutput({
+        content: revised,
+        card_type: 'platform_variant',
+        platform,
+      });
+      revised = (refinedImprove.refined as string) || revised;
       const improved_variant = {
         ...variant,
         generated_content: revised,
@@ -191,10 +198,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ],
       });
 
-      const refined = String(aiResult?.output || '').trim();
+      let refined = String(aiResult?.output || '').trim();
       if (!refined) {
         return res.status(500).json({ error: 'AI refinement returned empty output' });
       }
+      const refinedOutput = await refineLanguageOutput({
+        content: refined,
+        card_type: 'repurpose_card',
+        platform,
+      });
+      refined = (refinedOutput.refined as string) || refined;
 
       return res.status(200).json({
         success: true,

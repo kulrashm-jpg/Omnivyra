@@ -129,7 +129,7 @@ export default function AdminBlogEditPage() {
   return (
     <>
       <Head>
-        <title>Edit: {post?.title} | Blog CMS</title>
+        <title>Edit: {post?.title != null ? String(post.title) : 'Post'} | Blog CMS</title>
       </Head>
       <div className="min-h-screen bg-gray-50">
         <div className="border-b border-gray-200 bg-white px-4 py-3 sm:px-6">

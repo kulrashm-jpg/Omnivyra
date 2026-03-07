@@ -2437,12 +2437,12 @@ export default function CampaignPlanning() {
                       <button
                         onClick={async () => {
                             if (campaignId) {
-                              window.location.href = `/campaign-planning-hierarchical?campaignId=${campaignId}`;
+                              window.location.href = `/campaign-details/${campaignId}`;
                             } else {
                               // Try to load existing campaign first
                               await loadExistingCampaign();
                               if (campaignId) {
-                                window.location.href = `/campaign-planning-hierarchical?campaignId=${campaignId}`;
+                                window.location.href = `/campaign-details/${campaignId}`;
                               } else {
                                 notify('info', 'Please create a campaign first');
                               }
@@ -2803,7 +2803,7 @@ export default function CampaignPlanning() {
                 {campaignId && (
                   <button 
                     onClick={() => {
-                      window.location.href = `/campaign-planning-hierarchical?campaignId=${campaignId}`;
+                      window.location.href = `/campaign-details/${campaignId}`;
                     }}
                     className="w-full bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200 cursor-pointer flex items-center justify-center gap-2"
                   >

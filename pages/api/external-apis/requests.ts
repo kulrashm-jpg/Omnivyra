@@ -2,7 +2,13 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { validatePlatformConfig } from '../../../backend/services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getUserRole, isPlatformSuperAdmin, isSuperAdmin } from '../../../backend/services/rbacService';
+import {
+  getUserRole,
+  getCompanyRoleIncludingInvited,
+  hasPermission,
+  isPlatformSuperAdmin,
+  isSuperAdmin,
+} from '../../../backend/services/rbacService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 
 const authTypeRequiresKey = (authType?: string | null) =>
@@ -49,11 +55,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       const message = scopedResult.error.message || '';
       if (!message.toLowerCase().includes('company_id')) {
-        return res.status(500).json({ error: 'Failed to load API requests' });
+        return res.status(500).json({
+          error: 'Failed to load API requests',
+          detail: scopedResult.error.message,
+        });
       }
       const fallbackResult = await createQuery();
       if (fallbackResult.error) {
-        return res.status(500).json({ error: 'Failed to load API requests' });
+        return res.status(500).json({
+          error: 'Failed to load API requests',
+          detail: fallbackResult.error.message,
+        });
       }
       return res.status(200).json({ requests: fallbackResult.data || [] });
     }
@@ -69,22 +81,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .select('*')
         .order('created_at', { ascending: false });
       if (legacyError) {
-        return res.status(500).json({ error: 'Failed to load API requests' });
+        return res.status(500).json({
+          error: 'Failed to load API requests',
+          detail: legacyError.message,
+        });
       }
       return res.status(200).json({ requests: data || [] });
     }
-    const { role, error: roleError } = await getUserRole(user.id, companyId);
+    let { role, error: roleError } = await getUserRole(user.id, companyId);
+    if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
+      const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+      if (fallbackRole) {
+        role = fallbackRole;
+        roleError = null;
+      }
+    }
     if (roleError || !role) {
       return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     }
+    const canManage = await hasPermission(role, 'MANAGE_EXTERNAL_APIS');
     const { data, error: requestError } = await supabase
       .from('external_api_source_requests')
       .select('*')
       .eq('company_id', companyId)
-      .eq('created_by_user_id', user.id)
       .order('created_at', { ascending: false });
     if (!requestError) {
-      return res.status(200).json({ requests: data || [] });
+      const list = (data || []) as Array<{ created_by_user_id?: string | null }>;
+      const filtered = canManage
+        ? list
+        : list.filter((r) => r.created_by_user_id === user.id);
+      return res.status(200).json({ requests: filtered });
     }
     const requestMessage = requestError.message || '';
     if (!requestMessage.toLowerCase().includes('company_id')) {
@@ -98,7 +124,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (fallbackError) {
       return res.status(500).json({ error: 'Failed to load API requests' });
     }
-    return res.status(200).json({ requests: fallbackData || [] });
+    const fallbackList = (fallbackData || []).filter(
+      (r: { company_id?: string | null }) => !companyId || r.company_id === companyId
+    );
+    const fallbackFiltered = canManage ? fallbackList : fallbackList.filter(
+      (r: { created_by_user_id?: string | null }) => r.created_by_user_id === user.id
+    );
+    return res.status(200).json({ requests: fallbackFiltered });
   }
 
   if (req.method === 'POST') {
@@ -113,6 +145,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       base_url,
       purpose,
       category,
+      provider,
+      connection_type,
+      documentation_url,
+      sample_response,
       is_active,
       method,
       auth_type,
@@ -149,31 +185,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'API key env var name is required' });
     }
 
+    const insertPayload = {
+      name,
+      base_url,
+      purpose: purpose || 'trends',
+      category: category || null,
+      provider: provider || null,
+      connection_type: connection_type || null,
+      documentation_url: documentation_url || null,
+      sample_response: sample_response || null,
+      is_active: is_active ?? true,
+      method: method || 'GET',
+      auth_type: auth_type || 'none',
+      api_key_env_name: resolvedApiKeyEnv,
+      headers: headers || {},
+      query_params: query_params || {},
+      is_preset: false,
+      platform_type: resolvedPlatformType,
+      supported_content_types: supported_content_types || [],
+      promotion_modes: promotion_modes || [],
+      required_metadata: required_metadata || {},
+      posting_constraints: posting_constraints || {},
+      requires_admin: requires_admin ?? true,
+      status: 'pending_admin_review',
+      company_id: companyId,
+      created_by_user_id: user.id,
+      created_at: new Date().toISOString(),
+    };
     const insertWithCompany = await supabase
       .from('external_api_source_requests')
-      .insert({
-        name,
-        base_url,
-        purpose: purpose || 'trends',
-        category: category || null,
-        is_active: is_active ?? true,
-        method: method || 'GET',
-        auth_type: auth_type || 'none',
-        api_key_env_name: resolvedApiKeyEnv,
-        headers: headers || {},
-        query_params: query_params || {},
-        is_preset: false,
-        platform_type: resolvedPlatformType,
-        supported_content_types: supported_content_types || [],
-        promotion_modes: promotion_modes || [],
-        required_metadata: required_metadata || {},
-        posting_constraints: posting_constraints || {},
-        requires_admin: requires_admin ?? true,
-        status: 'pending',
-        company_id: companyId,
-        created_by_user_id: user.id,
-        created_at: new Date().toISOString(),
-      })
+      .insert(insertPayload)
       .select('*')
       .single();
 
@@ -182,36 +223,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     const insertMessage = insertWithCompany.error.message || '';
     if (!insertMessage.toLowerCase().includes('company_id')) {
-      return res.status(500).json({ error: 'Failed to submit API request' });
+      return res.status(500).json({
+        error: 'Failed to submit API request',
+        detail: insertWithCompany.error.message,
+      });
     }
     const insertFallback = await supabase
       .from('external_api_source_requests')
       .insert({
-        name,
-        base_url,
-        purpose: purpose || 'trends',
-        category: category || null,
-        is_active: is_active ?? true,
-        method: method || 'GET',
-        auth_type: auth_type || 'none',
-        api_key_env_name: resolvedApiKeyEnv,
-        headers: headers || {},
-        query_params: query_params || {},
-        is_preset: false,
-        platform_type: resolvedPlatformType,
-        supported_content_types: supported_content_types || [],
-        promotion_modes: promotion_modes || [],
-        required_metadata: required_metadata || {},
-        posting_constraints: posting_constraints || {},
-        requires_admin: requires_admin ?? true,
-        status: 'pending',
-        created_by_user_id: user.id,
-        created_at: new Date().toISOString(),
+        ...insertPayload,
+        company_id: companyId,
       })
       .select('*')
       .single();
     if (insertFallback.error) {
-      return res.status(500).json({ error: 'Failed to submit API request' });
+      return res.status(500).json({
+        error: 'Failed to submit API request',
+        detail: insertFallback.error.message,
+      });
     }
     return res.status(201).json({ request: insertFallback.data });
   }

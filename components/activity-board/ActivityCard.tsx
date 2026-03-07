@@ -10,6 +10,7 @@ import type { Activity, ActivityStage } from './types';
 import { getBoardIndicators } from './board-indicators';
 import BoardIntelligenceIndicators from './BoardIntelligenceIndicators';
 import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
+import { getContentTypeBadgeClasses } from '../../utils/contentTaxonomy';
 
 const STAGE_BORDER_CLASSES: Record<ActivityStage, string> = {
   PLAN: 'border-l-blue-500',
@@ -116,7 +117,7 @@ export default function ActivityCard({
           <span className="text-[10px] leading-none shrink-0" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (intel.label ?? undefined)}>
             {execMode === 'AI_AUTOMATED' ? '🟢' : execMode === 'CONDITIONAL_AI' ? '🟡' : '🔴'}
           </span>
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border ${getContentTypeBadgeClasses(activity.content_type)}`}>
             {labelize(activity.content_type)}
           </span>
         </div>

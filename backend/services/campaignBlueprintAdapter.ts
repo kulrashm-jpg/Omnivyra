@@ -49,13 +49,32 @@ export function fromStructuredPlan(plan: any): CampaignBlueprint {
     posting_execution_map: Array.isArray(w.posting_execution_map) ? w.posting_execution_map : undefined,
     resolved_postings: Array.isArray(w.resolved_postings) ? w.resolved_postings : undefined,
     week_extras: (w.week_extras && typeof w.week_extras === 'object') ? { ...w.week_extras } : undefined,
+    distribution_insights: Array.isArray(w.distribution_insights) ? w.distribution_insights : undefined,
   }));
 
   return {
     campaign_id: campaignId,
     duration_weeks: blueprintWeeks.length || 12,
     weeks: blueprintWeeks,
+    campaign_strategy_summary: buildCampaignStrategySummaryFromWeeks(blueprintWeeks),
   };
+}
+
+/** Build a short strategic narrative from weeks (phase_label progression). */
+function buildCampaignStrategySummaryFromWeeks(weeks: CampaignBlueprintWeek[]): string {
+  if (!weeks?.length) return 'This campaign focuses on awareness and education.';
+  const phases = [...new Set(weeks.map((w) => (w.phase_label ?? w.primary_objective ?? '').trim()).filter(Boolean))];
+  if (phases.length <= 1) {
+    return phases[0] ? `This campaign focuses on ${phases[0].toLowerCase()}.` : 'This campaign focuses on awareness and education.';
+  }
+  const first = phases[0];
+  const rest = phases.slice(1, -1);
+  const last = phases[phases.length - 1];
+  if (rest.length === 0) {
+    return `This campaign begins with ${first.toLowerCase()} and culminates in ${last.toLowerCase()}.`;
+  }
+  const mid = rest.map((p) => p.toLowerCase()).join(', ');
+  return `This campaign begins with ${first.toLowerCase()}, moves into ${mid}, and culminates in ${last.toLowerCase()}.`;
 }
 
 /**
@@ -125,6 +144,7 @@ export function fromRecommendationPlan(
     campaign_id: campaignId,
     duration_weeks: blueprintWeeks.length || 12,
     weeks: blueprintWeeks,
+    campaign_strategy_summary: buildCampaignStrategySummaryFromWeeks(blueprintWeeks),
   };
 }
 

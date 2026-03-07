@@ -30,9 +30,9 @@ export function getExecutionModeColorClasses(
       };
     case 'CREATOR_REQUIRED':
       return {
-        card: 'border-amber-200 bg-amber-50/60',
-        badge: 'bg-amber-100 text-amber-700 border-amber-200',
-        borderLeft: 'border-l-amber-400',
+        card: 'border-orange-200 bg-orange-50/60',
+        badge: 'bg-orange-100 text-orange-700 border-orange-200',
+        borderLeft: 'border-l-orange-400',
       };
     case 'CONDITIONAL_AI':
       return {

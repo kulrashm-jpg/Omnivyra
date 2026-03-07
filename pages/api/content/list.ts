@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingResponse';
 import { ALL_ROLES } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { resolveEffectiveCampaignRole, type CampaignAuthContext } from '../../../backend/services/campaignRoleService';
@@ -49,7 +50,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     const week = weekNumber ? Number(weekNumber) : undefined;
     const assets = await listAssetsWithLatestContent({ campaignId, weekNumber: week });
-    return res.status(200).json({ assets });
+    const refinedAssets = await refineUserFacingResponse(assets);
+    return res.status(200).json({ assets: refinedAssets });
   } catch (error: any) {
     return res.status(500).json({ error: error?.message || 'Failed to list content assets' });
   }

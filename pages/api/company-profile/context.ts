@@ -18,7 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await resolveCompanyAccess(req, res, companyId);
   if (!access) return;
 
-  const profile = await getProfile(companyId, { autoRefine: false });
+  const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
   const isCompanyAdminOnly = access.role === 'COMPANY_ADMIN';
   const companyContext = isCompanyAdminOnly
     ? buildLimitedCompanyContext(profile)

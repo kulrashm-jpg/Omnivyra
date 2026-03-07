@@ -84,19 +84,82 @@ type ApiRequest = {
   status: string;
   created_at: string;
   rejection_reason?: string | null;
+  company_id?: string | null;
 };
+
+const PURPOSE_OPTIONS = [
+  'trend_campaign_detection',
+  'market_pulse_signals',
+  'competitor_intelligence',
+  'market_news',
+  'influencer_signals',
+  'technology_signals',
+  'keyword_intelligence',
+] as const;
+
+const POLLING_OPTIONS = ['realtime', '2h', '6h', 'daily', 'weekly'] as const;
+const PRIORITY_OPTIONS = ['HIGH', 'MEDIUM', 'LOW'] as const;
 
 const emptyRequestForm = {
   name: '',
   base_url: '',
   purpose: 'trends',
   category: '',
+  provider: '',
+  connection_type: 'REST',
+  documentation_url: '',
+  sample_response: '',
   method: 'GET',
   auth_type: 'none',
   api_key_env_name: '',
   headers_json: '{}',
   query_params_json: '{}',
 };
+
+type TabId = 'presets' | 'request' | 'approval' | 'usage';
+
+const FILTER_FIELD_KEYS = [
+  'keywords',
+  'topics',
+  'competitors',
+  'industries',
+  'companies',
+  'influencers',
+  'technologies',
+  'geography',
+] as const;
+
+type CompanyConfigState = {
+  purposes: string[];
+  include_filters: Record<string, string[]>;
+  exclude_filters: Record<string, string[]>;
+  polling_frequency: string;
+  daily_limit: string;
+  signal_limit: string;
+  priority: string;
+  saving: boolean;
+  error: string | null;
+};
+
+function emptyFilterRecord(): Record<string, string[]> {
+  return FILTER_FIELD_KEYS.reduce<Record<string, string[]>>((acc, k) => {
+    acc[k] = [];
+    return acc;
+  }, {});
+}
+
+function filtersFromPayload(obj: unknown): Record<string, string[]> {
+  const out = emptyFilterRecord();
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out;
+  const rec = obj as Record<string, unknown>;
+  for (const key of FILTER_FIELD_KEYS) {
+    const val = rec[key];
+    if (Array.isArray(val)) {
+      out[key] = val.map((v) => String(v).trim()).filter(Boolean);
+    }
+  }
+  return out;
+}
 
 const parseJsonObject = (value: string) => {
   try {
@@ -119,6 +182,73 @@ const scaleHeight = (value: number, max: number, maxHeight = 60) => {
   if (max <= 0) return 4;
   return Math.max(4, Math.round((value / max) * maxHeight));
 };
+
+function FilterTagRow({
+  label,
+  values,
+  onAdd,
+  onRemove,
+}: {
+  label: string;
+  values: string[];
+  onAdd: (value: string) => void;
+  onRemove: (index: number) => void;
+}) {
+  const [input, setInput] = useState('');
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-[11px] text-gray-500 w-20 shrink-0 capitalize">{label}</span>
+      <div className="flex flex-wrap gap-1">
+        {values.map((v, i) => (
+          <span
+            key={`${v}-${i}`}
+            className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[11px]"
+          >
+            {v}
+            <button
+              type="button"
+              onClick={() => onRemove(i)}
+              className="hover:bg-indigo-200 rounded-full p-0.5"
+              aria-label={`Remove ${v}`}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <input
+        type="text"
+        className="border rounded px-2 py-0.5 text-xs w-28"
+        placeholder="Add..."
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const v = input.trim();
+            if (v) {
+              onAdd(v);
+              setInput('');
+            }
+          }
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => {
+          const v = input.trim();
+          if (v) {
+            onAdd(v);
+            setInput('');
+          }
+        }}
+        className="text-[11px] text-indigo-600 hover:underline"
+      >
+        Add
+      </button>
+    </div>
+  );
+}
 
 const HealthBadgeLegend = () => (
   <div className="text-[11px] text-gray-500 flex flex-wrap gap-3 items-center">
@@ -152,6 +282,21 @@ export default function ExternalApiAccessPage() {
   const [canManageExternalApis, setCanManageExternalApis] = useState(false);
   const [globalPresets, setGlobalPresets] = useState<ApiSource[]>([]);
   const [companyDefaultApis, setCompanyDefaultApis] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<TabId>('presets');
+  const [configModalApiId, setConfigModalApiId] = useState<string | null>(null);
+  const [companyConfig, setCompanyConfig] = useState<CompanyConfigState>({
+    purposes: [],
+    include_filters: emptyFilterRecord(),
+    exclude_filters: emptyFilterRecord(),
+    polling_frequency: 'daily',
+    daily_limit: '',
+    signal_limit: '',
+    priority: 'MEDIUM',
+    saving: false,
+    error: null,
+  });
+  const [allowedPolling, setAllowedPolling] = useState<string[]>([]);
+  const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     const { data } = await supabase.auth.getSession();
@@ -238,6 +383,55 @@ export default function ExternalApiAccessPage() {
     loadRequests();
   }, [selectedCompanyId]);
 
+  useEffect(() => {
+    if (!configModalApiId || !selectedCompanyId) {
+      return;
+    }
+    const load = async () => {
+      try {
+        const res = await fetchWithAuth(
+          `/api/external-apis/company-config?companyId=${encodeURIComponent(selectedCompanyId)}&api_source_id=${encodeURIComponent(configModalApiId)}`
+        );
+        if (!res.ok) {
+          setCompanyConfig((c) => ({ ...c, error: 'Failed to load config' }));
+          return;
+        }
+        const data = await res.json();
+        const config = data.config;
+        const allowed = data.allowed_polling || POLLING_OPTIONS;
+        setAllowedPolling(Array.isArray(allowed) ? allowed : []);
+        if (config) {
+          setCompanyConfig({
+            purposes: Array.isArray(config.purposes) ? config.purposes : [],
+            include_filters: filtersFromPayload(config.include_filters),
+            exclude_filters: filtersFromPayload(config.exclude_filters),
+            polling_frequency: config.polling_frequency || 'daily',
+            daily_limit: config.daily_limit != null ? String(config.daily_limit) : '',
+            signal_limit: config.signal_limit != null ? String(config.signal_limit) : '',
+            priority: config.priority || 'MEDIUM',
+            saving: false,
+            error: null,
+          });
+        } else {
+          setCompanyConfig((c) => ({
+            ...c,
+            purposes: [],
+            include_filters: emptyFilterRecord(),
+            exclude_filters: emptyFilterRecord(),
+            polling_frequency: allowed?.[0] || 'daily',
+            daily_limit: '',
+            signal_limit: '',
+            priority: 'MEDIUM',
+            error: null,
+          }));
+        }
+      } catch {
+        setCompanyConfig((c) => ({ ...c, error: 'Failed to load config' }));
+      }
+    };
+    load();
+  }, [configModalApiId, selectedCompanyId]);
+
   const updateDraft = (id: string, updates: Partial<AccessDraft>) => {
     setDrafts((prev) => ({
       ...prev,
@@ -300,6 +494,99 @@ export default function ExternalApiAccessPage() {
     }
   };
 
+  const saveCompanyConfig = async () => {
+    if (!configModalApiId || !selectedCompanyId) return;
+    const includeFilters: Record<string, string[]> = { ...companyConfig.include_filters };
+    const excludeFilters: Record<string, string[]> = { ...companyConfig.exclude_filters };
+    setCompanyConfig((c) => ({ ...c, saving: true, error: null }));
+    try {
+      const res = await fetchWithAuth(
+        `/api/external-apis/company-config?companyId=${encodeURIComponent(selectedCompanyId)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companyId: selectedCompanyId,
+            api_source_id: configModalApiId,
+            enabled: true,
+            purposes: companyConfig.purposes,
+            include_filters: includeFilters as Record<string, unknown>,
+            exclude_filters: excludeFilters as Record<string, unknown>,
+            polling_frequency: companyConfig.polling_frequency || null,
+            daily_limit: companyConfig.daily_limit ? parseInt(companyConfig.daily_limit, 10) : null,
+            signal_limit: companyConfig.signal_limit ? parseInt(companyConfig.signal_limit, 10) : null,
+            priority: companyConfig.priority || null,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err?.error || 'Failed to save config');
+      }
+      const preset = globalPresets.find((p) => p.id === configModalApiId);
+      const draft = preset ? drafts[configModalApiId] : null;
+      await fetchWithAuth(
+        `/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companyId: selectedCompanyId,
+            api_source_id: configModalApiId,
+            is_enabled: true,
+            scope: 'company',
+            api_key_env_name: draft?.api_key_env_name || null,
+            headers_override: (() => {
+              try {
+                return draft?.headers_override_json ? JSON.parse(draft.headers_override_json) : {};
+              } catch {
+                return {};
+              }
+            })(),
+            query_params_override: (() => {
+              try {
+                return draft?.query_params_override_json ? JSON.parse(draft.query_params_override_json) : {};
+              } catch {
+                return {};
+              }
+            })(),
+            rate_limit_per_min: draft?.rate_limit_per_min ? Number(draft.rate_limit_per_min) : null,
+          }),
+        }
+      );
+      setConfigModalApiId(null);
+      setSaveMessage('Configuration saved.');
+      await loadApis();
+    } catch (e: any) {
+      setCompanyConfig((c) => ({ ...c, error: e?.message || 'Failed to save', saving: false }));
+      return;
+    }
+    setCompanyConfig((c) => ({ ...c, saving: false }));
+  };
+
+  const runApprovalAction = async (requestId: string, action: string, rejectionReason?: string) => {
+    setApprovalActionId(requestId);
+    try {
+      const res = await fetchWithAuth(
+        `/api/external-apis/requests/${requestId}?companyId=${encodeURIComponent(selectedCompanyId!)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, rejection_reason: rejectionReason }),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data?.error || 'Failed to update');
+      }
+      await loadRequests();
+    } catch (e: any) {
+      setRequestMessage(e?.message || 'Action failed');
+    } finally {
+      setApprovalActionId(null);
+    }
+  };
+
   const submitRequest = async () => {
     setRequestMessage(null);
     const headersResult = parseJsonObject(requestForm.headers_json);
@@ -325,6 +612,10 @@ export default function ExternalApiAccessPage() {
           base_url: requestForm.base_url,
           purpose: requestForm.purpose,
           category: requestForm.category || null,
+          provider: requestForm.provider || null,
+          connection_type: requestForm.connection_type || null,
+          documentation_url: requestForm.documentation_url || null,
+          sample_response: requestForm.sample_response || null,
           method: requestForm.method,
           auth_type: requestForm.auth_type,
           api_key_env_name: requestForm.api_key_env_name || null,
@@ -358,7 +649,7 @@ export default function ExternalApiAccessPage() {
   const pendingRequestNames = useMemo(() => {
     const set = new Set<string>();
     requests.forEach((req) => {
-      if (req.status === 'pending') {
+      if (req.status === 'pending' || req.status === 'pending_admin_review') {
         set.add(req.name.toLowerCase());
       }
     });
@@ -420,6 +711,29 @@ export default function ExternalApiAccessPage() {
           )}
         </div>
 
+        <div className="flex gap-2 border-b border-gray-200 bg-white rounded-t-lg shadow px-4 pt-2">
+          {(
+            [
+              { id: 'presets' as TabId, label: 'Global Preset APIs' },
+              { id: 'request' as TabId, label: 'Request New API' },
+              { id: 'approval' as TabId, label: 'Approval Queue' },
+              { id: 'usage' as TabId, label: 'Usage Analytics' },
+            ] as const
+          ).map(({ id, label }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              className={`px-4 py-2.5 text-sm font-medium rounded-t-lg ${
+                activeTab === id
+                  ? 'bg-gray-100 text-indigo-700 border-b-2 border-indigo-600 -mb-px'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="bg-white rounded-lg shadow p-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
             <div className="text-xs text-gray-500">Total APIs</div>
@@ -445,6 +759,8 @@ export default function ExternalApiAccessPage() {
           </div>
         )}
 
+        {activeTab === 'presets' && (
+          <>
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -535,7 +851,7 @@ export default function ExternalApiAccessPage() {
                           {api.auth_type || 'none'}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 text-xs">
+                      <div className="flex items-center gap-2 text-xs flex-wrap">
                         {canManageExternalApis ? (
                           <>
                             <label className="flex items-center gap-2 text-gray-700">
@@ -550,10 +866,20 @@ export default function ExternalApiAccessPage() {
                             </label>
                             <button
                               onClick={() => setSelectedApiId(api.id)}
-                              className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg"
+                              className="px-3 py-1.5 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+                              title="API key, headers, rate limit"
                             >
-                              Configure
+                              Access & keys
                             </button>
+                            {isEnabled && (
+                              <button
+                                onClick={() => setConfigModalApiId(api.id)}
+                                className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                                title="Purpose, include/exclude filters, polling, limits"
+                              >
+                                Tune for company
+                              </button>
+                            )}
                           </>
                         ) : (
                           <span className="text-xs text-gray-500">
@@ -752,20 +1078,47 @@ export default function ExternalApiAccessPage() {
             <div className="text-sm text-gray-500">No global presets are available.</div>
           ) : (
             <div className="space-y-3">
-              {globalPresets.map((preset) => (
-                <div key={preset.id} className="border rounded-lg p-3 text-sm">
-                  <div className="font-semibold text-gray-900">{preset.name}</div>
-                  <div className="text-xs text-gray-500">{preset.base_url}</div>
-                  <div className="text-xs text-gray-400">
-                    {preset.category || 'General'} • {preset.method || 'GET'} •{' '}
-                    {preset.auth_type || 'none'}
+              {globalPresets.map((preset) => {
+                const isEnabled = companyDefaultApis.includes(preset.id);
+                return (
+                  <div key={preset.id} className="border rounded-lg p-3 text-sm flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="font-semibold text-gray-900">{preset.name}</div>
+                      <div className="text-xs text-gray-500">{preset.base_url}</div>
+                      <div className="text-xs text-gray-400">
+                        {preset.category || 'General'} • {preset.method || 'GET'} •{' '}
+                        {preset.auth_type || 'none'}
+                      </div>
+                    </div>
+                    {canManageExternalApis && (
+                      <div className="flex gap-2">
+                        {!isEnabled && (
+                          <button
+                            onClick={() => setConfigModalApiId(preset.id)}
+                            className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs"
+                          >
+                            Enable
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setConfigModalApiId(preset.id)}
+                          className="px-3 py-1.5 bg-gray-200 text-gray-800 rounded-lg text-xs"
+                        >
+                          {isEnabled ? 'View / Edit config' : 'Configure'}
+                        </button>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
+          </>
+        )}
+
+        {activeTab === 'request' && (
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Request a New API</h2>
           {requestMessage && (
@@ -782,16 +1135,31 @@ export default function ExternalApiAccessPage() {
             />
             <input
               className="border rounded-lg px-3 py-2"
+              placeholder="Provider"
+              value={requestForm.provider}
+              onChange={(e) => setRequestForm((prev) => ({ ...prev, provider: e.target.value }))}
+            />
+            <input
+              className="border rounded-lg px-3 py-2"
               placeholder="Base URL"
               value={requestForm.base_url}
               onChange={(e) => setRequestForm((prev) => ({ ...prev, base_url: e.target.value }))}
             />
             <input
               className="border rounded-lg px-3 py-2"
-              placeholder="Category"
+              placeholder="API Category"
               value={requestForm.category}
               onChange={(e) => setRequestForm((prev) => ({ ...prev, category: e.target.value }))}
             />
+            <select
+              className="border rounded-lg px-3 py-2"
+              value={requestForm.connection_type}
+              onChange={(e) => setRequestForm((prev) => ({ ...prev, connection_type: e.target.value }))}
+            >
+              <option value="REST">REST</option>
+              <option value="Webhook">Webhook</option>
+              <option value="RSS">RSS</option>
+            </select>
             <select
               className="border rounded-lg px-3 py-2"
               value={requestForm.purpose}
@@ -803,6 +1171,12 @@ export default function ExternalApiAccessPage() {
               <option value="news">News</option>
               <option value="demographics">Demographics</option>
             </select>
+            <input
+              className="border rounded-lg px-3 py-2 md:col-span-2"
+              placeholder="Documentation URL"
+              value={requestForm.documentation_url}
+              onChange={(e) => setRequestForm((prev) => ({ ...prev, documentation_url: e.target.value }))}
+            />
             <select
               className="border rounded-lg px-3 py-2"
               value={requestForm.method}
@@ -851,6 +1225,17 @@ export default function ExternalApiAccessPage() {
                 }
               />
             </div>
+            <div className="md:col-span-2">
+              <div className="text-xs text-gray-500 mb-1">Sample API response (optional)</div>
+              <textarea
+                className="border rounded-lg px-3 py-2 w-full h-24 text-xs"
+                value={requestForm.sample_response}
+                onChange={(e) =>
+                  setRequestForm((prev) => ({ ...prev, sample_response: e.target.value }))
+                }
+                placeholder="Paste a sample JSON or text response"
+              />
+            </div>
           </div>
           <div className="mt-4">
             <button
@@ -862,42 +1247,332 @@ export default function ExternalApiAccessPage() {
             </button>
           </div>
         </div>
+        )}
 
+        {activeTab === 'approval' && (
         <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Your Requests</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Approval Queue</h2>
           {requests.length === 0 ? (
-            <div className="text-sm text-gray-500">No requests submitted yet.</div>
+            <div className="text-sm text-gray-500">No requests in the queue.</div>
           ) : (
             <div className="space-y-3">
-              {requests.map((request) => (
-                <div key={request.id} className="border rounded-lg p-3 text-sm">
-                  <div className="font-semibold text-gray-900">{request.name}</div>
-                  <div className="text-xs text-gray-500">{request.base_url}</div>
-                  <div className="text-xs text-gray-400">
-                    Status:{' '}
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-[11px] ${
-                        request.status === 'approved'
-                          ? 'bg-green-100 text-green-700'
-                          : request.status === 'rejected'
-                          ? 'bg-red-100 text-red-700'
-                          : 'bg-yellow-100 text-yellow-700'
-                      }`}
-                    >
-                      {request.status}
-                    </span>{' '}
-                    • {new Date(request.created_at).toLocaleDateString()}
-                  </div>
-                  {request.status === 'rejected' && request.rejection_reason && (
-                    <div className="text-xs text-red-600 mt-1">
-                      Reason: {request.rejection_reason}
+              {requests.map((request) => {
+                const statusClass =
+                  request.status === 'approved'
+                    ? 'bg-green-100 text-green-700'
+                    : request.status === 'rejected'
+                    ? 'bg-red-100 text-red-700'
+                    : request.status === 'sent_to_super_admin' || request.status === 'approved_by_admin'
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'bg-yellow-100 text-yellow-700';
+                const canAct =
+                  canManageExternalApis &&
+                  ['pending_admin_review', 'pending', 'approved_by_admin', 'sent_to_super_admin'].includes(
+                    request.status
+                  );
+                const isPendingAdmin = ['pending_admin_review', 'pending'].includes(request.status);
+                const isApprovedByAdmin = request.status === 'approved_by_admin';
+                const isSentToSuper = request.status === 'sent_to_super_admin';
+                return (
+                  <div key={request.id} className="border rounded-lg p-3 text-sm">
+                    <div className="font-semibold text-gray-900">{request.name}</div>
+                    <div className="text-xs text-gray-500">{request.base_url}</div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      Status:{' '}
+                      <span className={`px-2 py-0.5 rounded-full text-[11px] ${statusClass}`}>
+                        {request.status.replace(/_/g, ' ')}
+                      </span>{' '}
+                      • {new Date(request.created_at).toLocaleDateString()}
                     </div>
-                  )}
-                </div>
-              ))}
+                    {request.status === 'rejected' && request.rejection_reason && (
+                      <div className="text-xs text-red-600 mt-1">
+                        Reason: {request.rejection_reason}
+                      </div>
+                    )}
+                    {canAct && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {isPendingAdmin && (
+                          <>
+                            <button
+                              onClick={() => runApprovalAction(request.id, 'approve_by_admin')}
+                              disabled={approvalActionId === request.id}
+                              className="px-2 py-1 bg-green-600 text-white rounded text-xs disabled:opacity-50"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => runApprovalAction(request.id, 'send_to_super_admin')}
+                              disabled={approvalActionId === request.id}
+                              className="px-2 py-1 bg-blue-600 text-white rounded text-xs disabled:opacity-50"
+                            >
+                              Send to Super Admin
+                            </button>
+                          </>
+                        )}
+                        {(isPendingAdmin || isApprovedByAdmin || isSentToSuper) && (
+                          <button
+                            onClick={() =>
+                              runApprovalAction(
+                                request.id,
+                                'reject',
+                                window.prompt('Rejection reason (optional):') || undefined
+                              )
+                            }
+                            disabled={approvalActionId === request.id}
+                            className="px-2 py-1 bg-red-600 text-white rounded text-xs disabled:opacity-50"
+                          >
+                            Reject
+                          </button>
+                        )}
+                        {isSentToSuper && (
+                          <span className="text-xs text-gray-500">
+                            Waiting for Super Admin to approve or reject.
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
+        )}
+
+        {activeTab === 'usage' && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Usage Analytics</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Total API requests, success/failure counts, and usage over time per API.
+          </p>
+          {visibleApis.length === 0 ? (
+            <div className="text-sm text-gray-500">No APIs configured. Enable APIs in Global Preset APIs.</div>
+          ) : (
+            <div className="space-y-4">
+              {visibleApis.map((api) => {
+                const usage = api.usage_summary;
+                const total = usage?.request_count ?? 0;
+                const success = usage?.success_count ?? 0;
+                const failed = usage?.failure_count ?? 0;
+                const rate = total > 0 ? success / total : 0;
+                return (
+                  <div key={api.id} className="border rounded-lg p-4">
+                    <div className="font-semibold text-gray-900">{api.name}</div>
+                    <div className="text-xs text-gray-500">{api.base_url}</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-sm">
+                      <div className="bg-gray-50 rounded p-2">
+                        <div className="text-gray-500 text-xs">Total requests</div>
+                        <div className="font-semibold">{total}</div>
+                      </div>
+                      <div className="bg-green-50 rounded p-2">
+                        <div className="text-gray-500 text-xs">Success</div>
+                        <div className="font-semibold text-green-700">{success}</div>
+                      </div>
+                      <div className="bg-red-50 rounded p-2">
+                        <div className="text-gray-500 text-xs">Failed</div>
+                        <div className="font-semibold text-red-700">{failed}</div>
+                      </div>
+                      <div className="bg-gray-50 rounded p-2">
+                        <div className="text-gray-500 text-xs">Success rate</div>
+                        <div className="font-semibold">{formatPercent(rate)}</div>
+                      </div>
+                    </div>
+                    {(api.usage_daily || []).length > 0 && (
+                      <div className="mt-3">
+                        <div className="text-xs text-gray-500 mb-1">Usage over time (last 14 days)</div>
+                        <div className="flex flex-wrap gap-2">
+                          {(api.usage_daily || []).map((day) => (
+                            <div
+                              key={day.usage_date}
+                              className="text-xs bg-gray-100 rounded px-2 py-1"
+                              title={`${day.request_count} requests, ${day.failure_count} failures`}
+                            >
+                              {String(day.usage_date).slice(5)}: {day.request_count}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        )}
+
+        {configModalApiId && (() => {
+          const preset = globalPresets.find((p) => p.id === configModalApiId) || apis.find((a) => a.id === configModalApiId);
+          if (!preset) return null;
+          return (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <div className="text-lg font-semibold text-gray-900">{preset.name}</div>
+                    <div className="text-xs text-gray-500">Company API configuration (purpose, filters, polling, limits)</div>
+                  </div>
+                  <button
+                    onClick={() => setConfigModalApiId(null)}
+                    className="text-sm text-gray-500 hover:text-gray-900"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="space-y-4 text-sm">
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Purpose (multi-select)</div>
+                    <div className="flex flex-wrap gap-2">
+                      {PURPOSE_OPTIONS.map((p) => (
+                        <label key={p} className="flex items-center gap-1">
+                          <input
+                            type="checkbox"
+                            checked={companyConfig.purposes.includes(p)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setCompanyConfig((c) => ({ ...c, purposes: [...c.purposes, p] }));
+                              } else {
+                                setCompanyConfig((c) => ({ ...c, purposes: c.purposes.filter((x) => x !== p) }));
+                              }
+                            }}
+                          />
+                          <span className="text-xs">{p.replace(/_/g, ' ')}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="md:col-span-2">
+                    <div className="text-xs font-medium text-gray-700 mb-2">Include filters</div>
+                    <p className="text-[10px] text-gray-400 mb-2">Signals matching these will be prioritized.</p>
+                    <div className="space-y-2">
+                      {FILTER_FIELD_KEYS.map((key) => (
+                        <FilterTagRow
+                          key={`include-${key}`}
+                          label={key.replace(/_/g, ' ')}
+                          values={companyConfig.include_filters[key] || []}
+                          onAdd={(v) =>
+                            setCompanyConfig((c) => ({
+                              ...c,
+                              include_filters: {
+                                ...c.include_filters,
+                                [key]: [...(c.include_filters[key] || []), v].filter(Boolean),
+                              },
+                            }))
+                          }
+                          onRemove={(idx) =>
+                            setCompanyConfig((c) => ({
+                              ...c,
+                              include_filters: {
+                                ...c.include_filters,
+                                [key]: (c.include_filters[key] || []).filter((_, i) => i !== idx),
+                              },
+                            }))
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="md:col-span-2">
+                    <div className="text-xs font-medium text-gray-700 mb-2">Exclude filters</div>
+                    <p className="text-[10px] text-gray-400 mb-2">Signals matching these will be ignored.</p>
+                    <div className="space-y-2">
+                      {FILTER_FIELD_KEYS.map((key) => (
+                        <FilterTagRow
+                          key={`exclude-${key}`}
+                          label={key.replace(/_/g, ' ')}
+                          values={companyConfig.exclude_filters[key] || []}
+                          onAdd={(v) =>
+                            setCompanyConfig((c) => ({
+                              ...c,
+                              exclude_filters: {
+                                ...c.exclude_filters,
+                                [key]: [...(c.exclude_filters[key] || []), v].filter(Boolean),
+                              },
+                            }))
+                          }
+                          onRemove={(idx) =>
+                            setCompanyConfig((c) => ({
+                              ...c,
+                              exclude_filters: {
+                                ...c.exclude_filters,
+                                [key]: (c.exclude_filters[key] || []).filter((_, i) => i !== idx),
+                              },
+                            }))
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Polling frequency</div>
+                    <select
+                      className="border rounded-lg px-3 py-2 w-full"
+                      value={companyConfig.polling_frequency}
+                      onChange={(e) => setCompanyConfig((c) => ({ ...c, polling_frequency: e.target.value }))}
+                    >
+                      {(allowedPolling.length ? allowedPolling : POLLING_OPTIONS).map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-gray-400 mt-0.5">Allowed options depend on your plan.</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Daily limit (optional)</div>
+                      <input
+                        type="number"
+                        className="border rounded-lg px-3 py-2 w-full"
+                        value={companyConfig.daily_limit}
+                        onChange={(e) => setCompanyConfig((c) => ({ ...c, daily_limit: e.target.value }))}
+                        placeholder="e.g. 100"
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Signal limit (optional)</div>
+                      <input
+                        type="number"
+                        className="border rounded-lg px-3 py-2 w-full"
+                        value={companyConfig.signal_limit}
+                        onChange={(e) => setCompanyConfig((c) => ({ ...c, signal_limit: e.target.value }))}
+                        placeholder="e.g. 500"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Priority</div>
+                    <select
+                      className="border rounded-lg px-3 py-2 w-full"
+                      value={companyConfig.priority}
+                      onChange={(e) => setCompanyConfig((c) => ({ ...c, priority: e.target.value }))}
+                    >
+                      {PRIORITY_OPTIONS.map((p) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {companyConfig.error && (
+                    <div className="text-xs text-red-600">{companyConfig.error}</div>
+                  )}
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => setConfigModalApiId(null)}
+                      className="px-3 py-2 border rounded-lg text-gray-700"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={saveCompanyConfig}
+                      disabled={companyConfig.saving}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg disabled:opacity-50"
+                    >
+                      {companyConfig.saving ? 'Saving...' : 'Save configuration'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {selectedApi && selectedDraft && canManageExternalApis && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">

@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<!--
+  Placeholders for dynamic values:
+  {{company_name}} {{website_url}} {{report_date}}
+  {{overall_score}} {{seo_score}} {{conversion_score}} {{messaging_score}} {{trust_score}}
+  {{ai_summary}}
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Website Growth Report - Omnivyra</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+      color: #333;
+      background: #fff;
+      padding: 40px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    /* Report Header */
+    .report-header {
+      text-align: center;
+      padding: 32px 0;
+      border-bottom: 1px solid #e5e7eb;
+      margin-bottom: 32px;
+    }
+    .logo-placeholder {
+      width: 120px;
+      height: 40px;
+      background: #f3f4f6;
+      border-radius: 6px;
+      margin: 0 auto 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #9ca3af;
+      font-size: 12px;
+    }
+    .report-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 16px;
+    }
+    .company-info {
+      font-size: 14px;
+      color: #6b7280;
+    }
+    .company-info span {
+      display: block;
+      margin: 4px 0;
+    }
+    /* Section base */
+    .section {
+      margin-bottom: 32px;
+      padding: 24px;
+      background: #f9fafb;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #111827;
+      margin-bottom: 16px;
+    }
+    /* Section 1: Score Indicator */
+    .score-section {
+      text-align: center;
+      padding: 40px;
+    }
+    .score-circle {
+      width: 160px;
+      height: 160px;
+      border-radius: 50%;
+      margin: 0 auto 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      border: 6px solid #fbbf24;
+      background: #fff;
+    }
+    .score-circle.high { border-color: #22c55e; }
+    .score-circle.medium { border-color: #f59e0b; }
+    .score-circle.low { border-color: #ef4444; }
+    .score-value {
+      font-size: 42px;
+      color: #111827;
+    }
+    .score-max {
+      font-size: 16px;
+      color: #6b7280;
+      font-weight: 500;
+    }
+    .score-status {
+      font-size: 16px;
+      font-weight: 600;
+      color: #f59e0b;
+      margin-bottom: 12px;
+    }
+    .score-explanation {
+      color: #6b7280;
+      font-size: 15px;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    /* Section 2: AI Insight Box */
+    .insight-box {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 20px 24px;
+      border-radius: 8px;
+      margin-top: 12px;
+    }
+    .insight-box .section-title {
+      margin-bottom: 8px;
+    }
+    .insight-text {
+      color: #1e40af;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    /* Section 3: Bullet List */
+    .issues-list {
+      list-style: none;
+      margin-top: 12px;
+    }
+    .issues-list li {
+      padding: 12px 16px;
+      margin-bottom: 8px;
+      background: #fff;
+      border-radius: 6px;
+      border-left: 3px solid #ef4444;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .issues-list li::before {
+      content: "•";
+      margin-right: 8px;
+      font-weight: bold;
+      color: #ef4444;
+    }
+    /* Section 4: Progress Bar */
+    .progress-bar-container {
+      background: #fff;
+      height: 24px;
+      border-radius: 12px;
+      overflow: hidden;
+      margin: 16px 0;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.06);
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #f59e0b, #ef4444);
+      border-radius: 12px;
+      width: 25%;
+    }
+    .progress-explanation {
+      color: #6b7280;
+      font-size: 14px;
+      margin-top: 12px;
+    }
+    /* Section 5: Score Cards */
+    .score-cards {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .score-card {
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      border-top: 4px solid #e5e7eb;
+    }
+    .score-card.high { border-top-color: #22c55e; }
+    .score-card.medium { border-top-color: #f59e0b; }
+    .score-card.low { border-top-color: #ef4444; }
+    .score-card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #111827;
+      margin-bottom: 4px;
+    }
+    .score-card-value {
+      font-size: 28px;
+      font-weight: 700;
+      margin: 8px 0;
+    }
+    .score-card-value.high { color: #22c55e; }
+    .score-card-value.medium { color: #f59e0b; }
+    .score-card-value.low { color: #ef4444; }
+    .score-card-desc {
+      font-size: 13px;
+      color: #6b7280;
+      line-height: 1.4;
+    }
+    /* Section 6: Checklist */
+    .checklist {
+      list-style: none;
+      margin-top: 12px;
+    }
+    .checklist li {
+      padding: 14px 16px;
+      margin-bottom: 8px;
+      background: #fff;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .checklist-num {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      background: #3b82f6;
+      color: #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .checklist-text {
+      flex: 1;
+    }
+    /* Section 7: Growth Potential */
+    .growth-summary {
+      background: #f0fdf4;
+      border-left: 4px solid #22c55e;
+      padding: 20px 24px;
+      border-radius: 8px;
+    }
+    .growth-summary .section-title {
+      color: #166534;
+    }
+    .growth-text {
+      color: #15803d;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    /* Section 8: CTA */
+    .cta-section {
+      background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+      color: #fff;
+      padding: 32px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .cta-section .section-title {
+      color: #fff;
+      font-size: 22px;
+      margin-bottom: 12px;
+    }
+    .cta-text {
+      font-size: 15px;
+      line-height: 1.6;
+      opacity: 0.9;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    @media print {
+      body { padding: 20px; }
+      .section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <!-- REPORT HEADER -->
+  <header class="report-header">
+    <div class="logo-placeholder">[Omnivyra Logo]</div>
+    <h1 class="report-title">AI Website Growth Report</h1>
+    <div class="company-info">
+      <span><strong>Company:</strong> Acme Technologies</span>
+      <span><strong>Website:</strong> www.acmetech.com</span>
+      <span><strong>Report Date:</strong> March 2026</span>
+    </div>
+  </header>
+
+  <!-- SECTION 1: Overall Website Intelligence Score -->
+  <section class="section score-section">
+    <h2 class="section-title">Overall Website Intelligence Score</h2>
+    <div class="score-circle medium">
+      <span class="score-value">67</span>
+      <span class="score-max">/ 100</span>
+    </div>
+    <p class="score-status">Moderate Growth Opportunity</p>
+    <p class="score-explanation">Your website attracts visitors but may be missing opportunities to convert them into customers.</p>
+  </section>
+
+  <!-- SECTION 2: Key AI Insight -->
+  <section class="section">
+    <h2 class="section-title">Key AI Insight</h2>
+    <div class="insight-box">
+      <p class="insight-text">Your website communicates the product but lacks strong conversion triggers such as visible call-to-actions and trust signals.</p>
+    </div>
+  </section>
+
+  <!-- SECTION 3: Major Issues Detected -->
+  <section class="section">
+    <h2 class="section-title">Major Issues Detected</h2>
+    <ul class="issues-list">
+      <li>Primary call-to-action is not clearly visible above the fold</li>
+      <li>Homepage messaging does not clearly explain the core benefit</li>
+      <li>No testimonials or social proof present</li>
+    </ul>
+  </section>
+
+  <!-- SECTION 4: Opportunities to Increase Customers -->
+  <section class="section">
+    <h2 class="section-title">Opportunities to Increase Customers</h2>
+    <p><strong>Estimated Traffic Loss:</strong> 20–35%</p>
+    <div class="progress-bar-container">
+      <div class="progress-bar-fill"></div>
+    </div>
+    <p class="progress-explanation">Improving conversion elements and trust signals could significantly increase lead generation.</p>
+  </section>
+
+  <!-- SECTION 5: Website Performance Scores -->
+  <section class="section">
+    <h2 class="section-title">Website Performance Scores</h2>
+    <div class="score-cards">
+      <div class="score-card high">
+        <div class="score-card-title">SEO Visibility</div>
+        <div class="score-card-value high">70</div>
+        <p class="score-card-desc">Your site has decent search visibility with room for optimization.</p>
+      </div>
+      <div class="score-card low">
+        <div class="score-card-title">Conversion Readiness</div>
+        <div class="score-card-value low">55</div>
+        <p class="score-card-desc">Conversion paths need strengthening to capture more leads.</p>
+      </div>
+      <div class="score-card medium">
+        <div class="score-card-title">Messaging Clarity</div>
+        <div class="score-card-value medium">63</div>
+        <p class="score-card-desc">Core value proposition could be communicated more clearly.</p>
+      </div>
+      <div class="score-card low">
+        <div class="score-card-title">Trust Signals</div>
+        <div class="score-card-value low">60</div>
+        <p class="score-card-desc">Adding testimonials and social proof would build credibility.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECTION 6: Top 5 Actions to Improve Growth -->
+  <section class="section">
+    <h2 class="section-title">Top 5 Actions to Improve Growth</h2>
+    <ol class="checklist">
+      <li>
+        <span class="checklist-num">1</span>
+        <span class="checklist-text">Add a clear call-to-action above the fold</span>
+      </li>
+      <li>
+        <span class="checklist-num">2</span>
+        <span class="checklist-text">Improve homepage headline clarity</span>
+      </li>
+      <li>
+        <span class="checklist-num">3</span>
+        <span class="checklist-text">Add testimonials or customer success stories</span>
+      </li>
+      <li>
+        <span class="checklist-num">4</span>
+        <span class="checklist-text">Optimize meta descriptions for SEO</span>
+      </li>
+      <li>
+        <span class="checklist-num">5</span>
+        <span class="checklist-text">Improve mobile page load speed</span>
+      </li>
+    </ol>
+  </section>
+
+  <!-- SECTION 7: Growth Potential -->
+  <section class="section growth-summary">
+    <h2 class="section-title">Growth Potential</h2>
+    <p class="growth-text">Your website shows strong potential for growth. With a few improvements to messaging, conversion paths, and trust signals, it could significantly increase leads and customer engagement.</p>
+  </section>
+
+  <!-- SECTION 8: Omnivyra Recommendation -->
+  <section class="cta-section">
+    <h2 class="section-title">Improve Your Website Growth with Omnivyra</h2>
+    <p class="cta-text">Connect your analytics or run campaigns through Omnivyra to unlock deeper insights into user behavior and conversion performance.</p>
+  </section>
+</body>
+</html>

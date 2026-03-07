@@ -51,7 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
 
-  const profile = await getProfile(companyId, { autoRefine: false });
+  const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
   const previewOverrides = req.body?.preview_overrides ?? null;
   const context = {
     trend_topic: recommendation?.trend_topic ?? previewContext?.topic ?? null,

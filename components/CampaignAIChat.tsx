@@ -23,6 +23,7 @@ import ChatVoiceButton from './ChatVoiceButton';
 import AIGenerationProgress from './AIGenerationProgress';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
 import { getFormatLineForContentType, getIntentLabelForContentType } from '../utils/formatLineForContentType';
+import { getContentCapacityOptionsForMode } from '../utils/contentCapacityOptions';
 
 /** True when the user message indicates they're ready for the final weekly plan (not just answering a question). */
 function isFinalPlanSubmissionMessage(text: string): boolean {
@@ -289,8 +290,33 @@ function prettyContentTypeLabel(contentType: string): string {
   return t.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Creator-dependent content types only (CREATOR_REQUIRED + CONDITIONAL_AI per executionModeInference). */
+const CREATOR_DEPENDENT_PLANNING_LABELS = [
+  'Videos',
+  'Long Videos',
+  'Carousels',
+  'Images',
+  'Shorts',
+  'Reels',
+  'Songs',
+  'Audio',
+  'Podcasts',
+  'Slides',
+  'Slideware',
+] as const;
+
+const PLATFORM_LABELS_FALLBACK: Record<string, string> = {
+  linkedin: 'LinkedIn',
+  facebook: 'Facebook',
+  instagram: 'Instagram',
+  twitter: 'Twitter',
+  x: 'X',
+  youtube: 'YouTube',
+  tiktok: 'TikTok',
+};
+
 const PLANNING_CONTENT_TYPE_LABELS = [
-  'Posts',
+  'Text posts',
   'Videos',
   'Long Videos',
   'Blogs',
@@ -316,8 +342,8 @@ function canonicalPlanningTypeLabel(label: string): string {
   const s = String(label || '').trim();
   if (!s) return '';
   const n = s.toLowerCase().replace(/\s+/g, ' ').trim();
-  if (n === 'post' || n === 'posts') return 'Posts';
-  if (n === 'text' || n === 'texts') return 'Posts';
+  if (n === 'post' || n === 'posts' || n === 'text post' || n === 'text posts' || n === 'textpost' || n === 'textposts') return 'Text posts';
+  if (n === 'text' || n === 'texts') return 'Text posts';
   if (n === 'video' || n === 'videos') return 'Videos';
   if (n === 'long video' || n === 'long videos' || n === 'long-form video' || n === 'long-form videos') return 'Long Videos';
   if (n === 'blog' || n === 'blogs') return 'Blogs';
@@ -348,6 +374,7 @@ function planningLabelToParseKeyAndTag(label: string): { parseKey: string; tag?:
   const canon = canonicalPlanningTypeLabel(label);
   switch (canon) {
     case 'Posts':
+    case 'Text posts':
       return { parseKey: 'post' };
     case 'Images':
       return { parseKey: 'post', tag: 'image' };
@@ -392,7 +419,22 @@ function planningLabelToParseKeyAndTag(label: string): { parseKey: string; tag?:
   }
 }
 
-function getQuickPickConfig(question: string, platformOptions: string[]): QuickPickConfig | null {
+/** Plan-key to plan label for duration options. */
+const DURATION_PLAN_LABELS: Record<number, string> = {
+  4: 'Starter',
+  6: 'Growth',
+  8: 'Pro',
+  12: 'Enterprise',
+};
+
+const DURATION_OPTIONS = [4, 6, 8, 12] as const;
+const ABSOLUTE_MAX_WEEKS = 12;
+
+function getQuickPickConfig(
+  question: string,
+  platformOptions: string[],
+  maxDurationWeeks?: number | null
+): QuickPickConfig | null {
   const q = question.toLowerCase();
   if (
     q.includes('how many weeks') ||
@@ -401,11 +443,22 @@ function getQuickPickConfig(question: string, platformOptions: string[]): QuickP
     q.includes('create your week plan now')
   ) {
     const isCreatePlanStep = q.includes('create your week plan now');
+    const max = maxDurationWeeks != null ? Math.min(maxDurationWeeks, ABSOLUTE_MAX_WEEKS) : ABSOLUTE_MAX_WEEKS;
+    const options = DURATION_OPTIONS
+      .filter((w) => w <= max)
+      .map((w) => {
+        const n = Number(w);
+        const lbl = DURATION_PLAN_LABELS[n];
+        return n + ' weeks' + (lbl ? ' (' + lbl + ')' : '');
+      });
+    options.push('Else share');
     return {
       key: 'campaign_duration',
       multi: false,
-      options: ['2 weeks', '4 weeks', '8 weeks', '12 weeks'],
-      ...(isCreatePlanStep && { helperText: "You're all set — pick a duration and click Submit to create your plan." }),
+      options,
+      helperText: isCreatePlanStep
+        ? "You're all set — pick a duration and click Submit to create your plan."
+        : 'What is the duration of your campaign? (Max ' + max + ' weeks for your plan)',
     };
   }
   if (q.includes('target audience') || q.includes('who will see your content')) {
@@ -598,12 +651,15 @@ function getQuickPickConfig(question: string, platformOptions: string[]): QuickP
     q.includes('how much content') ||
     q.includes('what can your team produce') ||
     q.includes('how will you create') ||
-    q.includes('how many pieces per week')
+    q.includes('how many pieces per week') ||
+    q.includes('create per week') ||
+    q.includes('creator-dependent pieces') ||
+    q.includes('how many can you create per week') ||
+    q.includes('how many can you and your team create every week')
   ) {
     return {
       key: 'content_capacity',
       multi: true,
-      // Will be overridden at runtime with the full catalog-derived list (same as availability).
       options: Array.from(PLANNING_CONTENT_TYPE_LABELS),
     };
   }
@@ -649,7 +705,7 @@ function extractPlanningTypeHintsFromCapacityValue(value: unknown): string[] {
     if (hasPositive(/\b(\d{1,3})\s*white\s*papers?\b/g) || hasPositive(/\b(\d{1,3})\s*whitepapers?\b/g)) add('White Papers');
     if (hasPositive(/\b(\d{1,3})\s*blogs?\b/g)) add('Blogs');
     if (hasPositive(/\b(\d{1,3})\s*articles?\b/g)) add('Articles');
-    if (hasPositive(/\b(\d{1,3})\s*(?:posts?|feed\s*posts?)\b/g)) add('Posts');
+    if (hasPositive(/\b(\d{1,3})\s*(?:posts?|feed\s*posts?|text\s*posts?)\b/g)) add('Text posts');
     if (hasPositive(/\b(\d{1,3})\s*videos?\b/g)) add('Videos');
     if (hasPositive(/\b(\d{1,3})\s*reels?\b/g)) add('Reels');
     if (hasPositive(/\b(\d{1,3})\s*shorts?\b/g)) add('Shorts');
@@ -671,7 +727,7 @@ function extractPlanningTypeHintsFromCapacityValue(value: unknown): string[] {
       return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
     };
 
-    if (num(obj.post) > 0) add('Posts');
+    if (num(obj.post) > 0) add('Text posts');
     if (num(obj.video) > 0) add('Videos');
     if (num(obj.blog) > 0) add('Blogs');
     if (num(obj.story) > 0) add('Stories');
@@ -713,7 +769,7 @@ function isEligiblePlanningType(candidate: string, eligible: Set<string>): boole
   if (eligible.size === 0) {
     const c0 = canonicalPlanningTypeLabel(candidate);
     if (!c0) return false;
-    return ['Posts', 'Images', 'Carousels', 'Blogs', 'Articles', 'White Papers', 'Threads', 'Stories'].includes(c0);
+    return ['Text posts', 'Posts', 'Images', 'Carousels', 'Blogs', 'Articles', 'White Papers', 'Threads', 'Stories'].includes(c0);
   }
   const c = canonicalPlanningTypeLabel(candidate);
   if (!c) return false;
@@ -722,7 +778,7 @@ function isEligiblePlanningType(candidate: string, eligible: Set<string>): boole
   // Rollups: if you can do Videos, you can pick specific video formats.
   if (eligible.has('Videos') && ['Reels', 'Shorts', 'Long Videos', 'Spaces', 'Audio', 'Podcasts'].includes(c)) return true;
   // Rollups: if you can do Posts, you can pick specific post formats.
-  if (eligible.has('Posts') && ['Images', 'Carousels'].includes(c)) return true;
+  if ((eligible.has('Posts') || eligible.has('Text posts')) && ['Images', 'Carousels'].includes(c)) return true;
   // Rollups: if you can do Blogs, you can pick specific written formats.
   if (
     eligible.has('Blogs') &&
@@ -743,20 +799,20 @@ function getPlatformSupportedPlanningTypes(platform: string, platformContentType
 
   // If platform intelligence is incomplete, provide conservative fallbacks for major platforms.
   if (key === 'linkedin') {
-    ['Posts', 'Images', 'Carousels', 'Videos', 'Articles', 'White Papers'].forEach((t) => supportedCanon.add(t));
+    ['Text posts', 'Posts', 'Images', 'Carousels', 'Videos', 'Articles', 'White Papers'].forEach((t) => supportedCanon.add(t));
   } else if (key === 'facebook') {
-    ['Posts', 'Images', 'Carousels', 'Videos', 'Reels', 'Stories'].forEach((t) => supportedCanon.add(t));
+    ['Text posts', 'Posts', 'Images', 'Carousels', 'Videos', 'Reels', 'Stories'].forEach((t) => supportedCanon.add(t));
   } else if (key === 'instagram') {
-    ['Posts', 'Images', 'Carousels', 'Videos', 'Reels', 'Stories'].forEach((t) => supportedCanon.add(t));
+    ['Text posts', 'Posts', 'Images', 'Carousels', 'Videos', 'Reels', 'Stories'].forEach((t) => supportedCanon.add(t));
   } else if (key === 'x' || key === 'twitter') {
-    ['Posts', 'Threads', 'Spaces', 'Videos'].forEach((t) => supportedCanon.add(t));
+    ['Text posts', 'Posts', 'Threads', 'Spaces', 'Videos'].forEach((t) => supportedCanon.add(t));
   } else if (key === 'youtube') {
     ['Videos', 'Long Videos', 'Shorts'].forEach((t) => supportedCanon.add(t));
   }
 
   // Expand supported rollups for nicer UX.
   if (supportedCanon.has('Articles') || supportedCanon.has('White Papers')) supportedCanon.add('Blogs');
-  if (supportedCanon.has('Images') || supportedCanon.has('Carousels')) supportedCanon.add('Posts');
+  if (supportedCanon.has('Images') || supportedCanon.has('Carousels')) { supportedCanon.add('Text posts'); supportedCanon.add('Posts'); }
   if (supportedCanon.has('Reels') || supportedCanon.has('Shorts') || supportedCanon.has('Long Videos')) supportedCanon.add('Videos');
 
   return supportedCanon;
@@ -786,7 +842,7 @@ function getEligiblePlatformPlanningTypeOptions(args: {
   const list = Array.from(supported).filter((opt) => isEligiblePlanningType(opt, args.eligible));
   // Stable, human-friendly ordering.
   const priority = new Map<string, number>([
-    ['Posts', 1],
+    ['Text posts', 1],
     ['Images', 2],
     ['Carousels', 3],
     ['Blogs', 4],
@@ -992,6 +1048,8 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [roiReport, setRoiReport] = useState<any>(null);
   const [businessReport, setBusinessReport] = useState<any>(null);
   const [isBusinessLoading, setIsBusinessLoading] = useState(false);
+  const [companyKeyMessages, setCompanyKeyMessages] = useState<string | null>(null);
+  const [companyProblemTransformation, setCompanyProblemTransformation] = useState<{ desired_transformation?: string; life_after_solution?: string } | null>(null);
   const [platformIntelAssetId, setPlatformIntelAssetId] = useState<string>('');
   const [platformIntelPlatform, setPlatformIntelPlatform] = useState<string>('linkedin');
   const [platformIntelContentType, setPlatformIntelContentType] = useState<string>('text');
@@ -1039,6 +1097,10 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [showAllPlatformRequestTypes, setShowAllPlatformRequestTypes] = useState<Record<string, boolean>>({});
   const [planningAvailableTypeHints, setPlanningAvailableTypeHints] = useState<string[]>([]);
   const [planningCapacityTypeHints, setPlanningCapacityTypeHints] = useState<string[]>([]);
+  const [planDurationLimit, setPlanDurationLimit] = useState<{
+    max_campaign_duration_weeks: number;
+    plan_key: string | null;
+  } | null>(null);
   const [planningExclusiveCampaigns, setPlanningExclusiveCampaigns] = useState<
     Array<{ platform: string; content_type: string; count_per_week: string }>
   >([]);
@@ -1119,7 +1181,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     const list = Array.from(raw);
     // Prefer common types first for speed.
     const priority = new Map<string, number>([
-      ['Posts', 1],
+      ['Text posts', 1],
       ['Videos', 2],
       ['Reels', 3],
       ['Shorts', 4],
@@ -1150,6 +1212,12 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
         return a.localeCompare(b);
       });
   }, [platformCatalogPlatforms]);
+
+  /** Content capacity: only creator-dependent types (Videos, Carousels, etc.). */
+  const creatorDependentQuickPickOptions = useMemo(() => {
+    const creatorSet = new Set(CREATOR_DEPENDENT_PLANNING_LABELS);
+    return allCatalogContentTypeQuickPickOptions.filter((label) => creatorSet.has(label as typeof CREATOR_DEPENDENT_PLANNING_LABELS[number]));
+  }, [allCatalogContentTypeQuickPickOptions]);
 
   const platformExtractCandidates = useMemo(() => {
     const keys =
@@ -1183,6 +1251,47 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     }
     return true;
   };
+
+  useEffect(() => {
+    if (!resolvedCompanyId) return;
+    fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(resolvedCompanyId)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        const p = data?.profile;
+        const km = p?.key_messages;
+        if (typeof km === 'string' && km.trim()) setCompanyKeyMessages(km.trim().slice(0, 150));
+        else if (Array.isArray(km) && km.length > 0 && typeof km[0] === 'string' && km[0].trim()) setCompanyKeyMessages(String(km[0]).trim().slice(0, 150));
+        else setCompanyKeyMessages(null);
+        const dt = p?.desired_transformation;
+        const las = p?.life_after_solution;
+        if ((typeof dt === 'string' && dt.trim()) || (typeof las === 'string' && las.trim())) {
+          setCompanyProblemTransformation({
+            desired_transformation: typeof dt === 'string' && dt.trim() ? dt.trim().slice(0, 150) : undefined,
+            life_after_solution: typeof las === 'string' && las.trim() ? las.trim().slice(0, 150) : undefined,
+          });
+        } else setCompanyProblemTransformation(null);
+      })
+      .catch(() => {
+        setCompanyKeyMessages(null);
+        setCompanyProblemTransformation(null);
+      });
+  }, [resolvedCompanyId]);
+
+  useEffect(() => {
+    if (!resolvedCompanyId) return;
+    let cancelled = false;
+    fetchWithAuth(`/api/company-plan-duration-limit?companyId=${encodeURIComponent(resolvedCompanyId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setPlanDurationLimit({
+          max_campaign_duration_weeks: Number(data.max_campaign_duration_weeks) || 12,
+          plan_key: data.plan_key ?? null,
+        });
+      })
+      .catch(() => setPlanDurationLimit(null));
+    return () => { cancelled = true; };
+  }, [resolvedCompanyId]);
 
   const resolveWorkingDurationWeeks = (): number => {
     const candidates: Array<unknown> = [
@@ -1248,11 +1357,20 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     );
     if (tentativeStart) base.tentative_start = tentativeStart;
 
-    const contentCapacity = pickString(
-      (prefilledPlanning as any)?.content_capacity,
-      (collectedPlanningContext as any)?.content_capacity
-    );
-    if (contentCapacity) base.content_capacity = contentCapacity;
+    if (planningAvailableCountsOverride && Object.keys(planningAvailableCountsOverride).length > 0) {
+      base.available_content = planningAvailableCountsOverride;
+    } else {
+      const ac = (prefilledPlanning as any)?.available_content ?? (collectedPlanningContext as any)?.available_content;
+      if (ac != null && (typeof ac === 'object' || (typeof ac === 'string' && String(ac).trim()))) base.available_content = ac;
+    }
+    if (planningCapacityCountsOverride && Object.keys(planningCapacityCountsOverride).length > 0) {
+      base.content_capacity = planningCapacityCountsOverride;
+      base.weekly_capacity = planningCapacityCountsOverride;
+    } else {
+      const cap = (prefilledPlanning as any)?.content_capacity ?? (prefilledPlanning as any)?.weekly_capacity ?? (collectedPlanningContext as any)?.content_capacity ?? (collectedPlanningContext as any)?.weekly_capacity;
+      if (cap != null) base.content_capacity = cap;
+      if (cap != null) base.weekly_capacity = cap;
+    }
 
     const durationWeeks =
       (prefilledPlanning as any)?.campaign_duration ??
@@ -1314,7 +1432,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       if (Object.keys(next).length > 0) base.platform_content_requests = next;
     }
 
-    if (hasProvidedPlatformContentRequests) {
+    if (hasProvidedPlatformContentRequests || base.platform_content_requests) {
       base.cross_platform_sharing = {
         enabled: planningCrossPlatformSharingEnabled,
         schedule: planningCrossPlatformScheduleMode,
@@ -1384,7 +1502,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     };
 
     const candidates = Array.from(new Set([oldText, normalizeCandidate(oldText)])).filter(Boolean);
-    const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapeRegExp = (s: string) => s.replace(new RegExp('[.*+?^${}()|[\\]\\\\]', 'g'), '\\$&');
 
     const deepReplace = (value: any, needle: string): { next: any; count: number } => {
       if (typeof value === 'string') {
@@ -1672,7 +1790,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       const errorMessage: ChatMessage = {
         id: Date.now(),
         type: 'ai',
-        message: `❌ Failed to save AI content. ${detail}`,
+        message: 'Error: Failed to save AI content. ' + detail,
         timestamp: new Date().toLocaleTimeString(),
         provider: getProviderName(selectedProvider),
         campaignId
@@ -1686,7 +1804,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     const oneLine = (s: unknown, max = 180) => {
       const t = fmt(s).replace(/\s+/g, ' ');
       if (!t) return '';
-      return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+      return t.length > max ? t.slice(0, max - 1) + '...' : t;
     };
     const serializeBreakdown = (w: any) => {
       const b = w?.platform_content_breakdown;
@@ -1698,7 +1816,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
           const type = fmt(it?.type) || 'item';
           const count = Number(it?.count ?? 0);
           const topics = Array.isArray(it?.topics) ? it.topics.map((t: any) => oneLine(t, 80)).filter(Boolean) : [];
-          const topicSeed = topics.length > 0 ? ` — topics: ${topics.slice(0, 4).join(' | ')}${topics.length > 4 ? ' …' : ''}` : '';
+          const topicSeed = topics.length > 0 ? ' — topics: ' + topics.slice(0, 4).join(' | ') + (topics.length > 4 ? ' ...' : '') : '';
           return `${type}${Number.isFinite(count) && count > 1 ? ` (${count})` : ''}${topicSeed}`;
         });
         lines.push(`${platform}: ${parts.join('; ')}`);
@@ -1715,7 +1833,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
         const problem = oneLine(t?.whatProblemAreWeAddressing, 90);
         return `- ${title}${intent ? ` — ${intent}` : ''}${who ? ` (who: ${who})` : ''}${problem ? ` (problem: ${problem})` : ''}`;
       });
-      return `Writer briefs (sample):\n${lines.join('\n')}${topics.length > 6 ? `\n- … +${topics.length - 6} more` : ''}`;
+      return 'Writer briefs (sample):\n' + lines.join('\n') + (topics.length > 6 ? '\n- ... +' + (topics.length - 6) + ' more' : '');
     };
 
     return plan.weeks
@@ -1744,7 +1862,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
           audience ? `Audience: ${audience}` : '',
           weeklyIntent ? `Weekly intent: ${weeklyIntent}` : '',
           tone ? `Tone: ${tone}` : '',
-          topicsToCover.length > 0 ? `Topics to cover:\n${topicsToCover.slice(0, 10).map((t: string) => `- ${t}`).join('\n')}${topicsToCover.length > 10 ? '\n- …' : ''}` : '',
+          topicsToCover.length > 0 ? 'Topics to cover:\n' + topicsToCover.slice(0, 10).map((t: string) => '- ' + t).join('\n') + (topicsToCover.length > 10 ? '\n- ...' : '') : '',
           breakdownBlock,
           briefsBlock,
         ]
@@ -2011,7 +2129,7 @@ This comprehensive approach ensures consistent growth and engagement across all 
       const errorMessage: ChatMessage = {
         id: Date.now(),
         type: 'ai',
-        message: '❌ Failed to create campaign plan. Please try again.',
+        message: 'Error: Failed to create campaign plan. Please try again.',
         timestamp: new Date().toLocaleTimeString(),
         provider: getProviderName(selectedProvider),
         campaignId
@@ -2020,6 +2138,38 @@ This comprehensive approach ensures consistent growth and engagement across all 
     } finally {
       setIsLoading(false);
     }
+  };
+
+  /** Check if target audience is already known from setup (so we don't ask again). */
+  const hasTargetAudienceAlready = (): boolean => {
+    const pre = prefilledPlanning as Record<string, unknown> | null | undefined;
+    const ta = pre?.target_audience;
+    if (typeof ta === 'string' && ta.trim()) return true;
+    const exec = pre?.execution_config as Record<string, unknown> | null | undefined;
+    if (typeof exec?.target_audience === 'string' && String(exec.target_audience).trim()) return true;
+    const recPayload = recommendationContext?.context_payload as Record<string, unknown> | null | undefined;
+    if (typeof recPayload?.target_audience === 'string' && String(recPayload.target_audience).trim()) return true;
+    return false;
+  };
+
+  /** Check if content capacity (how many can create per week) is already known. */
+  const hasContentCapacityAlready = (): boolean => {
+    const pre = prefilledPlanning as Record<string, unknown> | null | undefined;
+    const cap = pre?.content_capacity ?? pre?.weekly_capacity;
+    if (typeof cap === 'string' && cap.trim()) return true;
+    const exec = pre?.execution_config as Record<string, unknown> | null | undefined;
+    if (typeof exec?.content_capacity === 'string' && String(exec.content_capacity).trim()) return true;
+    const recPayload = recommendationContext?.context_payload as Record<string, unknown> | null | undefined;
+    if (typeof recPayload?.content_capacity === 'string' && String(recPayload.content_capacity).trim()) return true;
+    return false;
+  };
+
+  /** First question when target audience is known. Both available_content and content_capacity are factored in plan calculation. */
+  const getFirstQuestionWhenTargetAudienceKnown = (): string => {
+    if (hasContentCapacityAlready()) {
+      return '**First question:** Do you have existing content (videos, posts, blogs) for this campaign? Answer "no", "none", or describe what you have. (e.g., 3 videos, 10 posts, 2 blogs)';
+    }
+    return '**First question:** How many creator-dependent pieces can you produce per week? (e.g. 2 videos, 1 carousel — select types and quantities below)';
   };
 
   const buildRecommendationWelcome = (campaignData: any): string => {
@@ -2034,7 +2184,12 @@ This comprehensive approach ensures consistent growth and engagement across all 
     ];
     if (prefilledPlanning && Object.keys(prefilledPlanning).length > 0) {
       parts.push('\n\nI already have from your setup:\n' + Object.entries(prefilledPlanning).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n'));
-      parts.push(`\n\nI'll ask only what's still needed to build your week plan.\n\n**Who is your primary target audience?** (e.g., professionals, entrepreneurs, parents, educators)`);
+      parts.push(`\n\nI'll ask only what's still needed to build your week plan.`);
+      if (!hasTargetAudienceAlready()) {
+        parts.push(`\n\n**Who is your primary target audience?** (e.g., professionals, entrepreneurs, parents, educators)`);
+      } else {
+        parts.push(`\n\n${getFirstQuestionWhenTargetAudienceKnown()}`);
+      }
       return parts.join('');
     }
     if (desc) {
@@ -2049,7 +2204,12 @@ This comprehensive approach ensures consistent growth and engagement across all 
     if (reachEst) {
       parts.push(`\n**Estimated reach:** ${reachEst}`);
     }
-    parts.push(`\n\nI'll ask you one question at a time. We need: target audience, available content (if any—and if you have content, which campaign objective it should serve and which week(s) to slot it into), tentative start date (YYYY-MM-DD format), campaign types, content & production capacity, duration, platforms, key messages, success metrics. Then say "Create my plan" or "I'm ready".\n\n**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)`);
+    parts.push(`\n\nI'll ask you one question at a time. We need: target audience, available content (if any—and if you have content, which campaign objective it should serve and which week(s) to slot it into), tentative start date (YYYY-MM-DD format), campaign types, content & production capacity, duration, platforms, key messages, success metrics. Then say "Create my plan" or "I'm ready".`);
+    if (!hasTargetAudienceAlready()) {
+      parts.push(`\n\n**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)`);
+    } else {
+      parts.push(`\n\n${getFirstQuestionWhenTargetAudienceKnown()}`);
+    }
     return parts.join('');
   };
 
@@ -2057,14 +2217,16 @@ This comprehensive approach ensures consistent growth and engagement across all 
     const pre = prefilledPlanning;
     if (!pre || Object.keys(pre).length === 0) return '';
     const items = Object.entries(pre).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n');
+    const audienceQuestion = hasTargetAudienceAlready()
+      ? `\n\n${getFirstQuestionWhenTargetAudienceKnown()}\n\n`
+      : '\n\n**Who is your primary target audience?** (e.g., professionals, entrepreneurs, parents, educators)\n\n';
     return `Hello! I'm your AI assistant for "${name}".
 
 I already have these from your campaign setup:
 ${items}
 
 I'll ask only what's still needed to build your week plan.
-
-**Who is your primary target audience?** (e.g., professionals, entrepreneurs, parents, educators)\n\n`;
+${audienceQuestion}`;
   };
 
   const GENERIC_WELCOME = (name: string) => {
@@ -2146,7 +2308,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       setMessages(existingMessages);
     }
 
-    // Restore planning form state (last unsaved) so user can continue from where they left off
+    let restoredSharingFromStorage = false;
     if (typeof window !== 'undefined' && campaignId && isPlanningContext) {
       try {
         const formKey = getPlanningFormStorageKey(campaignId);
@@ -2162,6 +2324,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
           }
           if (typeof parsed?.crossPlatformSharing === 'boolean') {
             setPlanningCrossPlatformSharingEnabled(parsed.crossPlatformSharing);
+            restoredSharingFromStorage = true;
           }
           if (parsed?.scheduleMode === 'same_time' || parsed?.scheduleMode === 'staggered' || parsed?.scheduleMode === 'ai_recommended') {
             setPlanningCrossPlatformScheduleMode(parsed.scheduleMode);
@@ -2169,6 +2332,14 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         }
       } catch (e) {
         console.warn('Could not restore planning form state', e);
+      }
+    }
+    if (!restoredSharingFromStorage) {
+      const crossFromPrefilled = (prefilledPlanning as any)?.cross_platform_sharing;
+      const crossFromCollected = (collectedPlanningContext as any)?.cross_platform_sharing;
+      const cross = crossFromPrefilled ?? crossFromCollected;
+      if (cross != null && typeof cross === 'object' && 'enabled' in cross) {
+        setPlanningCrossPlatformSharingEnabled(Boolean((cross as { enabled?: boolean }).enabled));
       }
     }
   };
@@ -2393,6 +2564,12 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       if (q.includes('region') || q.includes('geo') || q.includes('market')) {
         return '(e.g., US, UK, India, global)';
       }
+      if (q.includes('core message') || q.includes('key message') || q.includes('audience to remember') || q.includes('one thing you want people to remember')) {
+        if (companyKeyMessages) return `(e.g. ${companyKeyMessages})`;
+        if (companyProblemTransformation?.desired_transformation) return `(e.g. Desired Transformation: ${companyProblemTransformation.desired_transformation})`;
+        if (companyProblemTransformation?.life_after_solution) return `(e.g. Life After Solution: ${companyProblemTransformation.life_after_solution})`;
+        return '(e.g. from Problem & Transformation in your company profile)';
+      }
       return '(e.g., brief specific answer in 1-2 lines)';
     };
 
@@ -2421,13 +2598,16 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
   const quickPickConfig = useMemo(() => {
     const lastAi = [...messages].reverse().find((m) => m.type === 'ai' && m.message)?.message || '';
     const q = extractQuestionCandidate(lastAi);
-    const base = getQuickPickConfig(q, platformQuickPickOptions);
+    const base = getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks);
     if (!base) return base;
-    if (base.key === 'available_content' || base.key === 'content_capacity') {
+    if (base.key === 'available_content') {
+      return { ...base, options: allCatalogContentTypeQuickPickOptions };
+    }
+    if (base.key === 'content_capacity') {
       return { ...base, options: allCatalogContentTypeQuickPickOptions };
     }
     return base;
-  }, [messages, platformQuickPickOptions, allCatalogContentTypeQuickPickOptions]);
+  }, [messages, platformQuickPickOptions, allCatalogContentTypeQuickPickOptions, creatorDependentQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks]);
   const quickPickAiMessageId = useMemo(() => {
     return [...messages].reverse().find((m) => m.type === 'ai' && m.message)?.id ?? null;
   }, [messages]);
@@ -2447,7 +2627,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       const next = messages[i + 1];
       if (curr?.type !== 'ai' || next?.type !== 'user') continue;
       const q = extractQuestionCandidate(String(curr?.message ?? ''));
-      const cfg = getQuickPickConfig(q, platformQuickPickOptions);
+      const cfg = getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks);
       if (!cfg) continue;
       if (cfg.key === 'available_content' || cfg.key === 'content_capacity') {
         fromHistory.push(...extractPlanningTypeHintsFromCapacityValue(String(next?.message ?? '')));
@@ -2467,6 +2647,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     collectedPlanningContext,
     messages,
     platformQuickPickOptions,
+    planDurationLimit?.max_campaign_duration_weeks,
   ]);
   const shouldRenderQuickPickInInput = false;
 
@@ -2801,8 +2982,32 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     };
     let answer = '';
     if (config.key === 'campaign_duration') {
-      if (quickCustomizeMode && custom) {
+      const isElseShare = picked.includes('Else share');
+      if ((quickCustomizeMode && custom) || (isElseShare && custom)) {
+        const match = custom.match(/(\d+)\s*weeks?/i) ?? custom.match(/(\d+)/);
+        const weeks = match ? parseInt(match[1], 10) : NaN;
+        if (!Number.isFinite(weeks) || weeks < 1) {
+          setUiErrorMessage('Please enter a valid duration (e.g. 6 weeks).');
+          return;
+        }
+        if (weeks > ABSOLUTE_MAX_WEEKS) {
+          setUiErrorMessage(`Campaign duration cannot exceed ${ABSOLUTE_MAX_WEEKS} weeks.`);
+          return;
+        }
+        const maxForPlan = planDurationLimit?.max_campaign_duration_weeks ?? ABSOLUTE_MAX_WEEKS;
+        if (weeks > maxForPlan) {
+          const planName = planDurationLimit?.plan_key ? String(planDurationLimit.plan_key).charAt(0).toUpperCase() + String(planDurationLimit.plan_key).slice(1) : 'Your';
+          const remainder = weeks - maxForPlan;
+          const splitSuggestion = remainder >= 1
+            ? ` You can do this in two runs: ${maxForPlan} weeks + ${remainder} week${remainder > 1 ? 's' : ''}.`
+            : '';
+          setUiErrorMessage(`Your ${planName} plan allows up to ${maxForPlan} weeks.${splitSuggestion} Or upgrade to extend your campaign.`);
+          return;
+        }
         answer = custom;
+      } else if (isElseShare && !custom) {
+        setUiErrorMessage('Please enter your desired duration (e.g. 6 weeks) in the custom field.');
+        return;
       } else if (picked.length > 0) {
         answer = `Yes, proceed with ${picked[0]}.`;
       }
@@ -3169,15 +3374,28 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       );
     }
     if (config.key === 'content_capacity') {
+      const platformsForCapacity = planningSelectedPlatforms.length > 0
+        ? planningSelectedPlatforms.map((p) => p.toLowerCase().trim())
+        : (() => {
+            const raw = (prefilledPlanning as any)?.platforms ?? (collectedPlanningContext as any)?.platforms;
+            if (Array.isArray(raw)) return raw.map((p: any) => String(p ?? '').toLowerCase().trim()).filter(Boolean);
+            const s = typeof raw === 'string' ? raw : '';
+            return s.split(/[,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean).map((x) => (x === 'twitter' ? 'x' : x));
+          })();
+      const effectiveOptions = getContentCapacityOptionsForMode(
+        quickCapacityCreationMode as 'manual' | 'ai-assisted' | 'full-ai' | '',
+        config.options,
+        platformsForCapacity
+      );
       const showAll = Boolean(showAllTypeCounters.content_capacity);
-      const visibleOptions = showAll ? config.options : config.options.slice(0, 10);
+      const visibleOptions = showAll ? effectiveOptions : effectiveOptions.slice(0, 10);
       const hasPreparation = !!quickCapacityCreationMode;
       const hasCapacityInput = Object.values(quickCapacityCounts).some((v) => {
         const n = Number(String(v).trim());
         return Number.isFinite(n) && n > 0;
       });
       const customKeys = Object.keys(quickCapacityCounts).filter((k) => {
-        if (config.options.includes(k)) return false;
+        if (effectiveOptions.includes(k)) return false;
         const n = Number(String(quickCapacityCounts[k] ?? '').trim());
         return Number.isFinite(n) && n > 0;
       });
@@ -3218,26 +3436,28 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               Pick an option above first, then add your counts.
             </div>
           ) : null}
-          <div className={`grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2 ${!hasPreparation ? 'opacity-60 pointer-events-none' : ''}`}>
-            {visibleOptions.map((option) => (
-              <label key={option} className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-2">
-                <span className="text-xs text-gray-700 w-20 shrink-0">{option}</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={2}
-                  value={quickCapacityCounts[option] ?? ''}
-                  onChange={(e) => {
-                    const value = e.target.value.replace(/\D/g, '').slice(0, 2);
-                    setQuickCapacityCounts((prev) => ({ ...prev, [option]: value }));
-                  }}
-                  placeholder="0"
-                  className="w-16 px-2 py-1.5 border border-gray-300 rounded-md text-sm"
-                  disabled={isBusy}
-                />
-                <span className="text-xs text-gray-500">/week</span>
-              </label>
-            ))}
+          <div className={`gap-2 mb-2 ${!hasPreparation ? 'opacity-60 pointer-events-none' : ''}`}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {visibleOptions.map((option) => (
+                  <label key={option} className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-2">
+                    <span className="text-xs text-gray-700 w-20 shrink-0">{option}</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={2}
+                      value={quickCapacityCounts[option] ?? ''}
+                      onChange={(e) => {
+                        const value = e.target.value.replace(/\D/g, '').slice(0, 2);
+                        setQuickCapacityCounts((prev) => ({ ...prev, [option]: value }));
+                      }}
+                      placeholder="0"
+                      className="w-16 px-2 py-1.5 border border-gray-300 rounded-md text-sm"
+                      disabled={isBusy}
+                    />
+                    <span className="text-xs text-gray-500">/week</span>
+                  </label>
+                ))}
+            </div>
           </div>
           {quickCustomizeMode ? (
             <div className="mb-2 rounded-md border border-gray-200 bg-white p-2">
@@ -3309,7 +3529,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             </div>
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
-            {config.options.length > 10 ? (
+            {effectiveOptions.length > 10 ? (
               <button
                 type="button"
                 disabled={isBusy}
@@ -3656,24 +3876,27 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             <div className="text-xs font-medium text-gray-700 mb-2">(1) Frequency per content type — match or adjust to your capacity</div>
             <div className="text-[11px] text-gray-500 mb-2">Set how many of each type per week per platform below.</div>
             <div className="flex flex-wrap items-center gap-3 text-xs text-gray-700 mt-3 pt-2 border-t border-gray-100">
-              <span className="font-medium text-gray-700">(2) Same topic across platforms?</span>
-              <label className="flex items-center gap-2">
+              <span className="font-medium text-gray-700">(2) Can one content piece be shared across platforms?</span>
+              <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={planningCrossPlatformSharingEnabled}
                   disabled={isBusy}
                   onChange={(e) => setPlanningCrossPlatformSharingEnabled(e.target.checked)}
+                  title="Yes = same piece reused on multiple platforms. No = each platform needs unique content."
                 />
-                <span>Yes — reuse one piece across platforms (same topic)</span>
+                <span>Yes — one piece shared across platforms</span>
               </label>
               <span className="text-gray-400">|</span>
-              <span className="text-gray-500">Uncheck = different content per platform</span>
+              <span className="text-gray-500">Uncheck = No, different content per platform</span>
             </div>
-            {planningCrossPlatformSharingEnabled && (
-              <p className="text-[11px] text-gray-600 mt-1.5">
-                <strong>Unique</strong> = pieces to create. Same piece can go to many platforms. E.g. 2 posts × 4 platforms = <strong>2 unique</strong>, 8 postings; 2 videos × 4 platforms = <strong>2 unique</strong>, 8 postings. Supply is compared to this total.
-              </p>
-            )}
+            <p className="text-[11px] text-gray-600 mt-1.5">
+              {planningCrossPlatformSharingEnabled ? (
+                <>Calculation: <strong>Unique pieces</strong> = max per content type (same piece → many platforms). E.g. 2 posts × 4 platforms = <strong>2 unique</strong>, 8 postings. Supply compared to unique.</>
+              ) : (
+                <>Calculation: <strong>Unique pieces</strong> = sum of all platform slots (each platform needs its own). E.g. 2 posts × 4 platforms = <strong>8 unique</strong>. Supply compared to this.</>
+              )}
+            </p>
             <div className="flex flex-wrap items-center gap-3 text-xs text-gray-700 mt-2">
               <span className="font-medium text-gray-700">(3) Publish same day or staggered?</span>
               <label className="flex items-center gap-2">
@@ -4391,30 +4614,46 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       }
     }
 
-    const data = await response.json().catch(() => ({}));
+    const text = await response.text();
+    let data: Record<string, unknown> = {};
+    try {
+      data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      // Body wasn't JSON (e.g. HTML error page) — keep {} and use status for message
+    }
     if (!response.ok) {
       if (response.status === 422 && (data?.conversationalResponse || data?.validation_result)) {
         return {
-          conversationalResponse: data.conversationalResponse || 'Capacity validation failed.',
+          conversationalResponse: (data.conversationalResponse as string) || 'Capacity validation failed.',
           validation_result: data.validation_result,
         };
       }
-      const raw = data.error || data.message || 'AI plan API error';
-      const friendly =
-        response.status === 400
-          ? 'Your message couldn\'t be processed. Please rephrase and try again.'
-          : raw;
+      const raw = (data.error || data.message) as string | undefined;
+      let friendly: string;
+      if (response.status === 400) {
+        friendly = 'Your message couldn\'t be processed. Please rephrase and try again.';
+      } else if (response.status === 401) {
+        friendly = raw || 'Session expired. Please sign in again.';
+      } else if (response.status === 403) {
+        friendly = raw || 'You don\'t have permission to update this campaign.';
+      } else if (response.status === 404) {
+        friendly = raw || 'Campaign not found.';
+      } else if (raw) {
+        friendly = raw;
+      } else {
+        friendly = `AI plan request failed (${response.status}). Please try again.`;
+      }
       throw new Error(friendly);
     }
 
     return {
-      plan: data.plan,
-      day: data.day,
-      platform_content: data.platform_content,
-      conversationalResponse: data.conversationalResponse,
+      plan: data.plan as StructuredPlan | undefined,
+      day: data.day as RefinedDay | undefined,
+      platform_content: data.platform_content as PlatformCustomization | undefined,
+      conversationalResponse: data.conversationalResponse as string | undefined,
       validation_result: data.validation_result,
       collectedPlanningContext: data.collectedPlanningContext as Record<string, unknown> | undefined,
-      startDateConflictWarning: data.startDateConflictWarning,
+      startDateConflictWarning: data.startDateConflictWarning as string | undefined,
     };
   };
 
@@ -5644,7 +5883,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
           {activeTab === 'chat' && (retrievePlanData?.savedPlan || retrievePlanData?.committedPlan || retrievePlanData?.draftPlan) && (
             <div className={`rounded-lg p-3 flex flex-wrap items-center gap-2 ${retrievePlanData?.committedPlan ? 'bg-emerald-50 border-2 border-emerald-300' : 'bg-indigo-50 border border-indigo-200'}`}>
               {isRetrievePlanLoading ? (
-                <span className="text-sm text-indigo-700">Checking for existing plans…</span>
+                <span className="text-sm text-indigo-700">Checking for existing plans...</span>
               ) : (
                 <>
                   <span className="text-sm font-medium text-indigo-900">
@@ -5656,16 +5895,15 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                       disabled={isParsingSavedPlan}
                       className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50"
                     >
-                      {isParsingSavedPlan ? 'Loading…' : 'Load saved plan (Edit)'}
+                      {isParsingSavedPlan ? 'Loading...' : 'Load saved plan (Edit)'}
                     </button>
                   )}
                   {retrievePlanData?.committedPlan && (
                     <>
                       <button
                         onClick={() => {
-                          const params = new URLSearchParams({ campaignId: campaignId! });
-                          if (resolvedCompanyId) params.set('companyId', resolvedCompanyId);
-                          window.location.href = `/campaign-planning-hierarchical?${params.toString()}`;
+                          const params = resolvedCompanyId ? `?companyId=${encodeURIComponent(resolvedCompanyId)}` : '';
+                          window.location.href = `/campaign-details/${campaignId!}${params}`;
                         }}
                         className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
                       >
@@ -5759,7 +5997,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-semibold text-gray-900">Campaign Health</div>
                       {isHealthLoading ? (
-                        <span className="text-xs text-gray-500">Loading…</span>
+                        <span className="text-xs text-gray-500">Loading...</span>
                       ) : (
                         <span
                           title={
@@ -5827,7 +6065,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                         disabled={isOptimizingWeek}
                         className="px-3 py-1 text-xs rounded bg-indigo-600 text-white disabled:opacity-50"
                       >
-                        {isOptimizingWeek ? 'Optimizing…' : 'Optimize'}
+                        {isOptimizingWeek ? 'Optimizing...' : 'Optimize'}
                       </button>
                     </div>
                     {optimizeResult && (
@@ -5861,7 +6099,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                   disabled={isExecutionLoading}
                   className="px-3 py-1 text-xs rounded bg-indigo-600 text-white disabled:opacity-50"
                 >
-                  {isExecutionLoading ? 'Loading…' : 'Regenerate week plan'}
+                  {isExecutionLoading ? 'Loading...' : 'Regenerate week plan'}
                 </button>
                 <button
                   onClick={handleApproveScheduling}
@@ -6020,7 +6258,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                 </button>
               </div>
               {isPerformanceLoading ? (
-                <div className="text-sm text-gray-500">Loading analytics…</div>
+                <div className="text-sm text-gray-500">Loading analytics...</div>
               ) : (
                 <div className="space-y-3">
                   <div className="border rounded p-3 text-xs">
@@ -6077,7 +6315,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
           ) : activeTab === 'business' ? (
             <div className="space-y-3">
               {isBusinessLoading ? (
-                <div className="text-sm text-gray-500">Loading business intelligence…</div>
+                <div className="text-sm text-gray-500">Loading business intelligence...</div>
               ) : (
                 <div className="space-y-3">
                   <div className="border rounded p-3 text-xs">
@@ -6143,7 +6381,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                   disabled={isPlatformIntelLoading}
                   className="px-3 py-1 text-xs rounded bg-indigo-600 text-white disabled:opacity-50"
                 >
-                  {isPlatformIntelLoading ? 'Loading…' : 'Generate'}
+                  {isPlatformIntelLoading ? 'Loading...' : 'Generate'}
                 </button>
               </div>
               {platformIntelData && (
@@ -6247,10 +6485,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                       maxSecondsHint={planTiming.maxSecondsHint}
                       onCancel={() => planAbortRef.current?.abort()}
                       rotatingMessages={[
-                        'Validating your inputs…',
-                        `Structuring ${resolvedWeeks} weeks…`,
-                        'Building weekly themes…',
-                        'Assigning content types…',
+                        'Validating your inputs...',
+                        'Structuring ' + resolvedWeeks + ' weeks...',
+                        'Building weekly themes...',
+                        'Assigning content types...',
                         finalMessage,
                       ]}
                     />
@@ -6268,9 +6506,9 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                       expectedSeconds={45}
                       maxSecondsHint={90}
                       rotatingMessages={[
-                        'Applying schedule…',
-                        'Updating calendar…',
-                        'Finishing schedule…',
+                        'Applying schedule...',
+                        'Updating calendar...',
+                        'Finishing schedule...',
                       ]}
                     />
                   </div>
@@ -6286,10 +6524,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                   ? 'Customizing platform content'
                   : 'Refining campaign inputs';
               const rotating = isRefineDay
-                ? ['Loading week…', 'Generating day content…', 'Applying refinements…']
+                ? ['Loading week...', 'Generating day content...', 'Applying refinements...']
                 : isPlatformCustomize
-                  ? ['Loading platforms…', 'Customizing per platform…', 'Applying changes…']
-                  : ['Reading your answers…', 'Structuring next steps…', 'Preparing next question…'];
+                  ? ['Loading platforms...', 'Customizing per platform...', 'Applying changes...']
+                  : ['Reading your answers...', 'Structuring next steps...', 'Preparing next question...'];
               return (
                 <div className="flex justify-start w-full px-1 sm:px-2">
                   <div className="w-full max-w-md">
@@ -6528,7 +6766,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                         </div>
                       </div>
                     ))}
-                  {isTyping && <div className="flex justify-start"><div className="bg-gray-100 px-3 py-2 rounded-lg text-sm text-gray-600">Thinking…</div></div>}
+                  {isTyping && <div className="flex justify-start"><div className="bg-gray-100 px-3 py-2 rounded-lg text-sm text-gray-600">Thinking...</div></div>}
                   <div ref={messagesEndRef} />
                 </div>
                 <div className="sticky bottom-0 bg-white border-t shrink-0">

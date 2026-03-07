@@ -9,6 +9,7 @@ import { supabase } from '../db/supabaseClient';
 import { isTerminalExecutionState } from '../governance/ExecutionStateMachine';
 import { assertValidExecutionTransition } from '../governance/ExecutionStateMachine';
 import { recordGovernanceEvent, recordCampaignCompletedEvent } from './GovernanceEventService';
+import { updateStrategyMemoryFromSignals } from './campaignStrategyMemoryService';
 
 /**
  * Check if campaign is eligible for auto-completion and transition if so.
@@ -80,6 +81,9 @@ export async function checkAndCompleteCampaignIfEligible(campaignId: string | nu
 
     const companyId = (cv as any)?.company_id ?? null;
     if (companyId) {
+      updateStrategyMemoryFromSignals(companyId, campaignId).catch((err) =>
+        console.warn('CampaignCompletionService: updateStrategyMemoryFromSignals failed', err)
+      );
       await recordGovernanceEvent({
         companyId,
         campaignId,

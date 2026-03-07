@@ -104,7 +104,7 @@ export type WeekOptimizationResult = {
 export const validateCompanyProfileGate = async (
   companyId?: string
 ): Promise<ProfileGateResult> => {
-  const profile = await getProfile(companyId, { autoRefine: false });
+  const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
   return validateCompanyProfile(profile);
 };
 
@@ -271,7 +271,7 @@ export const generateCampaignStrategy = async (input: {
     partial?: boolean;
   };
 }> => {
-  const profile = await getProfile(input.companyId, { autoRefine: false });
+  const profile = await getProfile(input.companyId, { autoRefine: false, languageRefine: true });
   const gate = validateCompanyProfile(profile);
   if (gate.status === 'blocked' || !profile) {
     return gate;

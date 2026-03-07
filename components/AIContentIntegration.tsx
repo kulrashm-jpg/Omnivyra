@@ -288,9 +288,9 @@ export default function AIContentIntegration({ campaignId, aiContent, onContentI
         <ol className="text-sm text-blue-800 space-y-1">
           <li>1. Review the AI-generated content suggestions above</li>
           <li>2. Select a week number (1-12) to generate content for</li>
-          <li>3. Click "Generate Week X Content" to create weekly content</li>
-          <li>4. Click "View Week X" to see the generated content in hierarchical view</li>
-          <li>5. Or click "Generate All 12 Weeks" to create the complete campaign</li>
+          <li>3. Click &quot;Generate Week X Content&quot; to create weekly content</li>
+          <li>4. Click &quot;View Week X&quot; to see the generated content in hierarchical view</li>
+          <li>5. Or click &quot;Generate All 12 Weeks&quot; to create the complete campaign</li>
         </ol>
       </div>
     </div>

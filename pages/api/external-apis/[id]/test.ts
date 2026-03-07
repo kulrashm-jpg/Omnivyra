@@ -1,14 +1,31 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { buildExternalApiRequest, executeExternalApiRequest } from '../../../../backend/services/externalApiService';
-import { buildCacheKey, getCacheStats, getCachedResponse, setCachedResponse } from '../../../../backend/services/externalApiCacheService';
+import { buildCacheKey, getCacheStats, getCachedResponse, setCachedResponse } from '../../../../backend/services/redisExternalApiCache';
 import { updateApiHealth } from '../../../../backend/services/externalApiHealthService';
 import { normalizeExternalTrends } from '../../../../backend/services/trendNormalizationService';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { Role } from '../../../../backend/services/rbacService';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
 
 const DEFAULT_TIMEOUT_MS = 5000;
+
+const requirePlatformAdmin = async (req: NextApiRequest, res: NextApiResponse) => {
+  const legacySession = getLegacySuperAdminSession(req);
+  if (legacySession) return { userId: legacySession.userId, role: 'SUPER_ADMIN' as const };
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (error || !user) {
+    res.status(401).json({ error: 'UNAUTHORIZED' });
+    return null;
+  }
+  if (await isPlatformSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' as const };
+  if (await isSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' as const };
+  res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+  return null;
+};
 const MAX_RESPONSE_CHARS = 2000;
 
 const normalizeError = (error: any) => {
@@ -67,7 +84,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const cacheKey = buildCacheKey({ apiId: data.id, geo: undefined, category: undefined });
-    const cached = getCachedResponse<any>(cacheKey, data.id);
+    const cached = await getCachedResponse<any>(cacheKey, data.id);
     let parsed: any = cached;
     let cacheHit = Boolean(cached);
     let responseStatus = 200;
@@ -117,7 +134,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         last_test_at: testedAt,
       });
       if (response.ok) {
-        setCachedResponse(cacheKey, parsed, DEFAULT_TIMEOUT_MS);
+        await setCachedResponse(cacheKey, parsed, DEFAULT_TIMEOUT_MS);
       }
     }
 
@@ -149,8 +166,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       tested_at: testedAt,
     });
   } catch (error: any) {
-    return res.status(500).json({ error: normalizeError(error) });
+    return res.status(500).json({
+      error: 'Failed to test API',
+      detail: normalizeError(error),
+    });
   }
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default async function wrappedHandler(req: NextApiRequest, res: NextApiResponse) {
+  const platformScopeRequested = req.query?.scope === 'platform';
+  const companyId =
+    (req.query?.companyId as string | undefined) ||
+    (req.body?.companyId as string | undefined);
+  if (platformScopeRequested && !companyId) {
+    const access = await requirePlatformAdmin(req, res);
+    if (!access) return;
+    return handler(req, res);
+  }
+  return withRBAC(handler, [Role.SUPER_ADMIN])(req, res);
+}

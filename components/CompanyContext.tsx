@@ -321,16 +321,18 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (!roles[c.company_id]) roles[c.company_id] = 'CONTENT_ARCHITECT';
       });
       const companyIds = list.map((c: CompanyOption) => c.company_id);
+      const firstRole = Object.values(roles)[0] || 'CONTENT_ARCHITECT';
+      const isSuperAdmin = firstRole === 'SUPER_ADMIN';
       setUser({
-        userId: 'content_architect',
+        userId: isSuperAdmin ? 'legacy_super_admin' : 'content_architect',
         role: 'admin',
         companyIds,
         defaultCompanyId: companyIds[0] || '',
       });
-      setUserName('Content Architect');
+      setUserName(isSuperAdmin ? 'Super Admin' : 'Content Architect');
       setCompanies(list);
       setRolesByCompany(roles);
-      setUserRole('CONTENT_ARCHITECT');
+      setUserRole(isSuperAdmin ? 'SUPER_ADMIN' : 'CONTENT_ARCHITECT');
       const stored = resolveStoredCompanyId();
       const fallbackId = companyIds[0] || '';
       const resolvedId = stored && companyIds.includes(stored) ? stored : fallbackId;

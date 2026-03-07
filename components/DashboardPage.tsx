@@ -519,8 +519,8 @@ export default function DashboardPage() {
   const buildPlanningWorkspaceUrl = (campaignId: string) => {
     const params = new URLSearchParams();
     if (selectedCompanyId) params.set('companyId', selectedCompanyId);
-    params.set('campaignId', campaignId);
-    return `/campaign-planning-hierarchical?${params.toString()}`;
+    const qs = params.toString();
+    return `/campaign-details/${campaignId}${qs ? `?${qs}` : ''}`;
   };
 
   const getStageColor = (stage: string) => {
@@ -991,7 +991,10 @@ export default function DashboardPage() {
                   Configure external sources for trend signals
                 </p>
                 <button
-                  onClick={() => window.location.href = '/external-apis'}
+                  onClick={() =>
+                    window.location.href =
+                      userRole === 'SUPER_ADMIN' ? '/external-apis?mode=platform' : '/external-apis'
+                  }
                   className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                 >
                   Manage APIs

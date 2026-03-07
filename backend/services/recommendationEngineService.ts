@@ -40,6 +40,12 @@ import { buildCompanyStrategyDNA, type CompanyStrategyDNA } from './companyStrat
 import { analyzeStrategySignals } from './recommendationStrategyFeedbackService';
 import { sequenceRecommendations } from './recommendationSequencingService';
 import { buildCampaignBlueprint } from './recommendationBlueprintService';
+import {
+  loadRecentCompanyThemes,
+  checkThemeOriginality,
+  DEFAULT_ORIGINALITY_THRESHOLD,
+} from '../utils/themeOriginalityGuard';
+import { getCompanyPerformanceInsights } from './campaignLearningService';
 import { validateCampaignBlueprint } from './recommendationBlueprintValidationService';
 import {
   resolveExecutionBlueprint,
@@ -58,6 +64,8 @@ export type StrategicPayloadInput = {
   mapped_core_types?: string[];
   primary_campaign_type?: string;
   context?: 'business' | 'personal' | 'third_party';
+  /** Execution config from Trend execution bar; campaign_duration aligns theme count with campaign length. */
+  execution_config?: { campaign_duration?: number } | null;
   [key: string]: unknown;
 };
 
@@ -1001,7 +1009,7 @@ export const generateRecommendations = async (
 ): Promise<RecommendationEngineResult> => {
   await ensureCampaignCompanyLink(input.companyId, input.campaignId);
   const useEnrichment = input.enrichmentEnabled !== false;
-  const profile = await getProfile(input.companyId, { autoRefine: useEnrichment });
+  const profile = await getProfile(input.companyId, { autoRefine: useEnrichment, languageRefine: true });
   await getCampaignMemory({ companyId: input.companyId, campaignId: input.campaignId ?? undefined });
   const personaSummary = extractPersonaSummary(profile);
 
@@ -1026,10 +1034,28 @@ export const generateRecommendations = async (
     }
   }
 
+  const execConfig = input.strategicPayload?.execution_config as { campaign_duration?: number } | undefined;
+  const execDuration =
+    execConfig != null &&
+    typeof execConfig.campaign_duration === 'number' &&
+    execConfig.campaign_duration >= 4 &&
+    execConfig.campaign_duration <= 12
+      ? execConfig.campaign_duration
+      : null;
+  let rawDurationWeeks = input.durationWeeks ?? execDuration ?? 12;
+  rawDurationWeeks = Math.max(4, Math.min(12, rawDurationWeeks));
+  const { normalizeCampaignDuration } = await import('../utils/durationNormalization');
+  const normalized = normalizeCampaignDuration(rawDurationWeeks);
+  const durationWeeks = normalized.normalized;
+
   const recommendationContext: Record<string, unknown> = {
     campaign_intelligence: campaignIntelligence,
     recent_campaign_intelligence: recentCampaignIntelligence,
     selected_api_ids: Array.isArray(input.selectedApiIds) ? input.selectedApiIds : null,
+    campaign_duration_weeks: rawDurationWeeks,
+    normalized_campaign_duration: normalized.normalized,
+    expected_number_of_weeks: rawDurationWeeks,
+    strategic_arc_type: normalized.strategic_arc_type,
   };
   if (input.strategicPayload && typeof input.strategicPayload === 'object') {
     recommendationContext.strategic_selection = {
@@ -1057,6 +1083,21 @@ export const generateRecommendations = async (
       recommendationContext.strategy_momentum = input.strategyMemory.strategy_momentum;
     }
   }
+  try {
+    const performanceInsights = await getCompanyPerformanceInsights(input.companyId);
+    recommendationContext.company_high_performing_themes = performanceInsights.company_high_performing_themes;
+    recommendationContext.company_high_performing_platforms = performanceInsights.company_high_performing_platforms;
+    recommendationContext.company_high_performing_content_types = performanceInsights.company_high_performing_content_types;
+    recommendationContext.company_low_performing_patterns = performanceInsights.company_low_performing_patterns;
+    recommendationContext.company_performance_usage_note =
+      'Use performance insights as GUIDANCE only (weight ~30%). Do not override trend intelligence. Maintain exploration: at least one theme per campaign should be experimental.';
+  } catch {
+    recommendationContext.company_high_performing_themes = [];
+    recommendationContext.company_high_performing_platforms = [];
+    recommendationContext.company_high_performing_content_types = [];
+    recommendationContext.company_low_performing_patterns = [];
+  }
+
   if (input.campaignId) {
     try {
       recommendationContext.learning_signals = await loadLearningSignals(
@@ -1080,11 +1121,6 @@ export const generateRecommendations = async (
     }
   }
 
-  let durationWeeks = input.durationWeeks;
-  if (durationWeeks == null) {
-    console.warn('Campaign duration not explicitly set; inferring from weeks array.');
-    durationWeeks = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
-  }
   const mappedCore = Array.isArray(input.strategicPayload?.mapped_core_types) && input.strategicPayload.mapped_core_types.length > 0
     ? input.strategicPayload.mapped_core_types[0]
     : null;
@@ -1621,10 +1657,32 @@ export const generateRecommendations = async (
         ? analyzeStrategySignals(trendsUsed, strategyDNA ?? undefined, profile)
         : undefined,
     strategy_sequence: strategySequence,
-    campaign_blueprint:
-      strategySequence != null && durationWeeks != null
-        ? buildCampaignBlueprint(strategySequence, durationWeeks)
-        : undefined,
+    campaign_blueprint: (() => {
+      if (strategySequence == null || durationWeeks == null) return undefined;
+      if (input.companyId) {
+        const topics = (strategySequence.ladder ?? [])
+          .flatMap((e) => (e.recommendations ?? []).map((r) => String(r.topic ?? '').trim()))
+          .filter(Boolean);
+        if (topics.length > 0) {
+          loadRecentCompanyThemes(input.companyId, 50)
+            .then((recent) => {
+              const { hasOverlap, overlappingPairs, maxScore } = checkThemeOriginality(
+                topics,
+                recent,
+                DEFAULT_ORIGINALITY_THRESHOLD
+              );
+              if (hasOverlap) {
+                console.warn(
+                  '[recommendationEngine] Theme originality guard: overlap with recent campaigns',
+                  { overlappingPairs: overlappingPairs.slice(0, 5), maxScore: maxScore.toFixed(2) }
+                );
+              }
+            })
+            .catch(() => {});
+        }
+      }
+      return buildCampaignBlueprint(strategySequence, durationWeeks, normalized.strategic_arc_type);
+    })(),
     campaign_blueprint_validation: undefined,
     campaign_blueprint_validated: undefined,
   } as RecommendationEngineResult;

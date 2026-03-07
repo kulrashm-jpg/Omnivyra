@@ -40,6 +40,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import PostCreationForm from '@/components/PostCreationForm';
+import PlatformIcon from '@/components/ui/PlatformIcon';
 
 interface ScheduledPost {
   id: string;
@@ -226,17 +227,6 @@ export default function CreativeDashboard() {
       case 'failed': return <AlertCircle className="h-4 w-4" />;
       case 'draft': return <Edit className="h-4 w-4" />;
       default: return <Clock className="h-4 w-4" />;
-    }
-  };
-
-  const getPlatformIcon = (platform: string) => {
-    switch (platform) {
-      case 'linkedin': return <Users className="h-4 w-4" />;
-      case 'twitter': return <Hash className="h-4 w-4" />;
-      case 'instagram': return <Image className="h-4 w-4" />;
-      case 'youtube': return <Video className="h-4 w-4" />;
-      case 'facebook': return <Globe className="h-4 w-4" />;
-      default: return <Rocket className="h-4 w-4" />;
     }
   };
 
@@ -514,8 +504,7 @@ export default function CreativeDashboard() {
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-3">
                           <div className="flex items-center gap-2">
-                            {getPlatformIcon(post.platform)}
-                            <span className="font-semibold text-white capitalize">{post.platform}</span>
+                            <PlatformIcon platform={post.platform} size={16} showLabel useBrandColor={true} className="text-white" />
                           </div>
                           <Badge className={`${getStatusColor(post.status)} text-white`}>
                             <div className="flex items-center gap-1">

@@ -93,7 +93,7 @@ export async function buildUnifiedContext(
     return dir + PROBLEM_ENFORCEMENT_BLOCK;
   }
 
-  const profile = await getProfile(companyId, { autoRefine: false });
+  const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
   const missionContext = await buildCompanyMissionContext(companyId, 'FULL');
 
   let contextBlock = '';

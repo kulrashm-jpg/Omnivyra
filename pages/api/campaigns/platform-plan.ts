@@ -28,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'companyId and weekNumber are required' });
     }
 
-    const profile = await getProfile(companyId, { autoRefine: false });
+    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
     if (!profile) {
       return res.status(404).json({ error: 'Company profile not found' });
     }

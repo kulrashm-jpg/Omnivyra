@@ -2,6 +2,7 @@ import type { OpportunityInput } from './opportunityService';
 import { buildUnifiedContext } from './contextResolver';
 import type { FocusModule } from './contextResolver';
 import { runDiagnosticPrompt } from './llm/openaiAdapter';
+import { getStrategicThemesAsOpportunities } from './strategicThemeEngine';
 
 export type GeneratorOptions = { regions?: string[] | null };
 
@@ -42,7 +43,7 @@ export function getGenerator(
   return async (companyId: string, strategicPayload?: StrategicPayload) => {
     switch (type) {
       case 'TREND':
-        return generateTrendOpportunities(companyId, strategicPayload);
+        return getStrategicThemesAsOpportunities({ companyId, limit: 20 });
       case 'LEAD':
         return generateLeadOpportunities(companyId);
       case 'PULSE':
@@ -57,129 +58,6 @@ export function getGenerator(
         return [];
     }
   };
-}
-
-type TrendThemeItem = {
-  title: string;
-  summary: string;
-  reach_estimate?: number | string;
-  formats?: string[];
-};
-
-/**
- * Generate TREND opportunities using strategic payload and optional OpenAI.
- */
-export async function generateTrendOpportunities(
-  companyId: string,
-  strategicPayload?: StrategicPayload
-): Promise<OpportunityInput[]> {
-  const offerings = strategicPayload?.selected_offerings ?? [];
-  const aspect = strategicPayload?.selected_aspect ?? null;
-  const direction = strategicPayload?.strategic_text ?? '';
-  const contextMode = (strategicPayload?.context_mode ?? 'FULL') as 'FULL' | 'FOCUSED' | 'NONE';
-  const regions = strategicPayload?.regions ?? [];
-  const clusterInputs = strategicPayload?.cluster_inputs ?? [];
-
-  const missionBlock = await buildUnifiedContext(companyId, {
-    mode: contextMode,
-    selectedModules: strategicPayload?.focused_modules,
-    additionalDirection: strategicPayload?.additional_direction,
-  });
-
-  let geographyInstruction = '';
-  let hasGeographyInContext = false;
-  if (contextMode !== 'NONE') {
-    const { buildCompanyMissionContext } = await import('./companyMissionContext');
-    const mc = await buildCompanyMissionContext(companyId, 'FULL');
-    hasGeographyInContext = !!(mc?.geography);
-  }
-  if (regions.length === 0) {
-    if (hasGeographyInContext) {
-      geographyInstruction = 'Use the company\'s default geography from context as the primary focus.';
-    } else {
-      geographyInstruction = 'Generate globally neutral themes (no specific region).';
-    }
-  } else if (regions.length === 1) {
-    geographyInstruction = `Tailor campaign themes specifically for the following region: ${regions[0]}.
-Consider cultural context, current market sentiment, and seasonal timing.`;
-  } else {
-    geographyInstruction = `Generate unified strategic themes suitable for multiple regions: ${regions.join(', ')}.
-Highlight region-specific nuance where necessary.
-Ensure themes are adaptable across cultures.`;
-  }
-
-  let clusterBlock = '';
-  if (clusterInputs.length > 0) {
-    const clusterLines = clusterInputs.map(
-      (c) =>
-        `- Problem Domain: ${c.problem_domain}, Signal Count: ${c.signal_count}, Avg Intent: ${c.avg_intent_score}, Avg Urgency: ${c.avg_urgency_score}, Priority: ${c.priority_score}`
-    );
-    clusterBlock = `
-
-Cluster-Derived Market Signal:
-${clusterLines.join('\n')}
-
-These represent validated emerging demand patterns from real market conversations.
-Build themes that directly capture this demand wave.
-Prioritize speed-to-market and differentiation.`;
-    if (regions.length > 0) {
-      clusterBlock += `
-
-Adapt themes for specified regions while preserving demand pattern.`;
-    }
-    clusterBlock += `
-
-Focus on execution-ready pillars, not exploratory themes.`;
-  }
-
-  const noAlignmentInstruction = !missionBlock
-    ? '\nDo not align to any company. Focus only on provided strategic inputs.'
-    : '';
-
-  const problemSignalInstruction = missionBlock
-    ? '\nThemes must originate from real user problem signals, not abstract market topics.'
-    : '';
-
-  const promptInput = {
-    problem_mission_context: missionBlock || null,
-    offerings,
-    strategic_aspect: aspect,
-    direction_notes: direction,
-    strategic_intents: strategicPayload?.strategic_intents ?? [],
-    context_mode: contextMode,
-    target_regions: regions,
-    geography_instruction: geographyInstruction,
-    cluster_derived_signal: clusterInputs.length > 0 ? clusterBlock : null,
-    additional_direction: strategicPayload?.additional_direction || null,
-  };
-
-  const systemPrompt = `You are a strategic campaign planner. Generate 6 strategic campaign theme pillars based on the provided context.
-${missionBlock ? `\n${missionBlock}\n` : ''}
-If context_mode is NONE, ignore brand alignment and focus on the strategic aspect and direction notes.${noAlignmentInstruction}
-Follow the geography_instruction for regional focus.
-If cluster_derived_signal is provided, treat it as high-priority input: build themes that directly capture the stated demand patterns.${problemSignalInstruction}
-Output valid JSON only, in this exact shape: { "themes": [ { "title": string, "summary": string, "reach_estimate": number or string, "formats": string[] } ] }.
-Each theme should have a short title, a 1-2 sentence summary, an optional reach_estimate, and 1-3 suggested formats (e.g. "Blog", "Video", "Social").`;
-
-  const userPrompt = JSON.stringify(promptInput, null, 2);
-
-  try {
-    const { data } = await runDiagnosticPrompt<{ themes: TrendThemeItem[] }>(
-      systemPrompt,
-      userPrompt
-    );
-    const themes = Array.isArray(data?.themes) ? data.themes : [];
-    return themes.slice(0, 6).map((t) => ({
-      title: (t.title ?? 'Strategic theme').trim() || 'Strategic theme',
-      summary: (t.summary ?? '').trim() || null,
-      payload: {
-        reach_estimate: t.reach_estimate ?? null,
-        formats: Array.isArray(t.formats) ? t.formats : [],
-      },
-    }));
-  } catch (err) {
-    return [];
-  }
 }
 
 /** Per-region recommendation output for multi-region consolidation. */

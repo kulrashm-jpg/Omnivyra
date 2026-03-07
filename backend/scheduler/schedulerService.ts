@@ -12,6 +12,13 @@ import { supabase } from '../db/supabaseClient';
 import { getQueue, getEngagementPollingQueue } from '../queue/bullmqClient';
 import { createQueueJob } from '../db/queries';
 import { getCampaignReadiness } from '../services/campaignReadinessService';
+import { addIntelligencePollingJob } from '../queue/intelligencePollingQueue';
+import { INTELLIGENCE_POLLER_USER_ID } from '../services/externalApiService';
+import { clusterRecentSignals } from '../services/signalClusterEngine';
+import { generateSignalIntelligence } from '../services/signalIntelligenceEngine';
+import { generateStrategicThemes } from '../services/strategicThemeEngine';
+import { generateCampaignOpportunities } from '../services/campaignOpportunityEngine';
+import { computeThemeRelevanceForCompany } from '../services/companyTrendRelevanceEngine';
 
 interface SchedulerResult {
   found: number; // Posts found that are due
@@ -156,5 +163,230 @@ export async function enqueueEngagementPolling(): Promise<void> {
   const queue = getEngagementPollingQueue();
   await queue.add('poll', {}, { jobId: `engagement-poll-${Date.now()}` });
   console.log('✅ Engagement polling job enqueued');
+}
+
+/** Polling window in minutes (2 hours) for rate limit check */
+const INTELLIGENCE_POLLING_WINDOW_MINUTES = 120;
+
+/** Reliability thresholds for job priority: HIGH=1, MEDIUM=5, LOW=10 */
+const RELIABILITY_HIGH = 0.8;
+const RELIABILITY_MEDIUM = 0.3;
+
+/** Map company polling_frequency to job priority (lower = run sooner). Used to respect company-configured polling. */
+const POLLING_PRIORITY: Record<string, number> = {
+  realtime: 1,
+  '2h': 2,
+  '6h': 5,
+  daily: 10,
+  weekly: 20,
+};
+function pollingPriorityFromConfig(frequency: string | null | undefined): number {
+  if (!frequency || typeof frequency !== 'string') return 10;
+  const key = frequency.trim().toLowerCase();
+  return POLLING_PRIORITY[key] ?? 10;
+}
+
+export interface EnqueueIntelligencePollingResult {
+  enqueued: number;
+  skipped: number;
+  reasons: { skipped_rate_limit: number; skipped_disabled: number };
+}
+
+/**
+ * Enqueue intelligence polling jobs for external API sources that at least one company has enabled.
+ * Call every 2 hours (e.g. from cron).
+ * - Only sources that appear in company_api_configs with enabled = true (company-aligned consumption)
+ * - Of those, only is_active = true and reliability not "disabled" (reliability_score >= 0.1)
+ * - Skips source if today's request_count >= rate_limit_per_min * polling_window
+ * - Priority: HIGH reliability (>=0.8) → 1, MEDIUM (>=0.3) → 5, LOW → 10
+ */
+export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligencePollingResult> {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { data: enabledConfigRows, error: configError } = await supabase
+    .from('company_api_configs')
+    .select('api_source_id, polling_frequency')
+    .eq('enabled', true);
+
+  if (configError || !enabledConfigRows?.length) {
+    return { enqueued: 0, skipped: 0, reasons: { skipped_rate_limit: 0, skipped_disabled: 0 } };
+  }
+
+  const enabledSourceIds = [...new Set((enabledConfigRows || []).map((r) => r.api_source_id))];
+  const pollingPriorityBySource = new Map<string, number>();
+  for (const row of enabledConfigRows || []) {
+    const id = row.api_source_id;
+    const p = pollingPriorityFromConfig((row as { polling_frequency?: string | null }).polling_frequency);
+    const existing = pollingPriorityBySource.get(id);
+    if (existing === undefined || p < existing) pollingPriorityBySource.set(id, p);
+  }
+  const { data: sources, error: sourcesError } = await supabase
+    .from('external_api_sources')
+    .select('id, name, rate_limit_per_min')
+    .eq('is_active', true)
+    .in('id', enabledSourceIds);
+
+  if (sourcesError || !sources?.length) {
+    return { enqueued: 0, skipped: 0, reasons: { skipped_rate_limit: 0, skipped_disabled: 0 } };
+  }
+
+  const { data: healthRows } = await supabase
+    .from('external_api_health')
+    .select('api_source_id, reliability_score')
+    .in('api_source_id', sources.map((s) => s.id));
+
+  const healthBySource = new Map<string, number>();
+  (healthRows ?? []).forEach((r: { api_source_id: string; reliability_score?: number }) => {
+    healthBySource.set(r.api_source_id, r.reliability_score ?? 1);
+  });
+
+  const { data: usageRows } = await supabase
+    .from('external_api_usage')
+    .select('api_source_id, request_count')
+    .eq('user_id', INTELLIGENCE_POLLER_USER_ID)
+    .eq('usage_date', today)
+    .in('api_source_id', sources.map((s) => s.id));
+
+  const usageBySource = new Map<string, number>();
+  (usageRows ?? []).forEach((r: { api_source_id: string; request_count?: number }) => {
+    usageBySource.set(r.api_source_id, r.request_count ?? 0);
+  });
+
+  let enqueued = 0;
+  let skippedRateLimit = 0;
+  let skippedDisabled = 0;
+
+  for (const source of sources) {
+    const reliability = healthBySource.get(source.id) ?? 1;
+    if (reliability < 0.1) {
+      skippedDisabled++;
+      continue;
+    }
+
+    const rateLimitPerMin = source.rate_limit_per_min ?? 60;
+    const cap = rateLimitPerMin * INTELLIGENCE_POLLING_WINDOW_MINUTES;
+    const requestCount = usageBySource.get(source.id) ?? 0;
+    if (requestCount >= cap) {
+      skippedRateLimit++;
+      continue;
+    }
+
+    const reliabilityPriority =
+      reliability >= RELIABILITY_HIGH ? 1 : reliability >= RELIABILITY_MEDIUM ? 5 : 10;
+    const companyPollingPriority = pollingPriorityBySource.get(source.id) ?? 10;
+    const priority = Math.min(reliabilityPriority, companyPollingPriority);
+
+    try {
+      await addIntelligencePollingJob(
+        { apiSourceId: source.id, companyId: null, purpose: 'intelligence_polling' },
+        { priority }
+      );
+      enqueued++;
+    } catch (err: any) {
+      console.warn('[enqueueIntelligencePolling] failed to enqueue', source.id, err?.message);
+    }
+  }
+
+  if (enqueued > 0) {
+    console.log(
+      `✅ Intelligence polling: enqueued ${enqueued}, skipped ${skippedRateLimit + skippedDisabled} (rate_limit=${skippedRateLimit}, disabled=${skippedDisabled})`
+    );
+  }
+
+  return {
+    enqueued,
+    skipped: skippedRateLimit + skippedDisabled,
+    reasons: { skipped_rate_limit: skippedRateLimit, skipped_disabled: skippedDisabled },
+  };
+}
+
+/**
+ * Run signal clustering on recent unclustered signals (last 6 hours).
+ * Call every 30 minutes (e.g. from cron).
+ */
+export async function runSignalClustering(): Promise<{
+  signals_processed: number;
+  clusters_created: number;
+  clusters_updated: number;
+}> {
+  const result = await clusterRecentSignals();
+  return {
+    signals_processed: result.signals_processed,
+    clusters_created: result.clusters_created,
+    clusters_updated: result.clusters_updated,
+  };
+}
+
+/**
+ * Run signal intelligence engine: convert clusters to actionable intelligence.
+ * Call every hour (e.g. from cron).
+ */
+export async function runSignalIntelligenceEngine(): Promise<{
+  clusters_processed: number;
+  records_upserted: number;
+}> {
+  return generateSignalIntelligence();
+}
+
+/**
+ * Run strategic theme engine: convert eligible intelligence into theme cards.
+ * Call every hour (e.g. from cron).
+ */
+export async function runStrategicThemeEngine(): Promise<{
+  intelligence_eligible: number;
+  themes_created: number;
+  themes_skipped: number;
+}> {
+  return generateStrategicThemes();
+}
+
+/**
+ * Run campaign opportunity engine: convert strategic themes into campaign opportunities.
+ * Call every hour (e.g. from cron).
+ */
+export async function runCampaignOpportunityEngine(): Promise<{
+  themes_processed: number;
+  opportunities_created: number;
+  opportunities_skipped: number;
+}> {
+  return generateCampaignOpportunities();
+}
+
+/**
+ * Run company trend relevance: score theme relevance per company (industry, keywords, competitors).
+ * Call every 6 hours (e.g. from cron).
+ */
+export async function runCompanyTrendRelevance(): Promise<{
+  companies_processed: number;
+  total_themes_scored: number;
+  errors: string[];
+}> {
+  const { data: companies, error } = await supabase
+    .from('companies')
+    .select('id')
+    .eq('status', 'active');
+
+  if (error || !companies?.length) {
+    return { companies_processed: 0, total_themes_scored: 0, errors: error ? [error.message] : [] };
+  }
+
+  let totalThemesScored = 0;
+  const errors: string[] = [];
+
+  for (const row of companies as { id: string }[]) {
+    try {
+      const result = await computeThemeRelevanceForCompany(row.id);
+      totalThemesScored += result.themes_scored;
+      errors.push(...result.errors);
+    } catch (e: any) {
+      errors.push(`company ${row.id}: ${e?.message ?? String(e)}`);
+    }
+  }
+
+  return {
+    companies_processed: companies.length,
+    total_themes_scored: totalThemesScored,
+    errors,
+  };
 }
 

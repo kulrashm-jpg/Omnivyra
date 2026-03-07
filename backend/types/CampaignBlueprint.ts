@@ -7,6 +7,8 @@ export interface CampaignBlueprint {
   campaign_id: string;
   duration_weeks: number;
   weeks: CampaignBlueprintWeek[];
+  /** Short strategic narrative (e.g. "This campaign begins by raising awareness..."). */
+  campaign_strategy_summary?: string;
 }
 
 export interface PlatformContentBreakdownItem {
@@ -81,6 +83,7 @@ export interface CampaignBlueprintWeek {
   /**
    * Deterministic execution units (additive).
    * Each execution_item has topic_slots; each slot may have optional master_content_id (one slot = one logical content piece).
+   * Scheduling fields (topic_code, content_code, scheduled_day, scheduled_time, etc.) are assigned by weeklyScheduleAllocator.
    * Kept as `any` here to avoid tight coupling across services.
    */
   execution_items?: any[];
@@ -88,4 +91,6 @@ export interface CampaignBlueprintWeek {
   resolved_postings?: any[];
   /** Flexible key-value store for AI/UI additions: summary, objectives, days_to_post, etc. */
   week_extras?: WeekExtras;
+  /** Phase 5: Distribution insights from contentDistributionIntelligence (read-only recommendations). */
+  distribution_insights?: Array<{ type: string; severity: string; message: string; recommendation?: string }>;
 }

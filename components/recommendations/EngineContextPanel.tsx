@@ -61,7 +61,7 @@ export default function EngineContextPanel({
   focusedModules = [],
   additionalDirection = '',
 }: Props) {
-  const [collapsed, setCollapsed] = useState(true);
+  const [overlayOpen, setOverlayOpen] = useState(false);
   const [contextData, setContextData] = useState<CompanyContextApi | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -135,89 +135,124 @@ export default function EngineContextPanel({
   const hasForced = (contextData?.forced_context_active_labels?.length ?? 0) > 0;
   const forcedContext = (contextData?.forced_context ?? {}) as Record<string, unknown>;
 
-  return (
-    <div className="border border-gray-200 rounded-lg bg-gray-50/80 overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setCollapsed((c) => !c)}
-        className="w-full flex items-center justify-between px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-100"
-      >
-        <span>Why We Are Looking At These Trends</span>
-        <span className="text-gray-500">{collapsed ? '▼' : '▲'}</span>
-      </button>
-      {!collapsed && (
-        <div className="px-3 pb-3 pt-0 text-sm text-gray-600 space-y-2">
-          {loading && <p className="text-gray-500">Loading…</p>}
-          {error && <p className="text-red-600">{error}</p>}
-          {!loading && !error && contextMode === 'NONE' && (
-            <div className="space-y-1">
-              <p className="text-gray-700">
-                <span className="font-medium">No Company Context:</span> trend discovery runs without company/forced context.
-              </p>
-              {additionalDirection.trim() ? (
-                <p className="text-gray-700">
-                  <span className="font-medium">Research direction:</span> {additionalDirection}
-                </p>
-              ) : (
-                <p className="text-amber-700">
-                  Add “Additional Research Direction” to guide this run.
-                </p>
-              )}
-            </div>
-          )}
-          {!loading && !error && contextMode !== 'NONE' && (
-            <>
-              <p className="text-gray-700">
-                <span className="font-medium">Context mode:</span> {contextMode === 'FULL' ? 'Full Company Context' : 'Focused Context'}
-              </p>
-              {visibleSections.length === 0 ? (
-                <p className="text-gray-500">No matching company context fields available for this mode.</p>
-              ) : (
-                <div className="space-y-2">
-                  {visibleSections.map((section) => (
-                    (() => {
-                      const entries = Object.entries(section.values)
-                        .filter(([field, value]) => !isGeographyField(field) && hasValue(value));
-                      if (entries.length === 0) return null;
-                      return (
-                    <div key={section.key}>
-                      <span className="text-gray-500 font-medium">{section.label}:</span>
-                      <ul className="mt-0.5 list-disc list-inside text-gray-700 space-y-0.5">
-                        {entries.map(([field, value]) => (
-                            <li key={field}>
-                              {field.replace(/_/g, ' ')}: {formatValue(value)}
-                            </li>
-                        ))}
-                      </ul>
-                    </div>
-                      );
-                    })()
-                  ))}
-                </div>
-              )}
-              {hasForced && (
-                <div className="pt-1">
-                  <span className="text-gray-500 font-medium">Forced Context (active selections):</span>
-                  <ul className="mt-0.5 list-disc list-inside text-gray-700 space-y-0.5">
-                    {(contextData?.forced_context_enabled_fields ?? [])
-                      .filter((fieldKey) => !isGeographyField(fieldKey))
-                      .map((fieldKey) => {
-                      const allKeys = contextData?.forced_context_enabled_fields ?? [];
-                      const index = allKeys.indexOf(fieldKey);
-                      const label = (contextData?.forced_context_active_labels ?? [])[index] || fieldKey.replace(/_/g, ' ');
-                      const value = forcedContext[fieldKey];
-                      return (
-                        <li key={label}>
-                          {label}{hasValue(value) ? `: ${formatValue(value)}` : ''}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
-            </>
+  const overlayContent = (
+    <div className="px-3 pb-3 pt-0 text-sm text-gray-600 space-y-2">
+      {loading && <p className="text-gray-500">Loading…</p>}
+      {error && <p className="text-red-600">{error}</p>}
+      {!loading && !error && contextMode === 'NONE' && (
+        <div className="space-y-1">
+          <p className="text-gray-700">
+            <span className="font-medium">No Company Context:</span> trend discovery runs without company/forced context.
+          </p>
+          {additionalDirection.trim() ? (
+            <p className="text-gray-700">
+              <span className="font-medium">Research direction:</span> {additionalDirection}
+            </p>
+          ) : (
+            <p className="text-amber-700">
+              Add &quot;Additional Research Direction&quot; to guide this run.
+            </p>
           )}
         </div>
+      )}
+      {!loading && !error && contextMode !== 'NONE' && (
+        <>
+          <p className="text-gray-700">
+            <span className="font-medium">Context mode:</span> {contextMode === 'FULL' ? 'Full Company Context' : 'Focused Context'}
+          </p>
+          {visibleSections.length === 0 ? (
+            <p className="text-gray-500">No matching company context fields available for this mode.</p>
+          ) : (
+            <div className="space-y-2">
+              {visibleSections.map((section) => (
+                (() => {
+                  const entries = Object.entries(section.values)
+                    .filter(([field, value]) => !isGeographyField(field) && hasValue(value));
+                  if (entries.length === 0) return null;
+                  return (
+                  <div key={section.key}>
+                    <span className="text-gray-500 font-medium">{section.label}:</span>
+                    <ul className="mt-0.5 list-disc list-inside text-gray-700 space-y-0.5">
+                      {entries.map(([field, value]) => (
+                          <li key={field}>
+                            {field.replace(/_/g, ' ')}: {formatValue(value)}
+                          </li>
+                      ))}
+                    </ul>
+                  </div>
+                    );
+                  })()
+                ))}
+            </div>
+          )}
+          {hasForced && (
+            <div className="pt-1">
+              <span className="text-gray-500 font-medium">Forced Context (active selections):</span>
+              <ul className="mt-0.5 list-disc list-inside text-gray-700 space-y-0.5">
+                {(contextData?.forced_context_enabled_fields ?? [])
+                  .filter((fieldKey) => !isGeographyField(fieldKey))
+                  .map((fieldKey) => {
+                  const allKeys = contextData?.forced_context_enabled_fields ?? [];
+                  const index = allKeys.indexOf(fieldKey);
+                  const label = (contextData?.forced_context_active_labels ?? [])[index] || fieldKey.replace(/_/g, ' ');
+                  const value = forcedContext[fieldKey];
+                  return (
+                    <li key={label}>
+                      {label}{hasValue(value) ? `: ${formatValue(value)}` : ''}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="relative">
+      <div className="border border-gray-200 rounded-lg bg-gray-50/80 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setOverlayOpen((o) => !o)}
+          className="w-full flex items-center justify-between px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-100"
+        >
+          <span>Company context</span>
+          <span className="text-gray-500">{overlayOpen ? '▴' : '▼'}</span>
+        </button>
+      </div>
+      {overlayOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            aria-hidden
+            onClick={() => setOverlayOpen(false)}
+          />
+          <div
+            className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-gray-200 bg-white shadow-xl max-h-[70vh] flex flex-col"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="company-context-overlay-title"
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
+              <h3 id="company-context-overlay-title" className="text-sm font-semibold text-gray-900">
+                Company context
+              </h3>
+              <button
+                type="button"
+                onClick={() => setOverlayOpen(false)}
+                className="text-gray-500 hover:text-gray-700 p-1 rounded"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="overflow-y-auto min-h-0">
+              {overlayContent}
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

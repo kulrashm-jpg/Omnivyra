@@ -1,0 +1,57 @@
+/**
+ * POST /api/campaigns/create-from-opportunity
+ * Create a campaign from a campaign opportunity (intelligence pipeline).
+ * Flow: Campaign Opportunity → Campaign Blueprint → Campaign Builder.
+ */
+
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { generateCampaignFromOpportunity } from '../../../backend/services/opportunityCampaignGenerator';
+
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const { opportunity_id, company_id } = req.body || {};
+
+    if (!opportunity_id || typeof opportunity_id !== 'string') {
+      return res.status(400).json({ error: 'opportunity_id is required' });
+    }
+    if (!company_id || typeof company_id !== 'string') {
+      return res.status(400).json({ error: 'company_id is required' });
+    }
+
+    const access = await enforceCompanyAccess({
+      req,
+      res,
+      companyId: company_id,
+    });
+    if (!access) return;
+
+    const result = await generateCampaignFromOpportunity(
+      opportunity_id.trim(),
+      company_id.trim(),
+      access.userId
+    );
+
+    return res.status(201).json({
+      campaign_id: result.campaign_id,
+      campaign_name: result.campaign_name,
+      opportunity_id: result.opportunity_id,
+      blueprint: result.blueprint,
+    });
+  } catch (err: any) {
+    if (err?.message === 'Campaign opportunity not found') {
+      return res.status(404).json({ error: 'Campaign opportunity not found' });
+    }
+    console.error('[create-from-opportunity]', err);
+    return res.status(500).json({
+      error: err?.message ?? 'Failed to create campaign from opportunity',
+    });
+  }
+}
+
+export default handler;

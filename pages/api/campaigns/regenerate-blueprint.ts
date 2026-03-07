@@ -19,20 +19,9 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { getRecommendedTopicsForCompany } from '../../../backend/services/recommendationEngineService';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { getLatestCampaignVersionByCampaignId } from '../../../backend/db/campaignVersionStore';
-import { generateTrendOpportunities } from '../../../backend/services/opportunityGenerators';
-import type { StrategicPayload } from '../../../backend/services/opportunityGenerators';
-import type { FocusModule } from '../../../backend/services/contextResolver';
+import { getStrategicThemesAsOpportunities } from '../../../backend/services/strategicThemeEngine';
 import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
-
-const FOCUS_MODULE_SET = new Set<FocusModule>([
-  'TARGET_CUSTOMER',
-  'PROBLEM_DOMAIN',
-  'CAMPAIGN_PURPOSE',
-  'OFFERINGS',
-  'GEOGRAPHY',
-  'PRICING',
-]);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -180,7 +169,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       let profile: Awaited<ReturnType<typeof getProfile>> = null;
 
       try {
-        profile = await getProfile(companyIdForTopics, { autoRefine: false });
+        profile = await getProfile(companyIdForTopics, { autoRefine: false, languageRefine: true });
 
         const snapshot = (version?.campaign_snapshot ?? {}) as {
           source_recommendation_id?: string;
@@ -254,58 +243,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         const companyTopics = await getRecommendedTopicsForCompany(companyIdForTopics, 15);
         companyTopics.forEach((t) => topicSet.add(t.trim()));
 
-        // 3. Campaign-specific themes (topic + company context) when no card or to supplement
-        const { data: campRow } = await supabase
-          .from('campaigns')
-          .select('name, description')
-          .eq('id', campaignId)
-          .maybeSingle();
-        const snap = version?.campaign_snapshot ?? {};
-        const planCtx = (snap?.planning_context ?? snap) as Record<string, unknown>;
-        const buildMode = (version?.build_mode ?? planCtx?.context_mode ?? 'full_context') as string;
-        const contextMode =
-          buildMode === 'full_context'
-            ? 'FULL'
-            : buildMode === 'focused_context'
-              ? 'FOCUSED'
-              : 'NONE';
-        const targetRegions = (planCtx?.target_regions as string[]) ?? [];
-        const focusedModules = (planCtx?.focused_modules as string[]) ?? [];
-        const normalizedFocusedModules: FocusModule[] = Array.isArray(focusedModules)
-          ? focusedModules
-              .map((m) => String(m ?? '').trim().toUpperCase())
-              .filter((m): m is FocusModule => FOCUS_MODULE_SET.has(m as FocusModule))
-          : [];
-        const additionalDirection =
-          (planCtx?.additional_direction as string) || (campRow?.description as string) || '';
-        const companyContext: Record<string, unknown> = {};
-        if (profile) {
-          companyContext.brand_voice = (profile as any).brand_voice;
-          companyContext.icp = (profile as any).ideal_customer_profile;
-          companyContext.positioning = (profile as any).brand_positioning;
-          companyContext.themes = (profile as any).content_themes ?? (profile as any).content_themes_list;
-          companyContext.geography = (profile as any).geography;
-        }
-        const campaignTypes = (version?.campaign_types ?? (planCtx?.campaign_types as string[]) ?? ['brand_awareness']) as string[];
-        const strategicText = [
-          `Campaign: ${(campRow?.name ?? '').trim() || 'Untitled campaign'}`,
-          campRow?.description ? `Focus: ${String(campRow.description).slice(0, 300)}` : '',
-          campaignTypes.length ? `Campaign types: ${campaignTypes.join(', ')}` : '',
-          additionalDirection ? `Additional direction: ${additionalDirection.slice(0, 200)}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n');
-        const payload: StrategicPayload = {
-          context_mode: contextMode,
-          company_context: companyContext,
-          selected_offerings: [],
-          selected_aspect: null,
-          strategic_text: strategicText,
-          regions: targetRegions.length > 0 ? targetRegions : undefined,
-          focused_modules: normalizedFocusedModules.length > 0 ? normalizedFocusedModules : undefined,
-          additional_direction: additionalDirection || undefined,
-        };
-        const themes = await generateTrendOpportunities(companyIdForTopics, payload);
+        // 3. Strategic themes from intelligence pipeline (replaces legacy LLM trend generation)
+        const themes = await getStrategicThemesAsOpportunities({
+          companyId: companyIdForTopics,
+          limit: 20,
+        });
         themes.forEach((t) => {
           if (t.title?.trim()) topicSet.add(t.title.trim());
         });

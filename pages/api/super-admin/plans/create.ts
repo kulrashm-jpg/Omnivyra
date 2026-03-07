@@ -14,7 +14,19 @@ const requireSuperAdmin = async (
   return false;
 };
 
-const RESOURCE_KEYS = ['llm_tokens', 'external_api_calls', 'automation_executions'];
+const RESOURCE_KEYS = [
+  'llm_tokens',
+  'external_api_calls',
+  'automation_executions',
+  'max_campaign_duration_weeks',
+  'max_topics',
+  'max_competitors',
+  'max_regions',
+  'max_products',
+  'max_keywords',
+  'enable_api_presets',
+  'enable_custom_templates',
+];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -74,15 +86,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       planId = inserted.id;
     }
 
-    for (const resourceKey of RESOURCE_KEYS) {
+    const keysToUpsert = [...new Set([...RESOURCE_KEYS, ...Object.keys(limits)])];
+    for (const resourceKey of keysToUpsert) {
       const value = limits[resourceKey];
-      const monthlyLimit = value != null ? Number(value) : null;
+      if (value === undefined) continue;
+      const limitValue = value != null ? Number(value) : null;
 
       const { error: upsertErr } = await supabase.from('plan_limits').upsert(
         {
           plan_id: planId,
           resource_key: resourceKey,
-          monthly_limit: monthlyLimit,
+          limit_value: limitValue,
           created_at: now,
         },
         { onConflict: 'plan_id,resource_key' }

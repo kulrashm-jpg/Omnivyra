@@ -10,12 +10,17 @@ import { ArrowLeft, Calendar, GripVertical, RefreshCw, ExternalLink } from 'luci
 import { getAiLookingAheadMessage } from '@/lib/aiLookingAheadMessage';
 import { getAiStrategicConfidence } from '@/lib/aiStrategicConfidence';
 import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
+import PlatformIcon from '../../components/ui/PlatformIcon';
 import { blueprintItemToUnifiedExecutionUnit } from '@/lib/planning/unifiedExecutionAdapter';
 import { applyDistributionForWeek } from '@/lib/planning/distributionEngine';
 import { detectMasterContentGroups } from '@/lib/planning/masterContentGrouping';
 import { buildRepurposingContext } from '@/lib/planning/repurposingContext';
 import { buildMasterContentDocument } from '@/lib/planning/masterContentDocument';
+import { buildWeeklyActivitiesFromExecutionItems } from '@/lib/planning/weeklyActivityAdapter';
+import { analyzeWeeklyDistribution } from '@/lib/planning/contentDistributionIntelligence';
+import WeeklyActivityBoard from '@/components/weekly-board/WeeklyActivityBoard';
 import type { UnifiedExecutionUnit } from '@/lib/planning/unifiedExecutionAdapter';
+import type { WeeklyActivity } from '@/lib/planning/weeklyActivityAdapter';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -54,6 +59,7 @@ export default function CampaignDailyPlanPage() {
   const [campaignStartDate, setCampaignStartDate] = useState<string | null>(null);
   const [totalWeeks, setTotalWeeks] = useState(1);
   const [weeklyPlans, setWeeklyPlans] = useState<Array<{ weekNumber?: number; week?: number; theme?: string }>>([]);
+  const [planWeeks, setPlanWeeks] = useState<Record<string, unknown>[]>([]);
   const [activities, setActivities] = useState<GridActivity[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -98,8 +104,9 @@ export default function CampaignDailyPlanPage() {
       setWeeklyPlans(plans);
 
       const payload = planRes.ok ? await planRes.json().catch(() => ({})) : {};
-      const planWeeks = (Array.isArray(payload?.draftPlan?.weeks) && payload.draftPlan.weeks.length > 0 ? payload.draftPlan.weeks : (Array.isArray(payload?.committedPlan?.weeks) ? payload.committedPlan.weeks : [])) || [];
-      const totalFromPlan = planWeeks.length;
+      const rawPlanWeeks = (Array.isArray(payload?.draftPlan?.weeks) && payload.draftPlan.weeks.length > 0 ? payload.draftPlan.weeks : (Array.isArray(payload?.committedPlan?.weeks) ? payload.committedPlan.weeks : [])) || [];
+      setPlanWeeks(rawPlanWeeks);
+      const totalFromPlan = rawPlanWeeks.length;
       const totalFromWeekly = plans.length;
       setTotalWeeks(Math.max(1, durationWeeks ?? 0, totalFromPlan, totalFromWeekly));
 
@@ -113,7 +120,7 @@ export default function CampaignDailyPlanPage() {
         }
       }
       const mapped: GridActivity[] = [];
-      for (const week of planWeeks) {
+      for (const week of rawPlanWeeks) {
         const weekNumber = Number((week as any)?.week ?? (week as any)?.week_number ?? 0) || 0;
         const items = Array.isArray((week as any)?.daily_execution_items) ? (week as any).daily_execution_items : [];
         const units = items.map((item: any) => blueprintItemToUnifiedExecutionUnit(item, week, id));
@@ -241,6 +248,7 @@ export default function CampaignDailyPlanPage() {
       }
     }
 
+    const totalDistributions = activitiesForThisTopicOnDay.length;
     const schedules = activitiesForThisTopicOnDay.map((a, idx) => ({
       id: a.planId ? `plan-${a.planId}` : `repurpose-${a.execution_id}-${idx}`,
       platform: a.platform.toLowerCase(),
@@ -250,6 +258,8 @@ export default function CampaignDailyPlanPage() {
       status: 'planned',
       title: activity.title,
       description: String((raw as any)?.writingIntent ?? (raw as any)?.description ?? ''),
+      sequence_index: idx + 1,
+      total_distributions: totalDistributions,
     }));
 
     const weekActivities = activities.filter((a) => a.week_number === activity.week_number);
@@ -292,6 +302,27 @@ export default function CampaignDailyPlanPage() {
     } catch (e) {
       console.error('Failed to open Activity Content Workspace', e);
     }
+  };
+
+  const openWorkspaceFromCard = (activity: WeeklyActivity) => {
+    const dayFull = DAYS[activity.scheduled_day - 1] ?? 'Monday';
+    const gridLike: GridActivity = {
+      id: activity.execution_id ?? activity.content_code,
+      execution_id: activity.execution_id ?? activity.content_code,
+      week_number: activity.week_number ?? 1,
+      day: dayFull,
+      title: activity.topic,
+      platform: activity.platform,
+      content_type: activity.content_type,
+      raw_item: activity.raw_slot,
+    };
+    openActivityWorkspace(gridLike);
+  };
+
+  const handleImprovePlan = (weekNumber: number) => {
+    router.push(
+      `/campaign-planning?campaignId=${encodeURIComponent(id)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}&week=${weekNumber}&openChat=1`
+    );
   };
 
   const handleRegenerateWeek = async (weekNumber: number) => {
@@ -394,11 +425,11 @@ export default function CampaignDailyPlanPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
           <div className="flex items-center justify-between mb-6">
             <button
-              onClick={() => router.push(`/campaign-planning-hierarchical?campaignId=${id}${companyId ? `&companyId=${companyId}` : ''}`)}
+              onClick={() => router.push(`/campaign-details/${id}${companyId ? `?companyId=${companyId}` : ''}`)}
               className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
             >
               <ArrowLeft className="w-5 h-5" />
-              Back to week plan
+              Back to campaign
             </button>
             <h1 className="text-xl font-bold text-gray-900">
               Daily Content Plan{campaignName ? ` — ${campaignName}` : ''}
@@ -509,6 +540,33 @@ export default function CampaignDailyPlanPage() {
                       Regenerate
                     </button>
                   </div>
+                  {(() => {
+                    const weekData = planWeeks.find((w: any) => (w?.week ?? w?.week_number) === weekNumber);
+                    const execItems = Array.isArray((weekData as any)?.execution_items) ? (weekData as any).execution_items : [];
+                    const hasSlots = execItems.some((e: any) => Array.isArray(e?.topic_slots) && e.topic_slots.length > 0);
+                    if (!hasSlots) return null;
+                    const cardActivities = buildWeeklyActivitiesFromExecutionItems(weekData);
+                    const distributionInsights = Array.isArray((weekData as any)?.distribution_insights)
+                      ? (weekData as any).distribution_insights
+                      : analyzeWeeklyDistribution(weekData, {
+                          campaignStartDate: campaignStartDate ?? undefined,
+                          weekNumber,
+                        });
+                    return (
+                      <div className="px-4 py-3 border-b border-gray-200 bg-white">
+                        <WeeklyActivityBoard
+                          activities={cardActivities}
+                          weekNumber={weekNumber}
+                          weekTheme={theme}
+                          campaignId={id}
+                          distributionInsights={distributionInsights}
+                          onOpenWorkspace={openWorkspaceFromCard}
+                          onImprovePlan={() => handleImprovePlan(weekNumber)}
+                          onEditApplied={loadData}
+                        />
+                      </div>
+                    );
+                  })()}
                   <div className="grid grid-cols-7 gap-px bg-gray-200">
                     {DAYS.map((day) => {
                       const cellActivities = getActivitiesFor(weekNumber, day);
@@ -552,7 +610,7 @@ export default function CampaignDailyPlanPage() {
                                   <span className="text-xs text-gray-800 truncate flex-1" title={act.title}>
                                     {act.title.slice(0, 24)}{act.title.length > 24 ? '…' : ''}
                                   </span>
-                                  <span className="text-[10px] text-gray-500 capitalize shrink-0">{act.platform}</span>
+                                  <span className="shrink-0"><PlatformIcon platform={act.platform} size={12} showLabel className="text-[10px] text-gray-500" /></span>
                                   <ExternalLink className="w-3 h-3 text-gray-400 shrink-0" />
                                 </div>
                                 <div className="font-medium text-[10px] text-gray-800">{modeLabel ?? 'AI Ready'}</div>

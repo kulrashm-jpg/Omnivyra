@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<!--
+  Placeholders for dynamic values:
+  {{company_name}} {{website_url}} {{report_date}}
+  {{seo_visibility_score}} {{journey_score}} {{conversion_score}} {{trust_score}}
+  {{lead_opportunity}}
+  Score colors: 80-100 green, 60-79 yellow, 40-59 orange, below 40 red
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Lead Generation & Website Performance Report - Omnivyra</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+      color: #333;
+      background: #fff;
+      padding: 40px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .report-header {
+      text-align: center;
+      padding: 32px 0;
+      border-bottom: 1px solid #e5e7eb;
+      margin-bottom: 32px;
+    }
+    .logo-placeholder {
+      width: 120px;
+      height: 40px;
+      background: #f3f4f6;
+      border-radius: 6px;
+      margin: 0 auto 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #9ca3af;
+      font-size: 12px;
+    }
+    .report-title {
+      font-size: 26px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 16px;
+      line-height: 1.3;
+    }
+    .company-info {
+      font-size: 14px;
+      color: #6b7280;
+    }
+    .company-info span {
+      display: block;
+      margin: 4px 0;
+    }
+    .section {
+      margin-bottom: 32px;
+      padding: 24px;
+      background: #f9fafb;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #111827;
+      margin-bottom: 16px;
+    }
+    /* Executive Summary */
+    .executive-box {
+      background: #fefce8;
+      border-left: 4px solid #eab308;
+      padding: 20px 24px;
+      border-radius: 8px;
+      margin-top: 12px;
+    }
+    .executive-text {
+      color: #713f12;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    /* Lead Score Section */
+    .lead-score-section {
+      text-align: center;
+      padding: 40px;
+    }
+    .lead-score-value {
+      font-size: 48px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 8px;
+    }
+    .lead-score-max {
+      font-size: 18px;
+      color: #6b7280;
+      font-weight: 500;
+      margin-bottom: 20px;
+    }
+    .progress-bar-container {
+      max-width: 400px;
+      margin: 0 auto 20px;
+      background: #fff;
+      height: 20px;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.06);
+    }
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 10px;
+    }
+    .progress-bar-fill.green { background: #22c55e; }
+    .progress-bar-fill.yellow { background: #eab308; }
+    .progress-bar-fill.orange { background: #f97316; }
+    .progress-bar-fill.red { background: #ef4444; }
+    .score-explanation {
+      color: #6b7280;
+      font-size: 14px;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    /* Analysis Cards */
+    .analysis-card {
+      background: #fff;
+      padding: 24px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      margin-top: 16px;
+      border-top: 4px solid #e5e7eb;
+    }
+    .analysis-card.green { border-top-color: #22c55e; }
+    .analysis-card.yellow { border-top-color: #eab308; }
+    .analysis-card.orange { border-top-color: #f97316; }
+    .analysis-card.red { border-top-color: #ef4444; }
+    .card-score {
+      font-size: 32px;
+      font-weight: 700;
+      margin: 8px 0 12px;
+    }
+    .card-score.green { color: #22c55e; }
+    .card-score.yellow { color: #ca8a04; }
+    .card-score.orange { color: #ea580c; }
+    .card-score.red { color: #dc2626; }
+    .card-explanation {
+      font-size: 14px;
+      color: #6b7280;
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+    .observations-list {
+      list-style: none;
+      margin-top: 12px;
+    }
+    .observations-list li {
+      padding: 10px 14px;
+      margin-bottom: 6px;
+      background: #f9fafb;
+      border-radius: 6px;
+      border-left: 3px solid #94a3b8;
+      font-size: 14px;
+    }
+    .observations-list li::before {
+      content: "•";
+      margin-right: 8px;
+      font-weight: bold;
+      color: #64748b;
+    }
+    /* Lead Opportunity Highlight */
+    .opportunity-box {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 20px 24px;
+      border-radius: 8px;
+    }
+    .opportunity-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #1e40af;
+      margin-bottom: 8px;
+    }
+    .opportunity-text {
+      color: #1e40af;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    /* Competitive Positioning */
+    .competitive-text {
+      font-size: 15px;
+      color: #4b5563;
+      line-height: 1.6;
+    }
+    /* Recommendations Checklist */
+    .recommendations-list {
+      list-style: none;
+      margin-top: 12px;
+    }
+    .recommendations-list li {
+      padding: 14px 16px;
+      margin-bottom: 8px;
+      background: #fff;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .rec-num {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      background: #1e40af;
+      color: #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .rec-text {
+      flex: 1;
+    }
+    /* Growth Summary */
+    .growth-summary {
+      background: #f0fdf4;
+      border-left: 4px solid #22c55e;
+      padding: 20px 24px;
+      border-radius: 8px;
+    }
+    .growth-summary .section-title {
+      color: #166534;
+    }
+    .growth-text {
+      color: #15803d;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    /* CTA Section */
+    .cta-section {
+      background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+      color: #fff;
+      padding: 32px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .cta-section .section-title {
+      color: #fff;
+      font-size: 22px;
+      margin-bottom: 12px;
+    }
+    .cta-text {
+      font-size: 15px;
+      line-height: 1.6;
+      opacity: 0.9;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    @media print {
+      body { padding: 20px; }
+      .section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <!-- REPORT HEADER -->
+  <header class="report-header">
+    <div class="logo-placeholder">[Omnivyra Logo]</div>
+    <h1 class="report-title">AI Lead Generation & Website Performance Report</h1>
+    <div class="company-info">
+      <span><strong>Company:</strong> BrightPath Consulting</span>
+      <span><strong>Website:</strong> www.brightpathconsulting.com</span>
+      <span><strong>Report Date:</strong> March 2026</span>
+    </div>
+  </header>
+
+  <!-- SECTION 1: Executive Summary -->
+  <section class="section">
+    <h2 class="section-title">Executive Summary</h2>
+    <div class="executive-box">
+      <p class="executive-text">Your website shows moderate visibility and engagement potential but currently lacks strong lead conversion pathways. Improvements in call-to-action placement, trust signals, and search visibility could significantly increase customer inquiries.</p>
+    </div>
+  </section>
+
+  <!-- SECTION 2: Lead Generation Readiness Score -->
+  <section class="section lead-score-section">
+    <h2 class="section-title">Lead Generation Readiness Score</h2>
+    <div class="lead-score-value">64</div>
+    <div class="lead-score-max">/ 100</div>
+    <div class="progress-bar-container">
+      <div class="progress-bar-fill yellow" style="width: 64%;"></div>
+    </div>
+    <p class="score-explanation">This score reflects how effectively your website turns visitors into leads.</p>
+  </section>
+
+  <!-- SECTION 3: Website Visibility Analysis -->
+  <section class="section">
+    <h2 class="section-title">Website Visibility Analysis</h2>
+    <div class="analysis-card yellow">
+      <div class="card-score yellow">68</div>
+      <p class="card-explanation">Your website appears in search results but may not rank strongly for important business-related keywords.</p>
+      <ul class="observations-list">
+        <li>Meta descriptions missing on several pages</li>
+        <li>Limited internal linking structure</li>
+        <li>Some headings lack keyword relevance</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SECTION 4: Customer Journey Analysis -->
+  <section class="section">
+    <h2 class="section-title">Customer Journey Analysis</h2>
+    <div class="analysis-card yellow">
+      <div class="card-score yellow">61</div>
+      <p class="card-explanation">Analysis of how visitors move through the website toward becoming leads.</p>
+      <ul class="observations-list">
+        <li>Visitors may struggle to identify the next step after reading the homepage</li>
+        <li>Navigation contains too many primary options</li>
+        <li>Key service pages lack strong lead capture prompts</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SECTION 5: Conversion Opportunity Assessment -->
+  <section class="section">
+    <h2 class="section-title">Conversion Opportunity Assessment</h2>
+    <div class="analysis-card orange">
+      <div class="card-score orange">57</div>
+      <p class="card-explanation">Analysis of conversion friction and barriers to lead capture.</p>
+      <ul class="observations-list">
+        <li>Primary call-to-action appears below the fold</li>
+        <li>Contact form requires multiple fields</li>
+        <li>No immediate lead capture incentives</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SECTION 6: Trust & Credibility Signals -->
+  <section class="section">
+    <h2 class="section-title">Trust & Credibility Signals</h2>
+    <div class="analysis-card orange">
+      <div class="card-score orange">52</div>
+      <p class="card-explanation">Analysis of credibility indicators that influence visitor confidence.</p>
+      <ul class="observations-list">
+        <li>No testimonials or customer reviews visible</li>
+        <li>No case studies displayed</li>
+        <li>Limited proof of industry experience</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SECTION 7: Estimated Lead Opportunity -->
+  <section class="section">
+    <h2 class="section-title">Estimated Lead Opportunity</h2>
+    <div class="opportunity-box">
+      <div class="opportunity-value">Estimated Lead Opportunity Increase: 25–40%</div>
+      <p class="opportunity-text">By strengthening conversion pathways and improving search visibility, your website could capture significantly more leads from existing traffic.</p>
+    </div>
+  </section>
+
+  <!-- SECTION 8: Competitive Positioning -->
+  <section class="section">
+    <h2 class="section-title">Competitive Positioning</h2>
+    <p class="competitive-text">Many competing websites emphasize clear value propositions and strong customer proof. Adding these elements could improve competitive positioning.</p>
+  </section>
+
+  <!-- SECTION 9: Top 7 Recommendations -->
+  <section class="section">
+    <h2 class="section-title">Top 7 Recommendations</h2>
+    <ol class="recommendations-list">
+      <li>
+        <span class="rec-num">1</span>
+        <span class="rec-text">Add a clear call-to-action on the homepage hero section</span>
+      </li>
+      <li>
+        <span class="rec-num">2</span>
+        <span class="rec-text">Simplify the navigation structure</span>
+      </li>
+      <li>
+        <span class="rec-num">3</span>
+        <span class="rec-text">Add customer testimonials or case studies</span>
+      </li>
+      <li>
+        <span class="rec-num">4</span>
+        <span class="rec-text">Improve search visibility through better keyword targeting</span>
+      </li>
+      <li>
+        <span class="rec-num">5</span>
+        <span class="rec-text">Reduce friction in contact forms</span>
+      </li>
+      <li>
+        <span class="rec-num">6</span>
+        <span class="rec-text">Add clear service benefits on landing pages</span>
+      </li>
+      <li>
+        <span class="rec-num">7</span>
+        <span class="rec-text">Improve internal linking between key pages</span>
+      </li>
+    </ol>
+  </section>
+
+  <!-- SECTION 10: Growth Potential Summary -->
+  <section class="section growth-summary">
+    <h2 class="section-title">Growth Potential Summary</h2>
+    <p class="growth-text">Your website already provides useful information for potential customers. With strategic improvements to lead capture and messaging clarity, it could significantly increase inquiries and customer engagement.</p>
+  </section>
+
+  <!-- SECTION 11: Omnivyra Recommendation -->
+  <section class="cta-section">
+    <h2 class="section-title">Unlock Deeper Growth Insights with Omnivyra</h2>
+    <p class="cta-text">Omnivyra helps businesses monitor website performance, improve campaign effectiveness, and identify conversion opportunities across the entire customer journey.</p>
+  </section>
+</body>
+</html>

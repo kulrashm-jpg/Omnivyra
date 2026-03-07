@@ -713,7 +713,7 @@ export function DayDetailView({ campaignId, weekNumber, day, onBack }: DayDetail
           <div className="text-center py-8">
             <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">No Content Yet</h3>
-            <p className="text-gray-600 mb-4">This day doesn't have any content planned yet.</p>
+            <p className="text-gray-600 mb-4">This day doesn&apos;t have any content planned yet.</p>
             <button className="flex items-center px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors mx-auto">
               <Plus className="w-4 h-4 mr-2" />
               Add Content

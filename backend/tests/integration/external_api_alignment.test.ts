@@ -4,7 +4,7 @@ import {
   normalizeSerpApiTrends,
   normalizeYouTubeTrends,
 } from '../../services/trendNormalizationService';
-import { setCachedResponse, getCacheStats, resetCacheStats } from '../../services/externalApiCacheService';
+import { setCachedResponse, getCacheStats, resetCacheStats, buildCacheKey } from '../../services/redisExternalApiCache';
 import { updateApiHealth } from '../../services/externalApiHealthService';
 
 jest.mock('../../db/supabaseClient', () => ({
@@ -146,7 +146,7 @@ describe('External API alignment', () => {
     const summary = await externalApiService.fetchExternalTrends('US', 'marketing', { recordHealth: true });
     expect(summary.missing_env_placeholders).toContain('missing_env:MISSING_KEY');
 
-    setCachedResponse('api-2::US::marketing::system', { items: [] }, 1000);
+    await setCachedResponse(buildCacheKey({ apiId: 'api-2', geo: 'marketing', category: undefined, userId: 'system:US' }), { items: [] }, 1000);
     const cachedSummary = await externalApiService.fetchExternalTrends('US', 'marketing', { recordHealth: true });
     expect(getCacheStats().hits).toBeGreaterThan(0);
     expect(updateApiHealth).toHaveBeenCalled();

@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<!--
+  Placeholders for dynamic values:
+  {{company_name}} {{website_url}} {{report_date}}
+  {{seo_score}} {{campaign_score}} {{landing_alignment_score}} {{funnel_score}}
+  {{engagement_score}} {{campaign_readiness}} {{tracking_score}}
+  {{conversion_opportunity}}
+  Score colors: 80-100 green, 60-79 yellow, 40-59 orange, below 40 red
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Marketing Funnel & Conversion Intelligence Report - Omnivyra</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+      color: #333;
+      background: #fff;
+      padding: 40px;
+      max-width: 920px;
+      margin: 0 auto;
+    }
+    .report-header {
+      text-align: center;
+      padding: 32px 0;
+      border-bottom: 1px solid #e5e7eb;
+      margin-bottom: 32px;
+    }
+    .logo-placeholder {
+      width: 120px;
+      height: 40px;
+      background: #f3f4f6;
+      border-radius: 6px;
+      margin: 0 auto 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #9ca3af;
+      font-size: 12px;
+    }
+    .report-title {
+      font-size: 24px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 16px;
+      line-height: 1.3;
+    }
+    .company-info {
+      font-size: 14px;
+      color: #6b7280;
+    }
+    .company-info span {
+      display: block;
+      margin: 4px 0;
+    }
+    .section {
+      margin-bottom: 32px;
+      padding: 24px;
+      background: #f9fafb;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #111827;
+      margin-bottom: 16px;
+    }
+    .section-divider {
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #e5e7eb, transparent);
+      margin: 28px 0;
+    }
+    /* Executive Summary */
+    .insight-box {
+      background: #fefce8;
+      border-left: 4px solid #eab308;
+      padding: 20px 24px;
+      border-radius: 8px;
+      margin-top: 12px;
+    }
+    .insight-text {
+      color: #713f12;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    /* Score Section */
+    .score-section {
+      text-align: center;
+      padding: 36px;
+    }
+    .score-value {
+      font-size: 44px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 8px;
+    }
+    .score-max {
+      font-size: 18px;
+      color: #6b7280;
+      font-weight: 500;
+      margin-bottom: 16px;
+    }
+    .score-explanation {
+      color: #6b7280;
+      font-size: 14px;
+      max-width: 520px;
+      margin: 0 auto;
+    }
+    /* Data Cards */
+    .data-cards {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .data-card {
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      border-top: 4px solid #e5e7eb;
+    }
+    .data-card.green { border-top-color: #22c55e; }
+    .data-card.yellow { border-top-color: #eab308; }
+    .data-card.orange { border-top-color: #f97316; }
+    .data-card.red { border-top-color: #ef4444; }
+    .data-card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .data-card-value {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .data-card-value.green { color: #22c55e; }
+    .data-card-value.yellow { color: #ca8a04; }
+    .data-card-value.orange { color: #ea580c; }
+    .data-card-value.red { color: #dc2626; }
+    .data-card-desc {
+      font-size: 13px;
+      color: #6b7280;
+      line-height: 1.4;
+    }
+    /* Analysis Card */
+    .analysis-card {
+      background: #fff;
+      padding: 24px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      margin-top: 16px;
+      border-top: 4px solid #e5e7eb;
+    }
+    .analysis-card.green { border-top-color: #22c55e; }
+    .analysis-card.yellow { border-top-color: #eab308; }
+    .analysis-card.orange { border-top-color: #f97316; }
+    .analysis-card.red { border-top-color: #ef4444; }
+    .card-score {
+      font-size: 28px;
+      font-weight: 700;
+      margin: 8px 0 12px;
+    }
+    .card-score.green { color: #22c55e; }
+    .card-score.yellow { color: #ca8a04; }
+    .card-score.orange { color: #ea580c; }
+    .card-score.red { color: #dc2626; }
+    .observations-list {
+      list-style: none;
+      margin-top: 12px;
+    }
+    .observations-list li {
+      padding: 10px 14px;
+      margin-bottom: 6px;
+      background: #f9fafb;
+      border-radius: 6px;
+      border-left: 3px solid #94a3b8;
+      font-size: 14px;
+    }
+    .observations-list li::before {
+      content: "•";
+      margin-right: 8px;
+      font-weight: bold;
+      color: #64748b;
+    }
+    /* Funnel Visualization */
+    .funnel-visual {
+      margin: 20px 0;
+      padding: 24px;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      text-align: center;
+    }
+    .funnel-stage {
+      padding: 16px 24px;
+      background: #f3f4f6;
+      border-radius: 6px;
+      margin: 8px auto;
+      font-weight: 500;
+      color: #374151;
+      max-width: 320px;
+    }
+    .funnel-arrow {
+      color: #9ca3af;
+      font-size: 20px;
+      margin: 4px 0;
+    }
+    /* Experiments */
+    .experiment-list {
+      list-style: none;
+      margin-top: 12px;
+    }
+    .experiment-list li {
+      padding: 16px 20px;
+      margin-bottom: 8px;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      border-left: 4px solid #3b82f6;
+    }
+    .experiment-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .experiment-text {
+      font-size: 14px;
+      color: #374151;
+      line-height: 1.5;
+    }
+    /* Table */
+    .analysis-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .analysis-table th,
+    .analysis-table td {
+      padding: 12px 16px;
+      text-align: left;
+      border-bottom: 1px solid #e5e7eb;
+      font-size: 14px;
+    }
+    .analysis-table th {
+      background: #f3f4f6;
+      font-weight: 600;
+      color: #374151;
+    }
+    .analysis-table tr:last-child td {
+      border-bottom: none;
+    }
+    .impact-high { color: #dc2626; font-weight: 600; }
+    .impact-medium { color: #ca8a04; font-weight: 500; }
+    /* Opportunity Box */
+    .opportunity-box {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 20px 24px;
+      border-radius: 8px;
+    }
+    .opportunity-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: #1e40af;
+      margin-bottom: 8px;
+    }
+    .opportunity-text {
+      color: #1e40af;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    /* Competitive Text */
+    .competitive-text {
+      font-size: 15px;
+      color: #4b5563;
+      line-height: 1.6;
+    }
+    /* Growth Summary */
+    .growth-summary {
+      background: #f0fdf4;
+      border-left: 4px solid #22c55e;
+      padding: 20px 24px;
+      border-radius: 8px;
+    }
+    .growth-summary .section-title {
+      color: #166534;
+    }
+    .growth-text {
+      color: #15803d;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    /* CTA Section */
+    .cta-section {
+      background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+      color: #fff;
+      padding: 32px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .cta-section .section-title {
+      color: #fff;
+      font-size: 22px;
+      margin-bottom: 12px;
+    }
+    .cta-text {
+      font-size: 15px;
+      line-height: 1.6;
+      opacity: 0.9;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    @media print {
+      body { padding: 20px; }
+      .section { break-inside: avoid; }
+      .data-cards { break-inside: avoid; }
+      .analysis-table { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <!-- REPORT HEADER -->
+  <header class="report-header">
+    <div class="logo-placeholder">[Omnivyra Logo]</div>
+    <h1 class="report-title">AI Marketing Funnel & Conversion Intelligence Report</h1>
+    <div class="company-info">
+      <span><strong>Company:</strong> Velocity Marketing Labs</span>
+      <span><strong>Website:</strong> www.velocitymarketinglabs.com</span>
+      <span><strong>Report Date:</strong> March 2026</span>
+    </div>
+  </header>
+
+  <!-- SECTION 1: Executive Marketing Summary -->
+  <section class="section">
+    <h2 class="section-title">Executive Marketing Summary</h2>
+    <div class="insight-box">
+      <p class="insight-text">Your website demonstrates solid informational structure but shows conversion leakage between campaign traffic and lead capture points. Improving funnel clarity and campaign message alignment could significantly increase marketing ROI.</p>
+    </div>
+  </section>
+
+  <div class="section-divider"></div>
+
+  <!-- SECTION 2: Marketing Performance Score -->
+  <section class="section score-section">
+    <h2 class="section-title">Marketing Performance Score</h2>
+    <div class="score-value">71</div>
+    <div class="score-max">/ 100</div>
+    <p class="score-explanation">This score evaluates how effectively your website supports marketing traffic, communicates value, and converts visitors into leads or customers.</p>
+  </section>
+
+  <!-- SECTION 3: Traffic Acquisition Potential -->
+  <section class="section">
+    <h2 class="section-title">Traffic Acquisition Potential</h2>
+    <p class="data-card-desc" style="margin-bottom: 16px;">How well the website supports incoming traffic from organic and paid sources.</p>
+    <div class="data-cards">
+      <div class="data-card yellow">
+        <div class="data-card-title">Organic Traffic Readiness</div>
+        <div class="data-card-value yellow">68</div>
+        <p class="data-card-desc">Search visibility and organic traffic potential.</p>
+      </div>
+      <div class="data-card orange">
+        <div class="data-card-title">Campaign Traffic Readiness</div>
+        <div class="data-card-value orange">55</div>
+        <p class="data-card-desc">Readiness for paid campaign traffic.</p>
+      </div>
+    </div>
+    <ul class="observations-list">
+      <li>Limited landing pages targeting high-intent search queries</li>
+      <li>Few pages optimized specifically for campaign traffic</li>
+      <li>Content structure favors information but not conversion</li>
+    </ul>
+  </section>
+
+  <!-- SECTION 4: Landing Page Alignment -->
+  <section class="section">
+    <h2 class="section-title">Landing Page Alignment</h2>
+    <div class="analysis-card yellow">
+      <div class="card-score yellow">62</div>
+      <p class="data-card-desc" style="margin-bottom: 12px;">Whether landing pages reinforce campaign messaging.</p>
+      <ul class="observations-list">
+        <li>Headline does not clearly reinforce campaign promise</li>
+        <li>Value proposition appears below the fold</li>
+        <li>CTA messaging may not match campaign intent</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SECTION 5: Conversion Funnel Analysis -->
+  <section class="section">
+    <h2 class="section-title">Conversion Funnel Analysis</h2>
+    <div class="funnel-visual">
+      <div class="funnel-stage">Landing Page</div>
+      <div class="funnel-arrow">↓</div>
+      <div class="funnel-stage">Product or Service Page</div>
+      <div class="funnel-arrow">↓</div>
+      <div class="funnel-stage">Contact / Lead Form</div>
+    </div>
+    <div class="analysis-card orange">
+      <div class="card-score orange">Conversion Funnel Efficiency: 58</div>
+      <ul class="observations-list">
+        <li>Multiple navigation paths dilute conversion focus</li>
+        <li>Key conversion actions require too many steps</li>
+        <li>Conversion triggers are not emphasized clearly</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SECTION 6: Engagement Performance -->
+  <section class="section">
+    <h2 class="section-title">Engagement Performance</h2>
+    <div class="analysis-card yellow">
+      <div class="card-score yellow">65</div>
+      <p class="data-card-desc" style="margin-bottom: 12px;">How engaging the website experience is for visitors.</p>
+      <ul class="observations-list">
+        <li>Important messaging appears late in page structure</li>
+        <li>Visual hierarchy could improve content scanning</li>
+        <li>Calls-to-action may not stand out enough</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SECTION 7: Campaign Readiness -->
+  <section class="section">
+    <h2 class="section-title">Campaign Readiness</h2>
+    <div class="analysis-card orange">
+      <div class="card-score orange">52</div>
+      <p class="data-card-desc" style="margin-bottom: 12px;">How well the website supports marketing campaigns.</p>
+      <ul class="observations-list">
+        <li>No dedicated landing pages for campaigns</li>
+        <li>Messaging not optimized for paid acquisition</li>
+        <li>Limited campaign-specific conversion paths</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SECTION 8: Tracking & Data Readiness -->
+  <section class="section">
+    <h2 class="section-title">Tracking & Data Readiness</h2>
+    <div class="analysis-card yellow">
+      <div class="card-score yellow">60</div>
+      <p class="data-card-desc" style="margin-bottom: 12px;">How well marketing performance can be measured.</p>
+      <ul class="observations-list">
+        <li>Limited clear funnel checkpoints</li>
+        <li>Key conversion events may not be clearly defined</li>
+        <li>Opportunity to improve performance monitoring</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SECTION 9: Competitive Positioning -->
+  <section class="section">
+    <h2 class="section-title">Competitive Positioning</h2>
+    <p class="competitive-text">Many high-performing marketing websites emphasize strong conversion triggers, clear value messaging, and focused landing page design. Strengthening these areas could improve competitive positioning.</p>
+  </section>
+
+  <!-- SECTION 10: Estimated Marketing Opportunity -->
+  <section class="section">
+    <h2 class="section-title">Estimated Marketing Opportunity</h2>
+    <div class="opportunity-box">
+      <div class="opportunity-value">Estimated Conversion Improvement Potential: 30–45%</div>
+      <p class="opportunity-text">Improving funnel clarity, campaign alignment, and conversion triggers could significantly increase leads from existing marketing traffic.</p>
+    </div>
+  </section>
+
+  <!-- SECTION 11: Optimization Experiment Ideas -->
+  <section class="section">
+    <h2 class="section-title">Optimization Experiment Ideas</h2>
+    <ul class="experiment-list">
+      <li>
+        <div class="experiment-label">Experiment 1</div>
+        <div class="experiment-text">Test a clearer headline emphasizing primary benefit</div>
+      </li>
+      <li>
+        <div class="experiment-label">Experiment 2</div>
+        <div class="experiment-text">Move CTA above the fold</div>
+      </li>
+      <li>
+        <div class="experiment-label">Experiment 3</div>
+        <div class="experiment-text">Create campaign-specific landing pages</div>
+      </li>
+      <li>
+        <div class="experiment-label">Experiment 4</div>
+        <div class="experiment-text">Simplify navigation during campaign traffic sessions</div>
+      </li>
+      <li>
+        <div class="experiment-label">Experiment 5</div>
+        <div class="experiment-text">Add testimonials near conversion areas</div>
+      </li>
+    </ul>
+  </section>
+
+  <!-- SECTION 12: Priority Optimization Roadmap -->
+  <section class="section">
+    <h2 class="section-title">Priority Optimization Roadmap</h2>
+    <table class="analysis-table">
+      <thead>
+        <tr>
+          <th>Priority</th>
+          <th>Area</th>
+          <th>Recommendation</th>
+          <th>Expected Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>Conversion</td>
+          <td>Move CTA above fold</td>
+          <td class="impact-high">High</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>Messaging</td>
+          <td>Clarify value proposition</td>
+          <td class="impact-high">High</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>Funnel</td>
+          <td>Simplify conversion steps</td>
+          <td class="impact-medium">Medium</td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>Trust</td>
+          <td>Add testimonials</td>
+          <td class="impact-medium">Medium</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>Campaign</td>
+          <td>Create landing pages</td>
+          <td class="impact-high">High</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- SECTION 13: Growth Potential Summary -->
+  <section class="section growth-summary">
+    <h2 class="section-title">Growth Potential Summary</h2>
+    <p class="growth-text">Your website contains strong informational content but requires improved alignment with marketing goals. Enhancing funnel structure and messaging clarity could significantly increase conversion performance.</p>
+  </section>
+
+  <!-- SECTION 14: Omnivyra Intelligence Platform -->
+  <section class="cta-section">
+    <h2 class="section-title">Unlock Continuous Marketing Intelligence with Omnivyra</h2>
+    <p class="cta-text">Omnivyra helps marketing teams track campaign performance, identify conversion friction, and continuously optimize marketing funnels through AI-driven insights.</p>
+  </section>
+</body>
+</html>

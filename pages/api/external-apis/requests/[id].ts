@@ -5,6 +5,7 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import {
   getUserRole,
+  getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
   isSuperAdmin,
@@ -55,7 +56,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!companyId) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }
-      const { role, error: roleError } = await getUserRole(user.id, companyId);
+      let { role, error: roleError } = await getUserRole(user.id, companyId);
+      if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
+        const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+        if (fallbackRole && (await hasPermission(fallbackRole, 'MANAGE_EXTERNAL_APIS'))) {
+          role = fallbackRole;
+          roleError = null;
+        }
+      }
       if (roleError || !role || !(await hasPermission(role, 'MANAGE_EXTERNAL_APIS'))) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }
@@ -66,9 +74,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
 
-  const { status, rejection_reason } = req.body || {};
-  if (!['approved', 'rejected', 'pending'].includes(String(status || ''))) {
-    return res.status(400).json({ error: 'Invalid status' });
+  const { status, action, rejection_reason } = req.body || {};
+  const resolvedAction = action || status;
+  const validActions = [
+    'approve_by_admin',
+    'send_to_super_admin',
+    'approved_by_admin',
+    'sent_to_super_admin',
+    'approve',
+    'reject',
+    'rejected',
+    'approved',
+    'pending',
+    'pending_admin_review',
+  ];
+  if (resolvedAction && !validActions.includes(String(resolvedAction))) {
+    return res.status(400).json({ error: 'Invalid status or action' });
   }
 
   const { data: requestRow, error: requestError } = await supabase
@@ -81,7 +102,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(404).json({ error: 'Request not found' });
   }
 
-  if (status === 'approved') {
+  const isSuperAdminUser =
+    legacySession || (await isPlatformSuperAdmin(user.id)) || (await isSuperAdmin(user.id));
+
+  const now = new Date().toISOString();
+
+  if (resolvedAction === 'approve' || resolvedAction === 'approved') {
     if (requestRow.status !== 'approved') {
       const tenantCompanyId = requestRow.company_id || companyId;
       if (!tenantCompanyId) {
@@ -114,32 +140,83 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .update({
         status: 'approved',
         approved_by_user_id: user.id,
-        approved_at: new Date().toISOString(),
+        approved_at: now,
       })
       .eq('id', id);
 
     if (updateError) {
-      return res.status(500).json({ error: 'Failed to approve request' });
+      return res.status(500).json({
+        error: 'Failed to approve request',
+        detail: updateError.message,
+      });
     }
     return res.status(200).json({ status: 'approved' });
   }
 
-  const { error: rejectError } = await supabase
-    .from('external_api_source_requests')
-    .update({
-      status,
-      approved_by_user_id: user.id,
-      approved_at: new Date().toISOString(),
-      rejection_reason: status === 'rejected' ? rejection_reason || null : null,
-      rejected_at: status === 'rejected' ? new Date().toISOString() : null,
-    })
-    .eq('id', id);
+  if (resolvedAction === 'reject' || resolvedAction === 'rejected') {
+    const { error: rejectError } = await supabase
+      .from('external_api_source_requests')
+      .update({
+        status: 'rejected',
+        rejection_reason: rejection_reason || null,
+        rejected_at: now,
+      })
+      .eq('id', id);
 
-  if (rejectError) {
-    return res.status(500).json({ error: 'Failed to update request status' });
+    if (rejectError) {
+      return res.status(500).json({
+        error: 'Failed to reject request',
+        detail: rejectError.message,
+      });
+    }
+    return res.status(200).json({ status: 'rejected' });
   }
 
-  return res.status(200).json({ status });
+  if (resolvedAction === 'approve_by_admin' || resolvedAction === 'approved_by_admin') {
+    if (isSuperAdminUser) {
+      return res.status(400).json({
+        error: 'Use approve (Super Admin) or send_to_super_admin (company admin)',
+      });
+    }
+    const { error: updateError } = await supabase
+      .from('external_api_source_requests')
+      .update({
+        status: 'approved_by_admin',
+        approved_by_admin_at: now,
+      })
+      .eq('id', id);
+
+    if (updateError) {
+      return res.status(500).json({
+        error: 'Failed to update request',
+        detail: updateError.message,
+      });
+    }
+    return res.status(200).json({ status: 'approved_by_admin' });
+  }
+
+  if (resolvedAction === 'send_to_super_admin' || resolvedAction === 'sent_to_super_admin') {
+    if (isSuperAdminUser) {
+      return res.status(400).json({ error: 'Super Admin should use approve or reject' });
+    }
+    const { error: updateError } = await supabase
+      .from('external_api_source_requests')
+      .update({
+        status: 'sent_to_super_admin',
+        sent_to_super_admin_at: now,
+      })
+      .eq('id', id);
+
+    if (updateError) {
+      return res.status(500).json({
+        error: 'Failed to update request',
+        detail: updateError.message,
+      });
+    }
+    return res.status(200).json({ status: 'sent_to_super_admin' });
+  }
+
+  return res.status(400).json({ error: 'Missing status or action' });
 }
 
 export default handler;

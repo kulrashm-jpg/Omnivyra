@@ -2,6 +2,7 @@
  * Campaign Blueprint Synthesis.
  * Converts strategy_sequence into a deterministic campaign blueprint.
  * No ranking, sequencing, or enrichment changes.
+ * Theme arcs are capped by strategic_arc_type (never themes = weeks).
  */
 
 import type {
@@ -9,6 +10,15 @@ import type {
   SequencedRecommendation,
   StrategySequence,
 } from './recommendationSequencingService';
+import type { StrategicArcType } from '../utils/durationNormalization';
+import {
+  capLadderToArcType,
+  filterLadderByArcPhases,
+} from '../utils/durationNormalization';
+import {
+  ensureThemeDiversity,
+  DEFAULT_SIMILARITY_THRESHOLD,
+} from '../utils/themeDiversityGuard';
 
 export type WeeklyBlueprintEntry = {
   week_number: number;
@@ -33,6 +43,7 @@ export type CampaignBlueprint = {
   duration_weeks: number;
   weekly_plan: WeeklyBlueprintEntry[];
   progression_summary: string;
+  campaign_strategy_summary?: string;
 };
 
 function pickTopic(rec: SequencedRecommendation): string {
@@ -94,15 +105,16 @@ function buildWeekStageMapping(
     return result.slice(0, 4);
   }
 
-  if (durationWeeks === 8) {
-    const perStage = Math.max(1, Math.floor(8 / ladder.length));
+  if (durationWeeks === 6 || durationWeeks === 8) {
+    const cap = durationWeeks;
+    const perStage = Math.max(1, Math.floor(cap / ladder.length));
     for (const entry of ladder) {
-      for (let i = 0; i < perStage && result.length < 8; i++) {
+      for (let i = 0; i < perStage && result.length < cap; i++) {
         result.push(toMapping(entry));
       }
     }
-    while (result.length < 8) result.push(toMapping(ladder[ladder.length - 1]));
-    return result.slice(0, 8);
+    while (result.length < cap) result.push(toMapping(ladder[ladder.length - 1]));
+    return result.slice(0, cap);
   }
 
   if (durationWeeks === 12) {
@@ -328,16 +340,33 @@ function ensureWeekReadiness(
 
 /**
  * Builds a deterministic campaign blueprint from strategy sequence.
+ * @param strategicArcType - When provided, caps ladder to theme arc (condensed 2-3, moderate 3-4, extended 4-5, full 5-7).
  */
 export function buildCampaignBlueprint(
   strategySequence: StrategySequence | null | undefined,
-  campaignDurationWeeks: number
+  campaignDurationWeeks: number,
+  strategicArcType?: StrategicArcType
 ): CampaignBlueprint | null {
   if (!strategySequence) {
     return null;
   }
 
-  const ladder = strategySequence.ladder ?? [];
+  let ladder = strategySequence.ladder ?? [];
+  if (strategicArcType) {
+    ladder = filterLadderByArcPhases(ladder, strategicArcType);
+    ladder = capLadderToArcType(ladder, strategicArcType);
+  }
+  const { ladder: diverseLadder, similarPairs } = ensureThemeDiversity(
+    ladder,
+    DEFAULT_SIMILARITY_THRESHOLD
+  );
+  if (similarPairs.length > 0) {
+    console.warn(
+      '[recommendationBlueprint] Theme diversity guard: similar pairs detected',
+      similarPairs.map((p) => ({ i: p.i, j: p.j, score: p.score.toFixed(2) }))
+    );
+  }
+  ladder = diverseLadder;
   const durationWeeks = Math.max(1, Math.min(52, campaignDurationWeeks));
   const weekStageMapping = buildWeekStageMapping(ladder, durationWeeks);
   const stageToLadder = new Map(ladder.map((entry) => [entry.stage, entry]));
@@ -402,9 +431,21 @@ export function buildCampaignBlueprint(
 
   const progression_summary = buildProgressionSummary(ladder);
 
+  // Ensure at least one theme per campaign is experimental (exploration logic)
+  if (weekly_plan.length > 0) {
+    const explorationWeekIdx = Math.floor(weekly_plan.length / 2);
+    const explorationWeek = weekly_plan[explorationWeekIdx];
+    const primaries = explorationWeek.primary_recommendations ?? [];
+    if (primaries.length > 0) {
+      const experimentalRec = { ...primaries[0], experimental: true };
+      explorationWeek.primary_recommendations = [experimentalRec, ...primaries.slice(1)];
+    }
+  }
+
   return {
     duration_weeks: durationWeeks,
     weekly_plan,
     progression_summary,
+    campaign_strategy_summary: progression_summary,
   };
 }

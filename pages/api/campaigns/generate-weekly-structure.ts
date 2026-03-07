@@ -16,8 +16,19 @@ import {
   suggestPublishingStrategy,
 } from '../../../backend/services/publishingOptimizationService';
 import { generatePlatformWaveSchedule } from '../../../backend/services/campaignWaveService';
-import { generateDailyDistributionPlan as generateAIDailyDistribution } from '../../../backend/services/dailyContentDistributionPlanService';
+/** Daily distribution removed: schedule (day_index) comes from weekly plan only. */
+import { getCompanyPerformanceInsights } from '../../../backend/services/campaignLearningService';
+import {
+  buildCampaignContext,
+  getCampaignContext,
+  setCampaignContext,
+  type CampaignContext,
+} from '../../../backend/services/contextCompressionService';
+import { getStrategyMemory } from '../../../backend/services/campaignStrategyMemoryService';
+import { getCachedStrategyProfile } from '../../../backend/services/strategyProfileCache';
+import { getLatestCampaignVersionByCampaignId } from '../../../backend/db/campaignVersionStore';
 import type { CampaignBlueprintWeek, WeeklyTopicWritingBrief } from '../../../backend/types/CampaignBlueprint';
+import { filterBoltContentTypeMix } from '../../../backend/utils/boltTextContentConfig';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -434,61 +445,201 @@ function assertDailyGlobalProgressionNotMutated(params: {
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+/** Input for generateWeeklyStructure. Matches API request body. */
+export interface GenerateWeeklyStructureInput {
+  week?: number;
+  weeks?: number[];
+  campaignId?: string;
+  companyId?: string;
+  auto_rebalance?: boolean;
+  auto_optimize_distribution?: boolean;
+  enable_campaign_waves?: boolean;
+  distribution_mode?: string;
+  eligible_platforms?: string[];
+  posts_per_week?: number;
+  bolt_run_id?: string;
+  adaptive_performance_insights?: Record<string, unknown>;
+  /** When provided (e.g. from BOLT executionConfig.tentative_start), used when campaign lacks start_date. */
+  campaign_start_date?: string;
+  /** When true (BOLT), restrict to text content only: post, blog, article, story, thread, poll. Exclude video, carousel, reels, etc. */
+  bolt_text_only?: boolean;
+}
 
-  try {
-    const {
-      week,
-      campaignId,
-      companyId,
-      auto_rebalance,
-      auto_optimize_distribution,
-      enable_campaign_waves,
-      distribution_mode,
-    } = req.body || {};
+/** Core logic for generating weekly structure. Callable from API or BOLT pipeline. */
+export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput): Promise<{
+  success: boolean;
+  week?: number;
+  weeks?: number[];
+  dailyPlan: unknown[];
+  topicDayMap: unknown[];
+  validation: unknown;
+  planning_feedback: unknown;
+  execution_feedback: unknown;
+  publishing_optimization: unknown;
+  auto_rebalance: boolean;
+  auto_optimize_distribution: boolean;
+  enable_campaign_waves: boolean;
+  message: string;
+}> {
+  const {
+    week,
+    weeks: weeksBody,
+    campaignId,
+    companyId,
+    auto_rebalance,
+    auto_optimize_distribution,
+    enable_campaign_waves,
+    distribution_mode,
+    eligible_platforms: eligiblePlatformsBody,
+    posts_per_week: postsPerWeekBody,
+    bolt_run_id: boltRunId,
+    adaptive_performance_insights: adaptiveInsightsBody,
+    campaign_start_date: campaignStartDateFromInput,
+    bolt_text_only: boltTextOnlyBody,
+  } = body || {};
+  const boltTextOnly = Boolean(boltTextOnlyBody ?? boltRunId);
+    const eligiblePlatforms: string[] | undefined =
+      Array.isArray(eligiblePlatformsBody) && eligiblePlatformsBody.length > 0
+        ? eligiblePlatformsBody.map((p: unknown) => String(p).toLowerCase().replace(/^twitter$/i, 'x'))
+        : undefined;
+    const postsPerWeek: number | undefined =
+      postsPerWeekBody != null && Number.isFinite(Number(postsPerWeekBody))
+        ? Math.max(2, Math.min(7, Math.floor(Number(postsPerWeekBody))))
+        : undefined;
     const autoRebalance = Boolean(auto_rebalance);
     const autoOptimizeDistribution = Boolean(auto_optimize_distribution);
     const enableCampaignWaves = Boolean(enable_campaign_waves);
-    const weekNumber = Number(week);
-    if (!campaignId || !Number.isFinite(weekNumber) || weekNumber < 1) {
-      return res.status(400).json({ error: 'campaignId and week (week number) are required' });
-    }
+
+    const weekNumbers: number[] = Array.isArray(weeksBody) && weeksBody.length > 0
+      ? weeksBody
+          .map((w: unknown) => Number(w))
+          .filter((n) => Number.isFinite(n) && n >= 1)
+      : Number.isFinite(Number(week)) && Number(week) >= 1
+        ? [Number(week)]
+        : [];
+
+  if (!campaignId || weekNumbers.length === 0) {
+    throw new Error('campaignId and week (or weeks array) are required');
+  }
 
     const { data: campaign } = await supabase
       .from('campaigns')
-      .select('id, start_date, name')
+      .select('id, start_date, name, company_id')
       .eq('id', campaignId)
       .maybeSingle();
 
-    if (!campaign?.start_date) {
-      return res.status(412).json({ error: 'Campaign start_date is required before generating daily plans' });
+  let effectiveStartDate = (campaign as { start_date?: string } | null)?.start_date;
+  if (!effectiveStartDate && campaignStartDateFromInput && String(campaignStartDateFromInput).trim()) {
+    const startVal = String(campaignStartDateFromInput).trim();
+    effectiveStartDate = startVal.includes('T') ? startVal : `${startVal}T00:00:00.000Z`;
+    await supabase.from('campaigns').update({ start_date: effectiveStartDate }).eq('id', campaignId);
+  }
+  if (!effectiveStartDate) {
+    throw new Error('Campaign start_date is required before generating daily plans');
+  }
+  // Ensure campaign object has start_date for downstream usage
+  if (campaign) (campaign as { start_date: string }).start_date = effectiveStartDate;
+
+  const blueprint = await getUnifiedCampaignBlueprint(String(campaignId));
+  if (!blueprint?.weeks?.length) {
+    throw new Error('Committed weekly blueprint not found');
+  }
+  for (const wn of weekNumbers) {
+    const wb = blueprint.weeks.find((w) => Number(w.week_number) === wn);
+    if (!wb) {
+      throw new Error(`Week ${wn} not found in blueprint`);
+    }
+  }
+
+    const adaptiveInsights = adaptiveInsightsBody && typeof adaptiveInsightsBody === 'object'
+      ? adaptiveInsightsBody as {
+          high_performing_platforms?: Array<{ value: string; avgEngagement: number; signalCount: number }>;
+          high_performing_content_types?: Array<{ value: string; avgEngagement: number; signalCount: number }>;
+          low_performing_patterns?: Array<{ platform?: string; content_type?: string; reason: string }>;
+        }
+      : null;
+
+    const cid = (campaign as any)?.company_id ?? companyId;
+    let compressedContext: CampaignContext | undefined;
+    const cached = cid ? getCampaignContext(String(campaignId)) : null;
+    if (cached) {
+      compressedContext = cached;
+    } else {
+      try {
+        let baseInsightsForCtx: { company_high_performing_platforms: any[]; company_high_performing_content_types: any[] } | null = null;
+        if (cid) baseInsightsForCtx = await getCompanyPerformanceInsights(cid);
+        const companyPerfForCtx = baseInsightsForCtx || adaptiveInsights ? {
+          high_performing_platforms: (adaptiveInsights?.high_performing_platforms?.length ?? 0) > 0
+            ? adaptiveInsights.high_performing_platforms
+            : baseInsightsForCtx?.company_high_performing_platforms.map((p) => ({ value: p.value })) ?? [],
+          high_performing_content_types: (adaptiveInsights?.high_performing_content_types?.length ?? 0) > 0
+            ? adaptiveInsights.high_performing_content_types
+            : baseInsightsForCtx?.company_high_performing_content_types.map((p) => ({ value: p.value })) ?? [],
+        } : undefined;
+        let strategyMemory: { preferred_platforms?: string[]; preferred_content_types?: string[] } | null = null;
+        let strategyProfile: { preferred_platform_weights?: Record<string, number>; preferred_content_type_ratios?: Record<string, number> } | null = null;
+        if (cid) {
+          try { strategyMemory = await getStrategyMemory(cid); } catch { /* optional */ }
+          try {
+            const { profile } = await getCachedStrategyProfile(cid);
+            strategyProfile = profile;
+          } catch { /* optional */ }
+        }
+        const themes = blueprint.weeks.flatMap((w) =>
+          (Array.isArray((w as any).topics) ? (w as any).topics : [])
+            .map((t) => (t as any)?.topicTitle ?? (t as any)?.title ?? '')
+            .filter(Boolean)
+        );
+        const topic = (campaign as any)?.name ?? blueprint.weeks[0]?.primary_objective ?? 'Campaign';
+        let execInputs: { target_audience?: string; content_depth?: string; campaign_goal?: string } = {};
+        try {
+          const versionRow = await getLatestCampaignVersionByCampaignId(String(campaignId));
+          const execConfig = (versionRow?.campaign_snapshot as Record<string, unknown>)?.execution_config as Record<string, unknown> | undefined;
+          if (execConfig && typeof execConfig === 'object') {
+            if (execConfig.target_audience != null && String(execConfig.target_audience).trim())
+              execInputs.target_audience = String(execConfig.target_audience).trim();
+            if (execConfig.content_depth != null && String(execConfig.content_depth).trim())
+              execInputs.content_depth = String(execConfig.content_depth).trim();
+            if (execConfig.campaign_goal != null && String(execConfig.campaign_goal).trim())
+              execInputs.campaign_goal = String(execConfig.campaign_goal).trim();
+          }
+        } catch { /* optional */ }
+        compressedContext = buildCampaignContext({
+          topic,
+          themes: themes.length > 0 ? themes : undefined,
+          companyPerformanceInsights: companyPerfForCtx,
+          strategyMemory: strategyMemory ?? undefined,
+          strategyLearningProfile: strategyProfile ?? undefined,
+          eligiblePlatforms,
+          ...execInputs,
+        });
+        if (cid) setCampaignContext(String(campaignId), compressedContext);
+      } catch { /* optional; will pass companyPerformanceInsights only */ }
     }
 
-    const blueprint = await getUnifiedCampaignBlueprint(String(campaignId));
-    if (!blueprint?.weeks?.length) {
-      return res.status(404).json({ error: 'Committed weekly blueprint not found' });
-    }
-    const weekBlueprint = blueprint.weeks.find((w) => Number(w.week_number) === weekNumber);
-    if (!weekBlueprint) {
-      return res.status(404).json({ error: `Week ${weekNumber} not found in blueprint` });
-    }
+    const allFinalItems: any[] = [];
+    const allRowsToInsert: any[] = [];
+    let lastTopicDayMap: { dayIndex: number; day: string; topics: string[] }[] = [];
+    let lastValidation: any = {};
+    let lastExecutionFeedback: any = {};
+    let lastPublishingOptimization: any = {};
+    let lastAutoRebalanceEffective = false;
+    let lastAutoOptimizeDistributionEffective = false;
 
-    const distributionStrategy = (weekBlueprint as any).distribution_strategy as string | undefined;
-    const fromStrategy =
-      distributionStrategy === 'QUICK_LAUNCH'
-        ? { campaignMode: 'QUICK_LAUNCH' as const, distributionMode: 'same_day_per_topic' as const }
-        : distributionStrategy === 'STAGGERED'
-          ? { campaignMode: 'STRATEGIC' as const, distributionMode: 'staggered' as const }
-          : null;
-    const distributionMode =
-      fromStrategy?.distributionMode ??
-      (distribution_mode === 'same_day_per_topic' ? 'same_day_per_topic' : 'staggered');
-    const campaignModeForAI = fromStrategy?.campaignMode ?? 'STRATEGIC';
+    for (const weekNumber of weekNumbers) {
+      const weekBlueprint = blueprint.weeks.find((w) => Number(w.week_number) === weekNumber)!;
 
-    const topicOrderRaw: string[] = Array.isArray(weekBlueprint.topics)
+      const distributionStrategy = (weekBlueprint as any).distribution_strategy as string | undefined;
+      const fromStrategy =
+        distributionStrategy === 'QUICK_LAUNCH'
+          ? { campaignMode: 'QUICK_LAUNCH' as const, distributionMode: 'same_day_per_topic' as const }
+          : distributionStrategy === 'STAGGERED'
+            ? { campaignMode: 'STRATEGIC' as const, distributionMode: 'staggered' as const }
+            : null;
+      const distributionMode =
+        fromStrategy?.distributionMode ??
+        (distribution_mode === 'same_day_per_topic' ? 'same_day_per_topic' : 'staggered');
+      const topicOrderRaw: string[] = Array.isArray(weekBlueprint.topics)
       ? weekBlueprint.topics.map((t) => String((t as any)?.topicTitle ?? '').trim()).filter(Boolean)
       : Array.isArray(weekBlueprint.topics_to_cover)
         ? weekBlueprint.topics_to_cover.map((t) => String(t ?? '').trim()).filter(Boolean)
@@ -516,20 +667,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (tk && key && (tk.includes(key) || key.includes(tk))) return t;
       }
       return topicOrder[fallbackIndex % topicOrder.length]!;
-    };
-
-    const spreadEvenlyAcrossDays = (count: number, days: number = 7): number[] => {
-      const n = Math.max(0, Math.floor(count));
-      if (n <= 0) return [];
-      if (n === 1) return [1];
-      const out: number[] = [];
-      for (let i = 0; i < n; i += 1) {
-        const idx0 =
-          Math.round(((i + 0.5) * days) / n - 0.5);
-        const clamped = Math.min(days - 1, Math.max(0, idx0));
-        out.push(clamped + 1);
-      }
-      return out;
     };
 
     type ExecutionItemInput = {
@@ -587,7 +724,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
       .filter((it) => it.content_type && it.selected_platforms.length > 0 && Number(it.count_per_week) > 0);
     const useExecutionItems = executionItems.length > 0;
-    const isAiPath = !useExecutionItems;
+    if (!useExecutionItems) {
+      throw new Error(
+        'EXECUTION_ITEMS_REQUIRED: Week must have execution_items with topic_slots. Daily distribution is disabled; schedule comes from weekly plan only.'
+      );
+    }
 
     if (useExecutionItems) {
       for (const it of executionItems) {
@@ -610,70 +751,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const dailyItemsDeterministic: DailyPlanItem[] = [];
     let dayTopics: string[][] = Array.from({ length: 7 }, () => []);
 
-    if (!useExecutionItems) {
-      // AI Content Distribution Planner: distribute weekly topics into daily plan (short topic 6–8 words, full topic, platform, content type, reasoning, holiday awareness).
-      const aiSlots = await generateAIDailyDistribution({
-        companyId: companyId ?? null,
-        campaignId: String(campaignId),
-        weekNumber,
-        weekBlueprint: weekBlueprint as CampaignBlueprintWeek,
-        campaignName: (campaign as any)?.name ?? undefined,
-        campaignStartDate: campaign?.start_date ?? undefined,
-        targetRegion: null,
-        campaignMode: campaignModeForAI,
-        contentTypesAvailable: (weekBlueprint as any)?.content_type_mix ?? undefined,
-        distributionMode,
-      });
-      let globalProgressionIndex = 1;
-      for (let slotIndex = 0; slotIndex < aiSlots.length; slotIndex += 1) {
-        const slot = aiSlots[slotIndex]!;
-        const dayIndex = Math.min(7, Math.max(1, slot.day_index));
-        const topicTitle = slot.short_topic?.trim() || slot.full_topic?.trim() || 'Daily topic';
-        const contentGuidance = deriveContentGuidance(null);
-        const writerBrief = {
-          objective: slot.reasoning || slot.full_topic,
-          target_audience: 'General Audience',
-          cta_type: 'Learn more',
-          brief_summary: slot.full_topic,
-          writing_angle: slot.reasoning,
-        };
-        const syntheticMasterContentId = `${campaignId}_w${weekNumber}_ai_${slotIndex}`;
-        const item: DailyPlanItem = {
-          dayIndex,
-          weekNumber,
-          topicTitle,
-          topicReference: buildTopicReference(weekNumber, globalProgressionIndex - 1),
-          globalProgressionIndex,
-          dailyObjective: slot.reasoning || slot.full_topic,
-          platformTargets: [normalizePlatformKey(slot.platform)].filter(Boolean),
-          contentType: slot.content_type || 'post',
-          briefSummary: slot.full_topic,
-          writerBrief,
-          writingIntent: slot.full_topic,
-          whoAreWeWritingFor: 'General Audience',
-          whatProblemAreWeAddressing: '',
-          whatShouldReaderLearn: '',
-          desiredAction: 'Learn more',
-          narrativeStyle: 'clear, practical, outcome-driven',
-          contentGuidance,
-          ctaType: 'Learn more',
-          kpiTarget: String((weekBlueprint as any)?.weekly_kpi_focus ?? 'Reach growth'),
-          masterContentId: syntheticMasterContentId,
-        };
-        dailyItemsDeterministic.push(item);
-        const existing = dayTopics[dayIndex - 1] ?? [];
-        if (!existing.includes(slot.full_topic)) existing.push(slot.full_topic);
-        dayTopics[dayIndex - 1] = existing;
-        globalProgressionIndex += 1;
-      }
-    } else {
+    {
       const isStaggered = distributionStrategy === 'STAGGERED';
       for (const exec of executionItems) {
-        const dayIndices = spreadEvenlyAcrossDays(exec.count_per_week, 7);
         const platforms = exec.selected_platforms.map(normalizePlatformKey).filter(Boolean);
-        for (let k = 0; k < dayIndices.length; k += 1) {
-          const baseDayIndex = dayIndices[k]!;
+        for (let k = 0; k < (exec.topic_slots?.length ?? 0); k += 1) {
           const slot = (exec.topic_slots || [])[k];
+          const baseDayIndex = Math.min(7, Math.max(1, Number((slot as any)?.day_index) || ((k % 7) + 1)));
           if (!slot || !slot.intent) {
             throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
           }
@@ -833,7 +917,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const item of finalItems) {
       const dayName = DAYS_OF_WEEK[item.dayIndex - 1] ?? 'Monday';
       const date = computeDayDate({
-        campaignStart: String(campaign.start_date),
+        campaignStart: String(effectiveStartDate),
         weekNumber,
         dayIndex: item.dayIndex,
       });
@@ -984,7 +1068,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           posting_strategy: `Week ${weekNumber} Day ${item.dayIndex} — ${item.topicReference}`,
           status: 'planned',
           priority: 'medium',
-          ai_generated: isAiPath,
+          ai_generated: false,
           target_audience: item.whoAreWeWritingFor,
         };
         rowsWithContent.push({ row, contentObj: enriched });
@@ -1170,21 +1254,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           wave_order: assignment.wave_order,
           wave_offset_days: assignment.wave_offset_days,
         };
-
         entry.contentObj = contentObj;
-        entry.row.date = assignment.scheduled_date;
+        // Phase 1: Do not mutate schedule in daily layer. Date comes from weekly plan only.
+        // entry.row.date = assignment.scheduled_date;
         entry.row.content = JSON.stringify(contentObj);
       }
     }
 
     const rows = rowsWithContent.map((r) => r.row);
-    if (rows.length > 0) {
-      const { error: insertError } = await supabase.from('daily_content_plans').insert(rows);
-      if (insertError) {
-        console.error('Error saving daily plans:', insertError);
-        return res.status(500).json({ error: 'Failed to save daily plans' });
-      }
-    }
+    if (rows.length > 0) allRowsToInsert.push(...rows);
+
+    lastTopicDayMap = dayTopics.map((topics, idx) => ({
+      dayIndex: idx + 1,
+      day: DAYS_OF_WEEK[idx],
+      topics,
+    }));
+    lastValidation = validation;
+    lastExecutionFeedback = execution_feedback;
+    lastPublishingOptimization = publishing_optimization;
+    lastAutoRebalanceEffective = autoRebalanceEffective;
+    lastAutoOptimizeDistributionEffective = autoOptimizeDistributionEffective;
+    allFinalItems.push(...finalItems);
 
     // Best-effort persistence into weekly plan JSON when weekly_content_refinements has content_plan.
     try {
@@ -1208,31 +1298,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (err) {
       console.warn('[execution_feedback] unable to persist into weekly_content_refinements.content_plan:', err);
     }
+    }
 
-    const topicDayMap = dayTopics.map((topics, idx) => ({
-      dayIndex: idx + 1,
-      day: DAYS_OF_WEEK[idx],
-      topics,
-    }));
+  if (allRowsToInsert.length > 0) {
+    const { error: insertError } = await supabase.from('daily_content_plans').insert(allRowsToInsert);
+    if (insertError) {
+      console.error('Error saving daily plans:', insertError);
+      throw new Error('Failed to save daily plans');
+    }
+  }
 
-    return res.status(200).json({
-      success: true,
-      week: weekNumber,
-      dailyPlan: finalItems,
-      topicDayMap,
-      validation,
-      planning_feedback: execution_feedback,
-      execution_feedback,
-      publishing_optimization,
-      auto_rebalance: autoRebalanceEffective,
-      auto_optimize_distribution: autoOptimizeDistributionEffective,
-      enable_campaign_waves: enableCampaignWaves,
-      message: `Generated topic-aligned daily plan skeleton for Week ${weekNumber}`,
-    });
+  return {
+    success: true,
+    week: weekNumbers.length === 1 ? weekNumbers[0] : undefined,
+    weeks: weekNumbers.length > 1 ? weekNumbers : undefined,
+    dailyPlan: allFinalItems,
+    topicDayMap: lastTopicDayMap,
+    validation: lastValidation,
+    planning_feedback: lastExecutionFeedback,
+    execution_feedback: lastExecutionFeedback,
+    publishing_optimization: lastPublishingOptimization,
+    auto_rebalance: lastAutoRebalanceEffective,
+    auto_optimize_distribution: lastAutoOptimizeDistributionEffective,
+    enable_campaign_waves: enableCampaignWaves,
+    message: weekNumbers.length === 1
+      ? `Generated topic-aligned daily plan skeleton for Week ${weekNumbers[0]}`
+      : `Generated topic-aligned daily plan skeleton for Weeks ${weekNumbers.join(', ')}`,
+  };
+}
 
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const result = await generateWeeklyStructure((req.body || {}) as GenerateWeeklyStructureInput);
+    return res.status(200).json(result);
   } catch (error) {
     console.error('Error in generate weekly structure API:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    const msg = error instanceof Error ? error.message : 'Internal server error';
+    return res.status(500).json({ error: msg });
   }
 }
 

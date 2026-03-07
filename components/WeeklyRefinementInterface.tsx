@@ -242,17 +242,6 @@ export default function WeeklyRefinementInterface({
     }
   };
 
-  const getPlatformIcon = (platform: string) => {
-    switch (platform.toLowerCase()) {
-      case 'linkedin': return <FileText className="h-4 w-4" />;
-      case 'instagram': return <Image className="h-4 w-4" />;
-      case 'youtube': return <Video className="h-4 w-4" />;
-      case 'twitter': return <FileText className="h-4 w-4" />;
-      case 'facebook': return <FileText className="h-4 w-4" />;
-      default: return <FileText className="h-4 w-4" />;
-    }
-  };
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center p-8">

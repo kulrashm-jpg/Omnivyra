@@ -1,11 +1,13 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { validatePlatformConfig } from '../../../backend/services/externalApiService';
+import { invalidateCompanyConfigCacheForApiSource } from '../../../backend/services/companyApiConfigCache';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
+  getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
   isSuperAdmin,
@@ -54,7 +56,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!companyId) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }
-      const { role, error: roleError } = await getUserRole(user.id, companyId);
+      let { role, error: roleError } = await getUserRole(user.id, companyId);
+      if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
+        const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+        if (fallbackRole) {
+          role = fallbackRole;
+          roleError = null;
+        }
+      }
       if (roleError || !role) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }
@@ -72,7 +81,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     const { data, error } = await query.single();
     if (error) {
-      return res.status(500).json({ error: 'Failed to load external API' });
+      return res.status(500).json({
+        error: 'Failed to load external API',
+        detail: error.message,
+      });
     }
     const { data: healthData } = await supabase
       .from('external_api_health')
@@ -184,8 +196,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { data, error } = await updateQuery.select('*').single();
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to update external API' });
+      return res.status(500).json({
+        error: 'Failed to update external API',
+        detail: error.message,
+      });
     }
+    await invalidateCompanyConfigCacheForApiSource(id);
     return res.status(200).json({ api: data });
   }
 
@@ -199,8 +215,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     const { error } = await deleteQuery;
     if (error) {
-      return res.status(500).json({ error: 'Failed to delete external API' });
+      return res.status(500).json({
+        error: 'Failed to delete external API',
+        detail: error.message,
+      });
     }
+    await invalidateCompanyConfigCacheForApiSource(id);
     return res.status(200).json({ success: true });
   }
 

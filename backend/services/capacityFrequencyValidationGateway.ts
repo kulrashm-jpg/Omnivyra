@@ -20,11 +20,12 @@ export interface ValidateCapacityAndFrequencyInput {
   exclusive_campaigns?: unknown;
   platform_content_requests?: unknown;
   cross_platform_sharing?: unknown;
+  content_repurposing?: unknown;
+  /** Campaign duration in weeks. Supply = available + (capacity × weeks). Default 1 when missing. */
+  campaign_duration_weeks?: number | null;
   campaign_intent?: string | null;
   content_types?: string[] | null;
-  /** Optional: when false, skip auto workload balancing and return invalid when over capacity. */
   enable_workload_balancing?: boolean;
-  /** Optional blueprint: when provided, demand can be derived from it if platform_content_requests is empty. */
   blueprint?: {
     weeks?: Array<{
       platform_allocation?: Record<string, number>;
@@ -126,12 +127,20 @@ export function validateCapacityAndFrequency(
     }
   }
 
+  const sharingEnabled = input.cross_platform_sharing != null
+    ? Boolean((input.cross_platform_sharing as any)?.enabled ?? input.cross_platform_sharing)
+    : false;
+  const repurposingEnabled = input.content_repurposing != null
+    ? Boolean((input.content_repurposing as any)?.enabled ?? input.content_repurposing)
+    : sharingEnabled;
   const result = validateCapacityVsExpectation({
     available_content: input.available_content,
     weekly_capacity: input.weekly_capacity,
     exclusive_campaigns: input.exclusive_campaigns,
     platform_content_requests,
     cross_platform_sharing: input.cross_platform_sharing,
+    content_repurposing: repurposingEnabled ? { enabled: true } : input.content_repurposing,
+    campaign_duration_weeks: input.campaign_duration_weeks,
     message: input.message,
     override_confirmed: input.override_confirmed,
   });
@@ -161,6 +170,8 @@ export function validateCapacityAndFrequency(
         exclusive_campaigns: input.exclusive_campaigns,
         platform_content_requests: balanced.balanced_requests,
         cross_platform_sharing: input.cross_platform_sharing,
+        content_repurposing: repurposingEnabled ? { enabled: true } : input.content_repurposing,
+        campaign_duration_weeks: input.campaign_duration_weeks,
         message: input.message,
         override_confirmed: input.override_confirmed,
       });

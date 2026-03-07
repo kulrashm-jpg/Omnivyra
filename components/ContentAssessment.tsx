@@ -11,10 +11,6 @@ import {
   BarChart3, 
   Zap, 
   Eye, 
-  Users, 
-  Hash, 
-  MessageCircle,
-  Share,
   Star,
   ArrowUp,
   ArrowDown,
@@ -23,6 +19,7 @@ import {
   Activity,
   Award
 } from 'lucide-react';
+import PlatformIcon from '@/components/ui/PlatformIcon';
 
 interface ContentAssessmentProps {
   content: string;
@@ -118,17 +115,6 @@ export default function ContentAssessment({
     if (score >= 80) return <CheckCircle className="h-4 w-4" />;
     if (score >= 60) return <AlertTriangle className="h-4 w-4" />;
     return <AlertTriangle className="h-4 w-4" />;
-  };
-
-  const getPlatformIcon = (platform: string) => {
-    switch (platform) {
-      case 'linkedin': return <Users className="h-4 w-4" />;
-      case 'twitter': return <MessageCircle className="h-4 w-4" />;
-      case 'instagram': return <Eye className="h-4 w-4" />;
-      case 'youtube': return <Share className="h-4 w-4" />;
-      case 'facebook': return <Users className="h-4 w-4" />;
-      default: return <Target className="h-4 w-4" />;
-    }
   };
 
   const getUniquenessLevel = (score: number) => {
@@ -259,8 +245,7 @@ export default function ContentAssessment({
                   <div key={platformScore.platform} className="border rounded-lg p-4">
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-3">
-                        {getPlatformIcon(platformScore.platform)}
-                        <h3 className="font-semibold capitalize">{platformScore.platform}</h3>
+                        <PlatformIcon platform={platformScore.platform} size={14} showLabel />
                         <Badge className={`${getScoreBgColor(platformScore.score)} ${getScoreColor(platformScore.score)}`}>
                           {platformScore.score}%
                         </Badge>

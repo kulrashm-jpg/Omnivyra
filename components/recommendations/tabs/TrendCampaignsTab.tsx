@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import ReactDOM from 'react-dom';
 import { useRouter } from 'next/router';
 import { v4 as uuidv4 } from 'uuid';
 import type { OpportunityTabProps } from './types';
@@ -13,9 +14,11 @@ import RecommendationBlueprintCard, {
   getConfidenceTierForRecommendation,
   getJourneyState,
   getDecisionMomentumState,
+  type BoltOutcomeView,
 } from '../cards/RecommendationBlueprintCard';
 import StrategicWorkspacePanel from '../StrategicWorkspacePanel';
 import AIGenerationProgress from '../../AIGenerationProgress';
+import BOLTProgressModal, { type BOLTProgress } from '../../BOLTProgressModal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -64,11 +67,15 @@ function safeParseClusterPayload(raw: string): { cluster_inputs?: ClusterInput[]
 /** Execution configuration (UX compact bar); injected into strategic payload. */
 export type ExecutionConfig = {
   target_audience: string;
+  /** Single segment for backward compatibility (first of professional_segments). */
   professional_segment: string | null;
+  /** Multiple professional segments when Target Audience is Professionals. */
+  professional_segments: string[];
   communication_style: string[];
   content_depth: string;
-  content_capacity: string;
-  campaign_duration: number;
+  /** Desired posting frequency per week (e.g. "5/w"). Capacity is collected in AI Chat. */
+  frequency_per_week: string;
+  campaign_duration?: number;
   tentative_start: string | undefined;
   campaign_goal: string;
 };
@@ -278,6 +285,9 @@ type CardSignals = {
   confidenceTier: 'high' | 'medium' | 'low';
   momentumState: ReturnType<typeof getDecisionMomentumState>;
   strategyStatus: StrategyStatusForProgress;
+  /** For workspace panel: show which cards are in "execute" / "upcoming" lists. */
+  cardId?: string;
+  cardTitle?: string;
 };
 
 /** List-level flow state from existing per-card signals. Narrative aggregation only. */
@@ -403,6 +413,10 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   /** Campaign created when user clicked "Generate Strategic Themes"; card is saved to this campaign when they click "Build Campaign Blueprint". */
   const [generatedCampaignId, setGeneratedCampaignId] = useState<string | null>(null);
   const [fastLoadingCardId, setFastLoadingCardId] = useState<string | null>(null);
+  /** BOLT run progress (stage, percentage) for progress modal. */
+  const [boltProgress, setBoltProgress] = useState<BOLTProgress | null>(null);
+  /** Per-card error when "Start this campaign" / "Build Campaign Blueprint" fails (shown on the card, not near Generate Themes). */
+  const [cardBuildError, setCardBuildError] = useState<Record<string, string>>({});
   const isMountedRef = useRef(true);
   useEffect(() => {
     return () => {
@@ -433,14 +447,55 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   // Execution Configuration (compact bar) — mandatory before theme generation
   const [executionCollapsed, setExecutionCollapsed] = useState(false);
   const [targetAudience, setTargetAudience] = useState<string | null>(null);
-  const [professionalSegment, setProfessionalSegment] = useState<string | null>(null);
+  const [professionalSegments, setProfessionalSegments] = useState<string[]>([]);
+  const [professionalDropdownOpen, setProfessionalDropdownOpen] = useState(false);
+  const professionalDropdownRef = useRef<HTMLDivElement>(null);
+  const professionalTriggerRef = useRef<HTMLButtonElement>(null);
+  const professionalPortalRef = useRef<HTMLDivElement>(null);
+  const [professionalDropdownRect, setProfessionalDropdownRect] = useState<{ top: number; left: number } | null>(null);
+  const [showMissingFieldsMessage, setShowMissingFieldsMessage] = useState(false);
+  const executionSectionRefs = useRef<Record<string, HTMLDivElement | null>>({
+    targetAudience: null,
+    campaignGoal: null,
+    frequencyPerWeek: null,
+    startDate: null,
+    communicationStyle: null,
+  });
   const [communicationStyle, setCommunicationStyle] = useState<string[]>([]);
   const [contentDepth, setContentDepth] = useState<string | null>(null);
-  const [contentCapacity, setContentCapacity] = useState<string | null>(null);
-  const [campaignDurationInput, setCampaignDurationInput] = useState<number>(4);
+  const [frequencyPerWeek, setFrequencyPerWeek] = useState<string | null>(null);
   const [tentativeStartDate, setTentativeStartDate] = useState<Date | undefined>();
   const [campaignGoal, setCampaignGoal] = useState<string | null>(null);
   const [executionCalendarOpen, setExecutionCalendarOpen] = useState(false);
+  useEffect(() => {
+    if (!professionalDropdownOpen) {
+      setProfessionalDropdownRect(null);
+      return;
+    }
+    const run = () => {
+      const el = professionalTriggerRef.current;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        setProfessionalDropdownRect({ top: r.bottom + 4, left: r.left });
+      }
+    };
+    run();
+    const t = requestAnimationFrame(run);
+    return () => cancelAnimationFrame(t);
+  }, [professionalDropdownOpen]);
+
+  useEffect(() => {
+    if (!professionalDropdownOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const inTrigger = professionalDropdownRef.current?.contains(target);
+      const inPortal = professionalPortalRef.current?.contains(target);
+      if (!inTrigger && !inPortal) setProfessionalDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [professionalDropdownOpen]);
+
   const engineRecommendationSource =
     generatedEngineRecommendations.length > 0 ? generatedEngineRecommendations : (engineRecommendations ?? []);
   const engineRecommendationCards = useMemo<Array<{ id: string; recommendation: Record<string, unknown> }>>(() => {
@@ -557,11 +612,20 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
           journeyState,
           strategyStatus,
         });
+        const rec = card.recommendation ?? {};
+        const cardTitle =
+          (typeof rec.polished_title === 'string' && rec.polished_title.trim()
+            ? rec.polished_title
+            : null) ??
+          (typeof rec.topic === 'string' && rec.topic.trim() ? rec.topic : null) ??
+          'Opportunity';
         return {
           journeyState,
           confidenceTier,
           momentumState,
           strategyStatus,
+          cardId: card.id,
+          cardTitle,
         };
       }
     );
@@ -995,18 +1059,17 @@ Generate strategic campaign pillars to capture this demand.`;
       targetAudience &&
       communicationStyle.length > 0 &&
       contentDepth &&
-      contentCapacity &&
-      campaignDurationInput >= 4 &&
+      frequencyPerWeek &&
       tentativeStartDate &&
       campaignGoal
     ) {
       base.execution_config = {
         target_audience: targetAudience,
-        professional_segment: professionalSegment ?? null,
+        professional_segment: professionalSegments[0] ?? null,
+        professional_segments: professionalSegments,
         communication_style: communicationStyle,
         content_depth: contentDepth,
-        content_capacity: contentCapacity,
-        campaign_duration: campaignDurationInput,
+        frequency_per_week: frequencyPerWeek,
         tentative_start: tentativeStartDate.toISOString(),
         campaign_goal: campaignGoal,
       };
@@ -1019,23 +1082,72 @@ Generate strategic campaign pillars to capture this demand.`;
     return !!(additionalDirection.trim() || selectedAspect || selectedFacets.length >= 1 || strategicText.trim() || (clusterInputs && clusterInputs.length > 0));
   };
 
-  const isExecutionValid =
-    !!targetAudience &&
-    communicationStyle.length > 0 &&
-    !!contentDepth &&
-    !!contentCapacity &&
-    campaignDurationInput >= 4 &&
-    !!tentativeStartDate &&
-    !!campaignGoal;
+  const requiredExecutionFields = useMemo(() => {
+    const hasAudience = !!targetAudience;
+    const hasGoal = !!campaignGoal;
+    const hasFrequency = !!frequencyPerWeek;
+    const hasStartDate = !!tentativeStartDate;
+    const hasStyle = communicationStyle.length > 0;
+    const missing: string[] = [];
+    if (!hasAudience) missing.push('Target Audience');
+    if (!hasGoal) missing.push('Campaign Goal');
+    if (!hasFrequency) missing.push('Frequency per week');
+    if (!hasStartDate) missing.push('Start Date');
+    if (!hasStyle) missing.push('Communication Style');
+    return {
+      completed: hasAudience && hasGoal && hasFrequency && hasStartDate && hasStyle,
+      completedCount: [hasAudience, hasGoal, hasFrequency, hasStartDate, hasStyle].filter(Boolean).length,
+      missing,
+    };
+  }, [targetAudience, campaignGoal, frequencyPerWeek, tentativeStartDate, communicationStyle]);
+
+  useEffect(() => {
+    if (requiredExecutionFields.completed) setShowMissingFieldsMessage(false);
+  }, [requiredExecutionFields.completed]);
+
+  const isExecutionFormComplete = requiredExecutionFields.completed;
+  const isExecutionValid = isExecutionFormComplete;
+
+  const executionFieldKeyToLabel: Record<string, string> = {
+    targetAudience: 'Target Audience',
+    campaignGoal: 'Campaign Goal',
+    frequencyPerWeek: 'Frequency per week',
+    startDate: 'Start Date',
+    communicationStyle: 'Communication Style',
+  };
+
+  const focusFirstMissingExecutionField = () => {
+    const order = ['targetAudience', 'campaignGoal', 'frequencyPerWeek', 'startDate', 'communicationStyle'] as const;
+    for (const key of order) {
+      if (requiredExecutionFields.missing.includes(executionFieldKeyToLabel[key])) {
+        const el = executionSectionRefs.current[key];
+        if (el) {
+          setShowMissingFieldsMessage(true);
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return;
+        }
+      }
+    }
+  };
+
+  const handleRunClick = () => {
+    if (!isExecutionFormComplete && !isSubmitting) {
+      setShowMissingFieldsMessage(true);
+      focusFirstMissingExecutionField();
+      return;
+    }
+    handleRun();
+  };
 
   const handleRun = async () => {
     setValidationError(null);
+    setShowMissingFieldsMessage(false);
     if (!companyId) {
       setValidationError('Select a company first.');
       return;
     }
     if (!isExecutionValid) {
-      setValidationError('Complete Execution Configuration (audience, style, depth, capacity, duration, start date, goal) before generating themes.');
+      setValidationError('Complete Execution Configuration (audience, style, depth, frequency, start date, goal) before generating themes.');
       return;
     }
     if (contextMode === 'NONE' && !additionalDirection.trim()) {
@@ -1054,13 +1166,21 @@ Generate strategic campaign pillars to capture this demand.`;
           : primaryCampaignType === 'third_party'
             ? 'third_party'
             : primaryCampaignType) ?? 'brand_awareness';
+      const durationFromExec =
+        payload.execution_config &&
+        typeof payload.execution_config === 'object' &&
+        typeof (payload.execution_config as { campaign_duration?: number }).campaign_duration === 'number' &&
+        (payload.execution_config as { campaign_duration: number }).campaign_duration >= 4 &&
+        (payload.execution_config as { campaign_duration: number }).campaign_duration <= 12
+          ? (payload.execution_config as { campaign_duration: number }).campaign_duration
+          : 12;
       const recRes = await fetchWithAuth('/api/recommendations/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           companyId,
           objective,
-          durationWeeks: 12,
+          durationWeeks: durationFromExec,
           ...(regionList.length > 0 ? { regions: regionList } : {}),
           strategicPayload: payload,
         }),
@@ -1224,26 +1344,35 @@ Generate strategic campaign pillars to capture this demand.`;
           Job History
         </button>
       </header>
-      <div className="rounded-lg border border-gray-200 p-4">
-        <EngineContextPanel
-          companyId={companyId}
-          fetchWithAuth={fetchWithAuth}
-          contextMode={contextMode}
-          focusedModules={focusedModules}
-          additionalDirection={additionalDirection}
-        />
-      </div>
-      <UnifiedContextModeSelector
-        mode={contextMode}
-        modules={focusedModules}
-        additionalDirection={additionalDirection}
-        onModeChange={setContextMode}
-        onModulesChange={setFocusedModules}
-        onAdditionalDirectionChange={setAdditionalDirection}
-        requireDirectionWhenNone={true}
-      />
-      <div className="rounded-lg border border-gray-200 bg-gray-50/50 px-4 py-3 text-sm text-gray-700">
-        {modeIndicatorLabel}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+          <EngineContextPanel
+            companyId={companyId}
+            fetchWithAuth={fetchWithAuth}
+            contextMode={contextMode}
+            focusedModules={focusedModules}
+            additionalDirection={additionalDirection}
+          />
+          <UnifiedContextModeSelector
+            mode={contextMode}
+            modules={focusedModules}
+            additionalDirection={additionalDirection}
+            onModeChange={setContextMode}
+            onModulesChange={setFocusedModules}
+            onAdditionalDirectionChange={setAdditionalDirection}
+            requireDirectionWhenNone={true}
+          />
+          <div className="rounded-lg border border-gray-200 bg-gray-50/50 px-4 py-3 text-sm text-gray-700">
+            {modeIndicatorLabel}
+          </div>
+        </div>
+        <div className="rounded-lg border border-gray-200 p-4">
+          <StrategicConsole
+            value={strategicText}
+            onChange={setStrategicText}
+            mode={contextMode}
+          />
+        </div>
       </div>
       <div className="border rounded-xl p-4 space-y-4 bg-muted/20">
         <div className="flex justify-between items-center">
@@ -1267,28 +1396,42 @@ Generate strategic campaign pillars to capture this demand.`;
           {executionCollapsed && (
             <div className="absolute inset-0 flex items-center">
               <div className="text-xs text-muted-foreground flex flex-wrap gap-2">
-                <span>{targetAudience ?? '—'}</span>
+                <span>
+                  {targetAudience ?? '—'}
+                  {targetAudience === 'Professionals' && professionalSegments.length > 0 && ` (${professionalSegments.join(', ')})`}
+                </span>
                 <span>{communicationStyle?.length ? communicationStyle.join(', ') : '—'}</span>
                 <span>{contentDepth ?? '—'}</span>
-                <span>{contentCapacity ?? '—'}</span>
-                <span>{campaignDurationInput}w</span>
+                <span>{frequencyPerWeek ?? '—'}</span>
                 <span>{campaignGoal ?? '—'}</span>
                 <span>{tentativeStartDate ? tentativeStartDate.toLocaleDateString(undefined, { dateStyle: 'long' }) : '—'}</span>
               </div>
             </div>
           )}
           {!executionCollapsed && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-gray-600" title="Who is the primary audience for this campaign?">Target Audience</label>
-              <div className="flex flex-wrap items-center gap-1.5" role="group">
+          <>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between text-xs text-gray-600">
+              <span>Setup Progress</span>
+              <span className="font-medium">{requiredExecutionFields.completedCount} / 5 required fields completed</span>
+            </div>
+            {/* Row 1: Target Audience (left) | Start Date (right) */}
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div
+                ref={(el) => { executionSectionRefs.current.targetAudience = el; }}
+                className={`space-y-2 min-w-0 rounded-lg border p-3 transition-colors ${!targetAudience ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
+              >
+                <label className="block text-xs font-medium text-gray-600" title="Who is the primary audience for this campaign?">
+                  Target Audience <span className="text-red-500">*</span>
+                </label>
+                <div className="flex flex-nowrap items-center gap-2" role="group">
                 {['Professionals', 'Entrepreneurs', 'Students', 'SMB', 'Parents'].map((v) => (
                   <button
                     key={v}
                     type="button"
                     title="Who is the primary audience for this campaign?"
                     onClick={() => setTargetAudience(v)}
-                    className={`px-2 py-1 text-xs rounded-md border transition-colors ${
+                    className={`shrink-0 px-3 py-1.5 text-xs rounded-md border transition-colors whitespace-nowrap ${
                       targetAudience === v ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
                     }`}
                   >
@@ -1296,35 +1439,113 @@ Generate strategic campaign pillars to capture this demand.`;
                   </button>
                 ))}
                 {targetAudience === 'Professionals' && (
-                  <select
-                    value={professionalSegment ?? ''}
-                    onChange={(e) => setProfessionalSegment(e.target.value || null)}
-                    title={professionalSegment ? `Segment selected: ${professionalSegment}. This refines recommendations for professional audiences.` : 'Narrow down which type of professionals (optional).'}
-                    className={`h-9 min-w-[7rem] rounded-md border px-2 text-sm text-gray-900 ${
-                      professionalSegment
-                        ? 'border-indigo-400 bg-indigo-50 text-indigo-900 ring-1 ring-indigo-200'
-                        : 'border-amber-300 bg-amber-50/80 text-amber-900'
-                    }`}
-                  >
-                    <option value="">Select</option>
-                    <option value="Managers">Managers</option>
-                    <option value="Job Seekers">Job Seekers</option>
-                    <option value="Founders">Founders</option>
-                    <option value="Corporate">Corporate</option>
-                  </select>
+                  <div className="relative shrink-0" ref={professionalDropdownRef}>
+                    <button
+                      ref={professionalTriggerRef}
+                      type="button"
+                      onClick={() => setProfessionalDropdownOpen((o) => !o)}
+                      title={professionalSegments.length > 0 ? `Segments: ${professionalSegments.join(', ')}` : 'Narrow down which types of professionals (optional).'}
+                      className={`h-9 min-w-[12rem] max-w-[22rem] rounded-md border px-3 text-sm text-left text-gray-900 flex items-center justify-between gap-2 whitespace-nowrap ${
+                        professionalSegments.length > 0
+                          ? 'border-indigo-400 bg-indigo-50 text-indigo-900 ring-1 ring-indigo-200'
+                          : 'border-amber-300 bg-amber-50/80 text-amber-900'
+                      }`}
+                    >
+                      <span className="truncate min-w-0">
+                        {professionalSegments.length > 0 ? professionalSegments.join(', ') : 'Select'}
+                      </span>
+                      <span className="shrink-0 text-gray-500">{professionalDropdownOpen ? '▴' : '▾'}</span>
+                    </button>
+                    {professionalDropdownOpen && professionalDropdownRect && typeof document !== 'undefined' && ReactDOM.createPortal(
+                      <div
+                        ref={professionalPortalRef}
+                        className="fixed z-[9999] min-w-[12rem] rounded-md border border-gray-200 bg-white py-1 shadow-xl"
+                        role="listbox"
+                        style={{ top: professionalDropdownRect.top, left: professionalDropdownRect.left }}
+                      >
+                        <div className="flex flex-nowrap gap-x-4 gap-y-1 px-3 py-2">
+                          {['Managers', 'Job Seekers', 'Founders', 'Corporate'].map((opt) => (
+                            <label
+                              key={opt}
+                              className="flex items-center gap-2 whitespace-nowrap text-sm text-gray-900 hover:bg-gray-50 cursor-pointer rounded px-1.5 py-1"
+                              role="option"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={professionalSegments.includes(opt)}
+                                onChange={() => {
+                                  setProfessionalSegments((prev) =>
+                                    prev.includes(opt) ? prev.filter((s) => s !== opt) : [...prev, opt]
+                                  );
+                                }}
+                                className="h-4 w-4 shrink-0 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                              />
+                              {opt}
+                            </label>
+                          ))}
+                        </div>
+                      </div>,
+                      document.body
+                    )}
+                  </div>
                 )}
               </div>
+              </div>
+              <div
+                ref={(el) => { executionSectionRefs.current.startDate = el; }}
+                className={`space-y-1.5 shrink-0 rounded-lg border p-3 transition-colors ${!tentativeStartDate ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
+              >
+                <label className="block text-xs font-medium text-gray-600" title="When do you plan to start this campaign?">
+                  Start Date <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <button
+                    type="button"
+                    title="When do you plan to start this campaign?"
+                    onClick={() => setExecutionCalendarOpen((o) => !o)}
+                    className="h-9 min-w-[8rem] rounded-md border border-gray-200 bg-white px-3 text-sm text-left text-gray-900"
+                  >
+                    {tentativeStartDate ? tentativeStartDate.toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'Pick date'}
+                  </button>
+                  {executionCalendarOpen && (
+                    <>
+                      <div className="fixed inset-0 z-[100]" aria-hidden onClick={() => setExecutionCalendarOpen(false)} />
+                      <div className="absolute z-[101] right-0 top-full mt-1 p-2 rounded-lg border border-gray-200 bg-white shadow-lg">
+                        <input
+                          type="date"
+                          value={tentativeStartDate?.toISOString().slice(0, 10) ?? ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setTentativeStartDate(v ? new Date(v) : undefined);
+                          }}
+                          className="border border-gray-200 rounded px-2 py-1 text-sm"
+                        />
+                        <Button variant="ghost" size="sm" onClick={() => setExecutionCalendarOpen(false)} className="mt-2 w-full">
+                          Done
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-gray-600" title="What is the main goal of this campaign?">Campaign Goal</label>
-              <div className="flex flex-wrap gap-1" role="group">
+            <div className="flex flex-nowrap items-end gap-4 overflow-x-auto pb-1">
+              <div
+                ref={(el) => { executionSectionRefs.current.campaignGoal = el; }}
+                className={`space-y-1.5 shrink-0 rounded-lg border p-3 transition-colors ${!campaignGoal ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
+              >
+              <label className="block text-xs font-medium text-gray-600" title="What is the main goal of this campaign?">
+                Campaign Goal <span className="text-red-500">*</span>
+              </label>
+              <div className="flex flex-nowrap gap-1.5" role="group">
                 {['Awareness', 'Leads', 'Engagement', 'Product'].map((v) => (
                   <button
                     key={v}
                     type="button"
                     title="What is the main goal of this campaign?"
                     onClick={() => setCampaignGoal(v)}
-                    className={`px-2 py-1 text-xs rounded-md border transition-colors ${
+                    className={`shrink-0 px-2.5 py-1 text-xs rounded-md border transition-colors whitespace-nowrap ${
                       campaignGoal === v ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
                     }`}
                   >
@@ -1332,17 +1553,17 @@ Generate strategic campaign pillars to capture this demand.`;
                   </button>
                 ))}
               </div>
-            </div>
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-gray-600" title="How detailed should each piece of content be?">Content Depth</label>
-              <div className="flex flex-wrap gap-1" role="group">
+              </div>
+              <div className="space-y-1.5 shrink-0">
+                <label className="block text-xs font-medium text-gray-600" title="How detailed should each piece of content be?">Content Depth</label>
+                <div className="flex flex-nowrap gap-1.5" role="group">
                 {['Short', 'Medium', 'Long'].map((v) => (
                   <button
                     key={v}
                     type="button"
                     title="How detailed should each piece of content be?"
                     onClick={() => setContentDepth(v)}
-                    className={`px-2 py-1 text-xs rounded-md border transition-colors ${
+                    className={`shrink-0 px-2.5 py-1 text-xs rounded-md border transition-colors whitespace-nowrap ${
                       contentDepth === v ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
                     }`}
                   >
@@ -1350,73 +1571,40 @@ Generate strategic campaign pillars to capture this demand.`;
                   </button>
                 ))}
               </div>
-            </div>
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-gray-600" title="How much content can you produce every week?">Content Capacity</label>
-              <select
-                value={contentCapacity ?? ''}
-                onChange={(e) => setContentCapacity(e.target.value || null)}
-                title="How much content can you produce every week?"
-                className="w-full h-9 rounded-md border border-gray-200 bg-white px-2 text-sm text-gray-900"
-              >
-                <option value="">Select</option>
-                <option value="1/w">1/w</option>
-                <option value="2/w">2/w</option>
-                <option value="3/w">3/w</option>
-                <option value="5/w">5/w</option>
-                <option value="Daily">Daily</option>
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-gray-600" title="How many weeks will this campaign run?">Campaign Duration (weeks)</label>
-              <Input
-                type="number"
-                min={4}
-                value={campaignDurationInput}
-                onChange={(e) => setCampaignDurationInput(Math.max(4, parseInt(e.target.value, 10) || 4))}
-                className="h-9 text-sm"
-                title="How many weeks will this campaign run?"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-gray-600" title="When do you plan to start this campaign?">Start Date</label>
-              <div className="relative">
-                <button
-                  type="button"
-                  title="When do you plan to start this campaign?"
-                  onClick={() => setExecutionCalendarOpen((o) => !o)}
-                  className="w-full h-9 rounded-md border border-gray-200 bg-white px-2 text-sm text-left text-gray-900"
-                >
-                  {tentativeStartDate ? tentativeStartDate.toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'Pick date'}
-                </button>
-                {executionCalendarOpen && (
-                  <>
-                    <div className="fixed inset-0 z-10" aria-hidden onClick={() => setExecutionCalendarOpen(false)} />
-                    <div className="absolute z-20 mt-1 left-0 p-2 rounded-lg border border-gray-200 bg-white shadow-lg">
-                      <input
-                        type="date"
-                        value={tentativeStartDate?.toISOString().slice(0, 10) ?? ''}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setTentativeStartDate(v ? new Date(v) : undefined);
-                        }}
-                        className="border border-gray-200 rounded px-2 py-1 text-sm"
-                      />
-                      <Button variant="ghost" size="sm" onClick={() => setExecutionCalendarOpen(false)} className="mt-2 w-full">
-                        Done
-                      </Button>
-                    </div>
-                  </>
-                )}
               </div>
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <label className="block text-xs font-medium text-gray-600" title="Tone and style of your content (pick up to 2).">Communication Style (max 2)</label>
-              <div className="flex flex-wrap gap-2">
+              <div
+                ref={(el) => { executionSectionRefs.current.frequencyPerWeek = el; }}
+                className={`space-y-1.5 shrink-0 w-24 rounded-lg border p-3 transition-colors ${!frequencyPerWeek ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
+              >
+                <label className="block text-xs font-medium text-gray-600" title="How many posts/pieces do you want to send per week?">
+                  Frequency per week <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={frequencyPerWeek ?? ''}
+                  onChange={(e) => setFrequencyPerWeek(e.target.value || null)}
+                  title="How many posts/pieces do you want to send per week?"
+                  className="w-full h-9 rounded-md border border-gray-200 bg-white px-2 text-sm text-gray-900"
+                >
+                  <option value="">Select</option>
+                  <option value="1/w">1/w</option>
+                  <option value="2/w">2/w</option>
+                  <option value="3/w">3/w</option>
+                  <option value="5/w">5/w</option>
+                  <option value="Daily">Daily</option>
+                </select>
+              </div>
+              <div
+                ref={(el) => { executionSectionRefs.current.communicationStyle = el; }}
+                className={`space-y-1.5 shrink-0 min-w-[12rem] rounded-lg border p-3 transition-colors ${communicationStyle.length === 0 ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
+              >
+              <label className="block text-xs font-medium text-gray-600" title="Tone and style of your content (pick up to 2).">
+                Communication Style (max 2) <span className="text-red-500">*</span>
+              </label>
+              <div className="flex flex-nowrap gap-2">
                 {['Professional', 'Conversational', 'Educational', 'Inspirational'].map((v) => {
                   const checked = communicationStyle.includes(v);
                   return (
-                    <label key={v} className="inline-flex items-center gap-1.5 cursor-pointer text-sm" title="Tone and style of your content (pick up to 2).">
+                    <label key={v} className="inline-flex items-center gap-1.5 cursor-pointer text-xs whitespace-nowrap" title="Tone and style of your content (pick up to 2).">
                       <input
                         type="checkbox"
                         checked={checked}
@@ -1434,8 +1622,9 @@ Generate strategic campaign pillars to capture this demand.`;
                   );
                 })}
               </div>
+              </div>
             </div>
-          </div>
+          </>
           )}
         </div>
       </div>
@@ -1544,11 +1733,6 @@ Generate strategic campaign pillars to capture this demand.`;
           </div>
         )}
       </div>
-      <StrategicConsole
-        value={strategicText}
-        onChange={setStrategicText}
-        mode={contextMode}
-      />
       <div className="rounded-lg border border-gray-200 p-4 space-y-3">
         <h3 className="text-sm font-semibold text-gray-800">Geographic Targeting (Optional)</h3>
         <div className="relative">
@@ -1627,12 +1811,26 @@ Generate strategic campaign pillars to capture this demand.`;
       <div>
         <button
           type="button"
-          onClick={handleRun}
-          disabled={isSubmitting || !isExecutionValid}
-          className="px-6 py-3 text-base font-medium rounded-lg bg-indigo-600 text-white disabled:opacity-50"
+          onClick={handleRunClick}
+          disabled={isSubmitting || !isExecutionFormComplete}
+          className={`px-6 py-3 text-base font-medium rounded-lg ${
+            isSubmitting || !isExecutionFormComplete
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-indigo-600 text-white hover:bg-indigo-700'
+          }`}
         >
-          {isSubmitting ? 'Generating…' : 'Generate Strategic Themes'}
+          {isSubmitting ? 'Generating…' : !isExecutionFormComplete ? 'Complete Required Fields' : 'Generate Strategic Themes'}
         </button>
+        {showMissingFieldsMessage && requiredExecutionFields.missing.length > 0 && (
+          <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            <p className="font-medium">Missing Inputs:</p>
+            <ul className="mt-1 list-inside list-disc space-y-0.5">
+              {requiredExecutionFields.missing.map((label) => (
+                <li key={label}>• {label}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
       {validationError && <div className="text-sm text-red-600">{validationError}</div>}
       <div id="recommendation-cards" ref={cardsSectionRef}>
@@ -1832,14 +2030,36 @@ Generate strategic campaign pillars to capture this demand.`;
                 flowState={strategicFlowState}
                 cardsWithSignals={workspaceSummaryData.cardsWithSignals}
                 strategyStatusPayload={strategyStatusPayload ?? undefined}
+                onScrollToCard={(cardId) => {
+                  const el = document.querySelector(`[data-card-id="${cardId}"]`);
+                  el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }}
               />
               <StrategicFlowSummary state={strategicFlowState} />
             </>
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 transition-all duration-200 ease-out">
             {rankedEngineCardsWithStatus.length > 0
-              ? rankedEngineCardsWithStatus.map(({ card, strategyStatus, isTopPriority, resurfaced }) => (
-                  <div key={card.id} className="transition-all duration-200 ease-out">
+              ? rankedEngineCardsWithStatus.map(({ card, strategyStatus, isTopPriority, resurfaced }, cardIndex) => {
+                  const signals = workspaceSummaryData.cardsWithSignals[cardIndex];
+                  const executeCount = workspaceSummaryData.cardsWithSignals.filter((c) => c.momentumState === 'execute').length;
+                  const upcomingCount = workspaceSummaryData.cardsWithSignals.filter((c) => c.journeyState === 'upcoming').length;
+                  const executionBadge =
+                    signals?.momentumState === 'execute' && executeCount > 0
+                      ? {
+                          index: workspaceSummaryData.cardsWithSignals.slice(0, cardIndex + 1).filter((c) => c.momentumState === 'execute').length,
+                          total: executeCount,
+                        }
+                      : undefined;
+                  const upcomingBadge =
+                    signals?.journeyState === 'upcoming' && upcomingCount > 0
+                      ? {
+                          index: workspaceSummaryData.cardsWithSignals.slice(0, cardIndex + 1).filter((c) => c.journeyState === 'upcoming').length,
+                          total: upcomingCount,
+                        }
+                      : undefined;
+                  return (
+                  <div key={card.id} data-card-id={card.id} className="transition-all duration-200 ease-out">
                     <RecommendationBlueprintCard
                     key={card.id}
                     recommendation={card.recommendation}
@@ -1847,6 +2067,9 @@ Generate strategic campaign pillars to capture this demand.`;
                     viewMode={viewMode}
                     isTopPriority={isTopPriority}
                     resurfaced={resurfaced}
+                    executionBadge={executionBadge}
+                    upcomingBadge={upcomingBadge}
+                    buildError={cardBuildError[card.id]}
                     fastLoading={fastLoadingCardId === card.id}
                     onBuildCampaignBlueprint={async () => {
                       if (!companyId) {
@@ -1854,6 +2077,7 @@ Generate strategic campaign pillars to capture this demand.`;
                         return;
                       }
                       setValidationError(null);
+                      setCardBuildError((prev) => ({ ...prev, [card.id]: '' }));
                       const recommendation = card.recommendation ?? {};
                       const title =
                         (typeof recommendation.polished_title === 'string'
@@ -1919,21 +2143,20 @@ Generate strategic campaign pillars to capture this demand.`;
                           const executionConfigPayload =
                             targetAudience &&
                             contentDepth &&
-                            contentCapacity &&
-                            campaignDurationInput >= 4 &&
+                            frequencyPerWeek &&
                             tentativeStartDate &&
                             campaignGoal &&
                             communicationStyle.length > 0
                               ? {
                                   target_audience: targetAudience,
-                                  professional_segment: professionalSegment ?? null,
-                                  communication_style: communicationStyle,
-                                  content_depth: contentDepth,
-                                  content_capacity: contentCapacity,
-                                  campaign_duration: campaignDurationInput,
-                                  tentative_start: tentativeStartDate.toISOString(),
-                                  campaign_goal: campaignGoal,
-                                }
+                                professional_segment: professionalSegments[0] ?? null,
+                                professional_segments: professionalSegments,
+                                communication_style: communicationStyle,
+                                content_depth: contentDepth,
+                                frequency_per_week: frequencyPerWeek,
+                                tentative_start: tentativeStartDate.toISOString(),
+                                campaign_goal: campaignGoal,
+                              }
                               : null;
                           const putRes = await fetchWithAuth(
                             `/api/campaigns/${encodeURIComponent(generatedCampaignId)}/source-recommendation`,
@@ -1951,6 +2174,7 @@ Generate strategic campaign pillars to capture this demand.`;
                             const err = await putRes.json().catch(() => ({}));
                             throw new Error(err?.error || 'Failed to save card to campaign');
                           }
+                          setCardBuildError((prev) => ({ ...prev, [card.id]: '' }));
                           createdCampaignId = generatedCampaignId;
                           setGeneratedCampaignId(null);
                         } else {
@@ -1959,18 +2183,17 @@ Generate strategic campaign pillars to capture this demand.`;
                           const executionConfigPayload =
                             targetAudience &&
                             contentDepth &&
-                            contentCapacity &&
-                            campaignDurationInput >= 4 &&
+                            frequencyPerWeek &&
                             tentativeStartDate &&
                             campaignGoal &&
                             communicationStyle.length > 0
                               ? {
                                   target_audience: targetAudience,
-                                  professional_segment: professionalSegment ?? null,
+                                  professional_segment: professionalSegments[0] ?? null,
+                                  professional_segments: professionalSegments,
                                   communication_style: communicationStyle,
                                   content_depth: contentDepth,
-                                  content_capacity: contentCapacity,
-                                  campaign_duration: campaignDurationInput,
+                                  frequency_per_week: frequencyPerWeek,
                                   tentative_start: tentativeStartDate.toISOString(),
                                   campaign_goal: campaignGoal,
                                 }
@@ -2023,20 +2246,19 @@ Generate strategic campaign pillars to capture this demand.`;
                         if (recId) qs.set('recommendationId', recId);
                         router.push(`/campaign-details/${createdCampaignId}?${qs.toString()}`);
                       } catch (error) {
-                        setValidationError(
-                          error instanceof Error
-                            ? error.message
-                            : 'Failed to open campaign pre-planning flow'
-                        );
+                        const msg = error instanceof Error ? error.message : 'Failed to save card to campaign';
+                        setCardBuildError((prev) => ({ ...prev, [card.id]: msg }));
                       }
                     }}
-                    onBuildCampaignFast={async () => {
+                    onBuildCampaignFast={async (options) => {
                       if (fastLoadingCardId === card.id) return;
+                      const outcomeView: BoltOutcomeView = options?.outcomeView ?? 'campaign_schedule';
                       if (!companyId) {
                         setValidationError('Select a company first.');
                         return;
                       }
                       setValidationError(null);
+                      setCardBuildError((prev) => ({ ...prev, [card.id]: '' }));
                       const recommendation = card.recommendation ?? {};
                       const title =
                         (typeof recommendation.polished_title === 'string'
@@ -2084,136 +2306,140 @@ Generate strategic campaign pillars to capture this demand.`;
                         regions: recommendation.regions ?? undefined,
                       };
                       const recId = typeof recommendation.id === 'string' ? recommendation.id.trim() : '';
+                      const durationWeeks = Math.min(4, Math.max(1, options?.durationWeeks ?? 4));
                       const executionConfigPayload =
                         targetAudience &&
                         contentDepth &&
-                        contentCapacity &&
-                        campaignDurationInput >= 4 &&
+                        frequencyPerWeek &&
                         tentativeStartDate &&
                         campaignGoal &&
                         communicationStyle.length > 0
                           ? {
                               target_audience: targetAudience,
-                              professional_segment: professionalSegment ?? null,
+                              professional_segment: professionalSegments[0] ?? null,
+                              professional_segments: professionalSegments,
                               communication_style: communicationStyle,
                               content_depth: contentDepth,
-                              content_capacity: contentCapacity,
-                              campaign_duration: campaignDurationInput,
+                              frequency_per_week: frequencyPerWeek,
+                              campaign_duration: durationWeeks,
                               tentative_start: tentativeStartDate.toISOString().split('T')[0],
                               campaign_goal: campaignGoal,
                             }
                           : null;
                       if (!executionConfigPayload) {
-                        setValidationError('Complete the execution bar (audience, depth, capacity, duration ≥4, start date, goal, style) to use BOLT.');
+                        setValidationError('Complete the execution bar (audience, depth, frequency, start date, goal, style) to use BOLT.');
                         return;
                       }
                       setFastLoadingCardId(card.id);
                       try {
-                        let createdCampaignId: string;
-                        if (generatedCampaignId) {
-                          const putRes = await fetchWithAuth(
-                            `/api/campaigns/${encodeURIComponent(generatedCampaignId)}/source-recommendation`,
-                            {
-                              method: 'PUT',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                source_recommendation_id: recId || null,
-                                source_strategic_theme: sourceStrategicTheme,
-                                execution_config: executionConfigPayload,
-                                mode: 'fast',
-                              }),
-                            }
-                          );
-                          if (!putRes.ok) {
-                            const err = await putRes.json().catch(() => ({}));
-                            throw new Error(err?.error || 'Failed to save card to campaign');
-                          }
-                          createdCampaignId = generatedCampaignId;
-                          setGeneratedCampaignId(null);
-                        } else {
-                          const campaignId = uuidv4();
-                          const response = await fetchWithAuth('/api/campaigns', {
+                        const BOLT_EXECUTE_TIMEOUT_MS = 30_000;
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), BOLT_EXECUTE_TIMEOUT_MS);
+                        let execRes;
+                        try {
+                          execRes = await fetchWithAuth('/api/bolt/execute', {
                             method: 'POST',
+                            signal: controller.signal,
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
-                              id: campaignId,
                               companyId,
-                              name: title,
+                              generatedCampaignId: generatedCampaignId ?? null,
+                              sourceStrategicTheme,
+                              executionConfig: executionConfigPayload,
+                              outcomeView,
+                              recId: recId || null,
+                              title,
                               description,
-                              status: 'planning',
-                              current_stage: 'planning',
-                              build_mode: 'no_context',
-                              source_opportunity_id: sourceOpportunityId,
-                              recommendation_id: recId || null,
-                              target_regions: regionsFromCard.length > 0 ? regionsFromCard : undefined,
-                              source_strategic_theme: sourceStrategicTheme,
-                              execution_config: executionConfigPayload,
-                              mode: 'fast',
+                              sourceOpportunityId,
+                              regionsFromCard,
                             }),
                           });
-                          if (!response.ok) {
-                            const err = await response.json().catch(() => ({}));
-                            throw new Error(err?.error || 'Failed to create campaign');
-                          }
-                          const data = await response.json().catch(() => ({}));
-                          createdCampaignId =
-                            data?.campaign?.id && typeof data.campaign.id === 'string'
-                              ? data.campaign.id
-                              : campaignId;
+                        } finally {
+                          clearTimeout(timeoutId);
                         }
+                        if (!execRes.ok) {
+                          const err = await execRes.json().catch(() => ({}));
+                          throw new Error(err?.error || 'Failed to start BOLT execution');
+                        }
+                        const execData = await execRes.json().catch(() => ({}));
+                        const runId = execData?.run_id;
+                        if (!runId) throw new Error('No run_id returned from BOLT execute');
+
                         if (recId) {
                           setUsedRecommendationIds((prev) => new Set([...prev, recId]));
                         }
-                        if (!createdCampaignId) {
-                          throw new Error('Campaign ID missing before Fast Mode planning.');
-                        }
-                        const campaignRes = await fetchWithAuth(
-                          `/api/campaigns?type=campaign&campaignId=${encodeURIComponent(createdCampaignId)}&companyId=${encodeURIComponent(companyId)}`
-                        );
-                        const campaignData = await campaignRes.json();
-                        const prefilledPlanning = campaignData.prefilledPlanning ?? {};
-                        const recommendationContextFromCampaign = campaignData.recommendationContext ?? null;
-                        const conversationHistory = [
-                          { type: 'user' as const, message: 'Yes, generate my full 12-week plan now.' },
-                        ];
-                        const planRes = await fetchWithAuth('/api/campaigns/ai/plan', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            campaignId: createdCampaignId,
-                            companyId,
-                            context: 'campaign-planning',
-                            conversationHistory,
-                            prefilledPlanning,
-                            recommendationContext: recommendationContextFromCampaign,
-                            forceFreshPlanningThread: true,
-                          }),
-                        });
-                        if (!planRes.ok) {
-                          console.error('Fast Mode plan failed', {
-                            campaignId: createdCampaignId,
-                            status: planRes.status,
-                          });
+                        if (generatedCampaignId) setGeneratedCampaignId(null);
+
+                        setBoltProgress({ stage: 'source-recommendation', status: 'started', progress_percentage: 0 });
+
+                        const pollProgress = async (): Promise<string | null> => {
+                          const progRes = await fetchWithAuth(`/api/bolt/progress?run_id=${encodeURIComponent(runId)}`);
+                          if (!progRes.ok) return null;
+                          const prog = await progRes.json().catch(() => ({}));
                           if (isMountedRef.current) {
-                            setFastLoadingCardId(null);
+                            setBoltProgress({
+                              stage: prog.stage,
+                              status: prog.status,
+                              progress_percentage: prog.progress_percentage,
+                              error_message: prog.error_message,
+                              weeks_generated: prog.weeks_generated,
+                              daily_slots_created: prog.daily_slots_created,
+                              scheduled_posts_created: prog.scheduled_posts_created,
+                            });
                           }
-                          router.push(`/campaign-details/${createdCampaignId}`);
-                          return;
+                          if (prog.status === 'completed') {
+                            return (prog.result_campaign_id as string) || null;
+                          }
+                          if (prog.status === 'failed') {
+                            throw new Error((prog.error_message as string) || 'BOLT execution failed');
+                          }
+                          return null;
+                        };
+
+                        const POLL_INTERVAL_MS = 2500;
+                        let completedCampaignId: string | null = null;
+                        while (!completedCampaignId && isMountedRef.current) {
+                          completedCampaignId = await pollProgress();
+                          if (!completedCampaignId) await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
                         }
-                        await new Promise((resolve) => setTimeout(resolve, 250));
-                        if (isMountedRef.current) {
+
+                        if (!isMountedRef.current) return;
+                        if (completedCampaignId) {
                           setFastLoadingCardId(null);
+                          setBoltProgress(null);
+                          const qs = new URLSearchParams({ companyId });
+                          const base = `/campaign-details/${completedCampaignId}`;
+                          if (outcomeView === 'week_plan') {
+                            router.push(`${base}?mode=fast&${qs.toString()}`);
+                          } else if (outcomeView === 'daily_plan') {
+                            router.push(`/campaign-daily-plan/${completedCampaignId}?${qs.toString()}`);
+                          } else if (outcomeView === 'repurpose') {
+                            router.push(`/activity-workspace?campaignId=${encodeURIComponent(completedCampaignId)}&companyId=${encodeURIComponent(companyId)}`);
+                          } else if (outcomeView === 'schedule') {
+                            router.push(`/campaign-calendar/${completedCampaignId}?${qs.toString()}`);
+                          } else {
+                            router.push(`${base}?mode=fast&${qs.toString()}`);
+                          }
                         }
-                        router.push(`/campaign-details/${createdCampaignId}?mode=fast`);
                       } catch (error) {
                         if (isMountedRef.current) {
-                          setFastLoadingCardId(null);
+                          let msg = error instanceof Error ? error.message : 'Failed to run BOLT (Fast Mode)';
+                          if (error instanceof Error && error.name === 'AbortError') {
+                            msg = 'Backend is taking too long to respond. Please ensure Redis and BOLT workers are running, then try again.';
+                          }
+                          setBoltProgress({
+                            stage: undefined,
+                            status: 'failed',
+                            progress_percentage: 0,
+                            error_message: msg,
+                          });
+                          setTimeout(() => {
+                            setFastLoadingCardId(null);
+                            setBoltProgress(null);
+                          }, 4000);
                         }
-                        setValidationError(
-                          error instanceof Error
-                            ? error.message
-                            : 'Failed to run BOLT (Fast Mode)'
-                        );
+                        const msg = error instanceof Error ? error.message : 'Failed to run BOLT (Fast Mode)';
+                        setCardBuildError((prev) => ({ ...prev, [card.id]: msg }));
                       }
                     }}
                     onMarkLongTerm={() =>
@@ -2232,7 +2458,8 @@ Generate strategic campaign pillars to capture this demand.`;
                     }
                   />
                   </div>
-                ))
+                  );
+                })
               : null}
           </div>
           {visibleEngineCards.length === 0 && (
@@ -2245,6 +2472,7 @@ Generate strategic campaign pillars to capture this demand.`;
               Marked long-term: {longTermEngineIds.size}
             </div>
           )}
+          <BOLTProgressModal open={fastLoadingCardId !== null} progress={boltProgress} />
           {jobId && (
             <EngineJobStatusPanel
               createdAt={(polledJob as { created_at?: string } | null)?.created_at}

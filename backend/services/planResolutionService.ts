@@ -5,6 +5,16 @@
 
 import { supabase } from '../db/supabaseClient';
 
+/** Plan-based max campaign duration (weeks). Fallback when not in plan_limits. */
+export const PLAN_MAX_DURATION_WEEKS: Record<string, number> = {
+  starter: 4,
+  growth: 6,
+  pro: 8,
+  enterprise: 12,
+};
+
+export const ABSOLUTE_MAX_DURATION_WEEKS = 12;
+
 export type ResolvedPlanLimits = {
   plan_key: string | null;
   limits: {
@@ -12,6 +22,7 @@ export type ResolvedPlanLimits = {
     external_api_calls: number | null;
     automation_executions: number | null;
   };
+  max_campaign_duration_weeks: number | null;
 };
 
 /**
@@ -24,6 +35,7 @@ export async function resolveOrganizationPlanLimits(
   const empty: ResolvedPlanLimits = {
     plan_key: null,
     limits: { llm_tokens: null, external_api_calls: null, automation_executions: null },
+    max_campaign_duration_weeks: null,
   };
 
   const { data: assignment, error: assignError } = await supabase
@@ -50,14 +62,15 @@ export async function resolveOrganizationPlanLimits(
 
   const { data: limitRows, error: limitsError } = await supabase
     .from('plan_limits')
-    .select('resource_key, monthly_limit')
+    .select('resource_key, limit_value')
     .eq('plan_id', planId);
 
   const planLimits: Record<string, number | null> = {};
   if (!limitsError && limitRows) {
     for (const row of limitRows) {
       const key = String(row.resource_key);
-      planLimits[key] = row.monthly_limit != null ? Number(row.monthly_limit) : null;
+      const val = (row as { limit_value?: number | null }).limit_value;
+      planLimits[key] = val != null ? Number(val) : null;
     }
   }
 
@@ -81,8 +94,17 @@ export async function resolveOrganizationPlanLimits(
       overrides.automation_executions ?? planLimits.automation_executions ?? null,
   };
 
+  const planKey = String(planRow.plan_key).toLowerCase();
+  const fromDb =
+    overrides.max_campaign_duration_weeks ?? planLimits.max_campaign_duration_weeks ?? null;
+  const max_campaign_duration_weeks =
+    fromDb != null
+      ? Math.min(ABSOLUTE_MAX_DURATION_WEEKS, Math.max(1, Math.floor(Number(fromDb))))
+      : (planKey && PLAN_MAX_DURATION_WEEKS[planKey]) ?? null;
+
   return {
     plan_key: planRow.plan_key,
     limits,
+    max_campaign_duration_weeks,
   };
 }

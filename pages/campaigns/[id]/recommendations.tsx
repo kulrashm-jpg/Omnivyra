@@ -147,7 +147,7 @@ export default function CampaignRecommendationsPage() {
       }
       setSelectedWeeks(new Set());
       await fetchRecommendations(sessionId ?? undefined);
-      router.push(`/campaign-planning-hierarchical?campaignId=${campaignId}`);
+      router.push(`/campaign-details/${campaignId}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to merge');
     } finally {

@@ -55,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const analytics = await getLatestAnalyticsReport(companyId, campaignId);
     const learning = await getLatestLearningInsights(companyId, campaignId);
 
-    const profile = await getProfile(companyId, { autoRefine: false });
+    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
     const report = await buildExecutiveReport({
       companyId,
       campaignId,

@@ -2,10 +2,14 @@
  * Executive Campaign Health API — read-only projection layer.
  * Consolidates engagement, comments, stability, strategist acceptance, and alerts.
  * No mutations, no schema changes, no changes to distribution or evaluation logic.
+ *
+ * Growth Intelligence Phase-1 integration
+ * Adds read-only growth_score derived from existing platform data
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getGrowthIntelligenceSummary } from '../../../backend/services/growthIntelligence';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { computeDistributionStability } from '../../../lib/intelligence/distributionStability';
 import { buildStrategicMemoryProfile } from '../../../lib/intelligence/strategicMemory';
@@ -37,6 +41,8 @@ export interface CampaignHealthSummary {
     percent_used: number | null;
     status: 'HEALTHY' | 'WARNING' | 'CRITICAL' | 'NOT_CONFIGURED';
   };
+  /** Growth Intelligence Phase-1: read-only score from existing platform data. Null if service unavailable. */
+  growth_score?: number | null;
 }
 
 const ALL_ACTIONS: StrategistAction[] = ['IMPROVE_CTA', 'IMPROVE_HOOK', 'ADD_DISCOVERABILITY'];
@@ -398,6 +404,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ai_spend_last_30_days,
       ai_budget,
     };
+
+    try {
+      const growth = await getGrowthIntelligenceSummary(supabase, access.companyId, cid);
+      summary.growth_score = growth.growthScore;
+    } catch (err) {
+      console.warn('Growth intelligence unavailable', err);
+      summary.growth_score = null;
+    }
 
     if (process.env.NODE_ENV === 'development') {
       console.log('[CampaignHealth]', summary);

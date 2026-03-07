@@ -7,11 +7,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   Calendar,
   Clock,
-  Users,
-  Hash,
-  Image,
-  Video,
-  Facebook,
   Edit3,
   Trash2,
   Eye,
@@ -28,8 +23,14 @@ import {
   TrendingUp,
   CheckCircle,
   AlertCircle,
-  XCircle
+  XCircle,
+  Users,
+  Hash,
+  Image,
+  Video,
+  Facebook
 } from 'lucide-react';
+import PlatformIcon from '@/components/ui/PlatformIcon';
 
 interface ScheduledPost {
   id: string;
@@ -140,11 +141,6 @@ export default function CalendarView() {
   };
 
   const teamMembers = ['Junior Team', 'Junior Creator', 'Junior Analyst'];
-
-  const getPlatformIcon = (platform: string) => {
-    const platformData = platforms.find(p => p.key === platform);
-    return platformData?.icon || <Users className="h-4 w-4" />;
-  };
 
   const getPlatformColor = (platform: string) => {
     const platformData = platforms.find(p => p.key === platform);
@@ -464,7 +460,7 @@ export default function CalendarView() {
                               onClick={() => setSelectedPost(post)}
                             >
                               <div className="flex items-center gap-1">
-                                {post.platform === 'internal' ? <AlertCircle className="h-3 w-3" /> : getPlatformIcon(post.platform)}
+                                {post.platform === 'internal' ? <AlertCircle className="h-3 w-3" /> : <PlatformIcon platform={post.platform} size={12} />}
                                 <span className="truncate">{post.title}</span>
                               </div>
                               <div className="text-xs opacity-75">
@@ -619,7 +615,7 @@ export default function CalendarView() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  {getPlatformIcon(selectedPost.platform)}
+                  <PlatformIcon platform={selectedPost.platform} size={14} showLabel />
                   <span>{selectedPost.title}</span>
                   <Badge 
                     variant="secondary" 
@@ -659,8 +655,7 @@ export default function CalendarView() {
                 <div>
                   <h4 className="font-medium mb-2">Platform</h4>
                   <div className="flex items-center gap-2">
-                    {getPlatformIcon(selectedPost.platform)}
-                    <span className="capitalize">{selectedPost.platform}</span>
+                    <PlatformIcon platform={selectedPost.platform} size={14} showLabel />
                   </div>
                 </div>
                 <div>

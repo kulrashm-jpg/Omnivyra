@@ -52,7 +52,7 @@ export async function runWeeklyRecommendationRefresh(): Promise<void> {
 
   for (const companyId of companyIds) {
     try {
-      const profile = await getProfile(companyId, { autoRefine: false });
+      const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
       const geoHint = profile?.geography_list?.[0] ?? profile?.geography ?? undefined;
       const categoryHint = profile?.industry_list?.[0] ?? profile?.category ?? undefined;
       const defaultApiIds = await getCompanyDefaultApiIds(companyId);
@@ -79,7 +79,7 @@ export async function runWeeklyRecommendationRefresh(): Promise<void> {
 export async function runCompanyProfileTriggeredRefresh(companyId: string): Promise<void> {
   if (!companyId) return;
   try {
-    const profile = await getProfile(companyId, { autoRefine: false });
+    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
     const geoHint = profile?.geography_list?.[0] ?? profile?.geography ?? undefined;
     const categoryHint = profile?.industry_list?.[0] ?? profile?.category ?? undefined;
     const defaultApiIds = await getCompanyDefaultApiIds(companyId);

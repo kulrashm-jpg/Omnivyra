@@ -168,7 +168,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const detectAskedKey = (aiMessage: string): string | null => {
       const n = normalizeForMatch(aiMessage);
       if (!n) return null;
-      if (n.includes('key messages') || n.includes('pain points') || n.includes('one thing you want people to remember')) return 'key_messages';
+      if (n.includes('key messages') || n.includes('pain points') || n.includes('one thing you want people to remember') || n.includes('core message') || n.includes('audience to remember')) return 'key_messages';
       if (n.includes('primary target audience') || n.includes('who will see your content') || (n.includes('target audience') && n.includes('who is'))) return 'target_audience';
       if (n.includes('target audience')) return 'target_audience';
       if ((n.includes('which professionals') && n.includes('mainly speaking')) || n.includes('which group fits')) return 'audience_professional_segment';
@@ -186,7 +186,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         n.includes('content capacity') ||
         n.includes('how much content') ||
         n.includes('how will you create') ||
-        n.includes('how many pieces per week')
+        n.includes('how many pieces per week') ||
+        n.includes('create per week') ||
+        n.includes('creator-dependent pieces') ||
+        n.includes('how many can you create per week') ||
+        n.includes('how many can you and your team create every week')
       ) {
         return 'content_capacity';
       }
@@ -229,13 +233,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (existingCollectedPlanningContext as any)?.tentative_start
       ?? tentativeStartFromCurrentMessage
       ?? (isoDateOnly(extractLatestAnswer('tentative_start') ?? '') || extractLatestAnswer('tentative_start'));
-    // Extract all Q&A answers from conversation (and existing body) so plan generation has full context, not just target_audience/tentative_start.
+    const lastAiAsksContentCapacity = lastAiEntry && detectAskedKey(String(lastAiEntry?.message ?? '')) === 'content_capacity';
+    const looksLikeCapacityAnswer = (m: string) =>
+      /\d+\s*(post|video|blog|story|thread|reel|short|carousel|piece)s?/i.test(m) || /\b(no|none|zero)\b/i.test(m) || /^\d+/.test(m.trim());
+    const contentCapacityFromCurrentMessage =
+      lastAiAsksContentCapacity && message.trim() && looksLikeCapacityAnswer(message) ? message.trim() : null;
+    // Extract all Q&A answers from conversation (and existing body) so plan generation has full context.
+    // Supply = available_content + content_capacity; both feed into viability validation.
     const availableContent =
       (existingCollectedPlanningContext as any)?.available_content ??
       extractLatestAnswer('available_content');
     const weeklyCapacity =
       (existingCollectedPlanningContext as any)?.weekly_capacity ??
       (existingCollectedPlanningContext as any)?.content_capacity ??
+      contentCapacityFromCurrentMessage ??
       extractLatestAnswer('content_capacity');
     const audienceProfessionalSegment =
       (existingCollectedPlanningContext as any)?.audience_professional_segment ??
@@ -291,7 +302,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...(contentDepth ? { content_depth: contentDepth } : {}),
       ...(topicContinuity ? { topic_continuity: topicContinuity } : {}),
       ...(availableContent != null && String(availableContent).trim() !== '' ? { available_content: availableContent } : {}),
-      ...(weeklyCapacity != null && String(weeklyCapacity).trim() !== '' ? { content_capacity: weeklyCapacity } : {}),
+      ...(weeklyCapacity != null && String(weeklyCapacity).trim() !== '' ? { content_capacity: weeklyCapacity, weekly_capacity: weeklyCapacity } : {}),
       ...(selectedPlatforms.length > 0 ? { platforms: selectedPlatforms.join(', ') } : {}),
       ...(platformContentRequests && typeof platformContentRequests === 'object' ? { platform_content_requests: platformContentRequests } : {}),
       ...(Array.isArray(exclusiveCampaigns) ? { exclusive_campaigns: exclusiveCampaigns } : {}),

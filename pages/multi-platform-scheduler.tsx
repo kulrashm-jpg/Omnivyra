@@ -20,11 +20,6 @@ import {
   Lightbulb,
   Zap,
   Rocket,
-  Users, // LinkedIn
-  Hash, // Twitter
-  Image, // Instagram
-  Video, // YouTube
-  Facebook,
   Brain,
   ArrowRight,
   Save,
@@ -33,8 +28,14 @@ import {
   Play,
   Pause,
   RotateCcw,
-  ExternalLink
+  ExternalLink,
+  Users,
+  Hash,
+  Image as ImageIcon,
+  Video,
+  Facebook,
 } from 'lucide-react';
+import PlatformIcon from '@/components/ui/PlatformIcon';
 
 interface ContentDraft {
   id: string;
@@ -114,7 +115,7 @@ export default function MultiPlatformScheduler() {
   const platforms = [
     { key: 'linkedin', name: 'LinkedIn', icon: <Users className="h-5 w-5" />, color: 'blue' },
     { key: 'twitter', name: 'Twitter', icon: <Hash className="h-5 w-5" />, color: 'sky' },
-    { key: 'instagram', name: 'Instagram', icon: <Image className="h-5 w-5" />, color: 'pink' },
+    { key: 'instagram', name: 'Instagram', icon: <ImageIcon className="h-5 w-5" />, color: 'pink' },
     { key: 'youtube', name: 'YouTube', icon: <Video className="h-5 w-5" />, color: 'red' },
     { key: 'facebook', name: 'Facebook', icon: <Facebook className="h-5 w-5" />, color: 'indigo' }
   ];
@@ -145,6 +146,7 @@ export default function MultiPlatformScheduler() {
       enabled: true
     }));
     setSchedulingRules(defaultRules);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- init once on mount
   }, []);
 
   const handleDraftSelect = (draft: ContentDraft) => {
@@ -224,11 +226,6 @@ export default function MultiPlatformScheduler() {
     // Mock scheduling
     console.log('Scheduling posts:', platformContents);
     alert('Posts scheduled successfully!');
-  };
-
-  const getPlatformIcon = (platform: string) => {
-    const platformData = platforms.find(p => p.key === platform);
-    return platformData?.icon || <Sparkles className="h-4 w-4" />;
   };
 
   const getPlatformColor = (platform: string) => {
@@ -353,8 +350,7 @@ export default function MultiPlatformScheduler() {
                   <CardHeader>
                     <CardTitle className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        {getPlatformIcon(platform)}
-                        <span className="text-lg">{platforms.find(p => p.key === platform)?.name}</span>
+                        <PlatformIcon platform={platform} size={20} showLabel />
                         <Badge variant="secondary" className="bg-purple-500/20 text-purple-300">
                           {platformContents[platform]?.contentType || 'post'}
                         </Badge>

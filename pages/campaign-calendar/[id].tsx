@@ -1,9 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
-import { ArrowLeft, Calendar, ChevronLeft, ChevronRight, Clock, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Calendar, ChevronLeft, ChevronRight, Clock, ExternalLink, X } from 'lucide-react';
 import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
+import PlatformIcon from '../../components/ui/PlatformIcon';
+import { getPlatformLabel } from '../../utils/platformIcons';
+import {
+  type ExecutionStatus,
+  getExecutionStatusBackground,
+  getExecutionStatusBadgeClasses,
+} from '../../utils/executionStatus';
 
-type ReadinessLabel = 'ready' | 'missing_media' | 'incomplete';
 type StageKey = 'awareness' | 'education' | 'authority' | 'engagement' | 'conversion' | 'team_note';
 
 type CalendarActivity = {
@@ -15,17 +21,45 @@ type CalendarActivity = {
   title: string;
   platform: string;
   content_type: string;
-  readiness_label: ReadinessLabel;
+  /** Unified execution status; default PENDING when missing. */
+  execution_status: ExecutionStatus;
   execution_jobs: Array<{
     job_id: string;
     platform: string;
     status: 'ready' | 'blocked';
     ready_to_schedule: boolean;
+    /** When set, used for job-level display; default PENDING. */
+    execution_status?: ExecutionStatus;
   }>;
   raw_item: Record<string, unknown>;
   /** When set, ownership colors override default card styling (additive). */
   execution_mode?: string;
 };
+
+/** Derive ExecutionStatus from job: use job.execution_status if present, else legacy ready_to_schedule → SCHEDULED, else PENDING. */
+function jobExecutionStatus(job: { execution_status?: string; ready_to_schedule?: boolean; status?: string }): ExecutionStatus {
+  const raw = (job?.execution_status ?? '').toString().toUpperCase();
+  if (raw === 'SCHEDULED' || raw === 'FINALIZED' || raw === 'IN_PROGRESS' || raw === 'PENDING') return raw as ExecutionStatus;
+  if (job?.ready_to_schedule || String(job?.status ?? '').toLowerCase() === 'ready') return 'SCHEDULED';
+  return 'PENDING';
+}
+
+/** Derive activity-level ExecutionStatus from jobs (best status wins) or legacy readiness. */
+function activityExecutionStatus(
+  jobs: Array<{ execution_status?: ExecutionStatus }>,
+  legacyReady?: boolean,
+  legacyMissingMedia?: boolean
+): ExecutionStatus {
+  if (jobs.length > 0) {
+    const ordered: ExecutionStatus[] = ['SCHEDULED', 'FINALIZED', 'IN_PROGRESS', 'PENDING'];
+    for (const s of ordered) {
+      if (jobs.some((j) => (j.execution_status ?? 'PENDING') === s)) return s;
+    }
+  }
+  if (legacyReady) return 'SCHEDULED';
+  if (legacyMissingMedia) return 'IN_PROGRESS';
+  return 'PENDING';
+}
 
 type StageGroup = {
   stage: StageKey;
@@ -63,28 +97,7 @@ const normalizeDateKey = (date: Date): string => {
   return local.toISOString().split('T')[0];
 };
 
-const normalizePlatformLabel = (platform: string): string => {
-  const p = String(platform || '').trim().toLowerCase();
-  if (!p) return 'Unknown';
-  if (p === 'x' || p === 'twitter') return 'X';
-  return p.charAt(0).toUpperCase() + p.slice(1);
-};
-
-const getPlatformGlyph = (platform: string): string => {
-  const p = String(platform || '').toLowerCase();
-  if (p === 'linkedin') return '💼';
-  if (p === 'instagram') return '📸';
-  if (p === 'facebook') return '📘';
-  if (p === 'x' || p === 'twitter') return '𝕏';
-  if (p === 'youtube') return '▶️';
-  return '🧩';
-};
-
-const getReadinessBadge = (label: ReadinessLabel) => {
-  if (label === 'ready') return { text: '🟢 Ready to Schedule', className: 'bg-emerald-100 text-emerald-700' };
-  if (label === 'missing_media') return { text: '🟡 Missing Media', className: 'bg-amber-100 text-amber-700' };
-  return { text: '🔴 Incomplete', className: 'bg-rose-100 text-rose-700' };
-};
+const normalizePlatformLabel = (platform: string): string => getPlatformLabel(platform) || 'Unknown';
 
 const normalizeStageValue = (raw: string): StageKey | null => {
   const value = raw.toLowerCase().replace(/[\s-]+/g, '_');
@@ -104,7 +117,7 @@ const mapDeterministicFallbackStage = (activity: CalendarActivity): StageKey => 
   if (ct.includes('guide') || ct.includes('tutorial') || ct.includes('article') || ct.includes('blog')) return 'education';
   if (ct.includes('webinar') || ct.includes('case') || ct.includes('thought') || ct.includes('podcast')) return 'authority';
   if (ct.includes('poll') || ct.includes('qa') || ct.includes('community') || ct.includes('thread')) return 'engagement';
-  if (activity.readiness_label !== 'ready') return 'engagement';
+  if (activity.execution_status !== 'SCHEDULED' && activity.execution_status !== 'FINALIZED') return 'engagement';
   return 'awareness';
 };
 
@@ -180,6 +193,7 @@ export default function CampaignCalendarPage() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [expandedState, setExpandedState] = useState<Record<string, boolean>>({});
   const [executionFilter, setExecutionFilter] = useState<'all' | 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI'>('all');
+  const [postPreview, setPostPreview] = useState<{ content: string; platform: string; contentType: string; title: string } | null>(null);
 
   useEffect(() => {
     if (!campaignId) return;
@@ -218,21 +232,25 @@ export default function CampaignCalendarPage() {
             const date = hasIsoDate ? parsed.toISOString().split('T')[0] : fallbackDate.toISOString().split('T')[0];
             const time = hasIsoDate ? parsed.toISOString().slice(11, 16) : (scheduledRaw.match(/^\d{1,2}:\d{2}$/) ? scheduledRaw : '09:00');
 
-            const readiness = item?.execution_readiness && typeof item.execution_readiness === 'object' ? item.execution_readiness : null;
-            const blocking = Array.isArray(readiness?.blocking_reasons) ? readiness.blocking_reasons : [];
-            const readiness_label: ReadinessLabel = readiness?.ready_to_schedule
-              ? 'ready'
-              : (blocking.includes('missing_required_media') ? 'missing_media' : 'incomplete');
+            const execution_readiness = item?.execution_readiness && typeof item.execution_readiness === 'object' ? item.execution_readiness : null;
+            const blocking = Array.isArray(execution_readiness?.blocking_reasons) ? execution_readiness.blocking_reasons : [];
+            const legacyReady = Boolean(execution_readiness?.ready_to_schedule);
+            const legacyMissingMedia = blocking.includes('missing_required_media');
 
             const execution_jobs = Array.isArray(item?.execution_jobs)
-              ? item.execution_jobs.map((job: any) => ({
-                  job_id: nonEmpty(job?.job_id),
-                  platform: nonEmpty(job?.platform).toLowerCase() || platform,
-                  status: String(job?.status || '').toLowerCase() === 'ready' ? 'ready' : 'blocked',
-                  ready_to_schedule: Boolean(job?.ready_to_schedule),
-                }))
+              ? item.execution_jobs.map((job: any) => {
+                  const status: ExecutionStatus = jobExecutionStatus(job);
+                  return {
+                    job_id: nonEmpty(job?.job_id),
+                    platform: nonEmpty(job?.platform).toLowerCase() || platform,
+                    status: String(job?.status || '').toLowerCase() === 'ready' ? 'ready' as const : 'blocked' as const,
+                    ready_to_schedule: Boolean(job?.ready_to_schedule),
+                    execution_status: status,
+                  };
+                })
               : [];
 
+            const execution_status = activityExecutionStatus(execution_jobs, legacyReady, legacyMissingMedia);
             const execution_mode = typeof (item as any)?.execution_mode === 'string' ? (item as any).execution_mode : undefined;
             mapped.push({
               execution_id,
@@ -243,7 +261,7 @@ export default function CampaignCalendarPage() {
               title,
               platform,
               content_type,
-              readiness_label,
+              execution_status,
               execution_jobs,
               raw_item: item,
               ...(execution_mode ? { execution_mode } : {}),
@@ -287,7 +305,7 @@ export default function CampaignCalendarPage() {
               const platform = nonEmpty(plan.platform).toLowerCase() || 'linkedin';
               const contentType = nonEmpty(plan.contentType ?? plan.content_type ?? (plan.dailyObject as any)?.contentType).toLowerCase() || 'post';
               const status = String(plan.status ?? 'planned').toLowerCase();
-              const readiness_label: ReadinessLabel = status === 'scheduled' || status === 'ready' ? 'ready' : 'incomplete';
+              const execution_status: ExecutionStatus = status === 'scheduled' || status === 'ready' ? 'SCHEDULED' : 'PENDING';
               const raw = (plan.dailyObject && typeof plan.dailyObject === 'object') ? plan.dailyObject : plan;
               return {
                 execution_id: String(plan.id ?? `daily-${weekNumber}-${idx}`),
@@ -298,7 +316,7 @@ export default function CampaignCalendarPage() {
                 title,
                 platform,
                 content_type: contentType,
-                readiness_label,
+                execution_status,
                 execution_jobs: [],
                 raw_item: raw,
               };
@@ -385,6 +403,19 @@ export default function CampaignCalendarPage() {
     setExpandedState((prev) => ({ ...prev, [storageKey]: !currently }));
   };
 
+  const openPostPreview = useCallback((activity: CalendarActivity) => {
+    if (activity.platform === 'team') return;
+    const raw = activity.raw_item && typeof activity.raw_item === 'object' ? activity.raw_item as Record<string, unknown> : {};
+    const content = String((raw as any)?.generated_content ?? (raw as any)?.content ?? '').trim();
+    const fallback = activity.title ? `Content for "${activity.title}" — ${activity.platform} ${activity.content_type}` : `Post — ${activity.platform} ${activity.content_type}`;
+    setPostPreview({
+      content: content || fallback,
+      platform: activity.platform,
+      contentType: activity.content_type,
+      title: activity.title,
+    });
+  }, []);
+
   const openActivityDetail = (activity: CalendarActivity) => {
     if (activity.platform === 'team') return;
     const raw = activity.raw_item && typeof activity.raw_item === 'object' ? activity.raw_item as Record<string, unknown> : {};
@@ -415,6 +446,40 @@ export default function CampaignCalendarPage() {
             topicGoal: (raw as any).dailyObjective ?? (raw as any).objective,
           },
         };
+    const generatedContent = String((raw as any)?.generated_content ?? '').trim();
+    const platformVariants = Array.isArray((raw as any)?.platform_variants) ? (raw as any).platform_variants : (
+      generatedContent ? [{ platform: activity.platform, content_type: activity.content_type, generated_content: generatedContent }] : []
+    );
+    if (platformVariants.length > 0 && !(dailyExecutionItem as any).platform_variants) {
+      (dailyExecutionItem as any).platform_variants = platformVariants;
+    }
+    const masterContent = (raw as any)?.master_content && typeof (raw as any).master_content === 'object'
+      ? (raw as any).master_content
+      : generatedContent ? { content: generatedContent, generation_status: 'generated' } : null;
+    if (masterContent && !(dailyExecutionItem as any).master_content) {
+      (dailyExecutionItem as any).master_content = masterContent;
+    }
+    const schedulesFromVariants = platformVariants.length > 0
+      ? platformVariants.map((v: any, i: number) => ({
+          id: `${activity.execution_id}-${v.platform}-${v.content_type}-${i}`,
+          platform: v.platform || activity.platform,
+          contentType: v.content_type || activity.content_type,
+          date: activity.date,
+          time: activity.time,
+          status: activity.execution_status === 'SCHEDULED' ? 'scheduled' : 'planned',
+          description: '',
+          title: activity.title,
+        }))
+      : [{
+          id: activity.execution_id,
+          platform: activity.platform,
+          contentType: activity.content_type,
+          date: activity.date,
+          time: activity.time,
+          status: activity.execution_status === 'SCHEDULED' ? 'scheduled' : 'planned',
+          description: '',
+          title: activity.title,
+        }];
     const workspaceKey = `activity-workspace-${campaignId}-${activity.execution_id}`;
     const payload = {
       campaignId,
@@ -425,18 +490,7 @@ export default function CampaignCalendarPage() {
       topic: activity.title,
       description: String((raw as any)?.writingIntent ?? (raw as any)?.description ?? ''),
       dailyExecutionItem,
-      schedules: [
-        {
-          id: activity.execution_id,
-          platform: activity.platform,
-          contentType: activity.content_type,
-          date: activity.date,
-          time: activity.time,
-          status: activity.readiness_label === 'ready' ? 'scheduled' : 'planned',
-          description: '',
-          title: activity.title,
-        },
-      ],
+      schedules: schedulesFromVariants,
     };
     try {
       if (typeof window !== 'undefined') {
@@ -465,13 +519,13 @@ export default function CampaignCalendarPage() {
               onClick={() => {
                 if (campaignId) {
                   const companyId = typeof router.query.companyId === 'string' ? router.query.companyId : '';
-                  router.push(`/campaign-planning-hierarchical?campaignId=${encodeURIComponent(campaignId)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`);
+                  router.push(`/campaign-details/${encodeURIComponent(campaignId)}${companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''}`);
                 } else {
                   router.back();
                 }
               }}
               className="p-2 rounded-lg border border-gray-200 hover:bg-white"
-              title="Back to week plan"
+              title="Back to campaign"
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
@@ -614,11 +668,11 @@ export default function CampaignCalendarPage() {
                               {group.items.map((activity) => {
                                 const execMode = (activity.execution_mode ?? 'AI_AUTOMATED') as 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI';
                                 const intel = getExecutionIntelligence(execMode);
-                                const readiness = getReadinessBadge(activity.readiness_label);
                                 const modeColors = intel.colorClasses;
+                                const statusBg = getExecutionStatusBackground(activity.execution_status);
                                 const articleClass = modeColors
-                                  ? `rounded-xl p-4 shadow-sm ${modeColors.card}`
-                                  : 'bg-white border border-gray-200 rounded-xl p-4 shadow-sm';
+                                  ? `rounded-xl p-4 shadow-sm border ${modeColors.card} ${statusBg}`
+                                  : `bg-white border border-gray-200 rounded-xl p-4 shadow-sm ${statusBg}`;
                                 const execDot = execMode === 'AI_AUTOMATED' ? '🟢' : execMode === 'CONDITIONAL_AI' ? '🟡' : '🔴';
                                 const modeLabel = intel.label;
                                 const modeExplanation = intel.explanation;
@@ -642,8 +696,8 @@ export default function CampaignCalendarPage() {
                                       <h4 className="text-base font-semibold text-gray-900">{activity.title}</h4>
                                       <div className="flex items-center gap-2">
                                         <span className="text-xs leading-none" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (modeLabel ?? undefined)}>{execDot}</span>
-                                        <span className={`text-[11px] px-2 py-1 rounded-full font-medium ${readiness.className}`}>
-                                          {readiness.text}
+                                        <span className={`text-[11px] px-2 py-1 rounded-full font-medium border ${getExecutionStatusBadgeClasses(activity.execution_status)}`}>
+                                          [{activity.execution_status}]
                                         </span>
                                         <span className="text-[11px] px-2 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-700 inline-flex items-center gap-1">
                                           <Clock className="h-3 w-3" />
@@ -656,17 +710,33 @@ export default function CampaignCalendarPage() {
                                     )}
 
                                     <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                                      <span className="px-2 py-1 rounded border border-gray-200 bg-gray-50">
-                                        {getPlatformGlyph(activity.platform)} {normalizePlatformLabel(activity.platform)}
-                                      </span>
-                                      <span className="px-2 py-1 rounded border border-gray-200 bg-gray-50 capitalize">
+                                      <button
+                                        type="button"
+                                        onClick={() => openPostPreview(activity)}
+                                        className="px-2 py-1 rounded border border-gray-200 bg-gray-50 inline-flex items-center gap-1 hover:bg-gray-100 hover:border-gray-300 cursor-pointer"
+                                        title={`View ${activity.platform} ${activity.content_type} in format`}
+                                      >
+                                        <PlatformIcon platform={activity.platform} size={14} showLabel />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openPostPreview(activity)}
+                                        className="px-2 py-1 rounded border border-gray-200 bg-gray-50 capitalize hover:bg-gray-100 hover:border-gray-300 cursor-pointer"
+                                        title={`View ${activity.content_type} in ${activity.platform} format`}
+                                      >
                                         {activity.content_type}
-                                      </span>
+                                      </button>
                                       {activity.execution_jobs.length > 0 && (
                                         <span className="px-2 py-1 rounded border border-slate-200 bg-slate-50 text-slate-700">
                                           {activity.execution_jobs
-                                            .map((job) => `[${normalizePlatformLabel(job.platform)} ${job.ready_to_schedule ? '🟢' : '🔴'}]`)
-                                            .join(' ')}
+                                            .map((job) => (
+                                              <span key={job.job_id} className="inline-flex items-center gap-0.5 mr-1">
+                                                <PlatformIcon platform={job.platform} size={12} />
+                                                <span className={`text-[10px] px-1 rounded ${getExecutionStatusBadgeClasses(job.execution_status ?? 'PENDING')}`}>
+                                                  {job.execution_status ?? 'PENDING'}
+                                                </span>
+                                              </span>
+                                            ))}
                                         </span>
                                       )}
                                     </div>
@@ -694,6 +764,65 @@ export default function CampaignCalendarPage() {
                 </section>
               );
             })}
+          </div>
+        )}
+
+        {postPreview && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+            onClick={() => setPostPreview(null)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4 max-h-[85vh] overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                <span className="text-sm font-medium text-gray-700">
+                  {getPlatformLabel(postPreview.platform)} {postPreview.contentType} — {postPreview.title}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPostPreview(null)}
+                  className="p-1.5 rounded hover:bg-gray-100"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="p-4 overflow-y-auto flex-1">
+                <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-50">
+                  <div className={`p-4 font-sans ${postPreview.platform === 'linkedin' ? 'bg-[#f3f6f8]' : 'bg-white'}`}>
+                    <div className="flex gap-3 mb-3">
+                      <div className="w-12 h-12 rounded-full bg-gray-300 flex-shrink-0" />
+                      <div>
+                        <div className="font-semibold text-gray-900">
+                          {postPreview.platform === 'linkedin' ? 'Your name' : 'Author'}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {postPreview.platform === 'linkedin'
+                            ? 'Professional headline · 1st'
+                            : postPreview.platform === 'x'
+                              ? '@handle'
+                              : `${getPlatformLabel(postPreview.platform)} post`}
+                        </div>
+                      </div>
+                    </div>
+                    <div className={`whitespace-pre-wrap text-sm leading-relaxed ${
+                      postPreview.platform === 'linkedin' ? 'text-gray-800' : 'text-gray-800'
+                    }`}>
+                      {postPreview.content}
+                    </div>
+                    {postPreview.platform === 'linkedin' && (
+                      <div className="mt-3 pt-3 border-t border-gray-200 flex gap-4 text-xs text-gray-500">
+                        <span>Like</span>
+                        <span>Comment</span>
+                        <span>Repost</span>
+                        <span>Send</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>

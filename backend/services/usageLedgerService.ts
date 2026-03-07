@@ -20,6 +20,19 @@ const PROVIDER_PRICING: Record<
 };
 
 /**
+ * Calculate estimated AI cost in USD from token counts and model.
+ * Uses current OpenAI pricing (gpt-4o-mini, gpt-4o).
+ */
+export function calculateAiCost(
+  tokensInput: number,
+  tokensOutput: number,
+  modelName: string
+): number {
+  const result = resolveLlmCost('openai', modelName, tokensInput, tokensOutput);
+  return result.total_cost ?? 0;
+}
+
+/**
  * Resolve cost from pricing map. Returns null if provider/model unknown.
  */
 export function resolveLlmCost(

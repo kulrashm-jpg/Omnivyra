@@ -7,13 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from './campaignBlueprintService';
 import { getProfile } from './companyProfileService';
-import OpenAI from 'openai';
-
-function getOpenAiClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
-  return new OpenAI({ apiKey });
-}
+import { runCompletionWithOperation } from './aiGateway';
 
 export type RecommendationWeekInput = {
   week_number: number;
@@ -44,7 +38,7 @@ export async function generateCampaignRecommendations(input: {
     .maybeSingle();
   let profile: any = {};
   try {
-    profile = await getProfile(companyId, { autoRefine: false });
+    profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
   } catch {
     profile = {};
   }
@@ -67,7 +61,6 @@ export async function generateCampaignRecommendations(input: {
     };
   }
 
-  const client = getOpenAiClient();
   const systemPrompt = `You are an expert campaign consultant. Improve the existing campaign plan with targeted suggestions per week.
 Stage: ${stage}. Focus suggestions on: topics, objectives, scheduling (best days/times), and platform×content mix.
 Return JSON: { "weeks": [ { "week_number": 1, "topics_to_cover": ["..."], "primary_objective": "...", "summary": "...", "objectives": ["..."], "goals": ["..."], "suggested_days_to_post": ["Tue","Thu"], "suggested_best_times": {"linkedin":"9am"}, "platform_allocation": {"linkedin":2}, "platform_content_breakdown": {"linkedin":[{"type":"post","count":1,"topic":"..."}]}, "content_type_mix": ["post"] } ] }
@@ -87,16 +80,19 @@ Generate improvement suggestions for each week.`;
 
   let resultWeeks: RecommendationWeekInput[];
   try {
-    const completion = await client.chat.completions.create({
+    const result = await runCompletionWithOperation({
+      companyId,
+      campaignId,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.4,
       response_format: { type: 'json_object' },
+      operation: 'generateCampaignRecommendations',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
       ],
     });
-    const raw = completion.choices?.[0]?.message?.content?.trim() || '{}';
+    const raw = result.output?.trim() || '{}';
     const parsed = JSON.parse(raw) as { weeks?: RecommendationWeekInput[] };
     resultWeeks = Array.isArray(parsed.weeks) ? parsed.weeks : [];
   } catch (err) {

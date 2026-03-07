@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import AIGenerationProgress from '../components/AIGenerationProgress';
+import PlatformIcon from '@/components/ui/PlatformIcon';
 import {
   Brain,
   Calendar,
@@ -19,11 +20,6 @@ import {
   FileText,
   Sparkles,
   Clock,
-  Users,
-  Hash,
-  Instagram,
-  Youtube,
-  Facebook,
   ArrowRight,
   Plus,
   Trash2,
@@ -194,17 +190,6 @@ export default function AIContentGenerator() {
   const editContent = (content: GeneratedContent) => {
     setSelectedContent(content);
     router.push(`/creative-scheduler?edit=${content.id}`);
-  };
-
-  const getPlatformIcon = (platform: string) => {
-    switch (platform) {
-      case 'linkedin': return <Users className="h-4 w-4" />;
-      case 'twitter': return <Hash className="h-4 w-4" />;
-      case 'instagram': return <Instagram className="h-4 w-4" />;
-      case 'youtube': return <Youtube className="h-4 w-4" />;
-      case 'facebook': return <Facebook className="h-4 w-4" />;
-      default: return <Sparkles className="h-4 w-4" />;
-    }
   };
 
   const getAssetIcon = (type: string) => {
@@ -400,7 +385,7 @@ export default function AIContentGenerator() {
                               <div className="flex gap-1">
                                 {content.platforms.map(platform => (
                                   <div key={platform} className="p-1 bg-white/10 rounded">
-                                    {getPlatformIcon(platform)}
+                                    <PlatformIcon platform={platform} size={14} />
                                   </div>
                                 ))}
                               </div>

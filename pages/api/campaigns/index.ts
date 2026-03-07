@@ -514,6 +514,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (campaign.description) pre.theme_or_description = String(campaign.description).slice(0, 300);
         if (snap.execution_config != null && typeof snap.execution_config === 'object' && !Array.isArray(snap.execution_config)) {
           pre.execution_config = snap.execution_config;
+          const ec = snap.execution_config as Record<string, unknown>;
+          // Legacy: promote content_capacity when present (old Trend campaigns)
+          if (!pre.content_capacity && ec.content_capacity != null && String(ec.content_capacity).trim()) {
+            pre.content_capacity = ec.content_capacity;
+            pre.weekly_capacity = ec.content_capacity;
+          }
+          if (!pre.available_content && ec.available_content != null && (typeof ec.available_content === 'string' ? String(ec.available_content).trim() : true)) {
+            pre.available_content = ec.available_content;
+          }
         }
         if (Object.keys(pre).length > 0) prefilledPlanning = pre;
       }

@@ -54,7 +54,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    const profile = await getProfile(companyId, { autoRefine: false });
+    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
     if (!profile) {
       return res.status(404).json({ status: 'blocked', reason: 'company profile not found' });
     }

@@ -18,17 +18,18 @@ import {
   Play,
   Pause,
   BarChart3,
-  Users,
-  Hash,
-  Image,
-  Video,
-  Globe,
   Zap,
   TrendingUp,
   Activity,
   Target,
   Rocket,
+  Users,
+  Hash,
+  Image as ImageIcon,
+  Video,
+  Globe,
 } from 'lucide-react';
+import PlatformIcon from '@/components/ui/PlatformIcon';
 import PostCreationForm from '@/components/PostCreationForm';
 
 interface ScheduledPost {
@@ -80,7 +81,7 @@ const platformStats: PlatformStats[] = [
     engagement: 6.5,
     reach: 3200,
     color: 'pink',
-    icon: <Image className="h-4 w-4" />,
+    icon: <ImageIcon className="h-4 w-4" />,
   },
   {
     platform: 'YouTube',
@@ -209,17 +210,6 @@ export default function SchedulingDashboard() {
       case 'failed': return <AlertCircle className="h-4 w-4" />;
       case 'draft': return <Edit className="h-4 w-4" />;
       default: return <Clock className="h-4 w-4" />;
-    }
-  };
-
-  const getPlatformIcon = (platform: string) => {
-    switch (platform) {
-      case 'linkedin': return <Users className="h-4 w-4" />;
-      case 'twitter': return <Hash className="h-4 w-4" />;
-      case 'instagram': return <Image className="h-4 w-4" />;
-      case 'youtube': return <Video className="h-4 w-4" />;
-      case 'facebook': return <Globe className="h-4 w-4" />;
-      default: return <Rocket className="h-4 w-4" />;
     }
   };
 
@@ -382,8 +372,7 @@ export default function SchedulingDashboard() {
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-3">
                           <div className="flex items-center gap-2">
-                            {getPlatformIcon(post.platform)}
-                            <span className="font-semibold text-white capitalize">{post.platform}</span>
+                            <PlatformIcon platform={post.platform} size={14} showLabel />
                           </div>
                           <Badge className={`${getStatusColor(post.status)} text-white`}>
                             <div className="flex items-center gap-1">
@@ -413,7 +402,7 @@ export default function SchedulingDashboard() {
                           )}
                           {post.mediaUrls && post.mediaUrls.length > 0 && (
                             <div className="flex items-center gap-1">
-                              <Image className="h-4 w-4" />
+                              <ImageIcon className="h-4 w-4" />
                               {post.mediaUrls.length} media
                             </div>
                           )}

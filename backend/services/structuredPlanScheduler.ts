@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { getPlatformRules, listPlatformCatalog } from './platformIntelligenceService';
+import { generateContentForDailyPlans } from './boltContentGenerationForSchedule';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -235,6 +236,110 @@ export function extractSchedulableJobsFromWeeks(weeks: any[]): SchedulableExecut
   return result;
 }
 
+/** Daily plan row from DB, used as primary BOLT scheduling source */
+type DailyPlanRow = {
+  id: string;
+  campaign_id: string;
+  week_number: number;
+  day_of_week: string;
+  date: string;
+  platform: string;
+  content_type: string;
+  title?: string | null;
+  topic?: string | null;
+  scheduled_time?: string | null;
+  content?: string | null;
+};
+
+/**
+ * Build scheduled_for Date from daily plan date + time.
+ * date: YYYY-MM-DD; scheduled_time: HH:MM or HH:MM:SS or ISO string
+ */
+function buildScheduledForFromDailyPlan(dateStr: string, timeStr: string | undefined): Date {
+  const time = String(timeStr ?? '09:00').trim();
+  const hhmm = time.match(/^(\d{1,2}):(\d{2})/);
+  const hours = hhmm ? Math.min(23, Math.max(0, Number(hhmm[1]))) : 9;
+  const minutes = hhmm ? Math.min(59, Math.max(0, Number(hhmm[2]))) : 0;
+  const datePart = String(dateStr ?? '').slice(0, 10);
+  if (!datePart) return new Date();
+  return new Date(Date.UTC(
+    parseInt(datePart.slice(0, 4), 10),
+    parseInt(datePart.slice(5, 7), 10) - 1,
+    parseInt(datePart.slice(8, 10), 10),
+    hours,
+    minutes,
+    0
+  ));
+}
+
+/**
+ * Schedule from BOLT-generated daily_content_plans.
+ * Preserves repurpose cascade platforms, posting times, and slot ordering.
+ * When contentMap is provided (from master+repurpose generation), uses generated content instead of placeholders.
+ */
+function scheduleFromDailyPlans(
+  plans: DailyPlanRow[],
+  campaign: { start_date: string; user_id: string },
+  accountMap: Map<string, string>,
+  campaignId: string,
+  normalize: PlatformNormalizer,
+  typeMapByPlatform: Record<string, Record<string, string>>,
+  contentMap?: Map<string, string>
+): { scheduledPosts: any[]; skippedPlatforms: string[] } {
+  const scheduledPosts: any[] = [];
+  const skippedPlatforms: string[] = [];
+
+  const sorted = [...plans].sort((a, b) => {
+    const dA = new Date(a.date).getTime();
+    const dB = new Date(b.date).getTime();
+    if (dA !== dB) return dA - dB;
+    const dayOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const idxA = dayOrder.indexOf(String(a.day_of_week || '').toLowerCase());
+    const idxB = dayOrder.indexOf(String(b.day_of_week || '').toLowerCase());
+    return (idxA >= 0 ? idxA : 0) - (idxB >= 0 ? idxB : 0);
+  });
+
+  for (const row of sorted) {
+    const platform = normalize(String(row.platform || '').trim().toLowerCase());
+    if (!platform) {
+      if (!skippedPlatforms.includes(row.platform)) skippedPlatforms.push(row.platform);
+      continue;
+    }
+    const socialAccountId = accountMap.get(platform);
+    if (!socialAccountId) {
+      if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
+      continue;
+    }
+
+    const contentType = String(row.content_type || 'post').trim().toLowerCase();
+    const topic = String(row.topic || row.title || '').trim();
+    const generatedContent = contentMap?.get(row.id);
+    const contentPlaceholder = topic
+      ? `Content for "${topic}" — ${platform} ${contentType}`
+      : `Content placeholder — ${platform} ${contentType}`;
+    const content = (generatedContent && generatedContent.trim()) ? generatedContent : contentPlaceholder;
+
+    const scheduledFor = buildScheduledForFromDailyPlan(row.date, row.scheduled_time ?? undefined);
+    const platformForDb = toDbPlatformKey(platform);
+
+    scheduledPosts.push({
+      user_id: campaign.user_id,
+      social_account_id: socialAccountId,
+      campaign_id: campaignId,
+      platform: platformForDb,
+      content_type: toDbContentType(platform, contentType, typeMapByPlatform),
+      content,
+      scheduled_for: scheduledFor.toISOString(),
+      status: 'scheduled',
+      timezone: 'UTC',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  return { scheduledPosts, skippedPlatforms };
+}
+
 function buildScheduledForFromJob(campaignStart: string, scheduledTime: string | undefined, index: number): Date {
   if (scheduledTime) {
     const isoLike = new Date(scheduledTime);
@@ -433,7 +538,16 @@ function scheduleFromLegacy(
   return { scheduledPosts, skippedPlatforms };
 }
 
-export async function scheduleStructuredPlan(plan: StructuredPlan, campaignId: string): Promise<{
+export type ScheduleStructuredPlanOptions = {
+  /** When true (BOLT schedule outcome), generate master content + repurpose variants before scheduling. */
+  generateContent?: boolean;
+};
+
+export async function scheduleStructuredPlan(
+  plan: StructuredPlan,
+  campaignId: string,
+  options?: ScheduleStructuredPlanOptions
+): Promise<{
   scheduled_count: number;
   skipped_count: number;
   skipped_platforms: string[];
@@ -493,11 +607,41 @@ export async function scheduleStructuredPlan(plan: StructuredPlan, campaignId: s
     }
   }
 
+  // STEP 1: Prefer BOLT-generated daily_content_plans when they exist
+  const { data: dailyPlans, error: dailyPlansError } = await supabase
+    .from('daily_content_plans')
+    .select('id, campaign_id, week_number, day_of_week, date, platform, content_type, title, topic, scheduled_time, content')
+    .eq('campaign_id', campaignId)
+    .order('date', { ascending: true })
+    .order('week_number', { ascending: true });
+
+  const hasDailyPlans = !dailyPlansError && Array.isArray(dailyPlans) && dailyPlans.length > 0;
+
+  let contentMap: Map<string, string> | undefined;
+  if (hasDailyPlans && options?.generateContent && dailyPlans) {
+    try {
+      contentMap = await generateContentForDailyPlans(campaignId, dailyPlans as DailyPlanRow[]);
+    } catch (err) {
+      console.warn('[schedule] Content generation failed, using placeholders:', (err as Error)?.message);
+    }
+  }
+
+  // STEP 2–4: Fallback chain when no daily plans
   const schedulableJobs = extractSchedulableJobsFromWeeks(plan.weeks as any[]);
   const hasExecutionJobs = schedulableJobs.length > 0;
   const useLegacy = isLegacyPlan(plan.weeks);
 
-  const { scheduledPosts, skippedPlatforms } = hasExecutionJobs
+  const { scheduledPosts, skippedPlatforms } = hasDailyPlans
+    ? scheduleFromDailyPlans(
+        dailyPlans as DailyPlanRow[],
+        campaign,
+        accountMap,
+        campaignId,
+        normalize,
+        typeMapByPlatform,
+        contentMap
+      )
+    : hasExecutionJobs
     ? scheduleFromExecutionJobs(
         plan.weeks,
         schedulableJobs,

@@ -1,6 +1,6 @@
 /**
  * Strategy Intelligence Panel — read-only surface for awareness, drift, trend, bias, AI pressure.
- * No buttons, no auto-actions, no conditional hiding. Enterprise minimal.
+ * Minimized (single line) when no data to reduce noise; expanded (full grid) when data is available.
  */
 
 import React from 'react';
@@ -52,8 +52,24 @@ function trendColor(trend: string): string {
 
 const NO_DATA = 'No data yet';
 
+function hasStrategyIntelligenceData(d: StrategyStatusPayload | null | undefined): boolean {
+  if (!d) return false;
+  const a = d.strategy_awareness;
+  if (a?.awareness_level || (Array.isArray(a?.awareness_summary) && a.awareness_summary.length > 0)) return true;
+  const dr = d.strategic_drift;
+  if (dr?.drift_type || dr?.severity || (Array.isArray(dr?.summary) && dr.summary.length > 0)) return true;
+  const t = d.strategic_memory_trend;
+  if (t?.trend || (Array.isArray(t?.summary) && t.summary.length > 0)) return true;
+  const b = d.strategy_bias;
+  if (b?.bias_level != null || typeof b?.bias_weight === 'number') return true;
+  const w = d.weekly_strategy_intelligence;
+  if (w?.intelligence_level || w?.ai_pressure) return true;
+  return false;
+}
+
 export default function StrategyIntelligencePanel(props: { data?: StrategyStatusPayload | null }) {
   const d = props.data;
+  const expanded = hasStrategyIntelligenceData(d);
   const awareness = d?.strategy_awareness;
   const drift = d?.strategic_drift;
   const trend = d?.strategic_memory_trend;
@@ -70,6 +86,10 @@ export default function StrategyIntelligencePanel(props: { data?: StrategyStatus
       <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
         Strategy Intelligence
       </h3>
+      {!expanded && (
+        <p className="text-xs text-slate-400">No data yet — select a campaign or run strategy analysis to see awareness, drift, trend, bias, and AI pressure.</p>
+      )}
+      {expanded && (
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {/* A) Awareness */}
         <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-2">
@@ -167,6 +187,7 @@ export default function StrategyIntelligencePanel(props: { data?: StrategyStatus
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

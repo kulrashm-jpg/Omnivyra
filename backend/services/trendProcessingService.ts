@@ -1,4 +1,8 @@
 import { TrendSignal } from './externalApiService';
+import {
+  insertNormalizedSignals,
+  type NormalizedSignalInput,
+} from './intelligenceSignalStore';
 
 export type TrendSignalNormalized = TrendSignal & {
   sources: string[];
@@ -144,3 +148,43 @@ export const mergeSignalsAcrossRegions = (
   }
   return scoreByFrequency(merged);
 };
+
+/**
+ * Persist normalized trend signals to the unified intelligence signal store.
+ * Does not change any existing return values; call when you have sourceApiId and want to store.
+ */
+export async function persistNormalizedTrendSignals(
+  signals: TrendSignalNormalized[],
+  options: {
+    sourceApiId: string;
+    companyId?: string | null;
+    detectedAt?: Date;
+    signalType?: string;
+  }
+): Promise<{ inserted: number; skipped: number }> {
+  if (!signals.length) return { inserted: 0, skipped: 0 };
+  const detectedAt = options.detectedAt ?? new Date();
+  const detectedAtStr = typeof detectedAt === 'string' ? detectedAt : detectedAt.toISOString();
+  const inputs: NormalizedSignalInput[] = signals.map((s) => ({
+    source_api_id: options.sourceApiId,
+    company_id: options.companyId ?? null,
+    signal_type: options.signalType ?? 'trend',
+    topic: s.topic ?? null,
+    confidence_score: s.signal_confidence ?? null,
+    detected_at: detectedAtStr,
+    normalized_payload: {
+      topic: s.topic,
+      sources: s.sources,
+      frequency: s.frequency,
+      volume: s.volume,
+      velocity: s.velocity,
+      platform_tag: s.platform_tag,
+      regions: s.regions,
+    },
+    topics: s.topic ? [s.topic] : [],
+  }));
+  const result = await insertNormalizedSignals(inputs, {
+    signal_type: options.signalType ?? 'trend',
+  });
+  return { inserted: result.inserted, skipped: result.skipped };
+}

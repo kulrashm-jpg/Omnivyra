@@ -4,7 +4,7 @@ import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignB
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { detectExecutionDrift, type PublishedContent } from '../../../backend/services/executionDriftDetector';
 import type { WeekPlanLike } from '../../../backend/services/executionMomentumTracker';
-import { computeExecutionHealthScore } from '../../../backend/services/executionHealthScorer';
+import { computeExecutionHealthScore, type ExecutionPressure, type ExecutionMomentum, type ExecutionDrift } from '../../../backend/services/executionHealthScorer';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -123,7 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : null;
     const executionPressure =
       executionIntelligence?.executionPressure ??
-      (blueprint && typeof blueprint === 'object' ? (blueprint as { executionPressure?: unknown }).executionPressure ?? null) ??
+      (blueprint && typeof blueprint === 'object' ? ((blueprint as { executionIntelligence?: { executionPressure?: unknown } }).executionIntelligence?.executionPressure ?? null) : null) ??
       null;
     const executionMomentum =
       executionIntelligence?.executionMomentum ?? null;
@@ -134,7 +134,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Execution drift: run when we have planned weeks and can load actual published posts
     let executionDrift: { state: string; signals: { schedule: number; topic: number; format: number }; driftScore: number; warnings?: string[] } | null = null;
-    const plannedWeeks: WeekPlanLike[] = Array.isArray(blueprint?.weeks) ? blueprint.weeks as WeekPlanLike[] : [];
+    const plannedWeeks: WeekPlanLike[] = Array.isArray(blueprint?.weeks) ? (blueprint.weeks as unknown as WeekPlanLike[]) : [];
     if (plannedWeeks.length > 0) {
       const { data: campaignRow } = await supabase
         .from('campaigns')
@@ -165,9 +165,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const executionHealth = computeExecutionHealthScore(
-      executionPressure ?? undefined,
-      executionMomentum ?? undefined,
-      executionDrift ?? undefined
+      (executionPressure ?? undefined) as ExecutionPressure | undefined,
+      (executionMomentum ?? undefined) as ExecutionMomentum | undefined,
+      (executionDrift ?? undefined) as ExecutionDrift | undefined
     );
 
     res.status(200).json({

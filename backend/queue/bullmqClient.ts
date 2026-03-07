@@ -37,6 +37,10 @@ function parseRedisUrl(url: string) {
 
 const redisConfig = parseRedisUrl(REDIS_URL);
 
+export function getRedisConfig() {
+  return redisConfig;
+}
+
 // Redis connection instance (shared across Queue/Worker)
 let redisConnection: IORedis | null = null;
 
@@ -107,11 +111,7 @@ export function getQueue(): Queue {
         password: redisConfig.password,
       },
       defaultJobOptions: {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 60000, // 1 minute initial delay
-        },
+        attempts: 1,
         removeOnComplete: {
           age: 24 * 3600, // Keep completed jobs for 24 hours
           count: 1000,
@@ -131,22 +131,25 @@ export function getQueue(): Queue {
 
 /**
  * Create a worker instance for processing jobs
- * 
+ *
  * @param queueName - Name of the queue (default: 'publish')
  * @param processor - Function to process jobs
+ * @param opts - Optional: concurrency (default 5)
  */
 export function getWorker(
   queueName: string = 'publish',
-  processor: (job: any) => Promise<void>
+  processor: (job: any) => Promise<void>,
+  opts?: { concurrency?: number }
 ): Worker {
   const connection = getRedisConnection();
+  const concurrency = opts?.concurrency ?? 5;
   const worker = new Worker(queueName, processor, {
     connection: {
       host: redisConfig.host,
       port: redisConfig.port,
       password: redisConfig.password,
     },
-    concurrency: 5, // Process up to 5 jobs concurrently
+    concurrency,
     limiter: {
       max: 10, // Max 10 jobs
       duration: 1000, // Per second

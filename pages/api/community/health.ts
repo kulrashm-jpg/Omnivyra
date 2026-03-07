@@ -6,7 +6,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { requireTenantScope } from '../../community-ai/utils';
+import { requireTenantScope } from '../community-ai/utils';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 export interface CommunityHealthSummary {

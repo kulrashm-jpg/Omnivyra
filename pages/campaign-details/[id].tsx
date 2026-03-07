@@ -43,6 +43,7 @@ import { TradeOffSuggestionList } from '../../components/governance/TradeOffSugg
 import { truncateMeaningfulTitle } from '../../lib/ui/truncateMeaningfulTitle';
 import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
 import { getFormatLineForContentType, getIntentLabelForContentType, toneForUserDisplay } from '../../utils/formatLineForContentType';
+import PlatformIcon from '../../components/ui/PlatformIcon';
 import { getViewMode } from '../../utils/getViewMode';
 import { VIEW_RULES } from '../../utils/viewVisibilityMatrix';
 
@@ -408,11 +409,9 @@ export default function CampaignDetails() {
     return `/campaign-details/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
   };
 
+  /** Redirect to campaign details (weekly/daily views live there); hierarchical planning screen removed. */
   const buildPlanningWorkspaceUrl = (campaignId: string) => {
-    const params = new URLSearchParams();
-    params.set('campaignId', campaignId);
-    if (effectiveCompanyId) params.set('companyId', effectiveCompanyId);
-    return `/campaign-planning-hierarchical?${params.toString()}`;
+    return buildCampaignDetailsUrl(campaignId);
   };
 
   const buildCampaignCalendarUrl = (campaignId: string, weekNumber?: number, day?: string) => {
@@ -2869,8 +2868,13 @@ export default function CampaignDetails() {
                               <p className="text-gray-600">{displayWeeklyTitle(weekPlan?.theme || `Week ${weekNumber} Theme`)}</p>
                               <p className="text-sm text-gray-500">{displayWeeklyTitle(weekPlan?.focusArea || `Week ${weekNumber} Focus Area`)}</p>
                               {(weekPlan as any)?.platform_allocation && Object.keys((weekPlan as any).platform_allocation).length > 0 && (
-                                <p className="text-xs text-indigo-600 mt-1">
-                                  {Object.entries((weekPlan as any).platform_allocation).map(([p, c]) => `${p}: ${c}`).join(' · ')}
+                                <p className="text-xs text-indigo-600 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                  {Object.entries((weekPlan as any).platform_allocation).map(([p, c]) => (
+                                    <span key={p} className="inline-flex items-center gap-1">
+                                      <PlatformIcon platform={p} size={12} showLabel />
+                                      <span>{String(c ?? '')}</span>
+                                    </span>
+                                  ))}
                                 </p>
                               )}
                               {topicsCount > 0 && (
@@ -3049,7 +3053,7 @@ export default function CampaignDetails() {
                                             )}
                                             <div className="mt-1 pt-1 border-t border-gray-100">
                                               <div className="font-medium text-gray-800">Execution details</div>
-                                              <div className="mt-0.5"><span className="font-medium">Platform(s):</span> {(topic?.topicExecution?.platformTargets || ['—']).join(', ')}</div>
+                                              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5"><span className="font-medium">Platform(s):</span> {(topic?.topicExecution?.platformTargets || ['—']).map((plat) => (plat === '—' ? <span key="—">—</span> : <PlatformIcon key={plat} platform={plat} size={12} showLabel />))}</div>
                                               <div className="mt-0.5"><span className="font-medium">Content type:</span> {topic?.topicExecution?.contentType || '—'}</div>
                                               <div className="mt-0.5"><span className="font-medium">CTA:</span> {topic?.topicExecution?.ctaType || '—'}</div>
                                               <div className="mt-0.5"><span className="font-medium">KPI target:</span> {topic?.topicExecution?.kpiFocus || '—'}</div>
@@ -3222,9 +3226,9 @@ export default function CampaignDetails() {
                                                       <div className="text-[10px] text-gray-700 truncate" title={p.title || p.topic}>{topicLabel}{topicLabel.length >= 32 ? '…' : ''}</div>
                                                     ) : null}
                                                     <span
-                                                      className={`text-[10px] px-1.5 py-0.5 rounded border font-medium capitalize ${colors.badge}`}
+                                                      className={`text-[10px] px-1.5 py-0.5 rounded border font-medium capitalize inline-flex items-center gap-1 ${colors.badge}`}
                                                     >
-                                                      {p.platform} • {p.contentType}
+                                                      <PlatformIcon platform={p.platform} size={10} showLabel /> • {p.contentType}
                                                     </span>
                                                   </div>
                                                 </div>

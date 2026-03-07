@@ -1,0 +1,33 @@
+---
+description: TypeScript and Lucide icon standards to prevent build errors
+globs: "**/*.tsx,**/*.ts"
+alwaysApply: false
+---
+
+# TypeScript & Lucide Standards
+
+## Lucide Icons
+
+- **Always import** every Lucide icon before use. Never use icons without explicit imports.
+- **Avoid `Image` name conflict:** Use `Image as ImageIcon` when importing the Lucide Image icon. The bare `Image` identifier can resolve to the DOM constructor and break JSX.
+  ```tsx
+  import { Image as ImageIcon, Users, Hash, Video } from 'lucide-react';
+  <ImageIcon className="h-5 w-5" />
+  ```
+
+## Array Type Assertions
+
+- When `Array.isArray(x) ? x : []` yields `unknown`, assert to `unknown[]` before using `.length` or array methods:
+  ```ts
+  const arr = (Array.isArray(x) ? x : []) as unknown[];
+  ```
+
+## Duplicate Variable Declarations
+
+- Avoid duplicate `let`/`const` in the same scope. Extract shared logic into helper functions.
+
+## Source Encoding (avoid build stalls)
+
+- Use ASCII ellipsis `...` (three periods), not Unicode ellipsis `…` (U+2026). Some parsers treat the latter as invalid.
+- Prefer plain text over emoji in string literals for errors/messages (e.g. `'Error:'` instead of `'❌'`) to avoid parse issues.
+- When template literals cause `Expected ',', got 'ident'` or similar, refactor to string concatenation.

@@ -157,7 +157,7 @@ describe('Campaign AI Plan — theme to weekly plan simulation', () => {
         messages: [
           { type: 'ai', message: 'Anything only for one platform? (e.g., LinkedIn, Instagram)' },
           { type: 'user', message: 'No.' },
-          { type: 'ai', message: "What's the one thing you want people to remember?" },
+          { type: 'ai', message: 'What is the core message you want your audience to remember?' },
           { type: 'user', message: 'aligned to the theme' },
           { type: 'ai', message: 'I have everything I need. Would you like me to create your week plan now?' },
           { type: 'user', message: 'Yes, proceed with 4 weeks.' },
