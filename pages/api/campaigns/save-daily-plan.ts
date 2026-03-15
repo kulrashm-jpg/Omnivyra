@@ -78,36 +78,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .replace(/\s*[|;]\s*$/g, '');
     const format_notes = [cleanedFormatNotes, metadataSection].filter(Boolean).join(' | ');
 
-    // Save daily plan (legacy schema compatibility via adapter fallbacks)
-    const { data: planData, error: planError } = await supabase
+    // Save daily plan via execution engine (updateActivity or insertActivity)
+    const platform = dailyExecution?.platform ?? dailyPlan.platform ?? 'linkedin';
+    const contentType = dailyExecution?.content_type ?? dailyPlan.contentType ?? 'post';
+    const { data: existing } = await supabase
       .from('daily_content_plans')
-      .upsert({
+      .select('id')
+      .eq('campaign_id', campaignId)
+      .eq('week_number', dailyPlan.weekNumber)
+      .eq('day_of_week', dailyPlan.dayOfWeek)
+      .eq('platform', platform)
+      .eq('content_type', contentType)
+      .maybeSingle();
+
+    const updates = {
+      date: dailyPlan.date,
+      title: dailyExecution?.title ?? dailyPlan.title,
+      content: dailyExecution?.content ?? dailyPlan.content,
+      description: dailyPlan.description,
+      media_requirements: dailyPlan.mediaRequirements,
+      hashtags: dailyPlan.hashtags,
+      call_to_action: dailyPlan.callToAction,
+      optimal_posting_time: dailyPlan.optimalPostingTime,
+      target_metrics: dailyPlan.targetMetrics,
+      format_notes: format_notes || null,
+      status: dailyPlan.status,
+      priority: dailyPlan.priority,
+      ai_generated: dailyPlan.aiGenerated || false,
+    };
+
+    const { updateActivity, insertActivity } = await import('../../../backend/services/executionPlannerService');
+    let planData: Record<string, unknown>;
+
+    if (existing?.id) {
+      await updateActivity(existing.id, updates, 'board');
+      const { data } = await supabase
+        .from('daily_content_plans')
+        .select('*')
+        .eq('id', existing.id)
+        .single();
+      planData = data as Record<string, unknown>;
+    } else {
+      const row = {
         campaign_id: campaignId,
         week_number: dailyPlan.weekNumber,
         day_of_week: dailyPlan.dayOfWeek,
         date: dailyPlan.date,
-        platform: dailyExecution?.platform ?? dailyPlan.platform,
-        content_type: dailyExecution?.content_type ?? dailyPlan.contentType,
-        title: dailyExecution?.title ?? dailyPlan.title,
-        content: dailyExecution?.content ?? dailyPlan.content,
-        description: dailyPlan.description,
-        media_requirements: dailyPlan.mediaRequirements,
-        hashtags: dailyPlan.hashtags,
-        call_to_action: dailyPlan.callToAction,
-        optimal_posting_time: dailyPlan.optimalPostingTime,
-        target_metrics: dailyPlan.targetMetrics,
-        format_notes: format_notes || null,
-        status: dailyPlan.status,
-        priority: dailyPlan.priority,
-        ai_generated: dailyPlan.aiGenerated || false,
-        updated_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-
-    if (planError) {
-      console.error('Error saving daily plan:', planError);
-      return res.status(500).json({ error: 'Failed to save daily plan' });
+        platform,
+        content_type: contentType,
+        title: updates.title,
+        content: updates.content,
+        ...updates,
+      };
+      const { id } = await insertActivity(row as any, 'board');
+      const { data } = await supabase
+        .from('daily_content_plans')
+        .select('*')
+        .eq('id', id)
+        .single();
+      planData = data as Record<string, unknown>;
     }
 
     res.status(200).json({

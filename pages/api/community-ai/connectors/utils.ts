@@ -2,27 +2,16 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { hasCommunityAiCapability } from '../../../../backend/services/rbac/communityAiCapabilities';
+import { extractAccessToken } from '../../../../backend/services/supabaseAuthService';
 
-const extractAccessToken = (req: NextApiRequest): string | null => {
-  const authHeader = req.headers.authorization || '';
-  if (authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice('Bearer '.length).trim();
-    if (token) return token;
-  }
-  const cookieEntries = Object.entries(req.cookies || {});
-  const directToken = req.cookies?.['sb-access-token'];
-  if (directToken) return directToken;
-  for (const [name, value] of cookieEntries) {
-    if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
-    try {
-      const parsed = JSON.parse(value);
-      if (parsed?.access_token) return String(parsed.access_token);
-    } catch {
-      // ignore malformed cookie
-    }
-  }
-  return null;
-};
+/**
+ * Returns the OAuth callback URL for a Community AI connector.
+ * Used by auth.ts and callback.ts for all platforms (facebook, twitter, reddit, instagram, linkedin).
+ */
+export function getCommunityAiConnectorCallbackUrl(platform: string): string {
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
+  return `${baseUrl}/api/community-ai/connectors/${platform}/callback`;
+}
 
 export const requireManageConnectors = async (
   req: NextApiRequest,
@@ -41,7 +30,8 @@ export const requireManageConnectors = async (
   }
   const { role, error: roleError } = await getUserRole(data.user.id, companyId);
   if (roleError || !role) {
-    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    const err = roleError === 'COMPANY_ACCESS_DENIED' ? 'COMPANY_ACCESS_DENIED' : 'FORBIDDEN_ROLE';
+    res.status(403).json({ error: err });
     return null;
   }
   // Community-AI connectors are NOT Virality External APIs.

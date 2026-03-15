@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getCampaignById } from '../../../backend/db/campaignStore';
 import { v4 as uuidv4 } from 'uuid';
 import { fromLegacyRefinements, fromStructuredPlan, blueprintWeeksToLegacyRefinements } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
@@ -35,14 +36,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       campaignId = uuidv4();
     }
     
-    let { data: campaign, error: campaignError } = await supabase
-      .from('campaigns')
-      .select('*')
-      .eq('id', campaignId)
-      .single();
+    let campaign = await getCampaignById(campaignId, '*');
 
-    if (campaignError) {
-      console.log('Campaign does not exist, creating new one:', campaignError.message);
+    if (!campaign) {
+      console.log('Campaign does not exist, creating new one');
       // Create the campaign with the provided campaignId
       const summary = (aiContent || JSON.stringify(structuredPlan?.weeks || []).slice(0, 200)) + '...';
       const { data: newCampaign, error: createError } = await supabase

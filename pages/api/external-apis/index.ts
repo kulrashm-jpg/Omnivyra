@@ -16,6 +16,7 @@ import {
   isSuperAdmin,
   Role,
 } from '../../../backend/services/rbacService';
+import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 
 const requireExternalApiAccess = async (
   req: NextApiRequest,
@@ -308,12 +309,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               }
             : null;
 
+        const todayKey = new Date().toISOString().slice(0, 10);
+        const companyRows =
+          companyId
+            ? rows.filter((row) => {
+                const parsed = parseUsageUserId(String(row.user_id || ''));
+                return parsed.companyId === companyId;
+              })
+            : [];
+        const todayRows = companyRows.filter((row) => String(row.usage_date) === todayKey);
+        const usage_today =
+          companyId
+            ? {
+                request_count: todayRows.reduce((s, r) => s + (r.request_count ?? 0), 0),
+                signals_generated: todayRows.reduce((s, r) => s + (r.signals_generated ?? 0), 0),
+              }
+            : null;
+
+        const { oauth_client_id_encrypted, oauth_client_secret_encrypted, ...apiSafe } = api as any;
         return {
-          ...api,
+          ...apiSafe,
+          has_oauth_credentials: !!(oauth_client_id_encrypted && oauth_client_secret_encrypted),
           health: (api as any).health || healthMap[api.id] || null,
           enabled_user_count: enabledCountMap[api.id] || 0,
           enabled_companies: enabledCompaniesByApi[api.id] || [],
           company_limits,
+          usage_today,
           usage_summary: {
             request_count: requestCount,
             success_count: successCount,
@@ -389,9 +410,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       required_metadata,
       posting_constraints,
       requires_admin,
+      oauth_client_id,
+      oauth_client_secret,
     } = req.body || {};
 
     const resolvedPlatformType = platform_type || 'social';
+
+    // Phase 4: Only SUPER_ADMIN can submit OAuth credentials. Tenant users: api_key, base_url, purpose only.
+    let oauthClientIdEncrypted: string | null = null;
+    let oauthClientSecretEncrypted: string | null = null;
+    if (access.role === 'SUPER_ADMIN') {
+      if (typeof oauth_client_id === 'string' && oauth_client_id.trim()) {
+        try {
+          oauthClientIdEncrypted = encryptCredential(oauth_client_id.trim());
+        } catch (e) {
+          console.warn('OAuth client ID encryption failed:', (e as Error)?.message);
+        }
+      }
+      if (typeof oauth_client_secret === 'string' && oauth_client_secret.trim()) {
+        try {
+          oauthClientSecretEncrypted = encryptCredential(oauth_client_secret.trim());
+        } catch (e) {
+          console.warn('OAuth client secret encryption failed:', (e as Error)?.message);
+        }
+      }
+    } else if (
+      (typeof oauth_client_id === 'string' && oauth_client_id.trim()) ||
+      (typeof oauth_client_secret === 'string' && oauth_client_secret.trim())
+    ) {
+      return res.status(403).json({
+        error: 'OAuth credentials can only be configured by Super Admin. Use Connect Accounts to authorize social media.',
+      });
+    }
     const validation = validatePlatformConfig({
       name,
       base_url,
@@ -419,6 +469,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         auth_type: auth_type || 'none',
         api_key_name: api_key_name || null,
         api_key_env_name: resolvedApiKeyEnv,
+        oauth_client_id_encrypted: oauthClientIdEncrypted,
+        oauth_client_secret_encrypted: oauthClientSecretEncrypted,
         headers: headers || {},
         query_params: query_params || {},
         is_preset: is_preset ?? false,
@@ -434,7 +486,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         company_id: null,
         created_at: new Date().toISOString(),
       });
-      return res.status(201).json({ api });
+      const { oauth_client_id_encrypted: _oid, oauth_client_secret_encrypted: _osec, ...apiSafe } = api as any;
+      return res.status(201).json({ api: { ...apiSafe, has_oauth_credentials: !!(_oid && _osec) } });
     }
 
     const { data, error } = await supabase
@@ -442,13 +495,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .insert({
         name,
         base_url,
-        purpose,
+        purpose: purpose || 'posting',
         category: category || null,
         is_active: is_active ?? true,
         method: method || 'GET',
         auth_type: auth_type || 'none',
         api_key_name: api_key_name || null,
         api_key_env_name: resolvedApiKeyEnv,
+        oauth_client_id_encrypted: oauthClientIdEncrypted,
+        oauth_client_secret_encrypted: oauthClientSecretEncrypted,
         headers: headers || {},
         query_params: query_params || {},
         is_preset: is_preset ?? false,
@@ -473,7 +528,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         detail: error.message,
       });
     }
-    return res.status(201).json({ api: data });
+    const { oauth_client_id_encrypted: _oid, oauth_client_secret_encrypted: _osec, ...apiSafe } = (data || {}) as any;
+    return res.status(201).json({ api: { ...apiSafe, has_oauth_credentials: !!(_oid && _osec) } });
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

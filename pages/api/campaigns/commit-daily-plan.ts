@@ -226,17 +226,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('week_number', weekNumber)
       .maybeSingle();
 
-    // Delete existing daily plans for this day
-    await supabase
+    // Replace day via execution engine: fetch existing week, merge, saveWeekPlans
+    const { data: existingWeek } = await supabase
       .from('daily_content_plans')
-      .delete()
+      .select('*')
       .eq('campaign_id', campaignId)
-      .eq('week_number', weekNumber)
-      .eq('day_of_week', day);
+      .eq('week_number', weekNumber);
 
-    // Insert new daily plans for each activity (with weekly_refinement_id or source_refinement_id for FK link)
     const refinementId = refinement?.id ?? null;
-    const dailyPlans = activities.map((activity: any) => {
+    const newDayRows = activities.map((activity: any) => {
       const dailyItem = normalizeToDailyExecutionItem(activity, campaignId, Number(weekNumber));
       return mapDailyItemToLegacyDbRow({
         activity,
@@ -249,15 +247,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     });
 
-    const { data: insertedPlans, error: insertError } = await supabase
-      .from('daily_content_plans')
-      .insert(dailyPlans)
-      .select();
+    const otherDays = (existingWeek ?? []).filter((p: { day_of_week?: string }) => p.day_of_week !== day);
+    const mergedRows = [...otherDays.map((p: Record<string, unknown>) => ({ ...p, id: undefined })), ...newDayRows];
 
-    if (insertError) {
-      console.error('Error inserting daily plans:', insertError);
-      return res.status(500).json({ error: 'Failed to commit daily plan' });
-    }
+    const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
+    await saveWeekPlans(campaignId, Number(weekNumber), mergedRows as any, 'manual');
 
     // Update weekly refinement to mark daily plan as populated
     await supabase

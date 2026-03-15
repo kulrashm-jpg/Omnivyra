@@ -2,12 +2,15 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from './CompanyContext';
+import { useCompanyIntegrations } from '@/hooks/useCompanyIntegrations';
 import { supabase } from '../utils/supabaseClient';
 import { CreditMeter } from './ui/CreditMeter';
+import PlatformIcon from './ui/PlatformIcon';
 
 const Header: React.FC = () => {
   const router = useRouter();
   const { userName, selectedCompanyId, userRole, isAuthenticated } = useCompanyContext();
+  const { platforms: connectedPlatforms } = useCompanyIntegrations(selectedCompanyId || '');
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [noCompanyLabel, setNoCompanyLabel] = useState('No company selected');
 
@@ -65,10 +68,22 @@ const Header: React.FC = () => {
               Home
             </button>
             <button
+              onClick={() => router.push('/campaign-proposals')}
+              className="bg-white text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-100 transition-colors"
+            >
+              Campaign Proposals
+            </button>
+            <button
               onClick={() => router.push('/social-platforms')}
               className="bg-white text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-100 transition-colors"
             >
-              Social Platform Settings
+              Social Platforms
+            </button>
+            <button
+              onClick={() => router.push('/community-ai/connectors')}
+              className="bg-white text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-100 transition-colors"
+            >
+              Connect Accounts
             </button>
             <button
               onClick={() => router.push('/community-ai')}
@@ -90,7 +105,32 @@ const Header: React.FC = () => {
                 Auto-Rules
               </button>
             )}
+            {(userRole || '').toString().toUpperCase() === 'COMPANY_ADMIN' && (
+              <button
+                onClick={() => router.push('/super-admin/consumption')}
+                className="bg-white text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-100 transition-colors"
+              >
+                Usage
+              </button>
+            )}
           </div>
+          {selectedCompanyId && connectedPlatforms.length > 0 && (
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-gray-500 font-medium">Connected:</span>
+              <div className="flex items-center gap-1.5">
+                {connectedPlatforms.map(({ platform }) => (
+                  <PlatformIcon
+                    key={platform}
+                    platform={platform}
+                    size={20}
+                    showLabel={false}
+                    className="opacity-90 hover:opacity-100"
+                    useBrandColor
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-4 text-sm text-gray-700">
               <div className="flex flex-col items-end">

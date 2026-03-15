@@ -5,7 +5,6 @@ import { getLegacySuperAdminSession } from '../../../backend/services/superAdmin
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
-  isPlatformSuperAdmin,
   isSuperAdmin,
 } from '../../../backend/services/rbacService';
 
@@ -29,8 +28,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
-  const isPlatformOrSuperAdmin =
-    legacySession || (await isPlatformSuperAdmin(user.id)) || (await isSuperAdmin(user.id));
+  const isPlatformOrSuperAdmin = legacySession || (await isSuperAdmin(user.id));
   if (!isPlatformOrSuperAdmin) {
     let { role, error: roleError } = await getUserRole(user.id, companyId);
     if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {

@@ -1,11 +1,13 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { getCampaignById } from '../../../../backend/db/campaignStore';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
 import {
   generateCampaignRecommendations,
   fetchRecommendationWeeks,
 } from '../../../../backend/services/campaignRecommendationExtensionService';
+import { formatForUserOutput } from '../../../../backend/utils/refineUserFacingResponse';
 
 async function getCompanyId(campaignId: string): Promise<string | null> {
   const { data: ver } = await supabase
@@ -15,11 +17,7 @@ async function getCompanyId(campaignId: string): Promise<string | null> {
     .limit(1)
     .maybeSingle();
   if (ver?.company_id) return ver.company_id as string;
-  const { data: camp } = await supabase
-    .from('campaigns')
-    .select('company_id')
-    .eq('id', campaignId)
-    .maybeSingle();
+  const camp = await getCampaignById<{ company_id?: string }>(campaignId, 'company_id');
   return camp?.company_id ? (camp.company_id as string) : null;
 }
 
@@ -60,7 +58,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...w,
         week_number: Number(w.week_number ?? w.week ?? 0),
       }));
-      const { data: camp } = await supabase.from('campaigns').select('duration_weeks').eq('id', campaignId).maybeSingle();
+      const camp = await getCampaignById<{ duration_weeks?: number }>(campaignId, 'duration_weeks');
       const resolved = (blueprint as any)?.duration_weeks ?? camp?.duration_weeks ?? committedWeeks.length;
       const durationWeeks = resolved && resolved > 0 ? resolved : 12;
 
@@ -85,13 +83,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const recByWeek = new Map(recs.map((r: any) => [r.week_number, r]));
 
-      return res.status(200).json({
+      const response = {
         recommendations: recs,
         sessionId: resolvedSessionId ? resolvedSessionId : (recs[0]?.session_id ?? null),
         committedWeeks,
         durationWeeks: typeof durationWeeks === 'number' ? durationWeeks : 12,
         recByWeek: Object.fromEntries(recByWeek),
-      });
+      };
+      const refined = await formatForUserOutput(response);
+      return res.status(200).json(refined);
     } catch (error: any) {
       console.error('Error fetching recommendations:', error);
       return res.status(500).json({ error: error?.message || 'Failed to fetch recommendations' });
@@ -101,10 +101,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'POST') {
     try {
       const result = await generateCampaignRecommendations({ campaignId, companyId });
-      return res.status(200).json({
-        sessionId: result.sessionId,
-        weeks: result.weeks,
-      });
+      const response = { sessionId: result.sessionId, weeks: result.weeks };
+      const refined = await formatForUserOutput(response);
+      return res.status(200).json(refined);
     } catch (error: any) {
       console.error('Error generating recommendations:', error);
       return res.status(500).json({ error: error?.message || 'Failed to generate recommendations' });

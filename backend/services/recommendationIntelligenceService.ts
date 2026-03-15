@@ -6,6 +6,7 @@
 
 import type { CompanyProfile } from './companyProfileService';
 import type { PolishFlags } from './recommendationPolishService';
+import { sanitizeTopicForDisplay } from './recommendationPolishService';
 
 export type RecommendationIntelligence = {
   problem_being_solved: string;
@@ -34,8 +35,8 @@ const normalizeList = (v: unknown): string[] => {
 const firstNonEmpty = (...vals: (string | null | undefined)[]): string =>
   vals.find((v) => v && String(v).trim())?.trim() ?? '';
 
-/** RULE A — Problem extraction: priority core_problem_statement > pain_symptoms > campaign_focus > content_themes */
-function buildProblemBeingSolved(profile: CompanyProfile | null): string {
+/** RULE A — Problem extraction: priority core_problem_statement > pain_symptoms > campaign_focus > content_themes. Topic-aware so each card has unique content. */
+function buildProblemBeingSolved(profile: CompanyProfile | null, topic: string): string {
   const audience = firstNonEmpty(
     profile?.target_audience,
     profile?.target_customer_segment,
@@ -47,7 +48,8 @@ function buildProblemBeingSolved(profile: CompanyProfile | null): string {
     (normalizeList(profile?.pain_symptoms).join('; ') || firstNonEmpty(profile?.campaign_focus)) ||
     firstNonEmpty(profile?.content_themes) ||
     'key challenges';
-  return `Helping ${audience} overcome ${problem}`;
+  const topicPart = topic && topic.trim() ? ` — with focus on ${topic.trim()}` : '';
+  return `Helping ${audience} overcome ${problem}${topicPart}`;
 }
 
 /** RULE B — Gap identification: awareness_gap first, else polish_flags.diamond_candidate */
@@ -95,8 +97,8 @@ function buildAuthorityReason(
   return `Company has credibility in ${match}.`;
 }
 
-/** RULE E — Expected transformation: pain_state -> desired_outcome */
-function buildExpectedTransformation(profile: CompanyProfile | null): string {
+/** RULE E — Expected transformation: pain_state -> desired_outcome. Topic-aware so each card has unique content. */
+function buildExpectedTransformation(profile: CompanyProfile | null, topic: string): string {
   const painState =
     firstNonEmpty(profile?.life_with_problem) ||
     (normalizeList(profile?.pain_symptoms).join('; ') || firstNonEmpty(profile?.core_problem_statement)) ||
@@ -106,7 +108,8 @@ function buildExpectedTransformation(profile: CompanyProfile | null): string {
     firstNonEmpty(profile?.life_after_solution) ||
     firstNonEmpty(profile?.campaign_focus) ||
     'desired outcome';
-  return `Move audience from ${painState} toward ${desiredOutcome}`;
+  const topicPart = topic && topic.trim() ? ` through ${topic.trim()}` : '';
+  return `Move audience from ${painState} toward ${desiredOutcome}${topicPart}`;
 }
 
 /** RULE F — Campaign angle: deterministic mapping from polish flags */
@@ -140,20 +143,23 @@ export function enrichRecommendationIntelligence(
       ...recommendations.map((r) => Number(r.volume ?? 0) || 0),
       1
     );
-    const problemBeingSolved = buildProblemBeingSolved(profile);
-    const expectedTransformation = buildExpectedTransformation(profile);
 
     return recommendations.map((rec) => {
       const topic = String(rec.topic || '').trim();
+      const polishedTitle = typeof rec.polished_title === 'string' ? rec.polished_title.trim() : '';
+      const displayTopic = polishedTitle || sanitizeTopicForDisplay(topic) || topic;
       const flags = rec.polish_flags as PolishFlags | undefined;
       const vol = Number(rec.volume ?? 0) || 0;
       const alignmentHigh = (rec.diamond_score as number ?? 0) >= 0.5 || flags?.diamond_candidate === true;
+
+      const problemBeingSolved = buildProblemBeingSolved(profile, displayTopic);
+      const expectedTransformation = buildExpectedTransformation(profile, displayTopic);
 
       const intelligence: RecommendationIntelligence = {
         problem_being_solved: problemBeingSolved,
         gap_being_filled: buildGapBeingFilled(flags, profile),
         why_now: buildWhyNow(rec, volumeMax, alignmentHigh),
-        authority_reason: buildAuthorityReason(flags, topic, profile),
+        authority_reason: buildAuthorityReason(flags, displayTopic, profile),
         expected_transformation: expectedTransformation,
         campaign_angle: buildCampaignAngle(flags),
       };

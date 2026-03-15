@@ -15,9 +15,8 @@ import TrendCampaignsTab from '../components/recommendations/tabs/TrendCampaigns
 import { useRecommendationViewMode } from '../components/recommendations/hooks/useRecommendationViewMode';
 import ActiveLeadsTab from '../components/recommendations/tabs/ActiveLeadsTab';
 import MarketPulseTab from '../components/recommendations/tabs/MarketPulseTab';
-import SeasonalRegionalTab from '../components/recommendations/tabs/SeasonalRegionalTab';
-import InfluencersTab from '../components/recommendations/tabs/InfluencersTab';
-import DailyFocusTab from '../components/recommendations/tabs/DailyFocusTab';
+import RecommendationStatusWidget from '../components/recommendations/RecommendationStatusWidget';
+import StrategySignalsWidget from '../components/dashboard/StrategySignalsWidget';
 
 type TrendSignal = {
   topic: string;
@@ -142,9 +141,6 @@ const OPPORTUNITY_TAB_TYPES: { type: string; label: string }[] = [
   { type: 'TREND', label: 'Trend Campaigns' },
   { type: 'LEAD', label: 'Active Leads' },
   { type: 'PULSE', label: 'Market Pulse' },
-  { type: 'SEASONAL', label: 'Seasonal & Regional' },
-  { type: 'INFLUENCER', label: 'Influencers' },
-  { type: 'DAILY_FOCUS', label: 'Daily Focus' },
 ];
 
 export default function RecommendationsPage() {
@@ -330,7 +326,7 @@ export default function RecommendationsPage() {
         window.localStorage.setItem('company_id', queryCompanyId);
       }
     }
-    if (queryTab && ['TREND', 'LEAD', 'PULSE', 'SEASONAL', 'INFLUENCER'].includes(queryTab)) {
+    if (queryTab && ['TREND', 'LEAD', 'PULSE'].includes(queryTab)) {
       setActiveOpportunityTab(queryTab);
     }
     if (queryCampaignId) {
@@ -1306,9 +1302,20 @@ export default function RecommendationsPage() {
     <div className="min-h-screen bg-gray-50 p-6">
       <Header />
       <div className="max-w-6xl mx-auto space-y-8">
-        {/* Recommendation Hub: engine-based workspace. */}
-        <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-3">Recommendation Hub</h2>
+        {/* Recommendation Hub: engine-based workspace. Strategy Signals on left. */}
+        <section className="flex flex-col lg:flex-row gap-6">
+          {selectedCompanyId && (
+            <aside className="lg:w-56 shrink-0 order-first">
+              <StrategySignalsWidget companyId={selectedCompanyId} fetchWithAuth={fetchWithAuth} />
+            </aside>
+          )}
+          <div className="flex-1 min-w-0">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-3">
+            <h2 className="text-xl font-semibold text-gray-900">Recommendation Hub</h2>
+            {selectedCompanyId && (
+              <RecommendationStatusWidget companyId={selectedCompanyId} fetchWithAuth={fetchWithAuth} />
+            )}
+          </div>
           <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-3 mb-3">
             {OPPORTUNITY_TAB_TYPES.map(({ type, label }) => (
               <button
@@ -1373,43 +1380,7 @@ export default function RecommendationsPage() {
                 onOverrideChange={(v) => setEngineOverride('PULSE', v)}
               />
             )}
-            {activeOpportunityTab === 'SEASONAL' && (
-              <SeasonalRegionalTab
-                companyId={selectedCompanyId}
-                regions={
-                  opportunityRegions.trim()
-                    ? opportunityRegions.split(',').map((r) => r.trim()).filter(Boolean)
-                    : undefined
-                }
-                onPromote={handleOpportunityPromote}
-                onAction={handleOpportunityAction}
-                fetchWithAuth={fetchWithAuth}
-                overrideText={engineOverrides['SEASONAL'] ?? ''}
-                onOverrideChange={(v) => setEngineOverride('SEASONAL', v)}
-              />
-            )}
-            {activeOpportunityTab === 'INFLUENCER' && (
-              <InfluencersTab
-                companyId={selectedCompanyId}
-                onPromote={handleOpportunityPromote}
-                onAction={handleOpportunityAction}
-                fetchWithAuth={fetchWithAuth}
-                overrideText={engineOverrides['INFLUENCER'] ?? ''}
-                onOverrideChange={(v) => setEngineOverride('INFLUENCER', v)}
-              />
-            )}
-            {activeOpportunityTab === 'DAILY_FOCUS' && (
-              <DailyFocusTab
-                companyId={selectedCompanyId}
-                onPromote={handleOpportunityPromote}
-                onAction={handleOpportunityAction}
-                fetchWithAuth={fetchWithAuth}
-                onSwitchTab={setActiveOpportunityTab}
-                onOpenGenerator={(target) => setGeneratorModalTarget(target)}
-                overrideText={engineOverrides['DAILY_FOCUS'] ?? ''}
-                onOverrideChange={(v) => setEngineOverride('DAILY_FOCUS', v)}
-              />
-            )}
+          </div>
           </div>
         </section>
 

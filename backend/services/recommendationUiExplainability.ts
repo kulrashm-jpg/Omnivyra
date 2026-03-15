@@ -1,3 +1,5 @@
+import { normalizeSignalSource } from './signalNormalizationService';
+
 export type TrendSignal = {
   topic: string;
   source?: string;
@@ -40,7 +42,7 @@ export const buildTrendSourceCounts = (trends: TrendSignal[]) => {
     const sources = trend.sources && trend.sources.length > 0 ? trend.sources : trend.source ? [trend.source] : [];
     if (sources.length === 0) return;
     sources.forEach((source) => {
-      const normalized = source.toLowerCase();
+      const normalized = normalizeSignalSource(source);
       if (normalized.includes('youtube')) counts.youtube += 1;
       else if (normalized.includes('news')) counts.newsapi += 1;
       else if (normalized.includes('reddit')) counts.reddit += 1;

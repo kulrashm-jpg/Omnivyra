@@ -148,6 +148,73 @@ export function generateThemeFromTopic(
   return result;
 }
 
+/**
+ * Stage-specific angle templates for marketing narrative progression.
+ * Used by Strategic Theme Progression Engine.
+ */
+export const PROGRESSION_ANGLE_TEMPLATES: Record<string, string[]> = {
+  Awareness: [
+    'Why {topic} is reshaping the industry',
+    'Why {topic} is transforming marketing teams',
+    'The rise of {topic}',
+    'How {topic} is changing the landscape',
+  ],
+  Education: [
+    '{topic} tools every team should know',
+    '{topic} tools every marketer should know',
+    'Understanding {topic} in practice',
+    'How {topic} actually works',
+  ],
+  Problem: [
+    'Why teams struggle with {topic}',
+    'Common mistakes when adopting {topic}',
+    'Hidden challenges of {topic}',
+  ],
+  Solution: [
+    'How {topic} solves this problem',
+    'How {topic} fixes marketing bottlenecks',
+    'A better approach to {topic}',
+    'Using {topic} effectively',
+  ],
+  Proof: [
+    'Companies winning with {topic}',
+    'Companies already winning with {topic}',
+    'Real examples of {topic} success',
+    'Case studies using {topic}',
+  ],
+  Conversion: [
+    'How to start with {topic}',
+    'How to start using {topic} in your campaigns',
+    'Implementing {topic} today',
+    'Getting started with {topic}',
+  ],
+};
+
+/**
+ * Generate an editorial angle for a progression stage.
+ * Deterministic: same topic + stage + weekIndex yields same output.
+ * Falls back to the raw topic when template lookup fails.
+ */
+export function generateThemeAngleForProgression(
+  topic: string,
+  stage: string,
+  weekIndex: number
+): string {
+  const normalized = normalizeTopic(topic);
+  if (!normalized) return topic;
+
+  const templates = PROGRESSION_ANGLE_TEMPLATES[stage];
+  if (!templates || templates.length === 0) {
+    return normalized;
+  }
+
+  const titleCased = titleCasePreservingAcronyms(normalized);
+  const seed = hash(`${normalized.toLowerCase()}-${stage}-${weekIndex}`);
+  const template = templates[seed % templates.length];
+  const result = template.replace(/\{topic\}/g, titleCased);
+  return result?.trim() || normalized;
+}
+
 /** Map angle name to index in THEME_ANGLES */
 const ANGLE_INDEX: Record<string, number> = {
   trend: 0,

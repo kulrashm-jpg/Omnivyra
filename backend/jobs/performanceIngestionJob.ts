@@ -32,13 +32,10 @@ export async function runPerformanceIngestion(): Promise<PerformanceIngestionRes
   const sinceStr = since.toISOString().split('T')[0];
 
   try {
-    const { data: analytics, error: analyticsError } = await supabase
-      .from('content_analytics')
-      .select(`
+    // Schema-resilient: content_analytics may use `date` or `analytics_date`; user_id may not exist (we get it from scheduled_posts)
+    const selectCols = `
         scheduled_post_id,
-        user_id,
         platform,
-        date,
         views,
         likes,
         shares,
@@ -50,10 +47,29 @@ export async function runPerformanceIngestion(): Promise<PerformanceIngestionRes
         impressions,
         reach,
         engagement_rate
-      `)
-      .gte('date', sinceStr)
-      .order('date', { ascending: false })
-      .limit(BATCH_SIZE);
+      `;
+    let analytics: Array<Record<string, unknown>> | null = null;
+    let analyticsError: { message: string } | null = null;
+
+    for (const dateCol of ['date', 'analytics_date']) {
+      const res = await supabase
+        .from('content_analytics')
+        .select(selectCols + `,\n        ${dateCol}`)
+        .gte(dateCol, sinceStr)
+        .order(dateCol, { ascending: false })
+        .limit(BATCH_SIZE);
+
+      if (!res.error) {
+        analytics = Array.isArray(res.data) ? (res.data as unknown as Array<Record<string, unknown>>) : null;
+        analyticsError = null;
+        break;
+      }
+      analyticsError = res.error as { message: string };
+      analytics = null;
+      const msg = (analyticsError?.message ?? '').toLowerCase();
+      if (msg.includes('does not exist') || msg.includes('column')) continue;
+      break;
+    }
 
     if (analyticsError) {
       errors.push(`content_analytics query failed: ${analyticsError.message}`);

@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveToken } from '../../../../../backend/services/platformTokenService';
-import { requireManageConnectors } from '../utils';
+import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
+import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 
 const decodeState = (state: string) => {
   const padded = state.replace(/-/g, '+').replace(/_/g, '/');
@@ -59,16 +60,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await requireManageConnectors(req, res, organizationId);
   if (!access) return;
 
-  const clientId = process.env.FACEBOOK_CLIENT_ID;
-  const clientSecret = process.env.FACEBOOK_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
+  const credentials = await getOAuthCredentialsForPlatform('facebook');
+  if (!credentials?.client_id || !credentials?.client_secret) {
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Facebook OAuth not configured')}`
     );
   }
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
-  const redirectUri = `${baseUrl}/api/community-ai/connectors/facebook/callback`;
+  const { client_id: clientId, client_secret: clientSecret } = credentials;
+  const redirectUri = getCommunityAiConnectorCallbackUrl('facebook');
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -83,11 +83,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { method: 'GET' }
     );
     if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
       return res.redirect(
-        `/community-ai/connectors?error=${encodeURIComponent(
-          `Facebook token exchange failed: ${errorText}`
-        )}`
+        `/community-ai/connectors?error=${encodeURIComponent('Connection failed. Please try again.')}`
       );
     }
 
@@ -100,12 +97,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token || null,
       expires_at: expiresAt,
+      connected_by_user_id: access!.userId,
     });
+
+    // G5.5: Audit log
+    console.info('[connector_audit]', JSON.stringify({ user_id: access!.userId, company_id: organizationId, platform: 'facebook', action: 'connect' }));
 
     return res.redirect(`${redirectTo}?connected=facebook&status=success`);
   } catch (err: any) {
     return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent(err?.message || 'OAuth failed')}`
+      `/community-ai/connectors?error=${encodeURIComponent('Connection failed. Please try again.')}`
     );
   }
 }

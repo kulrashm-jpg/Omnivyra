@@ -5,6 +5,7 @@
 
 import type { ConstraintResult, TradeOffOption } from '../types/CampaignDuration';
 import { supabase } from '../db/supabaseClient';
+import { getCampaignsByIds } from '../db/campaignStore';
 import { recordGovernanceEvent } from './GovernanceEventService';
 import { calculateEarliestViableStartDate } from './PortfolioTimelineProjection';
 
@@ -92,9 +93,9 @@ export async function evaluatePortfolioConstraints(
   });
 
   const overlappingIds = dateOverlappingAssignments.map((a: any) => a.campaign_id);
-  const { data: campaignStatusRows } = overlappingIds.length > 0
-    ? await supabase.from('campaigns').select('id, execution_status').in('id', overlappingIds)
-    : { data: [] };
+  const campaignStatusRows = overlappingIds.length > 0
+    ? await getCampaignsByIds(overlappingIds, 'id, execution_status')
+    : [];
   const excludedIds = new Set(
     (campaignStatusRows ?? [])
       .filter((r: any) => {
@@ -116,10 +117,7 @@ export async function evaluatePortfolioConstraints(
 
   const addPreemptionSuggestions = async () => {
     if (!isHighOrCritical || overlappingCampaignIds.length === 0) return;
-    const { data: campaignRows } = await supabase
-      .from('campaigns')
-      .select('id, priority_level')
-      .in('id', overlappingCampaignIds);
+    const campaignRows = await getCampaignsByIds(overlappingCampaignIds, 'id, priority_level');
     const campaignPriorityMap = new Map<string, number>();
     (campaignRows ?? []).forEach((r: any) => {
       campaignPriorityMap.set(r.id, priorityOrder[String(r.priority_level || 'NORMAL').toUpperCase()] ?? 1);

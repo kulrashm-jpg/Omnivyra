@@ -26,11 +26,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Real Instagram OAuth flow (via Facebook)
-    const state = `instagram_${Date.now()}`;
+    const returnTo = (req.query.returnTo as string) || '';
+    const stateBase = `instagram_${Date.now()}`;
+    const state = returnTo ? `${stateBase}|${returnTo}` : stateBase;
     
     const params = new URLSearchParams({
       client_id: clientId,
-      redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001'}/api/auth/instagram/callback`,
+      redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/instagram/callback`,
       scope: 'instagram_basic instagram_content_publish pages_show_list',
       response_type: 'code',
       state

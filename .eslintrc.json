@@ -5,5 +5,5 @@
     "react-hooks/exhaustive-deps": "warn",
     "@next/next/no-img-element": "warn"
   },
-  "ignorePatterns": [".next/", "node_modules/", "out/", "backend/tests/"]
+  "ignorePatterns": [".next/", "node_modules/", "out/", "backend/tests/", "test-file.js", "utils/project-protector.js", "utils/protector.js"]
 }

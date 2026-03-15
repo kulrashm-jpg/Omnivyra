@@ -68,17 +68,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('Error logging deletion:', logError);
     }
 
-    // Delete the activity
-    const { error: deleteError } = await supabase
-      .from('daily_content_plans')
-      .delete()
-      .eq('id', activityId);
-
-    if (deleteError) {
+    // Delete the activity via execution engine
+    const { deleteActivity } = await import('../../../backend/services/executionPlannerService');
+    try {
+      await deleteActivity(activityId);
+    } catch (deleteError) {
       console.error('Error deleting activity:', deleteError);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: 'Failed to delete activity',
-        details: deleteError.message 
+        details: deleteError instanceof Error ? deleteError.message : String(deleteError),
       });
     }
 

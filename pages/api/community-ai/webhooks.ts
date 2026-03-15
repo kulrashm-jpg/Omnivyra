@@ -19,6 +19,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!roleGate) return;
 
+    if (process.env.NODE_ENV !== 'production') {
+      res.setHeader('X-Debug-Webhook-Query', 'true');
+    }
+
     const { data, error } = await supabase
       .from('community_ai_webhooks')
       .select('id, event_type, webhook_url, is_active, created_at')
@@ -27,7 +31,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order('created_at', { ascending: false });
 
     if (error) {
-      return res.status(500).json({ error: 'FAILED_TO_LOAD_WEBHOOKS' });
+      console.error('[community-ai:webhooks]', {
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        supabaseError: error,
+      });
+      return res.status(500).json({
+        error: 'FAILED_TO_LOAD_WEBHOOKS',
+      });
     }
 
     return res.status(200).json({

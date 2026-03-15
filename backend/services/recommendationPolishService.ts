@@ -5,6 +5,7 @@
  */
 
 import type { CompanyProfile } from './companyProfileService';
+import type { StrategicPayloadInput } from './recommendationEngineService';
 import {
   buildWeightedAlignmentTokens,
   computeAlignmentScore,
@@ -40,6 +41,14 @@ const tokenize = (value: string): string[] =>
     .split(/[^a-z0-9]+/g)
     .map((t) => t.trim())
     .filter((t) => t.length > 2);
+
+/** Capitalize first letter for display (e.g. "stress" → "Stress"). Matches language refinement expectations. */
+function capitalizeForDisplay(text: string): string {
+  if (!text || typeof text !== 'string') return text;
+  const t = text.trim();
+  if (!t) return text;
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
 
 const GENERIC_BLACKLIST = new Set(['tools', 'software', 'platform', 'strategies', 'tips']);
 const DOWNWEIGHT = new Set(['marketing', 'growth', 'tech', 'engagement']);
@@ -85,8 +94,59 @@ const REFRAME_OPPORTUNITY = [
   'Underserved opportunity: {topic}',
 ];
 
+/**
+ * Detect if topic is already an editorial headline (from themeAngleEngine or similar).
+ * Avoids double-wrapping: "Why How X fails" / "Why What Most Teams Get Wrong About X fails".
+ */
+function isAlreadyTemplatedTitle(topic: string): boolean {
+  const t = (topic ?? '').trim();
+  if (!t || t.length < 10) return false;
+  const first = t.split(/\s+/)[0]?.toLowerCase() ?? '';
+  const prefixes = ['why', 'how', 'what', 'the', 'underserved', 'authority', 'opportunity'];
+  if (prefixes.includes(first)) return true;
+  if (/^The\s+\w+\s+(?:Impact|Future|Opportunity|Rise|Hidden|Growing)/i.test(t)) return true;
+  if (/^A\s+\d+-Step\s+Framework\s+for\s+/i.test(t)) return true;
+  return false;
+}
+
+/**
+ * Sanitize low-quality market report titles (e.g. "X Business Report 2026: $42.81 Bn Market Trends").
+ * Extracts a cleaner topic phrase for campaign-ready display.
+ * Exported for use in recommendationIntelligenceService.
+ */
+export function sanitizeTopicForDisplay(topic: string): string {
+  let t = (topic ?? '').trim();
+  if (!t) return t;
+
+  // Strip market report patterns: " Business Report 2026", " Business Report 2025", etc.
+  t = t.replace(/\s+Business\s+Report\s+(?:20\d{2}|202[0-9])\b/gi, '').trim();
+
+  // Strip dollar/market size suffixes: "$42.81 Bn", "$12+", ": $X Bn Market Trends, Opportunities"
+  t = t.replace(/\s*[:\-]\s*\$[\d.]+(?:\s*[Bb]n|\s*\+)?(?:\s+Market\s+Trends[^.]*)?\.?$/gi, '').trim();
+  t = t.replace(/\s+\$[\d.]+(?:\s*[Bb]n|\s*\+?)\b/g, '').trim();
+
+  // Strip trailing fragments that look like report metadata
+  t = t.replace(/\s+(?:Market\s+Trends|Opportunities|Growth\s+Analysis)[^.]*\.?$/gi, '').trim();
+
+  // Strip trailing cruft: ":." ".," ":," ",." (e.g. "Smart Trash Bin.:")
+  t = t.replace(/[.:,\s]+$/g, '').trim();
+
+  // If we stripped too much and nothing sensible remains, fall back to truncated original
+  if (!t || t.length < 3) return (topic ?? '').trim();
+
+  // Limit length for template insertion; take first ~60 chars at word boundary
+  const maxLen = 60;
+  if (t.length > maxLen) {
+    const cut = t.slice(0, maxLen);
+    const lastSpace = cut.lastIndexOf(' ');
+    t = lastSpace > 20 ? cut.slice(0, lastSpace) : cut;
+  }
+
+  return t.trim();
+}
+
 function applyGenericReframe(topic: string): string {
-  const base = topic.trim();
+  const base = capitalizeForDisplay(topic.trim());
   const template = REFRAME_GENERIC[Math.abs(hashCode(base)) % REFRAME_GENERIC.length];
   return template.replace('{topic}', base);
 }
@@ -94,10 +154,10 @@ function applyGenericReframe(topic: string): string {
 function applyOpportunityReframe(topic: string, isDiamond: boolean): string {
   const base = topic.trim();
   if (isDiamond) {
-    return `Underserved opportunity: ${base}`;
+    return `Underserved opportunity: ${capitalizeForDisplay(base)}`;
   }
   const template = REFRAME_OPPORTUNITY[Math.abs(hashCode(base)) % REFRAME_OPPORTUNITY.length];
-  return template.replace('{topic}', base);
+  return template.replace('{topic}', capitalizeForDisplay(base));
 }
 
 function hashCode(s: string): number {
@@ -126,7 +186,8 @@ function hasAuthorityOverlap(topic: string, authorityTokens: Set<string>): boole
 
 export function polishRecommendations(
   recommendations: Array<Record<string, unknown> & { topic: string }>,
-  profile: CompanyProfile | null
+  profile: CompanyProfile | null,
+  strategicPayload?: StrategicPayloadInput | null
 ): PolishedRecommendation[] {
   if (!recommendations || recommendations.length === 0) {
     return [];
@@ -134,7 +195,23 @@ export function polishRecommendations(
 
   try {
     const authorityTokens = getAuthorityTokens(profile);
-    const weightedTokens = profile ? buildWeightedAlignmentTokens(profile) : new Map<string, number>();
+    if (strategicPayload?.selected_offerings?.length) {
+      strategicPayload.selected_offerings.forEach((o) =>
+        tokenize(String(o)).forEach((t) => authorityTokens.add(t))
+      );
+    }
+    if (strategicPayload?.selected_aspect) {
+      tokenize(String(strategicPayload.selected_aspect)).forEach((t) => authorityTokens.add(t));
+    }
+    if (Array.isArray(strategicPayload?.selected_aspects)) {
+      strategicPayload.selected_aspects.forEach((a) =>
+        a && String(a).trim() && tokenize(String(a)).forEach((t) => authorityTokens.add(t))
+      );
+    }
+    const weightedTokens =
+      profile || strategicPayload
+        ? buildWeightedAlignmentTokens(profile ?? ({} as any), strategicPayload)
+        : new Map<string, number>();
 
     const volumeMax = Math.max(
       ...recommendations.map((r) => Number((r as any).volume ?? 0) || 0),
@@ -179,22 +256,25 @@ export function polishRecommendations(
         diamond_candidate: false,
       };
 
-      const authOverlap = hasAuthorityOverlap(topic, authorityTokens);
-      const generic = isGenericTopic(topic, authorityTokens);
+      const sanitized = sanitizeTopicForDisplay(topic);
+      const authOverlap = hasAuthorityOverlap(sanitized, authorityTokens);
+      const generic = isGenericTopic(sanitized, authorityTokens);
       const isDiamond = alignment >= 0.5 && ((rec as any).volume ?? 0) < volumeMax * 0.3;
 
       let title: string;
       if (authOverlap) {
         flags.authority_elevated = true;
-        title = `Authority Opportunity: ${topic}`;
+        title = `Authority Opportunity: ${capitalizeForDisplay(sanitized)}`;
+      } else if (isAlreadyTemplatedTitle(sanitized)) {
+        title = sanitized;
       } else if (generic) {
         flags.is_generic_reframed = true;
-        title = applyGenericReframe(topic);
+        title = applyGenericReframe(sanitized);
       } else if (isDiamond) {
         flags.diamond_candidate = true;
-        title = `Underserved opportunity: ${topic}`;
+        title = `Underserved opportunity: ${capitalizeForDisplay(sanitized)}`;
       } else {
-        title = applyOpportunityReframe(topic, false);
+        title = applyOpportunityReframe(sanitized, false);
       }
 
       return {

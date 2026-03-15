@@ -40,6 +40,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Failed to archive recommendation' });
   }
 
+  // Persist to recommendation_user_state for unified state tracking
+  const { error: userStateError } = await supabase.from('recommendation_user_state').upsert(
+    {
+      organization_id: snapshot.company_id,
+      user_id: access.userId ?? null,
+      recommendation_id: id,
+      state: 'ARCHIVED',
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'organization_id,recommendation_id', ignoreDuplicates: false }
+  );
+  if (userStateError) {
+    console.warn('recommendation_user_state upsert failed (archive)', userStateError);
+  }
+
   try {
     await supabase.from('audit_logs').insert({
       action: 'RECOMMENDATION_ARCHIVED',

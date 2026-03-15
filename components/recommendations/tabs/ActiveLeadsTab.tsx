@@ -124,7 +124,10 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
         setConnectedPlatforms(null);
         return;
       }
-      const list = (await res.json()) as { platform: string; connected?: boolean }[];
+      const data = (await res.json()) as
+        | { connections?: { platform: string; connected?: boolean }[] }
+        | { platform: string; connected?: boolean }[];
+      const list = Array.isArray(data) ? data : data?.connections ?? [];
       const set = new Set<string>();
       for (const r of list || []) {
         if (r.connected !== false && r.platform) {

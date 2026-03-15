@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { refineLanguageOutput } from '@/backend/services/languageRefinementService';
+import { generateDailyPlanDemo } from '@/backend/services/dailyPlanAiGenerator';
 
 async function refineFields(obj: unknown): Promise<unknown> {
   if (obj == null) return obj;
@@ -32,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { type, context, provider = 'demo', campaignId } = req.body;
+    const { type, context, provider = 'demo', campaignId, skipRefine } = req.body;
 
     if (!type || !context) {
       return res.status(400).json({ error: 'Type and context are required' });
@@ -48,6 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         content = await generateWeeklyPlan(context, provider);
         break;
       case 'daily_plan':
+        console.log('[DAILY_PLAN_TRACE] API_CALLED /api/ai/generate-content type=daily_plan', { weekNumber: context?.weekNumber, dayOfWeek: context?.dayOfWeek });
         content = await generateDailyPlan(context, provider);
         break;
       case 'platform_strategy':
@@ -63,7 +65,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Invalid content type' });
     }
 
-    const refinedContent = content != null ? await refineFields(content) : content;
+    const refinedContent =
+      content != null && !skipRefine ? await refineFields(content) : content;
 
     res.status(200).json({
       success: true,
@@ -264,45 +267,16 @@ async function generateDailyPlan(context: any, provider: string) {
   const { weekNumber, dayOfWeek, weeklyPlan, campaignStrategy } = context;
 
   if (provider === 'demo') {
-    const dayContent = {
-      Monday: { platform: 'instagram', type: 'post', focus: 'Motivational Monday music' },
-      Tuesday: { platform: 'tiktok', type: 'video', focus: 'Trending Tuesday content' },
-      Wednesday: { platform: 'instagram', type: 'story', focus: 'Behind-the-scenes Wednesday' },
-      Thursday: { platform: 'twitter', type: 'thread', focus: 'Thoughtful Thursday insights' },
-      Friday: { platform: 'youtube', type: 'video', focus: 'Feature Friday spotlight' },
-      Saturday: { platform: 'instagram', type: 'reel', focus: 'Weekend vibes content' },
-      Sunday: { platform: 'facebook', type: 'post', focus: 'Sunday reflection and community' }
-    };
-
-    const dayData = dayContent[dayOfWeek as keyof typeof dayContent];
-
+    const { generateDailyPlanDemo } = require('@/backend/services/dailyPlanAiGenerator');
+    const out = generateDailyPlanDemo({ weekNumber, dayOfWeek, weeklyPlan, campaignStrategy });
     return {
-      platform: dayData?.platform || 'instagram',
-      contentType: dayData?.type || 'post',
-      title: `${dayOfWeek} ${weeklyPlan?.theme || 'Content'}`,
-      content: `Today we're focusing on ${dayData?.focus || 'engaging content'}. ${weeklyPlan?.keyMessaging || 'Join us for another day of music discovery and community building.'}`,
-      description: `A ${dayData?.type || 'post'} for ${dayOfWeek} focusing on ${dayData?.focus || 'community engagement'}`,
+      ...out,
       mediaRequirements: {
-        type: dayData?.type === 'video' ? 'video' : 'image',
-        dimensions: dayData?.platform === 'instagram' ? '1080x1080' : 
-                   dayData?.platform === 'tiktok' ? '1080x1920' : '1920x1080',
-        aspectRatio: dayData?.platform === 'tiktok' ? '9:16' : '1:1'
+        type: out.contentType === 'video' ? 'video' : 'image',
+        dimensions: out.platform === 'instagram' ? '1080x1080' : out.platform === 'tiktok' ? '1080x1920' : '1920x1080',
+        aspectRatio: out.platform === 'tiktok' ? '9:16' : '1:1'
       },
-      hashtags: [
-        '#DrishiqMusic',
-        `#${dayOfWeek}`,
-        '#MusicDiscovery',
-        '#Community',
-        '#NewMusic'
-      ],
       callToAction: weeklyPlan?.callToAction || 'Follow for more music content',
-      optimalTime: dayData?.platform === 'instagram' ? '09:00' : 
-                   dayData?.platform === 'tiktok' ? '18:00' : '12:00',
-      targetMetrics: {
-        impressions: Math.floor(1000 + (weekNumber * 100)),
-        engagements: Math.floor(50 + (weekNumber * 5)),
-        clicks: Math.floor(10 + weekNumber)
-      }
     };
   }
 

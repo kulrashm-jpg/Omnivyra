@@ -41,11 +41,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { id } = req.query;
+  const { id, category, geo } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'API ID is required' });
   }
   const platformScopeRequested = req.query?.scope === 'platform';
+  const testCategory = typeof category === 'string' ? category : '';
+  const testGeo = typeof geo === 'string' ? geo : 'US';
   const { defaultCompanyId } = await resolveUserContext(req);
   const companyId =
     (req.query.companyId as string | undefined) ||
@@ -68,7 +70,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'API source not found' });
     }
 
-    const request = buildExternalApiRequest(data);
+    const request = buildExternalApiRequest(data, {
+      runtimeValues: {
+        geo: testGeo,
+        category: testCategory,
+      },
+    });
     if (request.missingEnv.length > 0) {
       console.warn('EXTERNAL_API_TEST_MISSING_ENV', { source: data.name, missing: request.missingEnv });
       return res.status(400).json({
@@ -83,7 +90,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    const cacheKey = buildCacheKey({ apiId: data.id, geo: undefined, category: undefined });
+    const cacheKey = buildCacheKey({ apiId: data.id, geo: testGeo, category: testCategory });
     const cached = await getCachedResponse<any>(cacheKey, data.id);
     let parsed: any = cached;
     let cacheHit = Boolean(cached);

@@ -3,6 +3,14 @@ import {
   insertNormalizedSignals,
   type NormalizedSignalInput,
 } from './intelligenceSignalStore';
+import { normalizeSignalSource } from './signalNormalizationService';
+
+/** Lineage: trace recommendation back to originating signal. */
+export type SignalLineageMeta = {
+  signal_id?: string | null;
+  signal_type?: 'EXTERNAL_API' | 'OMNIVYRA' | 'COMMUNITY' | 'MANUAL' | null;
+  source_topic?: string | null;
+};
 
 export type TrendSignalNormalized = TrendSignal & {
   sources: string[];
@@ -10,6 +18,10 @@ export type TrendSignalNormalized = TrendSignal & {
   platform_tag?: string;
   /** Regions this signal was seen in (multi-region merge). */
   regions?: string[];
+  /** Lineage: FK to intelligence_signals, provenance, original topic. */
+  signal_id?: string | null;
+  signal_type?: 'EXTERNAL_API' | 'OMNIVYRA' | 'COMMUNITY' | 'MANUAL' | null;
+  source_topic?: string | null;
 };
 
 const normalizeTopic = (topic: string) => topic.trim().toLowerCase();
@@ -41,24 +53,48 @@ export const removeDuplicates = (signals: TrendSignal[]): TrendSignal[] => {
   return unique;
 };
 
+/** Derive source_signal_type from source string for lineage. */
+export function deriveSignalTypeFromSource(source: string | { id?: string; name?: string } | undefined): 'EXTERNAL_API' | 'OMNIVYRA' | 'COMMUNITY' | 'MANUAL' | null {
+  const s = typeof source === 'string' ? source.toLowerCase() : String((source as any)?.id ?? (source as any)?.name ?? '').toLowerCase();
+  if (s.includes('omnivyra') || s.includes('omni_vyra')) return 'OMNIVYRA';
+  if (s.includes('community') || s.includes('community_ai')) return 'COMMUNITY';
+  if (s.includes('manual') || s.includes('detected_opportunity') || s.includes('opportunity') || s.includes('strategic_themes') || s.includes('ai_generated')) return 'MANUAL';
+  if (s && s !== 'unknown') return 'EXTERNAL_API';
+  return null;
+}
+
 export const mergeTrendsAcrossSources = (signals: TrendSignal[]): TrendSignalNormalized[] => {
   const groups = new Map<string, TrendSignalNormalized>();
   signals.forEach((signal) => {
     const key = normalizeTopic(signal.topic);
+    const srcRaw = (signal as any).source;
+    const src = typeof srcRaw === 'string' ? srcRaw : (srcRaw?.id ?? srcRaw?.name ?? 'unknown');
     const existing = groups.get(key);
     if (!existing) {
-      groups.set(key, {
+      const first: TrendSignalNormalized = {
         ...signal,
         topic: signal.topic.trim(),
-        sources: signal.source ? [signal.source] : [],
+        sources: src ? [src] : [],
         frequency: 1,
-      });
+      };
+      const signalType = deriveSignalTypeFromSource(src);
+      if (signalType) first.signal_type = signalType;
+      first.source_topic = signal.topic?.trim() ?? null;
+      if ((signal as any).signal_id) first.signal_id = (signal as any).signal_id;
+      if ((signal as any).signal_type) first.signal_type = (signal as any).signal_type;
+      if ((signal as any).source_topic) first.source_topic = (signal as any).source_topic;
+      groups.set(key, first);
     } else {
-      existing.sources = Array.from(new Set([...existing.sources, signal.source || 'unknown']));
+      existing.sources = Array.from(new Set([...existing.sources, String(src || 'unknown')]));
       existing.frequency += 1;
       existing.volume = Math.max(existing.volume ?? 0, signal.volume ?? 0) || existing.volume;
       existing.velocity = Math.max(existing.velocity ?? 0, signal.velocity ?? 0) || existing.velocity;
       existing.sentiment = Math.max(existing.sentiment ?? 0, signal.sentiment ?? 0) || existing.sentiment;
+      if (!existing.signal_id && (signal as any).signal_id) {
+        existing.signal_id = (signal as any).signal_id;
+        existing.signal_type = (signal as any).signal_type ?? existing.signal_type;
+        existing.source_topic = (signal as any).source_topic ?? existing.source_topic;
+      }
     }
   });
   return Array.from(groups.values());
@@ -75,7 +111,7 @@ export const scoreByFrequency = (signals: TrendSignalNormalized[]): TrendSignalN
 
 export const tagByPlatform = (signals: TrendSignalNormalized[]): TrendSignalNormalized[] => {
   return signals.map((signal) => {
-    const source = (signal.source || '').toLowerCase();
+    const source = normalizeSignalSource(signal.source);
     let platform_tag = signal.platform_tag;
     if (source.includes('youtube')) platform_tag = 'youtube';
     else if (source.includes('reddit')) platform_tag = 'reddit';
@@ -136,15 +172,24 @@ export const mergeSignalsAcrossRegions = (
       sumW > 0
         ? confidences.reduce((acc, c, i) => acc + c * recencyWeights[i], 0) / sumW
         : (confidences[0] ?? 0.5);
-    merged.push({
+    const firstSrc = typeof (first as any).source === 'string' ? (first as any).source : ((first as any).source?.id ?? (first as any).source?.name ?? '');
+    const mergedItem: TrendSignalNormalized = {
       ...first,
       topic: first.topic.trim(),
-      sources: Array.from(new Set([first.source].filter(Boolean))),
+      sources: Array.from(new Set([firstSrc].filter(Boolean))),
       frequency: regions.length,
       volume: Math.round(avgVolume * 100) / 100,
       signal_confidence: Math.min(1, Math.round(avgConf * 1000) / 1000),
       regions,
-    });
+    };
+    if ((first as any).signal_id) mergedItem.signal_id = (first as any).signal_id;
+    if ((first as any).signal_type) mergedItem.signal_type = (first as any).signal_type;
+    else {
+      const st = deriveSignalTypeFromSource(firstSrc);
+      if (st) mergedItem.signal_type = st;
+    }
+    mergedItem.source_topic = (first as any).source_topic ?? first.topic?.trim() ?? null;
+    merged.push(mergedItem);
   }
   return scoreByFrequency(merged);
 };

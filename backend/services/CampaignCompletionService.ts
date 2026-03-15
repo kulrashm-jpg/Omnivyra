@@ -10,6 +10,7 @@ import { isTerminalExecutionState } from '../governance/ExecutionStateMachine';
 import { assertValidExecutionTransition } from '../governance/ExecutionStateMachine';
 import { recordGovernanceEvent, recordCampaignCompletedEvent } from './GovernanceEventService';
 import { updateStrategyMemoryFromSignals } from './campaignStrategyMemoryService';
+import { markThemeConsumedForCampaign } from './companyThemeStateService';
 
 /**
  * Check if campaign is eligible for auto-completion and transition if so.
@@ -81,6 +82,9 @@ export async function checkAndCompleteCampaignIfEligible(campaignId: string | nu
 
     const companyId = (cv as any)?.company_id ?? null;
     if (companyId) {
+      markThemeConsumedForCampaign(campaignId).catch((err) =>
+        console.warn('CampaignCompletionService: markThemeConsumedForCampaign failed', err)
+      );
       updateStrategyMemoryFromSignals(companyId, campaignId).catch((err) =>
         console.warn('CampaignCompletionService: updateStrategyMemoryFromSignals failed', err)
       );

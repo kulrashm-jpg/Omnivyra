@@ -31,6 +31,15 @@ export type QueryBuilderOutput = {
 
 const PLACEHOLDERS = ['topic', 'competitor', 'product', 'region', 'keyword'] as const;
 
+/** Default fallback topics when companyId is null (global polling) and no company context. */
+const DEFAULT_FALLBACK_TOPICS = [
+  'AI',
+  'marketing automation',
+  'content marketing',
+  'startup trends',
+  'SaaS tools',
+];
+
 function resolvePlaceholder(
   name: string,
   input: QueryBuilderInput
@@ -98,14 +107,20 @@ export async function expand(
   let queryParams: Record<string, string> = {};
   let runtimeValues: Record<string, string> = {};
 
-  const topic = (input.topic ?? '').trim();
+  // When companyId is null (global polling) and no topic, use first fallback so templates expand
+  const rawTopic = (input.topic ?? '').trim();
+  const topic =
+    rawTopic ||
+    (input.companyId == null ? DEFAULT_FALLBACK_TOPICS[0]! : '');
   const competitor = (input.competitor ?? '').trim();
   const product = (input.product ?? '').trim();
   const region = (input.region ?? '').trim();
   const keyword = (input.keyword ?? '').trim();
 
+  const effectiveInput = { ...input, topic };
+
   if (explicitTemplate && explicitTemplate.trim()) {
-    const expanded = expandTemplate(explicitTemplate.trim(), input);
+    const expanded = expandTemplate(explicitTemplate.trim(), effectiveInput);
     if (expanded) {
       queryParams.q = expanded;
       queryParams.query = expanded;
@@ -119,10 +134,21 @@ export async function expand(
     const templates = await loadTemplates(source.id);
     if (templates.length > 0) {
       const t = templates[0];
-      const expanded = expandTemplate(t.template, input);
+      const expanded = expandTemplate(t.template, effectiveInput);
       if (expanded) {
         queryParams.q = expanded;
         queryParams.query = expanded;
+      }
+      runtimeValues.topic = topic;
+      runtimeValues.competitor = competitor;
+      runtimeValues.product = product;
+      runtimeValues.region = region;
+      runtimeValues.keyword = keyword;
+    } else {
+      // No templates: use fallback topic for q/query when global polling
+      if (topic && (!('q' in baseParams) || !baseParams.q) && (!('query' in baseParams) || !baseParams.query)) {
+        queryParams.q = topic;
+        queryParams.query = topic;
       }
       runtimeValues.topic = topic;
       runtimeValues.competitor = competitor;

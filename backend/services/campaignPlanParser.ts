@@ -344,6 +344,18 @@ export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> 
     return { weeks: looseWeeks, format: 'legacy' };
   }
 
+  const normalizedWeeks = normalizeLenientWeeks(parsed);
+  if (normalizedWeeks.length > 0) {
+    console.warn('[campaign-ai][parse-debug]', {
+      rawLength: planText.length,
+      parserStage: 'lenient-normalization',
+      detectedWeeks: normalizedWeeks.length,
+      parseError: 'Structured schema validation failed; using lenient normalization fallback.',
+      missingSections: [],
+    });
+    return { weeks: normalizedWeeks, format: 'blueprint' as const };
+  }
+
   const detectedWeekHeaders = extractWeekNumbersLoose(planText).length;
 
   console.error('Structured plan schema validation failed', {
@@ -358,6 +370,72 @@ export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> 
     missingSections: detectedWeekHeaders === 0 ? ['week headers'] : [],
   });
   throw new Error('Invalid structured plan schema');
+}
+
+function normalizeLenientWeeks(parsed: unknown): WeeklyBlueprintWeek[] {
+  const ctaSet = new Set(CTA_TYPES);
+  const kpiSet = new Set(KPI_FOCUS_OPTIONS);
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+  const obj = parsed as Record<string, unknown>;
+  const planObj = obj.plan && typeof obj.plan === 'object' && !Array.isArray(obj.plan) ? (obj.plan as Record<string, unknown>) : null;
+  const rawWeeks = obj.weeks ?? obj.Weeks ?? planObj?.weeks;
+  if (!Array.isArray(rawWeeks) || rawWeeks.length === 0) return [];
+  const weeks: WeeklyBlueprintWeek[] = [];
+  for (let i = 0; i < rawWeeks.length; i++) {
+    const w = rawWeeks[i];
+    if (w == null || typeof w !== 'object' || Array.isArray(w)) continue;
+    const row = w as Record<string, unknown>;
+    const weekNum = typeof row.week === 'number' ? row.week : typeof row.week_number === 'number' ? row.week_number : i + 1;
+    const theme =
+      String(row.theme ?? row.phase_label ?? row.phaseLabel ?? row.weekly_theme ?? '').trim() ||
+      `Week ${weekNum}`;
+    const phaseLabel = String(row.phase_label ?? row.phaseLabel ?? theme).trim() || 'Audience Activation';
+    const primaryObjective = String(row.primary_objective ?? row.primaryObjective ?? row.objective ?? '').trim();
+    let platformAlloc: Record<string, number> = {};
+    if (row.platform_allocation != null && typeof row.platform_allocation === 'object' && !Array.isArray(row.platform_allocation)) {
+      platformAlloc = Object.fromEntries(
+        Object.entries(row.platform_allocation as Record<string, unknown>).filter(
+          ([, v]) => typeof v === 'number' && Number.isFinite(v)
+        ) as [string, number][]
+      );
+    }
+    const contentMix = Array.isArray(row.content_type_mix)
+      ? (row.content_type_mix as unknown[]).map(String).filter(Boolean)
+      : Array.isArray(row.contentTypeMix)
+        ? (row.contentTypeMix as unknown[]).map(String).filter(Boolean)
+        : ['post'];
+    const ctaRaw = String(row.cta_type ?? row.ctaType ?? 'None').trim();
+    const ctaType = ctaSet.has(ctaRaw as (typeof CTA_TYPES)[number])
+      ? (ctaRaw as (typeof CTA_TYPES)[number])
+      : 'None';
+    const allocSum = Object.values(platformAlloc).reduce((a, b) => a + b, 0);
+    const totalCount = typeof row.total_weekly_content_count === 'number'
+      ? row.total_weekly_content_count
+      : typeof row.totalWeeklyContentCount === 'number'
+        ? row.totalWeeklyContentCount
+        : allocSum || contentMix.length;
+    const kpiRaw = String(row.weekly_kpi_focus ?? row.weeklyKpiFocus ?? 'Reach growth').trim();
+    const weeklyKpi = kpiSet.has(kpiRaw as (typeof KPI_FOCUS_OPTIONS)[number])
+      ? (kpiRaw as (typeof KPI_FOCUS_OPTIONS)[number])
+      : 'Reach growth';
+    weeks.push({
+      week: weekNum,
+      phase_label: phaseLabel,
+      primary_objective: primaryObjective,
+      platform_allocation: Object.keys(platformAlloc).length > 0 ? platformAlloc : { linkedin: Math.max(1, totalCount) },
+      content_type_mix: contentMix.length > 0 ? contentMix : ['post'],
+      cta_type: ctaType,
+      total_weekly_content_count: totalCount,
+      weekly_kpi_focus: weeklyKpi,
+      theme,
+      topics_to_cover: Array.isArray(row.topics_to_cover)
+        ? (row.topics_to_cover as unknown[]).map(String).filter(Boolean)
+        : Array.isArray(row.topicsToCover)
+          ? (row.topicsToCover as unknown[]).map(String).filter(Boolean)
+          : theme ? [theme] : [],
+    });
+  }
+  return weeks;
 }
 
 export async function parseAiRefinedDay(planText: string): Promise<{

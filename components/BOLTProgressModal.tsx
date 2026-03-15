@@ -6,18 +6,25 @@
 import React, { useState, useEffect } from 'react';
 
 const STAGE_LABELS: Record<string, string> = {
-  'source-recommendation': 'Creating campaign from recommendation',
-  'ai/plan': 'Generating AI plan',
-  'commit-plan': 'Committing plan',
-  'generate-weekly-structure': 'Generating weekly structure',
-  'schedule-structured-plan': 'Scheduling posts',
+  'source-recommendation': 'Getting ready to prepare week plan',
+  'ai/plan': 'Creating week plan',
+  'commit-plan': 'Saving blueprint',
+  'generate-weekly-structure': 'Creating daily plans',
+  'schedule-structured-plan': 'Scheduling content',
+  'schedule-creating-content': 'Creating content',
+  'schedule-repurposing-content': 'Repurposing content',
+  'schedule-writing-posts': 'Scheduling content',
 };
 
 /** Also handle sub-stage names like generate-weekly-structure-week-1 */
-function getStageLabel(stage: string | undefined): string {
-  if (!stage) return 'Initializing…';
+function getStageLabel(stage: string | undefined, status?: string): string {
+  if (!stage) return status === 'completed' ? 'Complete' : 'Initializing…';
   if (STAGE_LABELS[stage]) return STAGE_LABELS[stage];
-  if (stage.startsWith('generate-weekly-structure-week-')) return 'Generating weekly structure';
+  if (stage.startsWith('generate-weekly-structure-week-')) {
+    const weekNum = stage.replace(/\D/g, '') || '';
+    return weekNum ? `Creating daily plans (Week ${weekNum})` : 'Creating daily plans';
+  }
+  if (stage.startsWith('generate-weekly-structure-weeks-')) return 'Creating daily plans';
   return stage.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -62,7 +69,7 @@ export default function BOLTProgressModal({ open, progress }: BOLTProgressModalP
   if (!open) return null;
 
   const pct = Math.min(100, Math.max(0, progress?.progress_percentage ?? 0));
-  const stageLabel = getStageLabel(progress?.stage);
+  const stageLabel = getStageLabel(progress?.stage, progress?.status);
   const isFailed = progress?.status === 'failed';
   const errorMsg = progress?.error_message;
 
@@ -102,12 +109,45 @@ export default function BOLTProgressModal({ open, progress }: BOLTProgressModalP
                 )}
               </svg>
             </div>
-            <div>
+            <div className="flex-1 min-w-0">
               <h2 id="bolt-progress-title" className="text-lg font-semibold text-gray-900">
-                {isFailed ? 'Generation failed' : 'Generating campaign plan'}
+                {isFailed ? 'Generation failed' : progress?.status === 'completed' ? 'Complete' : 'Generating campaign plan'}
               </h2>
-              <p className="text-sm text-gray-600">{stageLabel}</p>
             </div>
+          </div>
+
+          {/* Status box: shows current stage message, updates live as each stage completes */}
+          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
+            Status
+          </div>
+          <div
+            className={`mb-4 rounded-lg border-2 px-4 py-3 ${
+              progress?.status === 'completed'
+                ? 'border-green-200 bg-green-50'
+                : isFailed
+                  ? 'border-red-200 bg-red-50'
+                  : 'border-amber-200 bg-amber-50'
+            }`}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <p
+              className={`text-base font-semibold ${
+                progress?.status === 'completed'
+                  ? 'text-green-900'
+                  : isFailed
+                    ? 'text-red-800'
+                    : 'text-amber-900'
+              }`}
+            >
+              {stageLabel}
+            </p>
+            {!isFailed && progress?.status !== 'completed' && (
+              <p className="text-xs text-amber-700 mt-1">
+                Updates as each stage completes
+              </p>
+            )}
           </div>
 
           {!isFailed && (

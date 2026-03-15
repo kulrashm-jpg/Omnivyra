@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { getCommunityAiActionById } from '../../../../backend/db/communityAiActionStore';
 import { enforceActionRole, requireTenantScope } from '../utils';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
 import { logCommunityAiActionEvent } from '../../../../backend/services/communityAiActionLogService';
@@ -32,11 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'action_id is required' });
   }
 
-  const { data: action, error } = await supabase
-    .from('community_ai_actions')
-    .select('*')
-    .eq('id', actionId)
-    .single();
+  const { data: action, error } = await getCommunityAiActionById(actionId);
 
   if (error || !action) {
     return res.status(404).json({ error: 'ACTION_NOT_FOUND' });

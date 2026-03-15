@@ -38,6 +38,10 @@ export type ExternalApiSource = {
   auth_type: string;
   api_key_name?: string | null;
   api_key_env_name?: string | null;
+  /** Encrypted OAuth Client ID - never expose to client */
+  oauth_client_id_encrypted?: string | null;
+  /** Encrypted OAuth Client Secret - never expose to client */
+  oauth_client_secret_encrypted?: string | null;
   headers?: Record<string, any> | null;
   query_params?: Record<string, any> | null;
   is_preset?: boolean | null;
@@ -755,7 +759,22 @@ export const recordApiHealth = async (
       );
 
     if (upsertError) {
-      console.warn('Failed to persist API health record', { source: source.name });
+      const isSchemaError =
+        (upsertError as { code?: string })?.code === 'PGRST205' ||
+        (upsertError.message?.toLowerCase().includes('could not find the table') ?? false) ||
+        (upsertError.message?.toLowerCase().includes('relation') && upsertError.message?.toLowerCase().includes('does not exist'));
+      if (isSchemaError && !(globalThis as any).__external_api_health_schema_hint_shown) {
+        (globalThis as any).__external_api_health_schema_hint_shown = true;
+        console.warn(
+          'external_api_health table not found. Run database/external_api_health.sql to create it. API health tracking will be skipped.'
+        );
+      } else if (!isSchemaError) {
+        console.warn('Failed to persist API health record', {
+          source: source.name,
+          error: (upsertError as Error)?.message,
+          code: (upsertError as { code?: string })?.code,
+        });
+      }
     }
 
     return { freshness_score: freshnessScore, reliability_score: reliabilityScore };
@@ -973,10 +992,24 @@ export async function logExternalApiUsage(input: {
       );
 
     if (upsertError) {
-      console.warn('Failed to update API usage record', {
-        apiSourceId: input.apiSourceId,
-        userId: input.userId,
-      });
+      const isSchemaError =
+        (upsertError as { code?: string })?.code === 'PGRST205' ||
+        (upsertError.message?.toLowerCase().includes('could not find the table') ?? false) ||
+        (upsertError.message?.toLowerCase().includes('relation') && upsertError.message?.toLowerCase().includes('does not exist'));
+      if (isSchemaError && !(globalThis as any).__external_api_usage_schema_hint_shown) {
+        (globalThis as any).__external_api_usage_schema_hint_shown = true;
+        console.warn(
+          'external_api_usage table not found. Run database/external-api-usage.sql to create it. API usage tracking will be skipped.'
+        );
+      } else if (!isSchemaError) {
+        const err = upsertError as { code?: string; message?: string };
+        console.warn('Failed to update API usage record', {
+          apiSourceId: input.apiSourceId,
+          userId: input.userId,
+          code: err?.code,
+          message: err?.message,
+        });
+      }
     }
 
     if (input.feature && input.companyId) {
@@ -1020,13 +1053,27 @@ export async function addSignalsGenerated(input: {
   try {
     const usageDate = resolveUsageDate();
     const nowIso = new Date().toISOString();
-    const { data } = await supabase
+    const { data, error: selectError } = await supabase
       .from('external_api_usage')
       .select('signals_generated, request_count, success_count, failure_count, last_used_at')
       .eq('api_source_id', input.apiSourceId)
       .eq('user_id', input.userId)
       .eq('usage_date', usageDate)
       .maybeSingle();
+
+    const selectMsg = (selectError as { message?: string })?.message?.toLowerCase() ?? '';
+    const isSelectSchemaError =
+      selectError &&
+      ((selectMsg.includes('column') && selectMsg.includes('does not exist')) ||
+        selectMsg.includes('could not find the table') ||
+        (selectMsg.includes('relation') && selectMsg.includes('does not exist')));
+    if (isSelectSchemaError && !(globalThis as any).__external_api_usage_signals_hint_shown) {
+      (globalThis as any).__external_api_usage_signals_hint_shown = true;
+      console.warn(
+        'external_api_usage.signals_generated column missing. Run database/external_api_usage_signals_generated.sql. Signals tracking will be skipped.'
+      );
+      return;
+    }
 
     const current = (data?.signals_generated ?? 0) + input.count;
     const { error: upsertError } = await supabase.from('external_api_usage').upsert(
@@ -1045,10 +1092,27 @@ export async function addSignalsGenerated(input: {
     );
 
     if (upsertError) {
-      console.warn('Failed to update signals_generated', {
-        apiSourceId: input.apiSourceId,
-        userId: input.userId,
-      });
+      const msg = (upsertError as { message?: string })?.message?.toLowerCase() ?? '';
+      const isSchemaError =
+        (upsertError as { code?: string })?.code === 'PGRST205' ||
+        msg.includes('could not find the table') ||
+        (msg.includes('relation') && msg.includes('does not exist')) ||
+        (msg.includes('column') && msg.includes('does not exist'));
+      if (isSchemaError && !(globalThis as any).__external_api_usage_schema_hint_shown) {
+        (globalThis as any).__external_api_usage_schema_hint_shown = true;
+        const hint = msg.includes('signals_generated')
+          ? 'Run database/external_api_usage_signals_generated.sql to add signals_generated column.'
+          : 'Run database/external-api-usage.sql to create it. API usage tracking will be skipped.';
+        console.warn(`external_api_usage schema issue. ${hint}`);
+      } else if (!isSchemaError) {
+        const err = upsertError as { code?: string; message?: string };
+        console.warn('Failed to update signals_generated', {
+          apiSourceId: input.apiSourceId,
+          userId: input.userId,
+          code: err?.code,
+          message: err?.message,
+        });
+      }
     }
 
     if (input.feature && input.companyId) {
@@ -1080,6 +1144,7 @@ export async function addSignalsGenerated(input: {
     console.warn('addSignalsGenerated failed', {
       apiSourceId: input.apiSourceId,
       userId: input.userId,
+      error: (error as Error)?.message,
     });
   }
 }
@@ -1094,6 +1159,8 @@ const buildPlatformPayload = (input: Partial<ExternalApiSource>) => ({
   auth_type: input.auth_type ?? 'none',
   api_key_name: input.api_key_name ?? null,
   api_key_env_name: input.api_key_env_name ?? null,
+  oauth_client_id_encrypted: input.oauth_client_id_encrypted ?? null,
+  oauth_client_secret_encrypted: input.oauth_client_secret_encrypted ?? null,
   headers: input.headers ?? {},
   query_params: input.query_params ?? {},
   is_preset: input.is_preset ?? false,
@@ -1281,6 +1348,42 @@ export async function getPlatformConfigs(
     ...row,
     health: healthMap[row.id] || null,
   }));
+}
+
+/**
+ * Get social + community APIs for company admins. Excludes trend APIs.
+ * platform_type IN ('social', 'community') AND is_active = TRUE.
+ * Used by Social Platform Settings page.
+ */
+export async function getSocialPostingConfigs(
+  companyId: string | null | undefined,
+  options?: { skipCache?: boolean; platformScope?: boolean }
+): Promise<PlatformConfig[]> {
+  if (options?.platformScope) {
+    const { data, error } = await supabase
+      .from('external_api_sources')
+      .select('*')
+      .in('platform_type', ['social', 'community'])
+      .neq('purpose', 'trends')
+      .eq('is_active', true)
+      .order('created_at', { ascending: true });
+    if (error || !data) return [];
+    const apiIds = data.map((row: any) => row.id);
+    const healthMap = await fetchHealthMapForApiIds(apiIds);
+    return data.map((row: any) => ({
+      ...row,
+      health: healthMap[row.id] || null,
+    }));
+  }
+  if (!companyId) return [];
+  const all = await getPlatformConfigs(companyId, options);
+  return all.filter(
+    (c) => {
+      const pt = (c.platform_type || 'social').toLowerCase();
+      const isSocialOrCommunity = pt === 'social' || pt === 'community' || pt === 'video' || pt === 'blog' || pt === 'podcast';
+      return isSocialOrCommunity && c.is_active !== false && (c.purpose || '').toLowerCase() !== 'trends';
+    }
+  );
 }
 
 const normalizeArray = (value: any): string[] => {
@@ -2126,6 +2229,66 @@ export type FetchSingleSourceResult = {
 };
 
 /**
+ * Intelligence API overrides: ensure YouTube and NewsAPI use correct endpoints and params.
+ * Returns { effectiveSource, effectiveQueryParams } or null if API key missing (skip source).
+ */
+function getIntelligenceApiOverrides(
+  source: ExternalApiSource,
+  expanded: { queryParams: Record<string, string>; runtimeValues: Record<string, string> }
+): { effectiveSource: ExternalApiSource; effectiveQueryParams: Record<string, string> } | null {
+  const name = (source.name || '').toLowerCase();
+  const q = expanded.queryParams?.q || expanded.runtimeValues?.topic || 'AI';
+
+  if (name.includes('youtube')) {
+    const key = process.env.YOUTUBE_API_KEY;
+    if (!key || !String(key).trim()) {
+      console.log('[intelligence] API skipped — missing key', { source: source.name, key: 'YOUTUBE_API_KEY' });
+      return null;
+    }
+    return {
+      effectiveSource: {
+        ...source,
+        base_url: 'https://www.googleapis.com/youtube/v3/search',
+        auth_type: 'query',
+        api_key_env_name: 'YOUTUBE_API_KEY',
+      },
+      effectiveQueryParams: {
+        part: 'snippet',
+        type: 'video',
+        q,
+        maxResults: '25',
+        key,
+      },
+    };
+  }
+
+  if (name.includes('news')) {
+    const key = process.env.NEWS_API_KEY;
+    if (!key || !String(key).trim()) {
+      console.log('[intelligence] API skipped — missing key', { source: source.name, key: 'NEWS_API_KEY' });
+      return null;
+    }
+    return {
+      effectiveSource: {
+        ...source,
+        base_url: 'https://newsapi.org/v2/everything',
+        auth_type: 'query',
+        api_key_env_name: 'NEWS_API_KEY',
+      },
+      effectiveQueryParams: {
+        q,
+        language: 'en',
+        sortBy: 'publishedAt',
+        pageSize: '20',
+        apiKey: key,
+      },
+    };
+  }
+
+  return { effectiveSource: source, effectiveQueryParams: expanded.queryParams || {} };
+}
+
+/**
  * Fetch a single source with query builder expansion (Phase 1).
  * Used by intelligence polling worker. Runs query builder, builds request, fetches.
  */
@@ -2151,12 +2314,36 @@ export async function fetchSingleSourceWithQueryBuilder(
   });
 
   const health = await getHealthForSource(source);
-  const request = buildExternalApiRequest(source, {
-    queryParams: expanded.queryParams,
+  const overrides = getIntelligenceApiOverrides(source, expanded);
+  if (overrides === null) {
+    await updateApiHealth({ apiId: source.id, success: false, latencyMs: 0 });
+    await logExternalApiUsage({
+      apiSourceId: source.id,
+      userId: INTELLIGENCE_POLLER_USER_ID,
+      success: false,
+      errorCode: 'missing_env',
+      errorMessage: 'API skipped — missing key',
+      feature: 'intelligence_polling',
+      companyId: companyId ?? null,
+    });
+    return { results: [] };
+  }
+  const { effectiveSource, effectiveQueryParams } = overrides;
+  const request = buildExternalApiRequest(effectiveSource, {
+    queryParams: effectiveQueryParams,
     runtimeValues: { ...profileRuntimeValues, ...expanded.runtimeValues },
   });
 
   if (request.missingEnv.length > 0) {
+    console.log('[intelligence] API skipped — missing key', {
+      source: source.name,
+      missing: request.missingEnv,
+    });
+    console.log('[intelligence] API returned no results', {
+      reason: 'missing_env',
+      missing: request.missingEnv,
+      sourceId: source.id,
+    });
     await updateApiHealth({ apiId: source.id, success: false, latencyMs: 0 });
     await logExternalApiUsage({
       apiSourceId: source.id,
@@ -2184,6 +2371,11 @@ export async function fetchSingleSourceWithQueryBuilder(
     const latencyMs = Date.now() - startedAt;
 
     if (!response.ok) {
+      console.log('[intelligence] API returned no results', {
+        reason: 'http_error',
+        status: response.status,
+        sourceId: source.id,
+      });
       await updateApiHealth({ apiId: source.id, success: false, latencyMs });
       await logExternalApiUsage({
         apiSourceId: source.id,
@@ -2198,6 +2390,23 @@ export async function fetchSingleSourceWithQueryBuilder(
     }
 
     const payload = await response.json();
+    const itemsCount = Array.isArray(payload?.items) ? payload.items.length : 0;
+    const articlesCount = Array.isArray(payload?.articles) ? payload.articles.length : 0;
+    const hasData = itemsCount > 0 || articlesCount > 0 ||
+      (Array.isArray(payload?.data?.children) && payload.data.children.length > 0) ||
+      (Array.isArray(payload?.trend_results) && payload.trend_results.length > 0) ||
+      (Array.isArray(payload?.results) && payload.results.length > 0);
+    console.log('[intelligence] raw API response size', {
+      source: source.name,
+      sourceId: source.id,
+      keys: Object.keys(payload ?? {}).slice(0, 12),
+      items: itemsCount,
+      articles: articlesCount,
+      size: JSON.stringify(payload ?? {}).length,
+    });
+    if (!hasData) {
+      console.log('[intelligence] API returned no results', { reason: 'empty_payload', sourceId: source.id });
+    }
     const healthUpdate = await updateApiHealth({ apiId: source.id, success: true, latencyMs });
     await logExternalApiUsage({
       apiSourceId: source.id,

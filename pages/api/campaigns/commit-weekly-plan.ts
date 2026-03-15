@@ -33,51 +33,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: 'Failed to commit weekly plan' });
     }
 
-    // If committing, also generate daily plans for this week
+    // If committing, also generate daily plans for this week via execution engine
     if (commitType === 'finalize') {
       try {
-        // Generate daily content plans for each day of the week
         const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
         const platforms = ['linkedin', 'facebook', 'instagram', 'twitter', 'youtube'];
         const contentTypes = ['post', 'video', 'story', 'article', 'poll'];
+        const rows: Array<Record<string, unknown>> = [];
 
         for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
           const day = daysOfWeek[dayIndex];
           const date = new Date();
           date.setDate(date.getDate() + (weekNumber - 1) * 7 + dayIndex);
 
-          // Create daily plans for different platforms
           for (const platform of platforms) {
             const contentType = contentTypes[dayIndex % contentTypes.length];
-            
-            const { error: dailyPlanError } = await supabase
-              .from('daily_content_plans')
-              .insert({
-                campaign_id: campaignId,
-                week_number: weekNumber,
-                day_of_week: day,
-                date: date.toISOString().split('T')[0],
-                platform: platform,
-                content_type: contentType,
-                title: `${weekData.theme} - ${day} ${platform} Content`,
-                content: `Content for ${day} on ${platform} - ${weekData.focus_area}`,
-                hashtags: [`#${platform}`, `#week${weekNumber}`, `#${weekData.theme?.toLowerCase().replace(/\s+/g, '')}`],
-                status: 'planned',
-                priority: 'medium',
-                source_refinement_id: updatedRefinement.id,
-                ai_generated: true,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-              });
-
-            if (dailyPlanError) {
-              console.log(`Error creating daily plan for ${day} ${platform}:`, dailyPlanError);
-            }
+            rows.push({
+              campaign_id: campaignId,
+              week_number: weekNumber,
+              day_of_week: day,
+              date: date.toISOString().split('T')[0],
+              platform: platform,
+              content_type: contentType,
+              title: `${weekData.theme} - ${day} ${platform} Content`,
+              content: `Content for ${day} on ${platform} - ${weekData.focus_area}`,
+              hashtags: [`#${platform}`, `#week${weekNumber}`, `#${weekData.theme?.toLowerCase().replace(/\s+/g, '')}`],
+              status: 'planned',
+              priority: 'medium',
+              source_refinement_id: updatedRefinement.id,
+              ai_generated: true,
+            });
           }
+        }
+
+        if (rows.length > 0) {
+          const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
+          await saveWeekPlans(campaignId, weekNumber, rows as any, 'blueprint');
         }
       } catch (error) {
         console.log('Error generating daily plans:', error);
-        // Don't fail the commit if daily plan generation fails
       }
     }
 

@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireManageConnectors } from '../utils';
+import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
+import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 import crypto from 'crypto';
 
 const base64Url = (input: Buffer) =>
@@ -33,16 +34,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await requireManageConnectors(req, res, organizationId);
   if (!access) return;
 
-  const clientId = process.env.TWITTER_CLIENT_ID;
+  const credentials = await getOAuthCredentialsForPlatform('twitter');
+  const clientId = credentials?.client_id;
   if (!clientId) {
-    return res.status(500).json({ error: 'TWITTER_CLIENT_ID is not configured' });
+    return res.status(500).json({ error: 'Twitter OAuth is not configured. Super Admin must configure platform_oauth_configs or env vars.' });
   }
 
   const codeVerifier = base64Url(crypto.randomBytes(32));
   const codeChallenge = base64Url(crypto.createHash('sha256').update(codeVerifier).digest());
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
-  const redirectUri = `${baseUrl}/api/community-ai/connectors/twitter/callback`;
+  const redirectUri = getCommunityAiConnectorCallbackUrl('twitter');
   const redirectTo =
     typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';
   const state = buildState({

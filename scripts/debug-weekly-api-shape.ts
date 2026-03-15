@@ -6,7 +6,7 @@ async function main() {
     throw new Error('Usage: ts-node scripts/debug-weekly-api-shape.ts <campaignId>');
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line
   const handler = require('../pages/api/campaigns/get-weekly-plans').default;
 
   const req = {

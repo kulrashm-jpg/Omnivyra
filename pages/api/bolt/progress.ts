@@ -52,8 +52,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       scheduled_posts_created?: number | null;
     };
 
+    const stageLabels: Record<string, string> = {
+      'source-recommendation': 'Getting ready to prepare week plan',
+      'ai/plan': 'Creating week plan',
+      'commit-plan': 'Saving blueprint',
+      'generate-weekly-structure': 'Creating daily plans',
+      'schedule-structured-plan': 'Scheduling content',
+      'schedule-creating-content': 'Creating content',
+      'schedule-repurposing-content': 'Repurposing content',
+      'schedule-writing-posts': 'Scheduling content',
+    };
+    const stage = row.current_stage;
+    let stageLabel = stageLabels[stage];
+    if (!stageLabel && stage?.startsWith('generate-weekly-structure-week-')) {
+      const weekNum = stage.replace(/\D/g, '') || '';
+      stageLabel = weekNum ? `Creating daily plans (Week ${weekNum})` : 'Creating daily plans';
+    }
+    if (!stageLabel && stage?.startsWith('generate-weekly-structure-weeks-')) {
+      stageLabel = 'Creating daily plans';
+    }
+    if (!stageLabel) {
+      stageLabel = row.status === 'completed' ? 'Complete' : stage ? stage.replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) : 'Initializing…';
+    }
+
     return res.status(200).json({
       stage: row.current_stage,
+      stage_label: stageLabel,
       status: row.status,
       progress_percentage: row.progress_percentage,
       result_campaign_id: row.result_campaign_id ?? undefined,

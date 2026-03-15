@@ -200,15 +200,26 @@ async function fetchUnclusteredSignals(): Promise<SignalRow[]> {
 
 /**
  * Fetch existing clusters updated or created in the last 6 hours.
+ * Schema-resilient: if topic_embedding column is missing, fetches without it.
  */
 async function fetchRecentClusters(): Promise<ClusterRow[]> {
   const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
+  const selectCols = 'cluster_id, cluster_topic, signal_count, created_at, last_updated, topic_embedding';
+  let result = await supabase
     .from('signal_clusters')
-    .select('cluster_id, cluster_topic, signal_count, created_at, last_updated, topic_embedding')
+    .select(selectCols)
     .gte('last_updated', since)
     .order('last_updated', { ascending: false });
 
+  if (result.error && isSchemaError(result.error)) {
+    result = (await supabase
+      .from('signal_clusters')
+      .select('cluster_id, cluster_topic, signal_count, created_at, last_updated')
+      .gte('last_updated', since)
+      .order('last_updated', { ascending: false })) as typeof result;
+  }
+
+  const { data, error } = result;
   if (error) throw new Error(`Failed to fetch recent clusters: ${error.message}`);
   return (data ?? []).map((r: any) => ({
     ...r,
@@ -239,10 +250,23 @@ async function assignSignalsToCluster(
   if (updateCluster) throw new Error(`Failed to update cluster: ${updateCluster.message}`);
 }
 
+function isSchemaError(err: { message?: string; code?: string } | null): boolean {
+  if (!err) return false;
+  const msg = (err.message ?? '').toLowerCase();
+  const code = (err as { code?: string }).code;
+  return (
+    code === 'PGRST205' ||
+    msg.includes('could not find') ||
+    msg.includes('does not exist') ||
+    (msg.includes('column') && msg.includes('schema cache'))
+  );
+}
+
 /**
  * Create a new cluster and assign signals.
  * sourceApiId is stored on the cluster for theme filtering (cluster → source API lookup).
  * topic_embedding is generated from cluster_topic for vector search.
+ * Schema-resilient: if source_api_id or topic_embedding columns are missing, retries with minimal row.
  */
 async function createClusterAndAssign(
   clusterTopic: string,
@@ -252,22 +276,31 @@ async function createClusterAndAssign(
 ): Promise<string> {
   if (signalIds.length === 0) throw new Error('createClusterAndAssign requires at least one signal');
   const now = new Date().toISOString();
-  const row: Record<string, unknown> = {
+  const baseRow: Record<string, unknown> = {
     cluster_topic: clusterTopic,
     signal_count: signalIds.length,
     created_at: now,
     last_updated: now,
   };
-  if (sourceApiId) row.source_api_id = sourceApiId;
+  const rowWithOptional: Record<string, unknown> = { ...baseRow };
+  if (sourceApiId) rowWithOptional.source_api_id = sourceApiId;
   if (topicEmbedding?.length) {
-    row.topic_embedding = embeddingToPgVector(topicEmbedding);
+    rowWithOptional.topic_embedding = embeddingToPgVector(topicEmbedding);
   }
-  const { data: inserted, error: insertError } = await supabase
-    .from('signal_clusters')
-    .insert(row)
-    .select('cluster_id')
-    .single();
 
+  let result = await supabase.from('signal_clusters').insert(rowWithOptional).select('cluster_id').single();
+
+  if (result.error && isSchemaError(result.error)) {
+    if (!(globalThis as any).__signal_clusters_schema_hint_shown) {
+      (globalThis as any).__signal_clusters_schema_hint_shown = true;
+      console.warn(
+        'signal_clusters: source_api_id or topic_embedding column missing. Run database/signal_clusters_source_api_id.sql and database/add_signal_embeddings.sql. Clustering will continue with minimal schema.'
+      );
+    }
+    result = await supabase.from('signal_clusters').insert(baseRow).select('cluster_id').single();
+  }
+
+  const { data: inserted, error: insertError } = result;
   if (insertError || !inserted) throw new Error(`Failed to create cluster: ${insertError?.message}`);
 
   const clusterId = inserted.cluster_id as string;

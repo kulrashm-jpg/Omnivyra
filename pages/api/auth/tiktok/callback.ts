@@ -42,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         client_secret: process.env.TIKTOK_CLIENT_SECRET || '',
         grant_type: 'authorization_code',
         code: code as string,
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001'}/api/auth/tiktok/callback`,
+        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/tiktok/callback`,
       })
     });
 

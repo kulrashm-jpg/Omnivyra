@@ -24,8 +24,8 @@ export interface DetermineDistributionStrategyInput {
   postingDemand?: number | null;
   /** Number of platforms (e.g. linkedin, facebook). */
   platformCount?: number | null;
-  /** Whether cross-platform reuse is enabled. */
-  cross_platform_sharing?: boolean | null;
+  /** Whether cross-platform reuse is enabled. { enabled: boolean } or boolean. undefined → shared mode. */
+  cross_platform_sharing?: { enabled?: boolean } | boolean | null;
   /** Alias. */
   crossPlatformReuse?: boolean | null;
   /** Content types (e.g. post, video, article). */
@@ -35,6 +35,17 @@ export interface DetermineDistributionStrategyInput {
 }
 
 const DEFAULT_STRATEGY: DistributionStrategy = 'AI_OPTIMIZED';
+
+function resolveCrossPlatformSharing(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.enabled === 'boolean') return obj.enabled;
+    if (obj.enabled === undefined && (obj as any).mode === 'unique') return false;
+  }
+  return true;
+}
 
 function toNumber(v: unknown): number {
   if (v == null) return 0;
@@ -71,7 +82,7 @@ export function determineDistributionStrategy(
   const requestedTotal =
     toNumber(input.requested_total) || toNumber(input.postingDemand);
   const platformCount = toPlatformCount(input.platformCount);
-  const crossPlatformSharing = Boolean(
+  const crossPlatformSharing = resolveCrossPlatformSharing(
     input.cross_platform_sharing ?? input.crossPlatformReuse
   );
 

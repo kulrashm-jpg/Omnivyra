@@ -254,28 +254,55 @@ const readTopicList = (obj: Record<string, unknown> | null | undefined, key: str
 
 const MAX_BANNER_SNIPPET = 80;
 
+/** Client-side sanitize for topic/display when backend polish may be missing. Mirrors recommendationPolishService patterns. */
+function sanitizeTopicForDisplay(s: string | null | undefined): string {
+  if (!s || typeof s !== 'string') return '';
+  let t = s.trim();
+  if (!t) return '';
+  t = t.replace(/\s+Business\s+Report\s+20\d{2}\b/gi, '').trim();
+  t = t.replace(/\s*[:\-]\s*\$[\d.]+(?:\s*[Bb]n|\s*\+)?(?:\s+Market\s+Trends[^.]*)?\.?$/gi, '').trim();
+  t = t.replace(/[.:,\s]+$/g, '').trim();
+  return t || s.trim();
+}
+
+/** Truncate at word boundary to avoid awkward cuts like "...cloud" or mid-word fragments. */
+function truncateAtWordBoundary(s: string, maxLen: number): string {
+  if (!s || typeof s !== 'string') return s;
+  const t = s.trim();
+  if (t.length <= maxLen) return t;
+  const cut = t.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(' ');
+  if (lastSpace > maxLen * 0.5) return cut.slice(0, lastSpace).trim() + '…';
+  return cut.trim() + '…';
+}
+
 function getTransformationSummary(
   problem: string | null,
   transformation: string | null,
-  summaryFallback: string | null
+  summaryFallback: string | null,
+  topic: string | null = null,
+  /** Prefer this over topic for display (already polished). Use sanitized topic as fallback. */
+  displayTitle: string | null = null
 ): string {
-  const truncate = (s: string) =>
-    s.length <= MAX_BANNER_SNIPPET ? s : s.slice(0, MAX_BANNER_SNIPPET).trim() + '…';
+  const truncate = (s: string) => truncateAtWordBoundary(s, MAX_BANNER_SNIPPET);
+  const safeTitle = (displayTitle && displayTitle.trim()) || (topic ? sanitizeTopicForDisplay(topic) : '');
+  const topicPrefix = safeTitle ? `${safeTitle}: ` : '';
+  let base = '';
   if (problem && transformation) {
-    return `Designed to move your audience from ${truncate(problem)} → ${truncate(transformation)}`;
+    base = `Designed to move your audience from ${truncate(problem)} → ${truncate(transformation)}`;
+  } else if (problem) {
+    base = `Designed to address: ${truncate(problem)}. Clear audience progress and momentum.`;
+  } else if (transformation) {
+    base = `Designed to achieve: ${truncate(transformation)}.`;
+  } else if (summaryFallback) {
+    base =
+      summaryFallback.length <= MAX_BANNER_SNIPPET * 2
+        ? summaryFallback
+        : truncateAtWordBoundary(summaryFallback, MAX_BANNER_SNIPPET);
+  } else {
+    base = 'Designed to create clear audience progress and momentum.';
   }
-  if (problem) {
-    return `Designed to address: ${truncate(problem)}. Clear audience progress and momentum.`;
-  }
-  if (transformation) {
-    return `Designed to achieve: ${truncate(transformation)}.`;
-  }
-  if (summaryFallback) {
-    return summaryFallback.length <= MAX_BANNER_SNIPPET * 2
-      ? summaryFallback
-      : summaryFallback.slice(0, MAX_BANNER_SNIPPET).trim() + '…';
-  }
-  return 'Designed to create clear audience progress and momentum.';
+  return topicPrefix + base;
 }
 
 export type ConfidenceTier = 'high' | 'medium' | 'low';
@@ -427,6 +454,8 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
     momentumState === 'execute' ? 'font-semibold' : 'font-medium';
 
   const rec = recommendation ?? {};
+  const canExecuteRecommendationActions =
+    recommendation && typeof recommendation.id === 'string' && recommendation.id.trim().length > 0;
   const intelligence = (rec.intelligence as Record<string, unknown> | undefined) ?? null;
   const execution = (rec.execution as Record<string, unknown> | undefined) ?? null;
   const snapshot = (rec.company_context_snapshot as Record<string, unknown> | undefined) ?? null;
@@ -556,11 +585,20 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
   const hasMinimalBlueprint =
     blueprint.duration_weeks != null || blueprint.primary_recommendations.length > 0;
 
+  /** Display-safe title: prefer polished_title, always sanitize to strip "Business Report 2026", ":." etc. */
+  const displayTopic = (() => {
+    const raw = core.polished_title || core.topic;
+    if (!raw || !raw.trim()) return null;
+    const sanitized = sanitizeTopicForDisplay(raw);
+    return sanitized || raw.trim();
+  })();
   const confidenceBannerContent = useMemo(() => {
     const transformationLine = getTransformationSummary(
       intelligenceBlock.problem_being_solved,
       intelligenceBlock.expected_transformation,
-      core.summary
+      core.summary,
+      core.topic,
+      displayTopic ?? undefined
     );
     const confidenceLine = getConfidencePhrase(confidenceTier);
     return { transformationLine, confidenceLine, tier: confidenceTier };
@@ -568,6 +606,9 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
     intelligenceBlock.problem_being_solved,
     intelligenceBlock.expected_transformation,
     core.summary,
+    core.topic,
+    core.polished_title,
+    displayTopic,
     confidenceTier,
   ]);
 
@@ -580,7 +621,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
               <h4 className="text-sm font-semibold text-gray-800 mb-1">Core Theme</h4>
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-lg font-semibold text-gray-900">
-                  {core.polished_title || core.topic || 'Strategic recommendation'}
+                  {displayTopic || core.polished_title || core.topic || 'Strategic recommendation'}
                 </h3>
                 {strategyStatus === 'continuation' && (
                   <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800" title="Aligns with your dominant strategy">
@@ -811,7 +852,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             <button
               type="button"
               onClick={() => run(onMarkLongTerm)}
-              disabled={busy || !onMarkLongTerm}
+              disabled={busy || !onMarkLongTerm || !canExecuteRecommendationActions}
               className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 disabled:opacity-50"
             >
               Mark Long-Term
@@ -819,7 +860,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             <button
               type="button"
               onClick={() => run(onArchive)}
-              disabled={busy || !onArchive}
+              disabled={busy || !onArchive || !canExecuteRecommendationActions}
               className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-600 disabled:opacity-50"
             >
               Archive
@@ -838,7 +879,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             <h4 className="text-sm font-semibold text-gray-800 mb-1">Core Theme</h4>
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-lg font-semibold text-gray-900">
-                {core.polished_title || core.topic || 'Strategic recommendation'}
+                {displayTopic || core.polished_title || core.topic || 'Strategic recommendation'}
               </h3>
               {strategyStatus === 'continuation' && (
                 <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800" title="Aligns with your dominant strategy">
@@ -1090,7 +1131,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
           <button
             type="button"
             onClick={() => run(onMarkLongTerm)}
-            disabled={busy || !onMarkLongTerm}
+            disabled={busy || !onMarkLongTerm || !canExecuteRecommendationActions}
             className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 disabled:opacity-50"
           >
             Mark Long-Term
@@ -1098,7 +1139,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
           <button
             type="button"
             onClick={() => run(onArchive)}
-            disabled={busy || !onArchive}
+            disabled={busy || !onArchive || !canExecuteRecommendationActions}
             className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-600 disabled:opacity-50"
           >
             Archive

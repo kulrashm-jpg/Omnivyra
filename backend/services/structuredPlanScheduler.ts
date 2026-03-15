@@ -299,6 +299,30 @@ function scheduleFromDailyPlans(
     return (idxA >= 0 ? idxA : 0) - (idxB >= 0 ? idxB : 0);
   });
 
+  // Compute repurpose_index/repurpose_total: group by (topic||title, week_number), assign 1..N within each group
+  const repurposeByRowId = new Map<string, { index: number; total: number }>();
+  const groupKey = (r: DailyPlanRow) =>
+    `${String(r.topic || r.title || 'untitled').trim()}|${Number(r.week_number ?? 1) || 1}`;
+  const groups = new Map<string, DailyPlanRow[]>();
+  for (const r of sorted) {
+    const key = groupKey(r);
+    const list = groups.get(key) ?? [];
+    list.push(r);
+    groups.set(key, list);
+  }
+  const PLATFORM_ORDER = ['linkedin', 'facebook', 'instagram', 'x', 'twitter', 'youtube', 'tiktok', 'pinterest'];
+  for (const [, list] of groups) {
+    const total = list.length;
+    const ordered = [...list].sort((a, b) => {
+      const pa = String(a.platform || '').toLowerCase();
+      const pb = String(b.platform || '').toLowerCase();
+      const ia = PLATFORM_ORDER.indexOf(pa) >= 0 ? PLATFORM_ORDER.indexOf(pa) : 999;
+      const ib = PLATFORM_ORDER.indexOf(pb) >= 0 ? PLATFORM_ORDER.indexOf(pb) : 999;
+      return ia - ib || pa.localeCompare(pb);
+    });
+    ordered.forEach((r, i) => repurposeByRowId.set(r.id, { index: i + 1, total }));
+  }
+
   for (const row of sorted) {
     const platform = normalize(String(row.platform || '').trim().toLowerCase());
     if (!platform) {
@@ -321,6 +345,7 @@ function scheduleFromDailyPlans(
 
     const scheduledFor = buildScheduledForFromDailyPlan(row.date, row.scheduled_time ?? undefined);
     const platformForDb = toDbPlatformKey(platform);
+    const repurpose = repurposeByRowId.get(row.id) ?? { index: 1, total: 1 };
 
     scheduledPosts.push({
       user_id: campaign.user_id,
@@ -328,10 +353,13 @@ function scheduleFromDailyPlans(
       campaign_id: campaignId,
       platform: platformForDb,
       content_type: toDbContentType(platform, contentType, typeMapByPlatform),
+      title: topic || undefined,
       content,
       scheduled_for: scheduledFor.toISOString(),
       status: 'scheduled',
       timezone: 'UTC',
+      repurpose_index: repurpose.index,
+      repurpose_total: repurpose.total,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -423,6 +451,8 @@ function scheduleFromExecutionJobs(
       scheduled_for: scheduledFor.toISOString(),
       status: 'scheduled',
       timezone: 'UTC',
+      repurpose_index: 1,
+      repurpose_total: 1,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -477,6 +507,8 @@ function scheduleFromAllocation(
         scheduled_for: scheduledFor.toISOString(),
         status: 'scheduled',
         timezone: 'UTC',
+        repurpose_index: 1,
+        repurpose_total: 1,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
@@ -528,6 +560,8 @@ function scheduleFromLegacy(
           scheduled_for: scheduledFor.toISOString(),
           status: 'scheduled',
           timezone: 'UTC',
+          repurpose_index: 1,
+          repurpose_total: 1,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
@@ -541,6 +575,8 @@ function scheduleFromLegacy(
 export type ScheduleStructuredPlanOptions = {
   /** When true (BOLT schedule outcome), generate master content + repurpose variants before scheduling. */
   generateContent?: boolean;
+  /** Called when transitioning between schedule sub-stages (BOLT progress). */
+  onProgress?: (stage: string) => void;
 };
 
 export async function scheduleStructuredPlan(
@@ -569,11 +605,27 @@ export async function scheduleStructuredPlan(
     throw new Error('Campaign start date is required for scheduling');
   }
 
-  const { data: accounts, error: accountError } = await supabase
+  // G2.1: Resolve company_id for tenant-scoped account lookup
+  const { data: versionRow } = await supabase
+    .from('campaign_versions')
+    .select('company_id')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const companyId = (versionRow as { company_id?: string } | null)?.company_id ?? null;
+
+  let accountsQuery = supabase
     .from('social_accounts')
     .select('id, platform')
     .eq('user_id', campaign.user_id)
     .eq('is_active', true);
+  if (companyId) {
+    accountsQuery = accountsQuery.or(`company_id.eq.${companyId},company_id.is.null`);
+  } else {
+    accountsQuery = accountsQuery.is('company_id', null);
+  }
+  const { data: accounts, error: accountError } = await accountsQuery;
 
   if (accountError || !accounts) {
     throw new Error('Failed to load social accounts');
@@ -620,7 +672,13 @@ export async function scheduleStructuredPlan(
   let contentMap: Map<string, string> | undefined;
   if (hasDailyPlans && options?.generateContent && dailyPlans) {
     try {
-      contentMap = await generateContentForDailyPlans(campaignId, dailyPlans as DailyPlanRow[]);
+      contentMap = await generateContentForDailyPlans(campaignId, dailyPlans as DailyPlanRow[], {
+        onPhase: (phase) => {
+          if (phase === 'creating') options?.onProgress?.('schedule-creating-content');
+          if (phase === 'repurposing') options?.onProgress?.('schedule-repurposing-content');
+        },
+      });
+      options?.onProgress?.('schedule-writing-posts');
     } catch (err) {
       console.warn('[schedule] Content generation failed, using placeholders:', (err as Error)?.message);
     }
@@ -630,6 +688,10 @@ export async function scheduleStructuredPlan(
   const schedulableJobs = extractSchedulableJobsFromWeeks(plan.weeks as any[]);
   const hasExecutionJobs = schedulableJobs.length > 0;
   const useLegacy = isLegacyPlan(plan.weeks);
+
+  if (hasDailyPlans && options?.generateContent && !contentMap) {
+    options?.onProgress?.('schedule-writing-posts');
+  }
 
   const { scheduledPosts, skippedPlatforms } = hasDailyPlans
     ? scheduleFromDailyPlans(
@@ -694,6 +756,8 @@ export type LegacyScheduledPost = {
   maxRetries: number;
   createdAt: string;
   updatedAt: string;
+  repurpose_index?: number;
+  repurpose_total?: number;
 };
 
 function mapDbRowToLegacyScheduledPost(row: any): LegacyScheduledPost {
@@ -712,6 +776,8 @@ function mapDbRowToLegacyScheduledPost(row: any): LegacyScheduledPost {
     maxRetries: Number(row.max_retries ?? 3),
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+    repurpose_index: row.repurpose_index != null ? Number(row.repurpose_index) : 1,
+    repurpose_total: row.repurpose_total != null ? Number(row.repurpose_total) : 1,
   };
 }
 
@@ -865,6 +931,8 @@ export async function createLegacyScheduledPost(input: {
     scheduled_for: scheduledFor.toISOString(),
     status: 'scheduled',
     timezone: 'UTC',
+    repurpose_index: 1,
+    repurpose_total: 1,
     created_at: now,
     updated_at: now,
   };

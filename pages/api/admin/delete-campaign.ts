@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getCompanyCampaignIds } from '../../../backend/db/campaignVersionStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
   isSuperAdmin,
@@ -7,15 +8,6 @@ import {
   getCompanyRoleIncludingInvited,
   Role,
 } from '../../../backend/services/rbacService';
-
-async function getCompanyCampaignIds(companyId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('campaign_versions')
-    .select('campaign_id')
-    .eq('company_id', companyId);
-  if (error) return [];
-  return Array.from(new Set((data || []).map((r: any) => r.campaign_id).filter(Boolean)));
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {

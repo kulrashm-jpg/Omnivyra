@@ -80,7 +80,7 @@ export async function adjustCampaignDates(
     }
   }
 
-  // Adjust daily content plans
+  // Adjust daily content plans via execution engine
   const { data: daily } = await supabase
     .from('daily_content_plans')
     .select('id, date')
@@ -88,17 +88,17 @@ export async function adjustCampaignDates(
 
   let dailyAdjusted = 0;
   if (daily) {
+    const { updateActivity } = await import('./executionPlannerService');
     for (const plan of daily) {
       if (plan.date) {
         const newDate = new Date(plan.date);
         newDate.setDate(newDate.getDate() + dateDiff);
-
-        await supabase
-          .from('daily_content_plans')
-          .update({ date: newDate.toISOString() })
-          .eq('id', plan.id);
-
-        dailyAdjusted++;
+        try {
+          await updateActivity(plan.id, { date: newDate.toISOString() }, 'manual');
+          dailyAdjusted++;
+        } catch (e) {
+          console.warn('[schedulingService] updateActivity failed:', (e as Error).message);
+        }
       }
     }
   }

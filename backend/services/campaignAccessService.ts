@@ -6,12 +6,13 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
-import { getUserCompanyRole, getCompanyRoleIncludingInvited } from './rbacService';
+import { getUserCompanyRole, getCompanyRoleIncludingInvited, Role } from './rbacService';
 import {
   resolveEffectiveCampaignRole,
   isCompanyOverrideRole,
   type CampaignAuthContext,
 } from './campaignRoleService';
+import { resolveUserContext } from './userContextService';
 
 export type CampaignAccessResult = {
   userId: string;
@@ -49,18 +50,36 @@ export async function requireCampaignAccess(
   }
 
   const companyId = String(campaignRow.company_id);
-  let { role, userId } = await getUserCompanyRole(req, companyId);
+
+  // Resolve user context — supports env-based fallback (same as enforceCompanyAccess).
+  // When Supabase JWT is unavailable, resolveUserContext falls back to DEV_COMPANY_IDS
+  // so the request is not blocked with 403 in development.
+  const user = await resolveUserContext(req);
+  const userId = user?.userId ?? null;
   if (!userId) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
     return null;
   }
-  if (!role) {
-    const invitedRole = await getCompanyRoleIncludingInvited(userId, companyId);
-    if (invitedRole) role = invitedRole;
-  }
-  if (!role) {
-    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    return null;
+
+  // Fast-path: content_architect or env-listed company — grant COMPANY_ADMIN access.
+  const isContentArchitect = userId === 'content_architect';
+  const hasEnvAccess = isContentArchitect || user.companyIds.includes(companyId);
+
+  let role: (typeof Role)[keyof typeof Role] | null = null;
+  if (hasEnvAccess) {
+    role = Role.COMPANY_ADMIN;
+  } else {
+    // DB role lookup (normal authenticated path).
+    const roleResult = await getUserCompanyRole(req, companyId);
+    role = roleResult.role;
+    if (!role) {
+      const invitedRole = await getCompanyRoleIncludingInvited(userId, companyId);
+      if (invitedRole) role = invitedRole;
+    }
+    if (!role) {
+      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      return null;
+    }
   }
 
   let campaignAuth: CampaignAuthContext | undefined;

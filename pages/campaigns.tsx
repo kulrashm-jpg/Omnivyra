@@ -4,6 +4,7 @@ import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import { getStageLabelWithDuration } from '../backend/types/CampaignStage';
+import { navigateToCampaign } from '../lib/campaignResumeStore';
 
 interface Campaign {
   id: string;
@@ -31,6 +32,7 @@ export default function CampaignsList() {
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [pendingDeleteCampaignId, setPendingDeleteCampaignId] = useState<string | null>(null);
+  const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
   const filteredCampaigns = stageFilter === 'all'
     ? campaigns
     : campaigns.filter((c) => (c.current_stage || c.status) === stageFilter);
@@ -97,9 +99,7 @@ export default function CampaignsList() {
   };
 
   const handleCampaignClick = (campaignId: string) => {
-    const params = new URLSearchParams();
-    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
-    window.location.href = `/campaign-details/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
+    navigateToCampaign(campaignId, selectedCompanyId);
   };
 
   const handleDeleteCampaign = async (campaignId: string, e: React.MouseEvent) => {
@@ -113,8 +113,16 @@ export default function CampaignsList() {
     setPendingDeleteCampaignId(campaignId);
   };
 
-  const confirmDeleteCampaign = async () => {
-    if (!selectedCompanyId || !pendingDeleteCampaignId) return;
+  const confirmDeleteCampaign = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    e?.preventDefault();
+    if (!pendingDeleteCampaignId) return;
+    if (!selectedCompanyId) {
+      notify('error', 'Please select a company before deleting campaigns.');
+      setPendingDeleteCampaignId(null);
+      return;
+    }
+    setIsDeletingCampaign(true);
     try {
       const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
       const deleteResponse = await fetchWithAuth(deleteUrl, {
@@ -128,21 +136,18 @@ export default function CampaignsList() {
         })
       });
 
-      if (deleteResponse.ok) {
-        const deleteResult = await deleteResponse.json();
-        if (deleteResult.success) {
-          notify('success', 'Campaign deleted successfully.');
-          await fetchCampaigns();
-        } else {
-          notify('error', `Delete failed: ${deleteResult.error}`);
-        }
+      const deleteResult = await deleteResponse.json();
+      if (deleteResponse.ok && deleteResult.success) {
+        notify('success', 'Campaign deleted successfully.');
+        await fetchCampaigns();
       } else {
-        notify('error', 'Failed to delete campaign.');
+        notify('error', `Delete failed: ${deleteResult.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Error deleting campaign:', error);
-      notify('error', 'Failed to delete campaign. Please try again.');
+      notify('error', `Failed to delete campaign: ${error instanceof Error ? error.message : 'Please try again.'}`);
     } finally {
+      setIsDeletingCampaign(false);
       setPendingDeleteCampaignId(null);
     }
   };
@@ -180,25 +185,6 @@ export default function CampaignsList() {
             {notice.message}
           </div>
         )}
-        {pendingDeleteCampaignId && (
-          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-center justify-between gap-3">
-            <span>This campaign will be permanently deleted. Continue?</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPendingDeleteCampaignId(null)}
-                className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmDeleteCampaign}
-                className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        )}
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <div>
@@ -207,7 +193,7 @@ export default function CampaignsList() {
           </div>
           
           <button 
-            onClick={() => window.location.href = '/create-campaign'}
+            onClick={() => window.location.href = '/campaign-planner?mode=direct'}
             className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2"
           >
             <Plus className="w-5 h-5" />
@@ -309,7 +295,7 @@ export default function CampaignsList() {
             <p className="text-gray-600 mb-6">{campaigns.length === 0 ? 'Create your first campaign to get started with content planning' : 'Try selecting "All" or another stage'}</p>
             {campaigns.length === 0 ? (
               <button 
-                onClick={() => window.location.href = '/create-campaign'}
+                onClick={() => window.location.href = '/campaign-planner?mode=direct'}
                 className="bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 mx-auto"
               >
                 <Plus className="w-5 h-5" />
@@ -419,21 +405,50 @@ export default function CampaignsList() {
                     </div>
 
                     {/* Actions */}
-                    <div className="col-span-1 flex justify-end gap-2">
-                      <button 
-                        onClick={(e) => handleDeleteCampaign(campaign.id, e)}
-                        className="text-gray-400 hover:text-red-600 transition-colors p-1 rounded hover:bg-red-50"
-                        title="Delete Campaign"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => handleCampaignClick(campaign.id)}
-                        className="text-gray-400 hover:text-purple-600 transition-colors p-1 rounded hover:bg-purple-50"
-                        title="View Campaign"
-                      >
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
+                    <div className="col-span-1 flex justify-end gap-2 items-center">
+                      {pendingDeleteCampaignId === campaign.id ? (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900"
+                        >
+                          <span className="whitespace-nowrap">Delete? This cannot be undone.</span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setPendingDeleteCampaignId(null); }}
+                              disabled={isDeletingCampaign}
+                              className="px-2 py-1 rounded border border-amber-300 bg-white hover:bg-amber-100 disabled:opacity-60 text-xs"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); confirmDeleteCampaign(e); }}
+                              disabled={isDeletingCampaign}
+                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed text-xs"
+                            >
+                              {isDeletingCampaign ? 'Deleting…' : 'Delete'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <button 
+                            onClick={(e) => handleDeleteCampaign(campaign.id, e)}
+                            className="text-gray-400 hover:text-red-600 transition-colors p-1 rounded hover:bg-red-50"
+                            title="Delete Campaign"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); handleCampaignClick(campaign.id); }}
+                            className="text-gray-400 hover:text-purple-600 transition-colors p-1 rounded hover:bg-purple-50"
+                            title="View Campaign"
+                          >
+                            <ArrowRight className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

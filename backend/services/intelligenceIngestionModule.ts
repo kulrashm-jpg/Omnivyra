@@ -39,6 +39,7 @@ export async function ingestSignals(
   companyId: string | null = null,
   _purpose?: string | null
 ): Promise<IngestSignalsResult> {
+  console.log('[intelligence] polling started', { apiSourceId, companyId });
   const source = await getExternalApiSourceById(apiSourceId);
   if (!source) {
     throw new Error('API source not found or inactive');
@@ -60,12 +61,23 @@ export async function ingestSignals(
     companyId
   );
 
+  console.log('[intelligence] raw results fetched', { count: results.length });
   if (results.length === 0) {
     return { signals_inserted: 0, signals_skipped: 0 };
   }
 
   // Normalize raw API responses (YouTube, NewsAPI, SerpAPI, etc.) to payload.items format
-  const trends = normalizeTrends(results);
+  const trends = normalizeTrends(
+    results.map((r) => ({
+      source: r.source,
+      payload: r.payload,
+      health:
+        r.health && r.source
+          ? { api_source_id: r.source.id, ...r.health }
+          : undefined,
+    }))
+  );
+  console.log('[intelligence] normalized signals count', { count: trends.length });
   if (trends.length === 0) {
     return { signals_inserted: 0, signals_skipped: 0 };
   }
@@ -96,6 +108,11 @@ export async function ingestSignals(
     signalType: 'trend',
     queryHash: queryHash ?? null,
     queryContext: queryContext ?? null,
+  });
+
+  console.log('[intelligence] signals inserted', {
+    inserted: storeResult.inserted,
+    skipped: storeResult.skipped,
   });
 
   if (storeResult.inserted > 0) {

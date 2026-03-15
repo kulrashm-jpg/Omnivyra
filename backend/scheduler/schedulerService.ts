@@ -18,6 +18,12 @@ import { clusterRecentSignals } from '../services/signalClusterEngine';
 import { generateSignalIntelligence } from '../services/signalIntelligenceEngine';
 import { generateStrategicThemes } from '../services/strategicThemeEngine';
 import { generateCampaignOpportunities } from '../services/campaignOpportunityEngine';
+import { generateContentOpportunities } from '../services/contentOpportunityEngine';
+import { generateCampaignNarratives } from '../services/narrativeEngine';
+import { generateCommunityPosts } from '../services/communityPostEngine';
+import { generateCommunityThreads } from '../services/threadEngine';
+import { captureEngagementSignals } from '../services/engagementCaptureService';
+import { generateFeedbackInsights } from '../services/feedbackIntelligenceEngine';
 import { computeThemeRelevanceForCompany } from '../services/companyTrendRelevanceEngine';
 
 interface SchedulerResult {
@@ -193,10 +199,13 @@ export interface EnqueueIntelligencePollingResult {
 }
 
 /**
- * Enqueue intelligence polling jobs for external API sources that at least one company has enabled.
+ * Enqueue intelligence polling jobs for external API sources.
  * Call every 2 hours (e.g. from cron).
- * - Only sources that appear in company_api_configs with enabled = true (company-aligned consumption)
- * - Of those, only is_active = true and reliability not "disabled" (reliability_score >= 0.1)
+ *
+ * Mode 1 — Company polling: When company_api_configs has enabled = true, enqueue jobs for those sources.
+ * Mode 2 — Global fallback: When no company configs exist, enqueue jobs for ALL active API sources (company_id = null).
+ *
+ * - Only is_active = true and reliability not "disabled" (reliability_score >= 0.1)
  * - Skips source if today's request_count >= rate_limit_per_min * polling_window
  * - Priority: HIGH reliability (>=0.8) → 1, MEDIUM (>=0.3) → 5, LOW → 10
  */
@@ -208,26 +217,44 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
     .select('api_source_id, polling_frequency')
     .eq('enabled', true);
 
-  if (configError || !enabledConfigRows?.length) {
-    return { enqueued: 0, skipped: 0, reasons: { skipped_rate_limit: 0, skipped_disabled: 0 } };
-  }
-
-  const enabledSourceIds = [...new Set((enabledConfigRows || []).map((r) => r.api_source_id))];
+  let sources: { id: string; name?: string; rate_limit_per_min?: number }[];
+  let useGlobalFallback: boolean;
   const pollingPriorityBySource = new Map<string, number>();
-  for (const row of enabledConfigRows || []) {
-    const id = row.api_source_id;
-    const p = pollingPriorityFromConfig((row as { polling_frequency?: string | null }).polling_frequency);
-    const existing = pollingPriorityBySource.get(id);
-    if (existing === undefined || p < existing) pollingPriorityBySource.set(id, p);
-  }
-  const { data: sources, error: sourcesError } = await supabase
-    .from('external_api_sources')
-    .select('id, name, rate_limit_per_min')
-    .eq('is_active', true)
-    .in('id', enabledSourceIds);
 
-  if (sourcesError || !sources?.length) {
-    return { enqueued: 0, skipped: 0, reasons: { skipped_rate_limit: 0, skipped_disabled: 0 } };
+  if (configError || !enabledConfigRows?.length) {
+    // Global fallback: no company configs — use all active API sources
+    const { data: activeSources, error: sourcesError } = await supabase
+      .from('external_api_sources')
+      .select('id, name, rate_limit_per_min')
+      .eq('is_active', true);
+
+    if (sourcesError || !activeSources?.length) {
+      return { enqueued: 0, skipped: 0, reasons: { skipped_rate_limit: 0, skipped_disabled: 0 } };
+    }
+    sources = activeSources;
+    useGlobalFallback = true;
+    console.log('[intelligence] global polling enabled — no company configs found');
+  } else {
+    // Company mode: sources from enabled company configs
+    const enabledSourceIds = [...new Set((enabledConfigRows || []).map((r) => r.api_source_id))];
+    for (const row of enabledConfigRows || []) {
+      const id = row.api_source_id;
+      const p = pollingPriorityFromConfig((row as { polling_frequency?: string | null }).polling_frequency);
+      const existing = pollingPriorityBySource.get(id);
+      if (existing === undefined || p < existing) pollingPriorityBySource.set(id, p);
+    }
+    const { data: companySources, error: sourcesError } = await supabase
+      .from('external_api_sources')
+      .select('id, name, rate_limit_per_min')
+      .eq('is_active', true)
+      .in('id', enabledSourceIds);
+
+    if (sourcesError || !companySources?.length) {
+      return { enqueued: 0, skipped: 0, reasons: { skipped_rate_limit: 0, skipped_disabled: 0 } };
+    }
+    sources = companySources;
+    useGlobalFallback = false;
+    console.log('[intelligence] company polling enabled');
   }
 
   const { data: healthRows } = await supabase
@@ -277,8 +304,9 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
     const priority = Math.min(reliabilityPriority, companyPollingPriority);
 
     try {
+      const purpose = useGlobalFallback ? 'global_intelligence_polling' : 'intelligence_polling';
       await addIntelligencePollingJob(
-        { apiSourceId: source.id, companyId: null, purpose: 'intelligence_polling' },
+        { apiSourceId: source.id, companyId: null, purpose },
         { priority }
       );
       enqueued++;
@@ -353,6 +381,78 @@ export async function runCampaignOpportunityEngine(): Promise<{
 }
 
 /**
+ * Run content opportunity engine: convert strategic themes into content opportunities.
+ * Call every 2 hours (e.g. from cron).
+ */
+export async function runContentOpportunityEngine(): Promise<{
+  themes_processed: number;
+  opportunities_created: number;
+  opportunities_skipped: number;
+}> {
+  return generateContentOpportunities();
+}
+
+/**
+ * Run narrative engine: convert content opportunities into campaign narratives.
+ * Call every 4 hours (e.g. from cron).
+ */
+export async function runNarrativeEngine(): Promise<{
+  opportunities_processed: number;
+  narratives_created: number;
+  narratives_skipped: number;
+}> {
+  return generateCampaignNarratives();
+}
+
+/**
+ * Run community post engine: convert campaign narratives into platform-ready posts.
+ * Call every 3 hours (e.g. from cron).
+ */
+export async function runCommunityPostEngine(): Promise<{
+  narratives_processed: number;
+  posts_created: number;
+  posts_skipped: number;
+}> {
+  return generateCommunityPosts();
+}
+
+/**
+ * Run thread engine: convert community posts into multi-part threads.
+ * Call every 3 hours (e.g. from cron).
+ */
+export async function runThreadEngine(): Promise<{
+  posts_processed: number;
+  threads_created: number;
+  threads_skipped: number;
+}> {
+  return generateCommunityThreads();
+}
+
+/**
+ * Run engagement capture: capture metrics from platform APIs into engagement_signals.
+ * Call every 30 minutes (e.g. from cron).
+ */
+export async function runEngagementCapture(): Promise<{
+  posts_processed: number;
+  signals_created: number;
+  signals_skipped: number;
+}> {
+  return captureEngagementSignals();
+}
+
+/**
+ * Run feedback intelligence engine: analyze engagement and generate insights.
+ * Call every 6 hours (e.g. from cron).
+ */
+export async function runFeedbackIntelligenceEngine(): Promise<{
+  signals_analyzed: number;
+  insights_created: number;
+  insights_skipped: number;
+}> {
+  return generateFeedbackInsights();
+}
+
+/**
  * Run company trend relevance: score theme relevance per company (industry, keywords, competitors).
  * Call every 6 hours (e.g. from cron).
  */
@@ -388,5 +488,66 @@ export async function runCompanyTrendRelevance(): Promise<{
     total_themes_scored: totalThemesScored,
     errors,
   };
+}
+
+/** Default platforms/regions for scheduled lead detection (07:00, 18:00). */
+const SCHEDULED_LEAD_PLATFORMS = ['reddit', 'linkedin', 'twitter'];
+const SCHEDULED_LEAD_REGIONS = ['GLOBAL'];
+
+/**
+ * Enqueue lead detection jobs for all companies with profiles.
+ * Called by cron at 07:00 and 18:00.
+ */
+export async function enqueueScheduledLeadDetection(): Promise<{ enqueued: number; errors: string[] }> {
+  const { jobQueue } = await import('../queue/jobQueue');
+  const { data: companies, error } = await supabase
+    .from('company_profiles')
+    .select('company_id')
+    .not('company_id', 'is', null);
+  if (error) {
+    return { enqueued: 0, errors: [`Failed to load companies: ${error.message}`] };
+  }
+  const companyIds = (companies ?? []).map((r: { company_id: string }) => r.company_id).filter(Boolean);
+  if (companyIds.length === 0) return { enqueued: 0, errors: [] };
+
+  const errors: string[] = [];
+  let enqueued = 0;
+
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  for (const companyId of companyIds) {
+    try {
+      const { count } = await supabase
+        .from('lead_jobs_v1')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .gt('created_at', twentyFourHoursAgo);
+      if ((count ?? 0) >= 2) continue;
+      const { data: job, error: insertError } = await supabase
+        .from('lead_jobs_v1')
+        .insert({
+          company_id: companyId,
+          platforms: SCHEDULED_LEAD_PLATFORMS,
+          regions: SCHEDULED_LEAD_REGIONS,
+          keywords: null,
+          mode: 'REACTIVE',
+          status: 'PENDING',
+          total_found: 0,
+          total_qualified: 0,
+          context_payload: { scheduled_run: true },
+        })
+        .select('id')
+        .single();
+      if (insertError || !job) {
+        errors.push(`${companyId}: ${(insertError as Error)?.message ?? 'insert failed'}`);
+        continue;
+      }
+      await jobQueue.add('lead-job', { type: 'LEAD', jobId: job.id });
+      enqueued++;
+    } catch (e: any) {
+      errors.push(`${companyId}: ${e?.message ?? String(e)}`);
+    }
+  }
+  return { enqueued, errors };
 }
 

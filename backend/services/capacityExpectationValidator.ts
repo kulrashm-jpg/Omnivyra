@@ -187,7 +187,15 @@ function isOverrideConfirmedFromMessage(message: string): boolean {
     n.includes('proceed anyway') ||
     n.includes('ignore capacity') ||
     n.includes('yes proceed') ||
-    n.includes('continue anyway')
+    n.includes('continue anyway') ||
+    n.includes('adjust') ||
+    n.includes('move on') ||
+    n.includes('use suggested') ||
+    n.includes('apply suggested') ||
+    n.includes('go ahead') ||
+    n.includes('proceed') ||
+    n.includes('please adjust') ||
+    n.includes('please move')
   );
 }
 
@@ -331,5 +339,46 @@ export function validateCapacityVsExpectation(input: {
     suggested_adjustments: status === 'invalid' ? { reduce_total_by: deficit } : undefined,
     explanation,
   };
+}
+
+/**
+ * Lightweight capacity validation for configuration-time checks.
+ * Converts content_mix + platforms into platform_content_requests and runs validateCapacityVsExpectation.
+ * Exposed for early validation during campaign wizard.
+ */
+export function validateCapacityForContentMix(input: {
+  platforms: string[];
+  content_mix: { post_per_week?: number; video_per_week?: number; blog_per_week?: number; reel_per_week?: number; article_per_week?: number };
+  duration_weeks: number;
+  cross_platform_sharing_enabled: boolean;
+  available_content?: unknown;
+  weekly_capacity?: unknown;
+  exclusive_campaigns?: unknown;
+}): CapacityValidationResult | null {
+  const platforms = (input.platforms ?? ['linkedin'])
+    .map((p) => normalizePlatformKey(p))
+    .filter(Boolean);
+  const mix = input.content_mix ?? {};
+  const postPerWeek = toNonNegativeInt(mix.post_per_week);
+  const videoPerWeek = toNonNegativeInt(mix.video_per_week) + toNonNegativeInt(mix.reel_per_week);
+  const blogPerWeek = toNonNegativeInt(mix.blog_per_week) + toNonNegativeInt(mix.article_per_week);
+
+  const rows: Array<{ platform: string; content_type: string; count_per_week: number }> = [];
+  for (const p of platforms.length ? platforms : ['linkedin']) {
+    if (postPerWeek > 0) rows.push({ platform: p, content_type: 'post', count_per_week: postPerWeek });
+    if (videoPerWeek > 0) rows.push({ platform: p, content_type: 'video', count_per_week: videoPerWeek });
+    if (blogPerWeek > 0) rows.push({ platform: p, content_type: 'blog', count_per_week: blogPerWeek });
+  }
+
+  if (rows.length === 0) return null;
+
+  return validateCapacityVsExpectation({
+    platform_content_requests: rows,
+    available_content: input.available_content,
+    weekly_capacity: input.weekly_capacity,
+    exclusive_campaigns: input.exclusive_campaigns ?? 0,
+    cross_platform_sharing: { enabled: input.cross_platform_sharing_enabled },
+    campaign_duration_weeks: input.duration_weeks,
+  });
 }
 

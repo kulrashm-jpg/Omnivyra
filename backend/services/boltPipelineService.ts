@@ -9,7 +9,7 @@
 import { supabase } from '../db/supabaseClient';
 import { getProfile } from './companyProfileService';
 import { runCampaignAiPlan } from './campaignAiOrchestrator';
-import { saveCampaignBlueprintFromLegacy } from '../db/campaignPlanStore';
+import { saveStructuredCampaignPlan, commitDraftBlueprint } from '../db/campaignPlanStore';
 import { fromStructuredPlan } from './campaignBlueprintAdapter';
 import { scheduleStructuredPlan } from './structuredPlanScheduler';
 import { retryWithBackoff } from '../utils/retryWithBackoff';
@@ -332,6 +332,10 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
       count_per_week: r.count_per_week ?? Math.max(1, Math.floor(parsedFreq / 2)),
     }));
 
+  const durationWeeks = Math.min(
+    4,
+    Math.max(1, typeof execConfig.campaign_duration === 'number' ? execConfig.campaign_duration : 4)
+  );
   const collectedPlanningContext: Record<string, unknown> = {
     ...execConfig,
     execution_config: execConfig,
@@ -352,19 +356,20 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
         ],
     exclusive_campaigns: execConfig.exclusive_campaigns ?? 'No',
     key_messages: execConfig.key_messages ?? themeTitle ?? (typeof snapshot?.theme_or_description === 'string' ? snapshot.theme_or_description : 'Core value and expertise'),
-    campaign_duration: typeof execConfig.campaign_duration === 'number' ? execConfig.campaign_duration : 12,
+    campaign_duration: durationWeeks,
     preplanning_form_completed: true,
     bolt_text_only: true,
   };
 
+  const planMessage = `Yes, generate my ${durationWeeks}-week plan now.`;
   const result = await retryWithBackoff(
     () =>
       withTimeout(
         runCampaignAiPlan({
           campaignId,
           mode: 'generate_plan',
-          message: 'Yes, generate my full 12-week plan now.',
-          conversationHistory: [{ type: 'user', message: 'Yes, generate my full 12-week plan now.' }],
+          message: planMessage,
+          conversationHistory: [{ type: 'user', message: planMessage }],
           recommendationContext,
           collectedPlanningContext,
           bolt_run_id: runId,
@@ -380,6 +385,12 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     throw new Error('AI plan did not return a valid plan with weeks');
   }
 
+  // Trim to requested duration: reduce downstream work (generate-weekly-structure, scheduling)
+  const trimmedWeeks = plan.weeks.slice(0, durationWeeks);
+  if (trimmedWeeks.length < plan.weeks.length) {
+    (plan as { weeks: unknown[] }).weeks = trimmedWeeks;
+  }
+
   return { plan, result };
 }
 
@@ -390,10 +401,19 @@ async function runCommitPlan(
 ): Promise<void> {
   const sanitizedWeeks = sanitizeBoltPlanForTextOnly(plan.weeks);
   const blueprint = fromStructuredPlan({ weeks: sanitizedWeeks, campaign_id: campaignId });
-  await saveCampaignBlueprintFromLegacy({
+  // Align with strategic theme card → create campaign flow: saveStructuredCampaignPlan + commitDraftBlueprint
+  const snapshotHash = `bolt-${campaignId}-${Date.now()}`;
+  await saveStructuredCampaignPlan({
+    campaignId,
+    snapshot_hash: snapshotHash,
+    weeks: sanitizedWeeks as any,
+    omnivyre_decision: { status: 'ok', recommendation: 'proceed' } as any,
+    raw_plan_text: '',
+  });
+  await commitDraftBlueprint({
     campaignId,
     blueprint,
-    source: 'ai-commit-plan',
+    source: 'bolt-ai-commit-plan',
   });
   const durationWeeks = Math.max(1, blueprint.duration_weeks ?? plan.weeks.length ?? 1);
   const tentativeStart = executionConfig?.tentative_start as string | undefined;
@@ -538,7 +558,8 @@ async function runGenerateWeeklyStructure(
 async function runScheduleStructuredPlan(
   campaignId: string,
   plan: { weeks: unknown[] },
-  executionConfig: Record<string, unknown>
+  executionConfig: Record<string, unknown>,
+  onProgress?: (stage: string) => void
 ): Promise<{ scheduled_count: number }> {
   const tentativeStart = executionConfig.tentative_start as string | undefined;
   if (tentativeStart) {
@@ -548,7 +569,7 @@ async function runScheduleStructuredPlan(
   const result = await scheduleStructuredPlan(
     { weeks: plan.weeks } as Parameters<typeof scheduleStructuredPlan>[0],
     campaignId,
-    { generateContent: true }
+    { generateContent: true, onProgress }
   );
   await supabase
     .from('campaigns')
@@ -633,14 +654,25 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
 
   let eligiblePlatforms: string[] = [];
   try {
-    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
+    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false });
     const rawPlatforms = getAvailablePlatformsFromProfile(profile);
     eligiblePlatforms = filterBoltPlatforms(rawPlatforms);
-    if (eligiblePlatforms.length === 0 && rawPlatforms.length > 0) {
-      eligiblePlatforms = filterBoltPlatforms(['linkedin', 'instagram', 'facebook', 'x']);
-    }
+    // Only use company-configured platforms; never add unconfigured ones
   } catch {
     eligiblePlatforms = [];
+  }
+
+  const totalStages = isWeekPlanOnly
+    ? 2
+    : shouldSchedule
+      ? STAGES.length
+      : STAGES.length - 1;
+  const needsPlatformsForContent = !isWeekPlanOnly && (shouldSchedule || totalStages > 2);
+  if (needsPlatformsForContent && eligiblePlatforms.length === 0) {
+    const msg =
+      'No social platforms configured for this company. Add platform URLs (LinkedIn, Instagram, X, etc.) in the company profile before generating or scheduling content.';
+    await updateRun(runId, { status: 'failed', error_message: msg });
+    throw new Error(msg);
   }
 
   let campaignId: string | null = null;
@@ -649,11 +681,6 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
   let dailySlotsCreated = 0;
   let scheduledPostsCreated = 0;
 
-  const totalStages = isWeekPlanOnly
-    ? 2
-    : shouldSchedule
-      ? STAGES.length
-      : STAGES.length - 1;
   const getProgress = (stageIndex: number) => Math.round((stageIndex / totalStages) * 100);
 
   try {
@@ -782,7 +809,12 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
           weeksGenerated = plan.weeks.length;
           dailySlotsCreated = summary.dailySlotsCreated;
         } else if (stage === 'schedule-structured-plan' && campaignId && plan) {
-          const scheduleResult = await runScheduleStructuredPlan(campaignId, plan, payload.executionConfig);
+          const scheduleResult = await runScheduleStructuredPlan(
+            campaignId,
+            plan,
+            payload.executionConfig,
+            (s) => updateRun(runId, { current_stage: s })
+          );
           scheduledPostsCreated = scheduleResult.scheduled_count;
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
@@ -867,6 +899,38 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
     await updateRun(runId, { status: 'failed', error_message: userMessage });
     throw err;
   }
+}
+
+/**
+ * Planner-only: runs generate-weekly-structure (same service as BOLT pipeline stage).
+ * Blueprint must already be committed via campaignPlanStore before calling.
+ * Does not update campaign status (planner-finalize sets execution_ready, blueprint_status committed).
+ */
+export async function runPlannerCommitAndGenerateWeekly(params: {
+  campaignId: string;
+  companyId: string;
+  plan: { weeks: unknown[] };
+  startDate?: string;
+}): Promise<void> {
+  const blueprint = fromStructuredPlan({ weeks: params.plan.weeks, campaign_id: params.campaignId });
+  const durationWeeks = Math.max(1, blueprint.duration_weeks ?? params.plan.weeks.length ?? 1);
+  const weekNumbers = (params.plan.weeks as Array<{ week_number?: number; week?: number }>).map(
+    (w, i) => Number(w?.week_number ?? w?.week ?? i + 1)
+  );
+  if (params.startDate) {
+    const startVal = String(params.startDate).trim();
+    const startDateValue = startVal.includes('T') ? startVal : `${startVal}T00:00:00.000Z`;
+    await supabase.from('campaigns').update({
+      start_date: startDateValue,
+      duration_weeks: durationWeeks,
+      updated_at: new Date().toISOString(),
+    }).eq('id', params.campaignId);
+  }
+  await generateWeeklyStructure({
+    campaignId: params.campaignId,
+    companyId: params.companyId,
+    weeks: weekNumbers,
+  });
 }
 
 /** Unwrap AggregateError so we log underlying causes; return human-readable msg for UI. */

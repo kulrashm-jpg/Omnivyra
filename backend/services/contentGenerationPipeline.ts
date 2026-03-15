@@ -153,6 +153,70 @@ type DailyExecutionItemLike = {
 };
 
 const MEDIA_DEPENDENT_TYPES = new Set(['video', 'reel', 'short', 'carousel', 'slides', 'song']);
+const VIDEO_TYPES = new Set(['video', 'reel', 'short', 'podcast']);
+const CAROUSEL_TYPES = new Set(['carousel', 'slides']);
+const ARTICLE_TYPES = new Set(['article', 'newsletter', 'blog']);
+const THREAD_TYPES = new Set(['thread', 'tweetstorm']);
+
+function getContentTypeCategory(ct: string): 'video' | 'carousel' | 'article' | 'thread' | 'post' {
+  const t = ct.toLowerCase();
+  if (VIDEO_TYPES.has(t)) return 'video';
+  if (CAROUSEL_TYPES.has(t)) return 'carousel';
+  if (ARTICLE_TYPES.has(t)) return 'article';
+  if (THREAD_TYPES.has(t)) return 'thread';
+  return 'post';
+}
+
+function getContentTypeSystemPrompt(category: 'video' | 'carousel' | 'article' | 'thread' | 'post'): string {
+  switch (category) {
+    case 'video':
+      return `You are a video content strategist. Write a production guide for a creator to film. Output plain text structured as:
+THEME: [1-sentence theme]
+HOOK (opening 5 seconds): [punchy opening line or visual action]
+KEY TALKING POINTS:
+- [point 1]
+- [point 2]
+- [point 3]
+B-ROLL SUGGESTIONS: [brief visual ideas]
+CLOSING CTA: [what to say at the end]
+Keep it concise and actionable for the creator.`;
+    case 'carousel':
+      return `You are a carousel content designer. Write slide-by-slide content. Output plain text structured as:
+SLIDE 1 (Cover): [bold headline]
+SLIDE 2: [key point]
+SLIDE 3: [key point]
+SLIDE 4: [key point]
+SLIDE 5: [key point]
+SLIDE 6 (optional): [key point]
+SLIDE 7 (CTA): [call to action]
+Each slide: max 15 words. Make each slide a standalone punchy statement.`;
+    case 'article':
+      return `You are a long-form content writer. Write a complete article with proper structure. Include a compelling headline, brief intro paragraph, 3-4 sections with subheadings, and a conclusion with CTA. Output plain text with clear section breaks. Target 500-700 words.`;
+    case 'thread':
+      return `You are a Twitter/X thread writer. Write a thread of 5-7 tweets. Format as:
+1/ [opening hook tweet - must stop the scroll]
+2/ [key insight]
+3/ [key insight]
+4/ [key insight]
+5/ [key insight]
+6/ [optional insight]
+7/ [closing with CTA]
+Each tweet: max 270 characters. Output plain text.`;
+    default:
+      return `Write publish-ready social media post content from the provided JSON context. Keep it neutral and non-platform-specific. Output plain text only. Max 180 words.`;
+  }
+}
+
+function getContentTypeMaxWords(category: 'video' | 'carousel' | 'article' | 'thread' | 'post'): number {
+  switch (category) {
+    case 'article': return 700;
+    case 'thread': return 350;
+    case 'carousel': return 120;
+    case 'video': return 200;
+    default: return 180;
+  }
+}
+
 const MAX_WORDS_MASTER = 180;
 const MAX_WORDS_VARIANT = 120;
 const X_CHAR_LIMIT = 280;
@@ -1180,25 +1244,57 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
   };
 
   if (isMediaDependentContentType(item?.content_type)) {
-    return {
-      id: `master-${itemId}`,
-      generated_at: nowIso,
-      content: [
-        '[MEDIA BLUEPRINT]',
-        `Topic: ${topic}`,
-        `Objective: ${objective}`,
-        `Core message: ${coreMessage}`,
-      ].join('\n'),
-      generation_status: 'generated',
-      generation_source: 'ai',
-      content_type_mode: 'media_blueprint',
-      required_media: true,
-      media_status: 'missing',
-      decision_trace: decisionTrace,
+    const ctCategory = getContentTypeCategory(nonEmpty(item?.content_type));
+    const productionSystemPrompt = getContentTypeSystemPrompt(ctCategory);
+    const productionContext = {
+      topic,
+      objective,
+      core_message: coreMessage,
+      target_audience: nonEmpty(intent?.target_audience) || nonEmpty((asObject(item?.writer_content_brief) as any)?.whoAreWeWritingFor) || 'Campaign audience',
+      tone: nonEmpty((asObject(item?.writer_content_brief) as any)?.narrativeStyle) || nonEmpty(intent?.tone) || 'Professional and engaging',
+      cta: nonEmpty(intent?.cta_type) || 'Follow for more',
+      creator_instruction: nonEmpty((item as any)?.creatorInstruction) || nonEmpty((item as any)?.creator_instruction) || '',
     };
+    try {
+      const productionResult = await generateCampaignPlan({
+        companyId: null,
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.3,
+        messages: [
+          { role: 'system', content: productionSystemPrompt },
+          { role: 'user', content: JSON.stringify(productionContext) },
+        ],
+      });
+      const productionContent = nonEmpty(productionResult?.output) || `[MEDIA BLUEPRINT]\nTopic: ${topic}\nObjective: ${objective}\nCore message: ${coreMessage}`;
+      return {
+        id: `master-${itemId}`,
+        generated_at: nowIso,
+        content: productionContent,
+        generation_status: 'generated',
+        generation_source: 'ai',
+        content_type_mode: 'media_blueprint',
+        required_media: true,
+        media_status: 'missing',
+        decision_trace: decisionTrace,
+      };
+    } catch {
+      return {
+        id: `master-${itemId}`,
+        generated_at: nowIso,
+        content: `[MEDIA BLUEPRINT]\nTopic: ${topic}\nObjective: ${objective}\nCore message: ${coreMessage}`,
+        generation_status: 'generated',
+        generation_source: 'ai',
+        content_type_mode: 'media_blueprint',
+        required_media: true,
+        media_status: 'missing',
+        decision_trace: decisionTrace,
+      };
+    }
   }
 
+  const ctCategory = getContentTypeCategory(nonEmpty(item?.content_type));
   const contextPayload = {
+    content_type: nonEmpty(item?.content_type).toLowerCase() || 'post',
     topic,
     objective,
     target_audience:
@@ -1236,9 +1332,12 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
       : {}),
   };
 
+  const contentTypeSystemPrompt = getContentTypeSystemPrompt(ctCategory);
+  const contentTypeMaxWords = getContentTypeMaxWords(ctCategory);
+
   try {
-    const systemPrompt = CONTENT_MASTER_SYSTEM;
-    console.info('Prompt executed', { prompt: 'content_generation', version: CONTENT_GENERATION_PROMPT_VERSION });
+    const systemPrompt = contentTypeSystemPrompt;
+    console.info('Prompt executed', { prompt: 'content_generation', version: CONTENT_GENERATION_PROMPT_VERSION, content_type: contextPayload.content_type });
     const aiResult = await generateCampaignPlan({
       companyId: null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -1250,7 +1349,7 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
         },
         {
           role: 'user',
-          content: JSON.stringify({ ...contextPayload, max_words: MAX_WORDS_MASTER }),
+          content: JSON.stringify({ ...contextPayload, max_words: contentTypeMaxWords }),
         },
       ],
     });
@@ -1448,7 +1547,6 @@ export async function renderPlatformVariantsFromBlueprint(
       blueprint.cta ? String(blueprint.cta).trim() : null
     );
     let bounded = target.max_length ? rawContent.slice(0, target.max_length) : rawContent;
-    bounded = appendHashtagsToVariantContent(bounded, discoverabilityMeta, target.max_length);
     const formatted = applyAlgorithmicFormatting(bounded, target.platform);
     bounded = target.max_length ? formatted.content.slice(0, target.max_length) : formatted.content;
     const refined = await refineLanguageOutput({
@@ -1540,7 +1638,6 @@ export async function renderPlatformVariantsFromBlueprint(
 
       const maxLength = toPositiveNumber(target.max_length);
       let bounded = maxLength ? rawContent.slice(0, maxLength) : rawContent;
-      bounded = appendHashtagsToVariantContent(bounded, discoverabilityMeta, maxLength);
       const formatted = applyAlgorithmicFormatting(bounded, target.platform);
       bounded = maxLength ? formatted.content.slice(0, maxLength) : formatted.content;
       const refined = await refineLanguageOutput({
@@ -1706,8 +1803,17 @@ export async function generatePlatformVariantFromMaster(
   };
 
   try {
+    const contentTypeFormatGuide: Record<string, string> = {
+      article: 'Format as a structured article with clear sections, subheadings, and conclusion. Minimum 400 words.',
+      newsletter: 'Format as an email newsletter with sections, subheadings, and a clear CTA at the end.',
+      thread: 'Format as a Twitter/X thread: 5-7 tweets numbered 1/ through 7/. Each tweet max 270 chars.',
+      post: 'Format as a single social post. Punchy, direct, max 3 paragraphs.',
+      story: 'Format as quick visual story text overlay — very short, max 2 lines per frame.',
+      carousel: 'Keep format as slide text (each slide: bold headline + 1-2 support lines).',
+    };
+    const formatGuide = contentTypeFormatGuide[contentType] ?? '';
     const aiContent = await requestVariant(
-      `Rewrite the following MASTER CONTENT for platform "${normalizedPlatform}" and content_type "${contentType}". Style: ${styleInstruction}. ${
+      `Rewrite the following MASTER CONTENT for platform "${normalizedPlatform}" and content_type "${contentType}". Style: ${styleInstruction}. ${formatGuide ? `Format: ${formatGuide}` : ''} ${
         constraints.discoverabilityMeta?.hashtags?.length
           ? `Include discoverability hashtags naturally near the end. Preferred hashtags: ${constraints.discoverabilityMeta.hashtags.join(', ')}.`
           : ''
@@ -1733,7 +1839,6 @@ export async function generatePlatformVariantFromMaster(
     }
 
     let bounded = maxLength ? aiContent.slice(0, maxLength) : aiContent;
-    bounded = appendHashtagsToVariantContent(bounded, constraints.discoverabilityMeta, maxLength);
     const formatted = applyAlgorithmicFormatting(bounded, normalizedPlatform);
     bounded = maxLength ? formatted.content.slice(0, maxLength) : formatted.content;
     if (maxLength && targetLength && bounded.length < targetLength) {
@@ -1955,7 +2060,6 @@ export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLi
 
       const maxLength = toPositiveNumber(target.max_length);
       let bounded = maxLength ? rawContent.slice(0, maxLength) : rawContent;
-      bounded = appendHashtagsToVariantContent(bounded, discoverabilityMeta, maxLength);
       const formatted = applyAlgorithmicFormatting(bounded, target.platform);
       bounded = maxLength ? formatted.content.slice(0, maxLength) : formatted.content;
       const refined = await refineLanguageOutput({

@@ -1,12 +1,20 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../../../../backend/db/supabaseClient';
 import { setToken, TokenObject } from '../../../../backend/auth/tokenStore';
+import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
-// Initialize Supabase client for database operations
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+function parseState(state: string | undefined): { companyId?: string; returnTo?: string } {
+  if (!state || typeof state !== 'string') return {};
+  const [stateBase, returnTo] = state.split('|');
+  const result: { companyId?: string; returnTo?: string } = {};
+  if (returnTo && returnTo.startsWith('/')) result.returnTo = returnTo;
+  if (stateBase.startsWith('c:')) {
+    const parts = stateBase.split(':');
+    if (parts.length >= 2) result.companyId = parts[1];
+  }
+  return result;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,36 +22,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error, error_description } = req.query;
-
-  console.log('LinkedIn callback received:', { code: !!code, state, error, error_description });
+  const { returnTo: earlyReturnTo } = parseState(state as string);
+  const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
 
   if (error) {
     console.error('LinkedIn OAuth error:', error, error_description);
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error as string)}&description=${encodeURIComponent(error_description as string || '')}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
-    console.error('No authorization code received');
-    return res.redirect('/creative-scheduler?error=No authorization code received');
+    return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
   try {
     const platform = 'linkedin';
-    
-    // Exchange code for access token
-    console.log('Exchanging code for token...');
+    const { companyId, returnTo } = parseState(state as string);
+
+    const credentials = await getOAuthCredentialsForPlatform(platform);
+    if (!credentials?.client_id || !credentials?.client_secret) {
+      return res.redirect(
+        `${errDest}?error=${encodeURIComponent('LinkedIn OAuth not configured — ask your Super Admin to add credentials.')}`
+      );
+    }
+
     const tokenResponse = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         code: code as string,
-        client_id: process.env.LINKEDIN_CLIENT_ID || '',
-        client_secret: process.env.LINKEDIN_CLIENT_SECRET || '',
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001'}/api/auth/linkedin/callback`,
-      })
+        client_id: credentials.client_id,
+        client_secret: credentials.client_secret,
+        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/linkedin/callback`,
+      }),
     });
 
     if (!tokenResponse.ok) {
@@ -73,13 +84,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const profile = await profileResponse.json();
     console.log('Profile received:', { id: profile.id, firstName: profile.firstName });
 
-    // Get user_id from state or session (for now, using a default - in production, get from authenticated session)
-    // TODO: Get actual user_id from session/state
-    const userId = (state as string)?.split('_')[0] || process.env.DEFAULT_USER_ID || '';
-    
+    const { user } = await getSupabaseUserFromRequest(req);
+    const userId = user?.id || process.env.DEFAULT_USER_ID || '';
+
     if (!userId) {
       console.error('No user_id available - cannot save account');
-      return res.redirect(`/creative-scheduler?error=${encodeURIComponent('User session required')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
     }
 
     const accountName = `${profile.firstName?.localized?.en_US || 'LinkedIn'} ${profile.lastName?.localized?.en_US || 'User'}`;
@@ -94,31 +104,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       token_type: tokenData.token_type || 'Bearer',
     };
 
-    // Create or update social account in database
-    const { data: existingAccount, error: fetchError } = await supabase
-      .from('social_accounts')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('platform', 'linkedin')
-      .eq('platform_user_id', profile.id)
-      .single();
+    // Create or update social account in database (G2.2: always set company_id from validated context)
+    const companyIdUuid = companyId && /^[0-9a-f-]{36}$/i.test(companyId) ? companyId : null;
+    // Prefer tenant-scoped row; fall back to legacy (company_id null)
+    let existingAccount: { id: string } | null = null;
+    if (companyIdUuid) {
+      const { data: tenantRow } = await supabase
+        .from('social_accounts')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('company_id', companyIdUuid)
+        .eq('platform', 'linkedin')
+        .eq('platform_user_id', profile.id)
+        .maybeSingle();
+      if (tenantRow) existingAccount = tenantRow;
+    }
+    if (!existingAccount) {
+      const { data: legacyRow } = await supabase
+        .from('social_accounts')
+        .select('id')
+        .eq('user_id', userId)
+        .is('company_id', null)
+        .eq('platform', 'linkedin')
+        .eq('platform_user_id', profile.id)
+        .maybeSingle();
+      existingAccount = legacyRow;
+    }
 
     let accountId: string;
+
+    const updatePayload: Record<string, unknown> = {
+      account_name: accountName,
+      username: profile.firstName?.localized?.en_US || null,
+      is_active: true,
+      permissions: tokenData.scope?.split(' ') || [],
+      token_expires_at: expiresAt,
+      last_sync_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    if (companyIdUuid) updatePayload.company_id = companyIdUuid;
 
     if (existingAccount) {
       // Update existing account
       accountId = existingAccount.id;
       const { error: updateError } = await supabase
         .from('social_accounts')
-        .update({
-          account_name: accountName,
-          username: profile.firstName?.localized?.en_US || null,
-          is_active: true,
-          permissions: tokenData.scope?.split(' ') || [],
-          token_expires_at: expiresAt,
-          last_sync_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq('id', accountId);
 
       if (updateError) {
@@ -127,19 +158,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     } else {
       // Create new account
+      const insertPayload: Record<string, unknown> = {
+        user_id: userId,
+        platform: 'linkedin',
+        platform_user_id: profile.id,
+        account_name: accountName,
+        username: profile.firstName?.localized?.en_US || null,
+        is_active: true,
+        permissions: tokenData.scope?.split(' ') || [],
+        token_expires_at: expiresAt,
+        last_sync_at: new Date().toISOString(),
+      };
+      if (companyIdUuid) insertPayload.company_id = companyIdUuid;
+
       const { data: newAccount, error: insertError } = await supabase
         .from('social_accounts')
-        .insert({
-          user_id: userId,
-          platform: 'linkedin',
-          platform_user_id: profile.id,
-          account_name: accountName,
-          username: profile.firstName?.localized?.en_US || null,
-          is_active: true,
-          permissions: tokenData.scope?.split(' ') || [],
-          token_expires_at: expiresAt,
-          last_sync_at: new Date().toISOString(),
-        })
+        .insert(insertPayload)
         .select('id')
         .single();
 
@@ -156,11 +190,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log('✅ LinkedIn account saved successfully:', { accountId, accountName });
 
-    // Redirect back to creative scheduler with success
-    return res.redirect(`/creative-scheduler?connected=linkedin&account=${encodeURIComponent(accountName)}&success=true&message=LinkedIn account connected successfully!`);
+    const successDest = returnTo || '/social-platforms';
+    const sep = successDest.includes('?') ? '&' : '?';
+    return res.redirect(`${successDest}${sep}connected=linkedin&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('LinkedIn OAuth callback error:', error);
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error.message)}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }

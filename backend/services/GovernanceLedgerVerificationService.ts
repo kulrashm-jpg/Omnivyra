@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 import { computeGovernanceEventHash } from '../governance/GovernanceLedger';
 
 export interface CampaignLedgerResult {
@@ -14,15 +15,6 @@ export interface CampaignLedgerResult {
 export interface CompanyLedgerResult {
   valid: boolean;
   corruptedCampaigns: string[];
-}
-
-async function getCompanyCampaignIds(companyId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('campaign_versions')
-    .select('campaign_id')
-    .eq('company_id', companyId);
-  if (error) return [];
-  return Array.from(new Set((data || []).map((r: any) => r.campaign_id).filter(Boolean)));
 }
 
 /**

@@ -6,9 +6,11 @@ type CommunityAiLayoutProps = {
   title: string;
   context?: Record<string, unknown>;
   children: React.ReactNode;
+  /** Set to false to hide the Community AI Chat sidebar (e.g. on config/connectors page). Default: true. */
+  showChat?: boolean;
 };
 
-export default function CommunityAiLayout({ title, context = {}, children }: CommunityAiLayoutProps) {
+export default function CommunityAiLayout({ title, context = {}, children, showChat = true }: CommunityAiLayoutProps) {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />
@@ -16,11 +18,13 @@ export default function CommunityAiLayout({ title, context = {}, children }: Com
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900">{title}</h1>
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-6">
+        <div className={showChat ? 'grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-6' : 'max-w-4xl'}>
           <div className="space-y-6">{children}</div>
-          <div className="lg:sticky lg:top-6 h-fit">
-            <ChatPanel context={context} title="Community AI Chat" />
-          </div>
+          {showChat && (
+            <div className="lg:sticky lg:top-6 h-fit">
+              <ChatPanel context={context} title="Community AI Chat" />
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -7,13 +7,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const platform = 'twitter';
-    const state = `twitter_${Date.now()}`;
+    const returnTo = (req.query.returnTo as string) || '';
+    const stateBase = `twitter_${Date.now()}`;
+    const state = returnTo ? `${stateBase}|${returnTo}` : stateBase;
     
     // Twitter OAuth URL
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: process.env.TWITTER_CLIENT_ID || 'your_twitter_client_id',
-      redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001'}/api/auth/twitter/callback`,
+      redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/twitter/callback`,
       state,
       scope: 'tweet.read tweet.write users.read offline.access',
       code_challenge: 'challenge', // PKCE for security

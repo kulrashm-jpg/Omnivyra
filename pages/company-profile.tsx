@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
@@ -1524,12 +1525,12 @@ export default function CompanyProfilePage() {
                 )}
                 {companyId && (isAdmin || isContentArchitect) && (
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <a
+                    <Link
                       href="/campaigns"
                       className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
                     >
                       View campaigns &amp; weekly/daily plans →
-                    </a>
+                    </Link>
                   </div>
                 )}
                 {!isAdmin && !isContentArchitect && selectedCompanyName && (

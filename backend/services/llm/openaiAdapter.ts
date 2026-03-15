@@ -11,12 +11,15 @@ export interface LlmJsonResponse<T> {
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
+// Singleton — reuses HTTP connection pool across calls
+let _client: OpenAI | null = null;
 function getClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing OPENAI_API_KEY');
+  if (!_client) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
+    _client = new OpenAI({ apiKey });
   }
-  return new OpenAI({ apiKey });
+  return _client;
 }
 
 export async function runDiagnosticPrompt<T>(

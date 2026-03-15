@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 import { GOVERNANCE_POLICY_VERSION, getGovernancePolicyHash } from '../governance/GovernancePolicy';
 import { computeGovernanceEventHash } from '../governance/GovernanceLedger';
 import { recordGovernanceEvent } from './GovernanceEventService';
@@ -42,15 +43,6 @@ interface SnapshotData {
   governance_audit_runs: any[];
   campaign_governance_events: any[];
   summary: { eventCount: number; auditCount: number; policyHash: string };
-}
-
-async function getCompanyCampaignIds(companyId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('campaign_versions')
-    .select('campaign_id')
-    .eq('company_id', companyId);
-  if (error) return [];
-  return Array.from(new Set((data || []).map((r: any) => r.campaign_id).filter(Boolean)));
 }
 
 /**

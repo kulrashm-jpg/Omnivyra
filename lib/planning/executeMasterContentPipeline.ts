@@ -7,6 +7,7 @@
 import type { MasterContentDocument } from './masterContentDocument';
 import { deriveGenerationBias } from '../intelligence/generationBias';
 import type { StrategicMemoryProfile } from '../intelligence/strategicMemory';
+import { apiFetch } from '../apiFetch';
 
 type ActivityLike = {
   id?: string;
@@ -110,7 +111,7 @@ export async function executeMasterContentPipeline({
   };
   if (biasInstruction) masterPayload.extra_instruction = biasInstruction;
 
-  const resMaster = await fetch(CONTENT_API, {
+  const resMaster = await apiFetch(CONTENT_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(masterPayload),
@@ -135,7 +136,7 @@ export async function executeMasterContentPipeline({
     platform_variants: (dailyExecutionItem as any)?.platform_variants,
   };
 
-  const resVariants = await fetch(CONTENT_API, {
+  const resVariants = await apiFetch(CONTENT_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -175,7 +176,7 @@ export async function executeVariantImprovement(
   if (process.env.NODE_ENV === 'development') {
     console.log('[VariantImprovement]', { platform: payload.platform, action: payload.improvementType });
   }
-  const res = await fetch(CONTENT_API, {
+  const res = await apiFetch(CONTENT_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

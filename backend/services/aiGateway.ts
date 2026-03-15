@@ -7,6 +7,58 @@ import { checkUsageBeforeExecution } from './usageEnforcementService';
 
 const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
+/**
+ * Maps every operation name to a user-facing product area label.
+ * This is written to usage_events.feature_area on every LLM call so that
+ * company admins and super admins can see cost broken down by feature.
+ */
+const FEATURE_AREA_MAP: Record<string, string> = {
+  // Company Profile
+  refineProblemTransformation:       'Company Profile',
+  profileEnrichment:                 'Company Profile',
+  profileExtraction:                 'Company Profile',
+
+  // Recommendations
+  generateRecommendation:            'Recommendations',
+  generateCampaignRecommendations:   'Recommendations',
+
+  // Strategic Theme Cards
+  generateAdditionalStrategicThemes: 'Strategic Theme Cards',
+
+  // Campaign Planning (Week Plan)
+  generateCampaignPlan:              'Campaign Planning',
+  parsePlanToWeeks:                  'Campaign Planning',
+  optimizeWeek:                      'Campaign Planning',
+  previewStrategy:                   'Campaign Planning',
+  prePlanningExplanation:            'Campaign Planning',
+  suggestDuration:                   'Campaign Planning',
+  refineCampaignIdea:                'Campaign Planning',
+
+  // Daily Plan
+  generateDailyPlan:                 'Daily Plan',
+  generateDailyDistributionPlan:     'Daily Plan',
+  parseRefinedDay:                   'Daily Plan',
+
+  // Activity Workspace (content generation)
+  generateContentForDay:             'Activity Workspace',
+  regenerateContent:                 'Activity Workspace',
+  generateContentBlueprint:          'Activity Workspace',
+  generatePlatformVariants:          'Activity Workspace',
+  parsePlatformCustomization:        'Activity Workspace',
+
+  // AI Chat / Planner Assistant
+  chatModeration:                    'AI Chat',
+  extractPlannerCommands:            'AI Chat',
+
+  // Engagement
+  conversationTriage:                'Engagement',
+  conversationMemorySummary:         'Engagement',
+  responseGeneration:                'Engagement',
+
+  // Insights
+  generateContentIdeas:              'Insights',
+};
+
 type GatewayMetadata = {
   provider: 'direct-openai';
   model: string;
@@ -38,12 +90,15 @@ type GatewayRequest = {
   prompt_template_hash?: string | null;
 };
 
+// Singleton — created once per process, reuses HTTP connection pool
+let _openAiClient: OpenAI | null = null;
 const getOpenAiClient = (): OpenAI => {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing OPENAI_API_KEY');
+  if (!_openAiClient) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
+    _openAiClient = new OpenAI({ apiKey });
   }
-  return new OpenAI({ apiKey });
+  return _openAiClient;
 };
 
 const buildMetadata = (model: string, usage: any): GatewayMetadata => ({
@@ -99,6 +154,7 @@ const runCompletion = async (
       model_version: null,
       source_name: `openai:${request.model}`,
       process_type: request.operation,
+      feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
       error_flag: true,
       error_type: 'PLAN_LIMIT_EXCEEDED',
     });
@@ -128,6 +184,7 @@ const runCompletion = async (
       model_version: null,
       source_name: `openai:${request.model}`,
       process_type: request.operation,
+      feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
       latency_ms: latency,
       error_flag: true,
       error_type: error?.response?.status?.toString() ?? error?.message ?? 'unknown',
@@ -153,6 +210,7 @@ const runCompletion = async (
     model_version: null,
     source_name: `openai:${request.model}`,
     process_type: request.operation,
+    feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
     input_tokens: inputTokens || null,
     output_tokens: outputTokens || null,
     total_tokens: totalTokens || null,
@@ -170,14 +228,6 @@ const runCompletion = async (
     total_tokens: totalTokens,
     total_cost: cost.total_cost ?? undefined,
   });
-  const enforcement = await checkUsageBeforeExecution({
-    organization_id: request.companyId ?? UNKNOWN_ORG,
-    resource_key: 'llm_tokens',
-    projected_increment: 0,
-  });
-  if (!enforcement.allowed) {
-    // Do not block this response; future calls will block when pre-checked
-  }
   const contextTypeMap: Record<string, string> = {
     generateRecommendation: 'recommendation',
     generateCampaignPlan: 'campaign_plan',
@@ -199,6 +249,8 @@ const runCompletion = async (
     profileExtraction: 'profile_extraction',
     generatePlatformVariants: 'platform_variants',
     generateContentBlueprint: 'content_blueprint',
+    refineCampaignIdea: 'idea_refinement',
+    generateAdditionalStrategicThemes: 'additional_strategic_themes',
   };
   try {
     await supabase.from('audit_logs').insert({

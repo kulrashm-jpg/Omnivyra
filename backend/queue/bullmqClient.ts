@@ -268,9 +268,13 @@ export function createWorker(
   const connection = getRedisConnection();
   const concurrency = opts?.concurrency ?? 5;
   
-  const processor = typeof processorPathOrFn === 'function'
-    ? processorPathOrFn
-    : processorPathOrFn;
+  if (typeof processorPathOrFn !== 'function') {
+    throw new Error(
+      `createWorker: processor must be a function, got string "${processorPathOrFn}". ` +
+      'Use a dynamic import inside the processor function instead of a file path.'
+    );
+  }
+  const processor = processorPathOrFn;
   
   const worker = new Worker(name, processor as any, {
     connection: {

@@ -162,7 +162,7 @@ const simulateManualExecution = (action: CommunityAiAction): ExecutionResult => 
 export const executeAction = async (
   action: CommunityAiAction,
   approved: boolean,
-  options?: { notify?: boolean; webhook?: boolean; source?: 'manual' | 'auto' | 'scheduler' }
+  options?: { notify?: boolean; webhook?: boolean; source?: 'manual' | 'auto' | 'scheduler' | 'bulk' }
 ): Promise<ExecutionResult> => {
   const policy = await getCommunityAiPlatformPolicy();
   if (!policy.execution_enabled) {

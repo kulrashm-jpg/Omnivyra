@@ -2057,6 +2057,7 @@ export default function DailyPlanningInterface({ week, onSave, campaignId, campa
                           <input
                             type="date"
                             value={activity.date || ''}
+                            min={campaignData?.start_date || new Date().toISOString().split('T')[0]}
                             onChange={(e) => updateActivity(activity.id, { date: e.target.value })}
                             className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700"
                           />
@@ -2120,6 +2121,7 @@ export default function DailyPlanningInterface({ week, onSave, campaignId, campa
                       <input
                         type="date"
                         value={item.date || ''}
+                        min={campaignData?.start_date || new Date().toISOString().split('T')[0]}
                         onChange={(e) => updateActivity(item.id, { date: e.target.value })}
                         className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700"
                       />

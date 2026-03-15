@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireManageConnectors } from '../utils';
-import crypto from 'crypto';
+import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
+import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 
 const buildState = (value: Record<string, string>) => {
   const json = JSON.stringify(value);
@@ -26,13 +26,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await requireManageConnectors(req, res, organizationId);
   if (!access) return;
 
-  const clientId = process.env.REDDIT_CLIENT_ID;
+  const credentials = await getOAuthCredentialsForPlatform('reddit');
+  const clientId = credentials?.client_id;
   if (!clientId) {
-    return res.status(500).json({ error: 'REDDIT_CLIENT_ID is not configured' });
+    return res.status(500).json({ error: 'Reddit OAuth is not configured. Super Admin must configure platform_oauth_configs or env vars.' });
   }
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
-  const redirectUri = `${baseUrl}/api/community-ai/connectors/reddit/callback`;
+  const redirectUri = getCommunityAiConnectorCallbackUrl('reddit');
   const redirectTo =
     typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';
   const state = buildState({

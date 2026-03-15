@@ -198,6 +198,7 @@ export type MarketPulseContextPayload = {
   context_mode?: string;
   focused_modules?: FocusModule[];
   additional_direction?: string;
+  insight_source?: 'api' | 'llm' | 'hybrid';
 };
 
 export async function generateMarketPulseForRegion(

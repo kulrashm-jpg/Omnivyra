@@ -6,6 +6,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 import { replayGovernanceEvent } from './GovernanceReplayService';
 import { getCurrentPolicyVersion } from '../governance/GovernancePolicyRegistry';
 import { verifyCompanyLedger } from './GovernanceLedgerVerificationService';
@@ -262,15 +263,6 @@ export async function getCampaignGovernanceAnalytics(campaignId: string): Promis
   } catch {
     return null;
   }
-}
-
-async function getCompanyCampaignIds(companyId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('campaign_versions')
-    .select('campaign_id')
-    .eq('company_id', companyId);
-  if (error) return [];
-  return Array.from(new Set((data || []).map((r: any) => r.campaign_id).filter(Boolean)));
 }
 
 /**

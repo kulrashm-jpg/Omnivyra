@@ -1,7 +1,7 @@
 import type { NextApiRequest } from 'next';
 import { supabase } from '../db/supabaseClient';
 
-const extractAccessToken = (req: NextApiRequest): string | null => {
+export const extractAccessToken = (req: NextApiRequest): string | null => {
   const authHeader = req.headers.authorization || '';
   if (authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice('Bearer '.length).trim();

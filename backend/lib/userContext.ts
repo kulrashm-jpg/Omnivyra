@@ -3,6 +3,10 @@ import { getLatestProfile } from '../services/companyProfileService';
 /** INTERNAL = company's own user (default). EXTERNAL = agency/external. Infrastructure only; no enforcement yet. */
 export type MembershipType = 'INTERNAL' | 'EXTERNAL';
 
+// In-process cache: keyed by env vars, TTL 60 s. Avoids a DB hit on every request.
+let _contextCache: { value: UserContext; expiresAt: number } | null = null;
+const CONTEXT_CACHE_TTL_MS = 60_000;
+
 export type UserContext = {
   userId: string;
   role: 'admin' | 'user';
@@ -43,14 +47,23 @@ const parseCompanyIds = (value?: string | string[] | null): string[] => {
 };
 
 export const resolveUserContext = async (): Promise<UserContext> => {
+  // Return cached value if still fresh
+  if (_contextCache && Date.now() < _contextCache.expiresAt) {
+    return _contextCache.value;
+  }
+
   const role = normalizeRole(process.env.DEV_ROLE || 'admin');
   let companyIds = parseCompanyIds(process.env.DEV_COMPANY_IDS);
 
   if (companyIds.length === 0) {
-    const latest = await getLatestProfile();
-    if (latest?.company_id) {
-      companyIds = [latest.company_id];
-    } else {
+    try {
+      const latest = await getLatestProfile();
+      if (latest?.company_id) {
+        companyIds = [latest.company_id];
+      } else {
+        companyIds = ['default'];
+      }
+    } catch {
       companyIds = ['default'];
     }
   }
@@ -64,6 +77,7 @@ export const resolveUserContext = async (): Promise<UserContext> => {
     membershipByCompany: companyIds.length ? Object.fromEntries(companyIds.map((c) => [c, 'INTERNAL'])) : undefined,
   };
 
-  console.log('USER_CONTEXT_RESOLVED', userContext);
+  _contextCache = { value: userContext, expiresAt: Date.now() + CONTEXT_CACHE_TTL_MS };
+  console.debug('[userContext] resolved', { userId: userContext.userId, defaultCompanyId: userContext.defaultCompanyId });
   return userContext;
 };

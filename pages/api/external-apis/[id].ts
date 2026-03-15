@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { validatePlatformConfig } from '../../../backend/services/externalApiService';
+import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 import { invalidateCompanyConfigCacheForApiSource } from '../../../backend/services/companyApiConfigCache';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveUserContext } from '../../../backend/services/userContextService';

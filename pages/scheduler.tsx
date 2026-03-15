@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/router";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -256,30 +257,30 @@ export default function SchedulerPage() {
             </div>
             
             <nav className="space-y-2">
-              <a href="/" className="group flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/60 text-gray-700 hover:text-gray-900 transition-all duration-200">
+              <Link href="/" className="group flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/60 text-gray-700 hover:text-gray-900 transition-all duration-200">
                 <div className="p-2 rounded-lg bg-gray-100 group-hover:bg-white">
                   <Sparkles className="h-4 w-4" />
                 </div>
                 <span className="font-medium">Dashboard</span>
-              </a>
-              <a href="/scheduler" className="group flex items-center gap-3 px-4 py-3 rounded-xl bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/25">
+              </Link>
+              <Link href="/scheduler" className="group flex items-center gap-3 px-4 py-3 rounded-xl bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/25">
                 <div className="p-2 rounded-lg bg-white/20">
                   <Calendar className="h-4 w-4" />
                 </div>
                 <span className="font-medium">Scheduler</span>
-              </a>
-              <a href="/engagement" className="group flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/60 text-gray-700 hover:text-gray-900 transition-all duration-200">
+              </Link>
+              <Link href="/engagement" className="group flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/60 text-gray-700 hover:text-gray-900 transition-all duration-200">
                 <div className="p-2 rounded-lg bg-gray-100 group-hover:bg-white">
                   <Users className="h-4 w-4" />
                 </div>
                 <span className="font-medium">Engagement</span>
-              </a>
-              <a href="/analytics" className="group flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/60 text-gray-700 hover:text-gray-900 transition-all duration-200">
+              </Link>
+              <Link href="/analytics" className="group flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/60 text-gray-700 hover:text-gray-900 transition-all duration-200">
                 <div className="p-2 rounded-lg bg-gray-100 group-hover:bg-white">
                   <BarChart3 className="h-4 w-4" />
                 </div>
                 <span className="font-medium">Analytics</span>
-              </a>
+              </Link>
             </nav>
           </div>
         </aside>

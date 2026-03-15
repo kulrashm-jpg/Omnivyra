@@ -106,8 +106,10 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       window.localStorage.setItem('company_id', companyId);
       window.localStorage.removeItem('selected_campaign_id');
     }
-    const match = companies.find((company) => company.company_id === companyId);
-    console.log('SELECTED_COMPANY', { companyId, companyName: match?.name || '' });
+    if (process.env.NODE_ENV === 'development') {
+      const match = companies.find((company) => company.company_id === companyId);
+      console.log('SELECTED_COMPANY', { companyId, companyName: match?.name || '' });
+    }
   };
 
   const refreshCompanies = async () => {
@@ -155,34 +157,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const resolvedName = fromMeta || fromEmail || 'User';
       setUserName(resolvedName);
 
-      const { data: invitedRows, error: invitedError } = await supabase
-        .from('user_company_roles')
-        .select('company_id')
-        .eq('user_id', supabaseUser.id)
-        .eq('status', 'invited');
-      if (invitedError) {
-        console.warn('Failed to load invite status', invitedError.message);
-      }
-      if (invitedRows && invitedRows.length > 0) {
-        await supabase
-          .from('user_company_roles')
-          .update({
-            status: 'active',
-            accepted_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('user_id', supabaseUser.id)
-          .eq('status', 'invited');
-        await supabase.from('audit_logs').insert(
-          invitedRows.map((row) => ({
-            actor_user_id: supabaseUser.id,
-            action: 'USER_ACCEPTED_INVITE',
-            company_id: row.company_id,
-            created_at: new Date().toISOString(),
-          }))
-        );
-      }
-
+      // Single query for all roles (active + invited) to reduce round-trips
       const { data: roleRows, error: roleError } = await supabase
         .from('user_company_roles')
         .select('company_id, role, status')
@@ -191,20 +166,45 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         console.warn('Failed to load roles for user', roleError.message);
       }
 
-      let roles = (roleRows || []).filter((row) => row.status === 'active');
+      const invitedRows = (roleRows || []).filter((row) => row.status === 'invited');
+      if (invitedRows.length > 0) {
+        await Promise.all([
+          supabase
+            .from('user_company_roles')
+            .update({
+              status: 'active',
+              accepted_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', supabaseUser.id)
+            .eq('status', 'invited'),
+          supabase.from('audit_logs').insert(
+            invitedRows.map((row) => ({
+              actor_user_id: supabaseUser.id,
+              action: 'USER_ACCEPTED_INVITE',
+              company_id: row.company_id,
+              created_at: new Date().toISOString(),
+            }))
+          ),
+        ]);
+      }
+
+      // Include both active and newly-accepted invited in companies list
+      const activeRows = (roleRows || []).filter((row) => row.status === 'active');
+      const effectiveRoles = [...activeRows, ...invitedRows];
       let rolesMap: Record<string, string> = {};
       let companyIds: string[] = [];
       let nextCompanies: CompanyOption[] = [];
 
-      if (roles.length > 0) {
-        rolesMap = roles.reduce<Record<string, string>>((acc, entry) => {
+      if (effectiveRoles.length > 0) {
+        rolesMap = effectiveRoles.reduce<Record<string, string>>((acc, entry) => {
           const normalizedRole = normalizeCompanyRole(entry?.role);
           if (entry?.company_id && normalizedRole) {
             acc[entry.company_id] = normalizedRole;
           }
           return acc;
         }, {});
-        companyIds = Array.from(new Set(roles.map((row) => row.company_id))).filter(Boolean) as string[];
+        companyIds = Array.from(new Set(effectiveRoles.map((row) => row.company_id))).filter(Boolean) as string[];
         if (companyIds.length > 0) {
           const { data: profiles, error: profileError } = await supabase
             .from('company_profiles')
@@ -282,18 +282,22 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           window.localStorage.setItem('selected_company_id', resolvedId);
           window.localStorage.setItem('company_id', resolvedId);
         }
-        const match = nextCompanies.find((company) => company.company_id === resolvedId);
-        console.log('SELECTED_COMPANY', {
-          companyId: resolvedId,
-          companyName: match?.name || '',
-        });
+        if (process.env.NODE_ENV === 'development') {
+          const match = nextCompanies.find((company) => company.company_id === resolvedId);
+          console.log('SELECTED_COMPANY', {
+            companyId: resolvedId,
+            companyName: match?.name || '',
+          });
+        }
       }
       const nextRole = rolesMap[resolvedId] || null;
-      console.log('COMPANY_CONTEXT_ROLE', {
-        userId: supabaseUser.id,
-        companyId: resolvedId,
-        role: nextRole,
-      });
+      if (process.env.NODE_ENV === 'development') {
+        console.log('COMPANY_CONTEXT_ROLE', {
+          userId: supabaseUser.id,
+          companyId: resolvedId,
+          role: nextRole,
+        });
+      }
       setUserRole(nextRole);
     } catch (error) {
       console.warn('Failed to load company context');

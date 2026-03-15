@@ -7,8 +7,8 @@ import {
   getUserRole,
   getCompanyRoleIncludingInvited,
   hasPermission,
-  isPlatformSuperAdmin,
   isSuperAdmin,
+  isPlatformSuperAdmin,
 } from '../../../../backend/services/rbacService';
 import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
 
@@ -42,10 +42,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (legacySession) {
     canManageExternalApis = true;
   } else {
-    const platformAdmin = await isPlatformSuperAdmin(user.id);
-    if (platformAdmin) {
-      canManageExternalApis = true;
-    } else if (await isSuperAdmin(user.id)) {
+    // isPlatformSuperAdmin and isSuperAdmin are equivalent (both check SUPER_ADMIN)
+    if (await isSuperAdmin(user.id)) {
       console.debug('SUPER_ADMIN_FALLBACK', {
         path: req.url,
         userId: user.id,

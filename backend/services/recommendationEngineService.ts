@@ -54,9 +54,50 @@ import {
 import { enrichRecommendationCards } from './recommendationCardEnrichmentService';
 import { buildFallbackRecommendationSignals } from './recommendationFallbackSignalService';
 
-/** Optional strategic selection from Trend tab; influences context/prompts only, not ranking. */
+/** Attach signal_id from intelligence_signals when topics have matching stored signals. */
+async function attachIntelligenceSignalIds(
+  companyId: string,
+  signals: TrendSignalNormalized[]
+): Promise<TrendSignalNormalized[]> {
+  if (signals.length === 0) return signals;
+  const topicSet = new Set(signals.map((s) => (s.topic ?? '').trim().toLowerCase()).filter(Boolean));
+  if (topicSet.size === 0) return signals;
+  try {
+    const { data: rows } = await supabase
+      .from('intelligence_signals')
+      .select('id, topic, signal_type')
+      .or(`company_id.eq.${companyId},company_id.is.null`)
+      .order('detected_at', { ascending: false })
+      .limit(200);
+    if (!rows?.length) return signals;
+    const byTopic = new Map<string, { id: string; signal_type: string }>();
+    for (const r of rows) {
+      const key = (r.topic ?? '').trim().toLowerCase();
+      if (key && topicSet.has(key) && !byTopic.has(key)) {
+        byTopic.set(key, { id: r.id, signal_type: r.signal_type ?? 'trend' });
+      }
+    }
+    return signals.map((s) => {
+      const key = (s.topic ?? '').trim().toLowerCase();
+      const match = key ? byTopic.get(key) : null;
+      if (!match) return s;
+      return {
+        ...s,
+        signal_id: match.id,
+        signal_type: s.signal_type ?? 'EXTERNAL_API',
+        source_topic: s.source_topic ?? s.topic ?? null,
+      };
+    });
+  } catch {
+    return signals;
+  }
+}
+
+/** Optional strategic selection from Trend tab; influences filtering, ranking, and card generation. */
 export type StrategicPayloadInput = {
   selected_aspect?: string | null;
+  /** Multiple aspects; treated as OR (recommendations match any). */
+  selected_aspects?: string[];
   selected_offerings?: string[];
   strategic_text?: string;
   context_mode?: string;
@@ -65,7 +106,21 @@ export type StrategicPayloadInput = {
   primary_campaign_type?: string;
   context?: 'business' | 'personal' | 'third_party';
   /** Execution config from Trend execution bar; campaign_duration aligns theme count with campaign length. */
-  execution_config?: { campaign_duration?: number } | null;
+  execution_config?: {
+    campaign_duration?: number;
+    target_audience?: string;
+    communication_style?: string[];
+    content_depth?: string;
+    frequency_per_week?: number;
+    tentative_start?: string;
+    campaign_goal?: string;
+  } | null;
+  /** Cluster inputs from pulse/cluster flow; problem_domain used for alignment. */
+  cluster_inputs?: Array<{ problem_domain?: string; [key: string]: unknown }>;
+  /** Focused modules when context_mode is FOCUSED. */
+  focused_modules?: string[];
+  /** Additional strategic direction. */
+  additional_direction?: string;
   [key: string]: unknown;
 };
 
@@ -96,6 +151,8 @@ export type StrategyMemoryInput = {
   strategy_momentum?: StrategyMomentumInput | null;
 };
 
+export type InsightSource = 'api' | 'llm' | 'hybrid';
+
 export type RecommendationEngineInput = {
   companyId: string;
   campaignId?: string | null;
@@ -112,6 +169,8 @@ export type RecommendationEngineInput = {
   strategicPayload?: StrategicPayloadInput | null;
   /** Optional strategy history (continuation/expansion); context only, no ranking change. */
   strategyMemory?: StrategyMemoryInput | null;
+  /** api=external APIs only; llm=strategic themes from DB; hybrid=combine both. Default hybrid. */
+  insightSource?: InsightSource;
 };
 
 export type PersonaSummary = {
@@ -230,6 +289,23 @@ const pickProfileCategory = (profile: any): string | undefined => {
   return undefined;
 };
 
+/** Build category for external API fetches. Uses strategic selection when present so trends align with user intent (e.g. Business Problems, Finding direction). */
+function pickEffectiveCategory(
+  profile: any,
+  strategicPayload?: StrategicPayloadInput | null
+): string | undefined {
+  const tiers = strategicPayload ? extractStrategicPayloadTokensByTier(strategicPayload) : null;
+  const fromStrategic: string[] = [];
+  if (tiers) {
+    if (tiers.aspect.length) fromStrategic.push(...tiers.aspect);
+    if (tiers.offerings.length) fromStrategic.push(...tiers.offerings);
+    if (tiers.strategicDirection.length) fromStrategic.push(...tiers.strategicDirection.slice(0, 2));
+  }
+  const combined = fromStrategic.filter(Boolean).join(' ');
+  if (combined.trim()) return combined.trim();
+  return pickProfileCategory(profile);
+}
+
 const normalizeList = (value?: string | null): string[] =>
   String(value || '')
     .split(/[,;/|]+/g)
@@ -243,9 +319,124 @@ const tokenize = (value: string): string[] =>
     .map((t) => t.trim())
     .filter((t) => t.length > 2);
 
+/** Tiered extraction: strategic direction (top) → aspect → offerings → campaign focus → other. Used for weighted alignment. */
+type StrategicTokenTiers = {
+  strategicDirection: string[];
+  aspect: string[];
+  offerings: string[];
+  campaignFocus: string[];
+  other: string[];
+};
+
+function extractStrategicPayloadTokensByTier(
+  sp: StrategicPayloadInput | null | undefined
+): StrategicTokenTiers {
+  const strategicDirection: string[] = [];
+  const aspect: string[] = [];
+  const offerings: string[] = [];
+  const campaignFocus: string[] = [];
+  const other: string[] = [];
+  if (!sp || typeof sp !== 'object') return { strategicDirection, aspect, offerings, campaignFocus, other };
+
+  if (sp.strategic_text && String(sp.strategic_text).trim())
+    strategicDirection.push(...normalizeList(sp.strategic_text));
+  if (sp.additional_direction && String(sp.additional_direction).trim())
+    strategicDirection.push(...normalizeList(sp.additional_direction));
+
+  if (sp.selected_aspect && String(sp.selected_aspect).trim())
+    aspect.push(String(sp.selected_aspect).trim());
+  if (Array.isArray(sp.selected_aspects))
+    sp.selected_aspects.forEach((a) => a && String(a).trim() && aspect.push(String(a).trim()));
+
+  if (Array.isArray(sp.selected_offerings))
+    sp.selected_offerings.forEach((o) => o && offerings.push(String(o).trim()));
+
+  if (Array.isArray(sp.mapped_core_types))
+    campaignFocus.push(...sp.mapped_core_types.map((s) => String(s).trim()).filter(Boolean));
+  if (sp.primary_campaign_type && String(sp.primary_campaign_type).trim())
+    campaignFocus.push(String(sp.primary_campaign_type).trim());
+  const secondaries = sp.secondary_campaign_types as string[] | undefined;
+  if (Array.isArray(secondaries))
+    secondaries.forEach((s) => s && campaignFocus.push(String(s).trim()));
+
+  if (Array.isArray(sp.focused_modules))
+    sp.focused_modules.forEach((m) => m && other.push(String(m).trim()));
+  const clusterInputs = sp.cluster_inputs as Array<{ problem_domain?: string }> | undefined;
+  if (Array.isArray(clusterInputs)) {
+    clusterInputs.forEach((c) => {
+      if (c?.problem_domain && String(c.problem_domain).trim())
+        other.push(String(c.problem_domain).trim());
+    });
+  }
+  const execConfig = sp.execution_config as Record<string, unknown> | undefined;
+  if (execConfig && typeof execConfig === 'object') {
+    if (execConfig.target_audience && String(execConfig.target_audience).trim())
+      other.push(String(execConfig.target_audience).trim());
+    if (execConfig.campaign_goal && String(execConfig.campaign_goal).trim())
+      other.push(String(execConfig.campaign_goal).trim());
+    if (Array.isArray(execConfig.communication_style))
+      execConfig.communication_style.forEach((s) => s && other.push(String(s).trim()));
+    if (execConfig.content_depth && String(execConfig.content_depth).trim())
+      other.push(String(execConfig.content_depth).trim());
+  }
+  return { strategicDirection, aspect, offerings, campaignFocus, other };
+}
+
+/** Flatten all tiers for filtering (buildCoreProblemTokens). */
+function extractStrategicPayloadTokens(sp: StrategicPayloadInput | null | undefined): string[] {
+  const tiers = extractStrategicPayloadTokensByTier(sp);
+  return [
+    ...tiers.strategicDirection,
+    ...tiers.aspect,
+    ...tiers.offerings,
+    ...tiers.campaignFocus,
+    ...tiers.other,
+  ].filter(Boolean);
+}
+
+/**
+ * Baseline company identity fields used for theme alignment.
+ * Always included so strategic theme cards align to company context even when
+ * strategic aspect or offerings are not selected.
+ */
+const BASELINE_COMPANY_CONTEXT_KEYS = [
+  'industry',
+  'industry_list',
+  'products_services',
+  'products_services_list',
+  'target_audience',
+  'target_audience_list',
+  'category',
+  'category_list',
+  'campaign_focus',
+  'content_themes',
+  'content_themes_list',
+  'authority_domains',
+  'core_problem_statement',
+  'pain_symptoms',
+  'desired_transformation',
+] as const;
+
+function extractBaselineCompanyTokens(profile: any): string[] {
+  const raw: string[] = [];
+  for (const key of BASELINE_COMPANY_CONTEXT_KEYS) {
+    const val = profile?.[key];
+    if (Array.isArray(val)) {
+      raw.push(...val.map((s: unknown) => String(s ?? '').trim()).filter(Boolean));
+    } else if (typeof val === 'string' && val.trim()) {
+      raw.push(...val.split(/[,;]/).map((s) => s.trim()).filter(Boolean));
+    }
+  }
+  return raw;
+}
+
 /** Exported for unit testing; used in pre-filter and alignment. */
-export const buildCoreProblemTokens = (profile: any): Set<string> => {
+export const buildCoreProblemTokens = (
+  profile: any,
+  strategicPayload?: StrategicPayloadInput | null
+): Set<string> => {
   const raw = [
+    ...extractBaselineCompanyTokens(profile ?? {}),
     ...normalizeList(profile?.campaign_focus),
     ...normalizeList(profile?.content_themes),
     ...(Array.isArray(profile?.content_themes_list) ? profile.content_themes_list : []),
@@ -253,6 +444,7 @@ export const buildCoreProblemTokens = (profile: any): Set<string> => {
     ...(profile?.core_problem_statement ? normalizeList(profile.core_problem_statement) : []),
     ...(Array.isArray(profile?.pain_symptoms) ? profile.pain_symptoms.map((s: string) => String(s).trim()).filter(Boolean) : []),
     ...(profile?.desired_transformation ? normalizeList(profile.desired_transformation) : []),
+    ...extractStrategicPayloadTokens(strategicPayload ?? undefined),
   ]
     .filter(Boolean)
     .map((s: string) => s.trim());
@@ -260,6 +452,12 @@ export const buildCoreProblemTokens = (profile: any): Set<string> => {
   return tokens;
 };
 
+/**
+ * Returns true when the topic has at least one token matching the context set.
+ * When tokens is empty (sparse profile, no strategic payload), returns true so all
+ * signals pass through — a company with an incomplete profile should still get results,
+ * not a blank page.
+ */
 const hasOverlapWithTokens = (topic: string, tokens: Set<string>): boolean => {
   if (tokens.size === 0) return true;
   const topicTokens = tokenize(topic);
@@ -269,6 +467,12 @@ const hasOverlapWithTokens = (topic: string, tokens: Set<string>): boolean => {
 const WEIGHT_HIGH = 3;
 const WEIGHT_MEDIUM = 2;
 const WEIGHT_LOW = 1;
+/** Trend Campaign priority hierarchy: strategic direction (top) → aspect → offerings → campaign focus → other. */
+const WEIGHT_STRATEGIC_DIRECTION = 6;
+const WEIGHT_ASPECT = 5;
+const WEIGHT_OFFERINGS = 4;
+const WEIGHT_CAMPAIGN = 3;
+const WEIGHT_STRATEGIC_OTHER = 2;
 
 const GENERIC_TOKEN_BLACKLIST = new Set([
   'tools',
@@ -286,7 +490,10 @@ const DOWNWEIGHT_TOKENS = new Set([
 ]);
 
 /** Exported for unit testing; used in alignment scoring. */
-export const buildWeightedAlignmentTokens = (profile: any): Map<string, number> => {
+export const buildWeightedAlignmentTokens = (
+  profile: any,
+  strategicPayload?: StrategicPayloadInput | null
+): Map<string, number> => {
   const map = new Map<string, number>();
   const addWithWeight = (values: string[], w: number) => {
     values.forEach((s) =>
@@ -339,6 +546,12 @@ export const buildWeightedAlignmentTokens = (profile: any): Map<string, number> 
   if (profile?.desired_transformation) {
     addWithWeight(normalizeList(profile.desired_transformation), WEIGHT_HIGH);
   }
+  const tiers = extractStrategicPayloadTokensByTier(strategicPayload ?? undefined);
+  addWithWeight(tiers.strategicDirection, WEIGHT_STRATEGIC_DIRECTION);
+  addWithWeight(tiers.aspect, WEIGHT_ASPECT);
+  addWithWeight(tiers.offerings, WEIGHT_OFFERINGS);
+  addWithWeight(tiers.campaignFocus, WEIGHT_CAMPAIGN);
+  addWithWeight(tiers.other, WEIGHT_STRATEGIC_OTHER);
   return map;
 };
 
@@ -498,9 +711,10 @@ const computeMedian = (arr: number[]): number => {
 
 const scoreByAlignmentThenPopularity = (
   signals: TrendSignalNormalized[],
-  profile: any
+  profile: any,
+  strategicPayload?: StrategicPayloadInput | null
 ): TrendSignalNormalized[] => {
-  const weightedTokens = buildWeightedAlignmentTokens(profile);
+  const weightedTokens = buildWeightedAlignmentTokens(profile, strategicPayload);
   const strategyDNA = profile ? buildCompanyStrategyDNA(profile) : null;
   const volumes = signals.map((s) => Number(s.volume ?? 0) || 0);
   const volumeMax = Math.max(...volumes, 1);
@@ -1060,6 +1274,9 @@ export const generateRecommendations = async (
   if (input.strategicPayload && typeof input.strategicPayload === 'object') {
     recommendationContext.strategic_selection = {
       selected_aspect: input.strategicPayload.selected_aspect ?? null,
+      selected_aspects: Array.isArray(input.strategicPayload.selected_aspects)
+        ? input.strategicPayload.selected_aspects
+        : [],
       selected_offerings: Array.isArray(input.strategicPayload.selected_offerings)
         ? input.strategicPayload.selected_offerings
         : [],
@@ -1150,12 +1367,90 @@ export const generateRecommendations = async (
         : [];
   let rawSignals: TrendSignal[] = [];
   let missingEnvPlaceholders: string[] = [];
-  const category = pickProfileCategory(profile);
+  const category = pickEffectiveCategory(profile, input.strategicPayload);
+  const insightSource = input.insightSource ?? 'hybrid';
 
   let merged: TrendSignalNormalized[];
   let tagged: TrendSignalNormalized[];
 
-  if (effectiveRegions.length > 0) {
+  if (insightSource === 'llm') {
+    const { getStrategicThemesAsOpportunities } = await import('./strategicThemeEngine');
+    const { getThemesForCompany } = await import('./companyTrendRelevanceEngine');
+
+    let themes: Array<{ title: string; summary?: string | null; payload?: Record<string, unknown> }>;
+    const companyThemes = await getThemesForCompany(input.companyId, 0);
+    if (companyThemes.length > 0) {
+      themes = companyThemes.map(({ theme }) => ({
+        title: String(theme.theme_title ?? theme.title ?? '').trim() || 'Strategic theme',
+        summary: (theme.theme_description ?? theme.summary) as string | null,
+        payload: {
+          momentum_score: (theme.momentum_score ?? 0.5) as number,
+          trend_direction: theme.trend_direction ?? null,
+          companies: theme.companies ?? [],
+          keywords: theme.keywords ?? [],
+          influencers: theme.influencers ?? [],
+          strategic_theme_id: theme.id,
+        },
+      }));
+    } else {
+      themes = await getStrategicThemesAsOpportunities({ companyId: input.companyId, limit: 20 });
+    }
+
+    // If both DB sources returned nothing, generate fresh AI themes for this company.
+    // This is the primary intent of the "AI" insight source option.
+    if (themes.length === 0) {
+      try {
+        const { generateAdditionalStrategicThemes } = await import('./strategicThemeEngine');
+        const { generateThemeKey } = await import('./themeKeyService');
+        const { getExcludedThemeTopicsForCompany } = await import('./companyThemeStateService');
+        const excludedKeys = await getExcludedThemeTopicsForCompany(input.companyId);
+        const excludedSet = new Set(excludedKeys);
+        const rankingCtx = { historicalThemeCache: new Map<string, Set<string>>() };
+        const aiThemes = await generateAdditionalStrategicThemes({
+          companyId: input.companyId,
+          strategicPayload: input.strategicPayload,
+          limit: 15,
+          existingThemeKeys: [...excludedSet],
+          rankingContext: rankingCtx,
+        });
+        themes = aiThemes
+          .filter((t) => !excludedSet.has(generateThemeKey(t.topic)))
+          .map((t) => ({ title: t.topic, summary: null }));
+      } catch (aiErr) {
+        console.warn('[LLM_PATH] Direct AI theme generation failed, falling through to signal pipeline', aiErr);
+      }
+    }
+
+    const strategicTokens = buildCoreProblemTokens(profile, input.strategicPayload);
+    if (strategicTokens.size > 0) {
+      themes = [...themes].sort((a, b) => {
+        const aTitle = (a.title ?? '').toLowerCase();
+        const bTitle = (b.title ?? '').toLowerCase();
+        const aScore = [...strategicTokens].filter((t) => aTitle.includes(t)).length;
+        const bScore = [...strategicTokens].filter((t) => bTitle.includes(t)).length;
+        if (bScore !== aScore) return bScore - aScore;
+        return 0;
+      });
+    }
+    themes = themes.slice(0, 20);
+
+    const llmSignals: TrendSignal[] = themes.map((t) => {
+      const momentumScore = (t.payload as { momentum_score?: number } | undefined)?.momentum_score;
+      return {
+        topic: t.title,
+        source: 'strategic_themes',
+        geo: pickProfileGeo(profile),
+        volume: momentumScore != null ? momentumScore * 100 : 50,
+        sentiment: undefined,
+        velocity: momentumScore ?? 0.5,
+        signal_confidence: 0.8,
+        trend_source_health: undefined,
+      };
+    });
+    const deduped = removeDuplicates(llmSignals);
+    merged = mergeTrendsAcrossSources(deduped);
+    tagged = tagByPlatform(merged);
+  } else if (effectiveRegions.length > 0) {
     const perRegionSignals: Array<{ region: string; signals: TrendSignal[] }> = [];
     for (const regionCode of effectiveRegions) {
       const geo = String(regionCode).trim().toUpperCase() === 'GLOBAL' ? undefined : String(regionCode).trim();
@@ -1266,7 +1561,39 @@ export const generateRecommendations = async (
       usedFallbackContextSignals = tagged.length > 0;
     }
     if (!usedFallbackContextSignals) {
-      console.warn('FALLBACK_NO_SIGNALS');
+      console.warn('FALLBACK_NO_SIGNALS — attempting AI theme generation before giving up');
+      // Try AI-generated themes from company profile + strategic payload before returning empty.
+      try {
+        const { generateAdditionalStrategicThemes } = await import('./strategicThemeEngine');
+        const { generateThemeKey } = await import('./themeKeyService');
+        const { getExcludedThemeTopicsForCompany } = await import('./companyThemeStateService');
+        const excludedKeys = await getExcludedThemeTopicsForCompany(input.companyId);
+        const excludedSet = new Set(excludedKeys);
+        const rankingCtx = { historicalThemeCache: new Map<string, Set<string>>() };
+        const aiThemes = await generateAdditionalStrategicThemes({
+          companyId: input.companyId,
+          strategicPayload: input.strategicPayload,
+          limit: 10,
+          existingThemeKeys: [...excludedSet],
+          rankingContext: rankingCtx,
+        });
+        const validThemes = aiThemes.filter((t) => !excludedSet.has(generateThemeKey(t.topic)));
+        if (validThemes.length > 0) {
+          merged = mergeTrendsAcrossSources(validThemes.map((t) => ({
+            topic: t.topic,
+            source: 'ai_generated_fallback',
+            volume: 60,
+            signal_confidence: 0.6,
+          } as TrendSignal)));
+          tagged = tagByPlatform(merged);
+          usedFallbackContextSignals = tagged.length > 0;
+        }
+      } catch (aiErr) {
+        console.warn('FALLBACK_AI_THEME_GENERATION_FAILED', aiErr);
+      }
+    }
+
+    if (!usedFallbackContextSignals) {
       const fallbackPlan = await generateCampaignStrategy({
         companyId: input.companyId,
         objective,
@@ -1349,13 +1676,63 @@ export const generateRecommendations = async (
     }
   }
 
-  const coreProblemTokens = buildCoreProblemTokens(profile);
+  if (input.strategicPayload && typeof input.strategicPayload === 'object') {
+    const tiers = extractStrategicPayloadTokensByTier(input.strategicPayload);
+    console.log('[STRATEGIC_TRACE] Trend Campaign payload received', {
+      strategicDirection: tiers.strategicDirection.length,
+      aspect: tiers.aspect.length,
+      offerings: tiers.offerings.length,
+      campaignFocus: tiers.campaignFocus.length,
+      other: tiers.other.length,
+      sample: {
+        strategicDirection: tiers.strategicDirection.slice(0, 2),
+        aspect: tiers.aspect,
+        offerings: tiers.offerings.slice(0, 3),
+        campaignFocus: tiers.campaignFocus.slice(0, 2),
+      },
+    });
+  } else {
+    console.log('[STRATEGIC_TRACE] No Trend Campaign payload (parent-page or legacy flow)');
+  }
+
+  const coreProblemTokens = buildCoreProblemTokens(profile, input.strategicPayload);
   const disqualifiedSignals = deriveDisqualifiedSignals(profile as any);
+
+  tagged = await attachIntelligenceSignalIds(input.companyId, tagged);
+
+  if (input.strategicPayload && typeof input.strategicPayload === 'object') {
+    const tiers = extractStrategicPayloadTokensByTier(input.strategicPayload);
+    console.log('[STRATEGIC_TRACE] Trend Campaign payload received', {
+      tier_counts: {
+        strategicDirection: tiers.strategicDirection.length,
+        aspect: tiers.aspect.length,
+        offerings: tiers.offerings.length,
+        campaignFocus: tiers.campaignFocus.length,
+        other: tiers.other.length,
+      },
+      sample: {
+        strategicDirection: tiers.strategicDirection.slice(0, 2),
+        aspect: tiers.aspect[0] ?? null,
+        offerings: tiers.offerings.slice(0, 3),
+        campaignFocus: tiers.campaignFocus.slice(0, 2),
+      },
+      regions: input.regions?.length ?? 0,
+    });
+  }
+
   const [trendsToScore, filteredOut] = tagged.reduce<
     [TrendSignalNormalized[], TrendSignalNormalized[]]
   >(
     ([keep, ignore], trend) => {
-      const hasOverlap = hasOverlapWithTokens(trend.topic, coreProblemTokens);
+      // AI-generated and LLM-sourced signals are already semantically matched to company
+      // context — applying keyword overlap would incorrectly filter them out since AI themes
+      // use varied phrasing that doesn't echo exact profile tokens.
+      const isAiSourced =
+        usedFallbackContextSignals ||
+        insightSource === 'llm' ||
+        trend.source === 'ai_generated_fallback' ||
+        trend.source === 'strategic_themes';
+      const hasOverlap = isAiSourced || hasOverlapWithTokens(trend.topic, coreProblemTokens);
       const isDisqualified = containsDisqualifiedKeyword(trend.topic, disqualifiedSignals);
       if (!hasOverlap || isDisqualified) {
         return [keep, [...ignore, trend]];
@@ -1365,17 +1742,43 @@ export const generateRecommendations = async (
     [[], []]
   );
 
+  console.log('[STRATEGIC_TRACE] Filter results', {
+    raw_signals: tagged.length,
+    passed_filter: trendsToScore.length,
+    filtered_out: filteredOut.length,
+    passed_topics: trendsToScore.slice(0, 8).map((t) => t.topic),
+    filtered_out_sample: filteredOut.slice(0, 5).map((t) => t.topic),
+  });
+
   let trendsUsed = trendsToScore;
   let trendsIgnored: TrendSignalNormalized[] = [...filteredOut];
   let omnivyraMeta: RecommendationEngineResult['omnivyra_metadata'] = undefined;
   let fallbackReason: string | null = null;
 
-  if (isOmniVyraEnabled()) {
+  if (isOmniVyraEnabled() && insightSource !== 'api') {
+    const companyProfileForOmniVyra = profile
+      ? {
+          ...profile,
+          strategic_context:
+            input.strategicPayload && typeof input.strategicPayload === 'object'
+              ? {
+                  selected_aspect: input.strategicPayload.selected_aspect ?? null,
+                  selected_aspects: input.strategicPayload.selected_aspects ?? [],
+                  selected_offerings: input.strategicPayload.selected_offerings ?? [],
+                  strategic_text: input.strategicPayload.strategic_text ?? null,
+                  cluster_inputs: input.strategicPayload.cluster_inputs ?? [],
+                  focused_modules: input.strategicPayload.focused_modules ?? [],
+                  additional_direction: input.strategicPayload.additional_direction ?? null,
+                  execution_config: input.strategicPayload.execution_config ?? null,
+                }
+              : undefined,
+        }
+      : undefined;
     const relevance = await getTrendRelevance({
       signals: trendsToScore.map(normalizeTrendInput),
       geo: pickProfileGeo(profile),
-      category: pickProfileCategory(profile),
-      companyProfile: profile,
+      category: pickEffectiveCategory(profile, input.strategicPayload),
+      companyProfile: companyProfileForOmniVyra,
     });
     if (relevance.status === 'ok') {
       const relevant = relevance.data?.relevant_trends ?? relevance.data?.trends ?? [];
@@ -1397,8 +1800,8 @@ export const generateRecommendations = async (
     const ranking = await getTrendRanking({
       signals: trendsUsed.map(normalizeTrendInput),
       geo: pickProfileGeo(profile),
-      category: pickProfileCategory(profile),
-      companyProfile: profile,
+      category: pickEffectiveCategory(profile, input.strategicPayload),
+      companyProfile: companyProfileForOmniVyra,
     });
     if (ranking.status === 'ok') {
       const ranked = ranking.data?.ranked_trends ?? ranking.data?.trends ?? [];
@@ -1420,10 +1823,15 @@ export const generateRecommendations = async (
       console.warn('OMNIVYRA_FALLBACK_RANKING', { reason: ranking.error?.message });
     }
   } else {
-    trendsUsed = scoreByAlignmentThenPopularity(trendsUsed, profile);
-    fallbackReason = 'omnivyra_disabled';
+    trendsUsed = scoreByAlignmentThenPopularity(trendsUsed, profile, input.strategicPayload);
+    fallbackReason = insightSource === 'api' ? 'insight_source_api' : 'omnivyra_disabled';
     setLastFallbackReason(fallbackReason);
   }
+
+  console.log('[STRATEGIC_TRACE] Final selected topics after ranking', {
+    count: trendsUsed.length,
+    topics: trendsUsed.map((t) => t.topic),
+  });
 
   const sources = Array.from(
     new Set(trendsUsed.flatMap((trend) => trend.sources).filter(Boolean))
@@ -1508,7 +1916,7 @@ export const generateRecommendations = async (
   }
 
   trendsUsed = applyPersonaPlatformBias(trendsUsed, personaSummary, profile);
-  const polished = polishRecommendations(trendsUsed, profile);
+  const polished = polishRecommendations(trendsUsed, profile, input.strategicPayload);
   if (polished.length > 0) {
     trendsUsed = polished as unknown as TrendSignalNormalized[];
   }
@@ -1516,6 +1924,67 @@ export const generateRecommendations = async (
   if (enriched.length > 0) {
     trendsUsed = enriched as unknown as TrendSignalNormalized[];
   }
+
+  const { getExcludedThemeTopicsForCompany } = await import('./companyThemeStateService');
+  const { generateThemeKey } = await import('./themeKeyService');
+  const excludedKeys = await getExcludedThemeTopicsForCompany(input.companyId);
+  const excludedSet = new Set(excludedKeys);
+  trendsUsed = trendsUsed.filter((rec) => {
+    const themeKey = generateThemeKey(rec.topic || '');
+    return !excludedSet.has(themeKey);
+  });
+
+  const MIN_THEME_COUNT = 5;
+  if (trendsUsed.length < MIN_THEME_COUNT) {
+    const needed = MIN_THEME_COUNT - trendsUsed.length;
+    const { generateAdditionalStrategicThemes } = await import('./strategicThemeEngine');
+    const rankingContext = {
+      historicalThemeCache: new Map<string, Set<string>>(),
+    };
+    const existingThemeKeys = [
+      ...excludedSet,
+      ...trendsUsed.map((t) => generateThemeKey(t.topic || '')),
+    ];
+    const extraThemes = await generateAdditionalStrategicThemes({
+      companyId: input.companyId,
+      strategicPayload: input.strategicPayload,
+      limit: needed * 2,
+      existingThemeKeys,
+      rankingContext,
+    });
+    const extraFiltered = extraThemes.filter((t) => {
+      const key = generateThemeKey(t.topic);
+      return !excludedSet.has(key);
+    });
+    const fallbackSignals: TrendSignalNormalized[] = extraFiltered.map((t) => ({
+      topic: t.topic,
+      source: 'ai_generated_fallback',
+      sources: ['ai_generated_fallback'],
+      frequency: 1,
+      volume: 60,
+      signal_confidence: 0.6,
+      momentum_score: 0.6,
+      confidence_score: 0.6,
+      evidence:
+        t.evidence?.map((e) => ({
+          signal: e.signal,
+          momentum: e.momentum,
+          relevance: e.relevance,
+          ...(e.source_type && { source_type: e.source_type }),
+          ...(e.trend_direction && { trend_direction: e.trend_direction }),
+          ...(e.trend_strength !== undefined && { trend_strength: e.trend_strength }),
+          ...(e.signal_age_hours !== undefined && { signal_age_hours: e.signal_age_hours }),
+          ...(e.signal_age_label && { signal_age_label: e.signal_age_label }),
+        })) ?? undefined,
+    }));
+    const biased = applyPersonaPlatformBias(fallbackSignals, personaSummary, profile);
+    const polished = polishRecommendations(biased, profile, input.strategicPayload);
+    const polishedFallback = polished.length > 0 ? (polished as unknown as TrendSignalNormalized[]) : biased;
+    const enrichedFallback = enrichRecommendationIntelligence(polishedFallback, profile);
+    const processedFallback = enrichedFallback.length > 0 ? (enrichedFallback as unknown as TrendSignalNormalized[]) : polishedFallback;
+    trendsUsed = [...trendsUsed, ...processedFallback].slice(0, MIN_THEME_COUNT);
+  }
+
   const strategyDNA = profile ? buildCompanyStrategyDNA(profile) : null;
   const strategySequence =
     trendsUsed.length > 0 ? sequenceRecommendations(trendsUsed, strategyDNA) : undefined;
@@ -1532,7 +2001,9 @@ export const generateRecommendations = async (
   const allUnhealthy =
     signalQuality.health_snapshot.length > 0 &&
     signalQuality.health_snapshot.every((item) => (item.health_score ?? 1) < 0.3);
-  if (allUnhealthy && !usedFallbackContextSignals) {
+  // LLM path populates `tagged` from DB/AI sources — `usedFallbackContextSignals` stays false
+  // but themes ARE present, so the unhealthy-API guard must not discard them.
+  if (allUnhealthy && !usedFallbackContextSignals && insightSource !== 'llm') {
     const fallbackPlan = await generateCampaignStrategy({
       companyId: input.companyId,
       objective,
@@ -1694,6 +2165,21 @@ export const generateRecommendations = async (
   }
 
   result = enrichRecommendationCards(result);
+
+  for (const topic of result.trends_used) {
+    if (!topic.signal_id) {
+      if (!topic.signal_type) {
+        topic.signal_type = 'MANUAL';
+      }
+      if (!topic.signal_id && topic.signal_type !== 'MANUAL') {
+        topic.signal_type = 'EXTERNAL_API';
+      }
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[RecommendationEngine] Missing signal_id, using fallback lineage', topic.topic);
+      }
+    }
+    if (!topic.source_topic) topic.source_topic = topic.topic ?? null;
+  }
 
   const executionBlueprint = resolveExecutionBlueprint(result);
   if (executionBlueprint != null) {

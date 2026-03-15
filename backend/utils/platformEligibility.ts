@@ -51,9 +51,8 @@ export function getAvailablePlatformsFromProfile(profile: CompanyProfile | null 
     }
   }
 
-  return available.length > 0
-    ? sortPlatformsByPriority(available)
-    : ['linkedin', 'facebook', 'instagram'];
+  // Only return platforms configured for the company; never add unconfigured platforms.
+  return available.length > 0 ? sortPlatformsByPriority(available) : [];
 }
 
 /**

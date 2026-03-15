@@ -119,6 +119,12 @@ export async function insertNormalizedSignals(
       })
       .select('id, idempotency_key');
 
+    if (insertedRows || error) {
+      console.log('[store] supabase insert result', {
+        data: insertedRows,
+        error: error ? { message: error.message, code: error.code } : null,
+      });
+    }
     if (error) {
       throw new Error(`intelligence_signals insert failed: ${error.message}`);
     }
@@ -276,6 +282,19 @@ export async function insertFromTrendApiResults(
     options?.signalType ?? SIGNAL_TYPE_TREND
   );
   if (signals.length === 0) return { inserted: 0, skipped: 0, results: [] };
+  console.log('[store] inserting signals', { count: signals.length });
+  console.log('[store] rows prepared for insert', {
+    count: signals.length,
+    exampleRow: signals[0]
+      ? {
+          topic: signals[0].topic,
+          source_api_id: signals[0].source_api_id,
+          confidence_score: signals[0].confidence_score,
+          detected_at: signals[0].detected_at,
+          idempotency_key: signals[0].idempotency_key ?? '(computed)',
+        }
+      : null,
+  });
 
   let signalsToInsert = signals;
   if (companyId || options?.queryContext) {

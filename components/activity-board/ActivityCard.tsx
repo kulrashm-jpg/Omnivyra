@@ -10,7 +10,7 @@ import type { Activity, ActivityStage } from './types';
 import { getBoardIndicators } from './board-indicators';
 import BoardIntelligenceIndicators from './BoardIntelligenceIndicators';
 import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
-import { getContentTypeBadgeClasses } from '../../utils/contentTaxonomy';
+import { getContentTypeBadgeClasses, isCreatorDependentContentType } from '../../utils/contentTaxonomy';
 
 const STAGE_BORDER_CLASSES: Record<ActivityStage, string> = {
   PLAN: 'border-l-blue-500',
@@ -72,7 +72,8 @@ export default function ActivityCard({
   const [hover, setHover] = useState(false);
   const showActions = hover && (onMove != null || onApprove != null);
 
-  const execMode = (activity.execution_mode ?? 'AI_AUTOMATED') as 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI';
+  const storedExecMode = (activity.execution_mode ?? 'AI_AUTOMATED') as 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI';
+  const execMode = isCreatorDependentContentType(activity.content_type) ? 'CREATOR_REQUIRED' : storedExecMode;
   const intel = getExecutionIntelligence(execMode);
   const modeColors = intel.colorClasses;
   const stageBorder = modeColors ? modeColors.borderLeft : (STAGE_BORDER_CLASSES[activity.stage] ?? 'border-l-gray-300');

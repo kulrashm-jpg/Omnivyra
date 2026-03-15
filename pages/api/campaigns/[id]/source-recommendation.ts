@@ -114,6 +114,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
+  if (source_strategic_theme) {
+    const themeTopic = [theme?.polished_title, theme?.topic, theme?.title]
+      .map((t) => (typeof t === 'string' ? t.trim() : ''))
+      .find(Boolean);
+    if (themeTopic) {
+      const { markThemeInUse } = await import('../../../../backend/services/companyThemeStateService');
+      markThemeInUse(companyId, campaignId, themeTopic).catch((err) =>
+        console.warn('source-recommendation: markThemeInUse failed', err)
+      );
+    }
+  }
+
   return res.status(200).json({
     success: true,
     campaign_id: campaignId,

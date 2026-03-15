@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
+import { getDailyPlans } from '../../../backend/services/executionPlannerService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import {
   dailyPlanRowToUnifiedExecutionUnit,
@@ -34,16 +35,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const access = await requireCampaignAccess(req, res, campaignId);
     if (!access) return;
 
-    // Get daily plans for the campaign
-    const { data: dailyPlans, error } = await supabase
-      .from('daily_content_plans')
-      .select('*')
-      .eq('campaign_id', access.campaignId)
-      .order('week_number', { ascending: true })
-      .order('day_of_week', { ascending: true });
-
-    if (error) {
-      console.error('Error fetching daily plans:', error);
+    // Single read path: execution engine
+    if (process.env.NODE_ENV !== 'test') {
+      console.log('[EXECUTION_ENGINE] getDailyPlans', { campaignId: access.campaignId });
+    }
+    let dailyPlans: Record<string, unknown>[];
+    try {
+      dailyPlans = await getDailyPlans(access.campaignId);
+    } catch (err) {
+      console.error('Error fetching daily plans:', err);
       return res.status(500).json({ error: 'Failed to fetch daily plans' });
     }
 
@@ -156,34 +156,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ...(weekPlanningAdjustmentByNumber[wn] != null ? { planning_adjustment_reason: weekPlanningAdjustmentByNumber[wn] } : {}),
             ...(weekPlanningAdjustmentsSummaryByNumber[wn] != null ? { planning_adjustments_summary: weekPlanningAdjustmentsSummaryByNumber[wn] } : {}),
             ...(weekExtrasByNumber[wn] != null ? { week_extras: weekExtrasByNumber[wn] } : {}),
+            generation_source: plan.generation_source ?? null,
           };
         }
 
         const legacyParsed = tryParseJson(plan.content);
+        const lp = legacyParsed && typeof legacyParsed === 'object' ? legacyParsed as any : null;
         const legWeekNum = plan.week_number;
         return {
           id: plan.id,
           weekNumber: legWeekNum,
           dayOfWeek: plan.day_of_week,
           platform: plan.platform,
-          contentType: plan.content_type,
-          title: plan.title,
+          contentType: plan.content_type ?? lp?.contentType ?? lp?.content_type,
+          title: plan.title ?? lp?.topicTitle,
           content: plan.content,
-          description: plan.description,
-          topic: plan.topic,
-          introObjective: plan.intro_objective,
-          summary: plan.summary,
-          objective: plan.objective,
+          description: plan.description ?? lp?.writingIntent ?? '',
+          topic: plan.topic ?? lp?.topicTitle ?? '',
+          introObjective: plan.intro_objective ?? lp?.whatShouldReaderLearn ?? '',
+          summary: plan.summary ?? lp?.whatProblemAreWeAddressing ?? '',
+          objective: plan.objective ?? lp?.dailyObjective ?? '',
           keyPoints,
-          cta: plan.cta,
-          brandVoice: plan.brand_voice,
+          cta: plan.cta ?? lp?.desiredAction ?? '',
+          brandVoice: plan.brand_voice ?? lp?.narrativeStyle ?? '',
           themeLinkage: plan.theme_linkage,
-          formatNotes: plan.format_notes,
+          formatNotes: plan.format_notes ?? (lp?.contentType ? `${lp.contentType} content` : undefined),
           weekTheme: plan.week_theme,
           campaignTheme: plan.campaign_theme,
-          hashtags: plan.hashtags || [],
-          scheduledTime: plan.scheduled_time || plan.optimal_posting_time,
+          hashtags: plan.hashtags || (Array.isArray(lp?.hashtags) ? lp.hashtags : []),
+          scheduledTime: plan.scheduled_time || plan.optimal_posting_time || lp?.optimalTime,
           status: plan.status || 'planned',
+          ...(lp ? { dailyObject: lp } : {}),
           ...(legacyParsed && typeof legacyParsed === 'object' && (legacyParsed as any).master_content_id != null
             ? { master_content_id: (legacyParsed as any).master_content_id }
             : {}),
@@ -196,6 +199,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ...(weekPlanningAdjustmentsSummaryByNumber[legWeekNum] != null ? { planning_adjustments_summary: weekPlanningAdjustmentsSummaryByNumber[legWeekNum] } : {}),
           ...(weekMomentumAdjustmentsByNumber[legWeekNum] != null ? { momentum_adjustments: weekMomentumAdjustmentsByNumber[legWeekNum] } : {}),
           ...(weekExtrasByNumber[legWeekNum] != null ? { week_extras: weekExtrasByNumber[legWeekNum] } : {}),
+          generation_source: plan.generation_source ?? null,
         };
       }) || [];
 
@@ -231,6 +235,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     });
 
+    console.log('[DAILY_PLAN_TRACE] daily-plans returning', normalizedPlans.length, 'plans');
     res.status(200).json(normalizedPlans);
 
   } catch (error) {

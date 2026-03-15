@@ -1,4 +1,6 @@
 import { supabase } from '../db/supabaseClient';
+import { getCampaignStatus } from '../db/campaignStore';
+import { getCampaignReadiness } from './campaignReadinessService';
 import { DiagnosticsByType, ViralityAssessment } from './viralityAdvisorService';
 
 export type GateDecision = 'pass' | 'warn' | 'block';
@@ -21,13 +23,6 @@ export interface ViralityGateResult {
 
 const MIN_READINESS_THRESHOLD = 100;
 const VIRALITY_MODEL_VERSION = 'virality-diagnostics-1.1';
-
-interface CampaignReadinessRow {
-  readiness_percentage: number;
-  readiness_state: string;
-  blocking_issues: Array<{ code: string; message: string }> | null;
-  last_evaluated_at: string;
-}
 
 function isInsufficientEvidenceLabel(text?: string | null): boolean {
   if (!text) return false;
@@ -118,35 +113,6 @@ function buildAdvisoryNotes(assessment: ViralityAssessment): string[] {
   return notes;
 }
 
-async function loadCampaignStatus(campaignId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('campaigns')
-    .select('status')
-    .eq('id', campaignId)
-    .single();
-  if (error || !data) return null;
-  return (data as { status?: string }).status ?? null;
-}
-
-async function loadCampaignReadiness(
-  campaignId: string
-): Promise<CampaignReadinessRow | null> {
-  const { data, error } = await supabase
-    .from('campaign_readiness')
-    .select('readiness_percentage, readiness_state, blocking_issues, last_evaluated_at')
-    .eq('campaign_id', campaignId)
-    .single();
-
-  if (error) {
-    if (error.code === 'PGRST116') {
-      return null;
-    }
-    throw new Error(`Failed to load campaign readiness: ${error.message}`);
-  }
-
-  return data as CampaignReadinessRow;
-}
-
 async function loadViralityDiagnostics(
   campaignId: string
 ): Promise<ViralityAssessment | null> {
@@ -183,9 +149,9 @@ export async function evaluateViralityGate(
   campaignId: string
 ): Promise<ViralityGateResult> {
   const [readiness, diagnostics, status] = await Promise.all([
-    loadCampaignReadiness(campaignId),
+    getCampaignReadiness(campaignId),
     loadViralityDiagnostics(campaignId),
-    loadCampaignStatus(campaignId),
+    getCampaignStatus(campaignId),
   ]);
 
   const reasons: string[] = [];

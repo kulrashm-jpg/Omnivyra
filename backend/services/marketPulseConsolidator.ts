@@ -39,6 +39,8 @@ export type ConsolidatedPulseOutput = {
     momentum_score?: number;
     velocity_score?: number;
     early_advantage?: boolean;
+    primary_category?: string;
+    secondary_tags?: string[];
   }>;
   region_specific_insights: Array<{ region: string; insight: string }>;
   risk_alerts: string[];

@@ -1,6 +1,6 @@
-// Handle GET requests to /api/campaigns
+// Handle GET/POST requests to /api/campaigns
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import {
@@ -75,33 +75,9 @@ const requireCompanyRole = async (
   return { userId, role };
 };
 
-// Use service role key for server-side operations (bypasses RLS)
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-// Create Supabase client - will be validated in each handler
-let supabase: ReturnType<typeof createClient> | null = null;
-
-if (supabaseUrl && supabaseKey) {
-  supabase = createClient(supabaseUrl, supabaseKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
-} else {
-  console.error('Missing Supabase environment variables:', {
-    hasUrl: !!supabaseUrl,
-    hasKey: !!supabaseKey,
-    url: supabaseUrl ? 'set' : 'missing',
-    key: supabaseKey ? 'set' : 'missing'
-  });
-}
+// supabase singleton imported from shared client — no local re-creation
 
 const validatePlaybookReference = async (playbookId: string, companyId: string) => {
-  if (!supabase) {
-    return { ok: false, error: 'Server configuration error' };
-  }
   const { data, error } = await supabase
     .from('virality_playbooks')
     .select('id, company_id, status')
@@ -145,77 +121,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId) {
       return res.status(400).json({ error: 'companyId required' });
     }
-    if (!supabase) {
-      return res.status(500).json({ error: 'Server configuration error' });
-    }
-    let requester: { id: string } | null = null;
+    let requester: { id: string; role: string } | null = null;
     if (isContentArchitectSession(req)) {
-      requester = { id: 'content_architect' };
+      requester = { id: 'content_architect', role: Role.COMPANY_ADMIN };
     } else {
       const auth = await getSupabaseUserFromRequest(req);
       if (auth.error || !auth.user) {
         return res.status(401).json({ error: 'UNAUTHORIZED' });
       }
-      requester = { id: auth.user.id };
-    }
-    if (!requester) {
-      return res.status(401).json({ error: 'UNAUTHORIZED' });
-    }
-    if (requester.id !== 'content_architect') {
-      const { data: roleData, error: roleRowError } = await supabase
-        .from('user_company_roles')
-        .select('role, status')
-        .eq('user_id', requester.id)
-        .eq('company_id', companyId)
-        .maybeSingle();
-      let roleRow = roleData as { role: string; status: string } | null;
-      if (!roleRow && !roleRowError) {
-        const fallbackRole = await getCompanyRoleIncludingInvited(requester.id, companyId);
-        if (
-          fallbackRole === Role.COMPANY_ADMIN ||
-          fallbackRole === Role.ADMIN ||
-          fallbackRole === Role.SUPER_ADMIN
-        ) {
-          roleRow = { role: fallbackRole, status: 'invited' };
+      // Single RBAC resolution — checks platform admin, legacy admin, then company role
+      const userId = auth.user.id;
+      if (await isPlatformSuperAdmin(userId)) {
+        requester = { id: userId, role: Role.SUPER_ADMIN };
+      } else if (await isSuperAdmin(userId)) {
+        requester = { id: userId, role: Role.SUPER_ADMIN };
+      } else {
+        let { role } = await getUserRole(userId, companyId);
+        if (!role) {
+          role = await getCompanyRoleIncludingInvited(userId, companyId);
         }
+        if (!role) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+        const action = req.method === 'POST' ? 'CREATE_CAMPAIGN' : 'VIEW_CAMPAIGNS';
+        if (!(await hasPermission(role, action))) {
+          return res.status(403).json({ error: 'NOT_ALLOWED' });
+        }
+        requester = { id: userId, role };
       }
-      if (roleRowError) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      if (!roleRow) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      if (roleRow.status !== 'active') {
-        const fallbackRole = await getCompanyRoleIncludingInvited(requester.id, companyId);
-        const isAdminViaInvited =
-          fallbackRole === Role.COMPANY_ADMIN ||
-          fallbackRole === Role.ADMIN ||
-          fallbackRole === Role.SUPER_ADMIN;
-        if (!isAdminViaInvited) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-        roleRow = { role: fallbackRole as string, status: roleRow.status };
-      }
-      const role = roleRow;
-      const action = req.method === 'POST' ? 'CREATE_CAMPAIGN' : 'VIEW_CAMPAIGNS';
-      if (!(await hasPermission(role.role, action))) {
-        return res.status(403).json({ error: 'NOT_ALLOWED' });
-      }
-      console.log('RBAC_CHECK', {
-        userId: requester.id,
-        companyId,
-        role: roleRow?.role ?? null,
-        status: roleRow?.status ?? null,
-      });
     }
-
-    const access = await requireCompanyRole(req, res, companyId, requester.id, [
-      Role.SUPER_ADMIN,
-      Role.COMPANY_ADMIN,
-      Role.CONTENT_CREATOR,
-      Role.CONTENT_REVIEWER,
-      Role.CONTENT_PUBLISHER,
-    ]);
-    if (!access) return;
 
     const fetchCampaignIdsForCompany = async () => {
-      if (!supabase) {
-        return { ids: [] as string[], error: { message: 'Missing Supabase configuration' } };
-      }
       const { data, error } = await supabase
         .from('campaign_versions')
         .select('campaign_id')
@@ -226,9 +160,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     };
 
     const campaignBelongsToCompany = async (campaignId: string) => {
-      if (!supabase) {
-        return { ok: false, error: { message: 'Missing Supabase configuration' } };
-      }
       const { data, error } = await supabase
         .from('campaign_versions')
         .select('campaign_id')
@@ -239,21 +170,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     };
 
     if (req.method === 'POST') {
-      // Handle campaign creation
-      // Validate Supabase configuration
-      if (!supabase) {
-        console.error('Missing Supabase configuration for POST:', {
-          hasUrl: !!supabaseUrl,
-          hasKey: !!supabaseKey
-        });
-        return res.status(500).json({ 
-          error: 'Server configuration error',
-          details: 'Missing Supabase environment variables. Please check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
-        });
-      }
-
       const campaignData = req.body;
-      console.log('Received campaign data:', campaignData);
 
       // Hybrid context mode + campaign types (scratch default: no_context)
       const buildModeRaw =
@@ -331,7 +248,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         blueprint_status: null,
       };
 
-      console.log('Processed campaign data for database:', campaignDataWithUser);
 
       // Insert campaign into database
       const { data: campaign, error } = await (supabase as any)
@@ -341,18 +257,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .single();
 
       if (error) {
-        console.error('Error creating campaign:', {
-          message: error.message,
-          code: error.code,
-          details: error.details,
-          hint: error.hint
-        });
-        return res.status(500).json({ 
-          error: 'Failed to create campaign', 
-          details: error.message,
-          code: error.code,
-          hint: error.hint
-        });
+        console.error('[campaigns] create failed', error.code, error.message);
+        return res.status(500).json({ error: 'Failed to create campaign', details: error.message });
       }
 
       if (!campaign) {
@@ -427,6 +333,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
 
+      const themeTopic =
+        source_strategic_theme && typeof source_strategic_theme === 'object'
+          ? ((source_strategic_theme as { topic?: string; title?: string; polished_title?: string }).topic ??
+            (source_strategic_theme as { topic?: string; title?: string; polished_title?: string }).title ??
+            (source_strategic_theme as { topic?: string; title?: string; polished_title?: string }).polished_title ??
+            '')
+          : '';
+      if (themeTopic && typeof themeTopic === 'string' && themeTopic.trim()) {
+        const { markThemeInUse } = await import('../../../backend/services/companyThemeStateService');
+        markThemeInUse(companyId, (campaign as { id: string }).id, themeTopic).catch((err) =>
+          console.warn('Campaign creation: markThemeInUse failed', err)
+        );
+      }
+
       console.log('CAMPAIGN_CREATED', { companyId, campaignId: campaign.id });
       return res.status(201).json({ 
         success: true,
@@ -442,14 +362,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { type, campaignId } = req.query;
 
     if (type === 'campaign' && campaignId) {
-      // Validate Supabase configuration
-      if (!supabase) {
-        return res.status(500).json({ 
-          error: 'Server configuration error',
-          details: 'Missing Supabase environment variables.'
-        });
-      }
-      
       // Get specific campaign
       const ownership = await campaignBelongsToCompany(campaignId as string);
       if (ownership.error) {
@@ -515,6 +427,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (snap.execution_config != null && typeof snap.execution_config === 'object' && !Array.isArray(snap.execution_config)) {
           pre.execution_config = snap.execution_config;
           const ec = snap.execution_config as Record<string, unknown>;
+          // Promote tentative_start from execution_config when not already set (avoid re-asking)
+          if (!pre.tentative_start && ec.tentative_start != null && String(ec.tentative_start).trim()) {
+            pre.tentative_start = ec.tentative_start;
+          }
           // Legacy: promote content_capacity when present (old Trend campaigns)
           if (!pre.content_capacity && ec.content_capacity != null && String(ec.content_capacity).trim()) {
             pre.content_capacity = ec.content_capacity;
@@ -522,6 +438,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           }
           if (!pre.available_content && ec.available_content != null && (typeof ec.available_content === 'string' ? String(ec.available_content).trim() : true)) {
             pre.available_content = ec.available_content;
+          }
+        }
+        const snapAny = snap as Record<string, unknown>;
+        const wizardWs = snapAny.wizard_state as { cross_platform_sharing_enabled?: boolean } | undefined;
+        if (!pre.cross_platform_sharing) {
+          const cps = snapAny.cross_platform_sharing as { enabled?: boolean; mode?: string } | undefined;
+          if (cps && typeof cps === 'object' && !Array.isArray(cps)) {
+            pre.cross_platform_sharing = { enabled: cps.enabled !== false, mode: cps.mode === 'unique' ? 'unique' : 'shared' };
+          } else if (wizardWs && 'cross_platform_sharing_enabled' in wizardWs) {
+            const enabled = wizardWs.cross_platform_sharing_enabled !== false;
+            pre.cross_platform_sharing = { enabled, mode: enabled ? 'shared' : 'unique' };
           }
         }
         if (Object.keys(pre).length > 0) prefilledPlanning = pre;
@@ -535,6 +462,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         source_opportunity_id?: string | null;
         source_recommendation_id?: string | null;
         source_strategic_theme?: Record<string, unknown> | null;
+        wizard_state?: {
+          wizard_state_version?: number;
+          step?: number;
+          questionnaire_answers?: Record<string, unknown>;
+          planned_start_date?: string;
+          pre_planning_result?: Record<string, unknown> | null;
+          updated_at?: string;
+        } | null;
       } | null;
 
       if (snapshot) {
@@ -587,16 +522,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         prefilledPlanning: prefilledPlanning || undefined,
         sourceRecommendationCard: sourceRecommendationCard || undefined,
         mode: (snapshot as { mode?: string } | null)?.mode ?? undefined,
+        wizardState: snapshot?.wizard_state ?? undefined,
       });
     } else if (type === 'goals' && campaignId) {
-      // Validate Supabase configuration
-      if (!supabase) {
-        return res.status(500).json({ 
-          error: 'Server configuration error',
-          details: 'Missing Supabase environment variables.'
-        });
-      }
-      
       // Get campaign goals
       const ownership = await campaignBelongsToCompany(campaignId as string);
       if (ownership.error) {
@@ -621,75 +549,40 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       return res.status(200).json({ goals });
     } else {
-      // Validate Supabase configuration
-      if (!supabase) {
-        console.error('Missing Supabase configuration:', {
-          hasUrl: !!supabaseUrl,
-          hasKey: !!supabaseKey
-        });
-        return res.status(500).json({ 
-          error: 'Server configuration error',
-          details: 'Missing Supabase environment variables. Please check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
-        });
-      }
+      // List campaigns for company — paginated
+      const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
+      const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) || '50', 10)));
+      const offset = (page - 1) * limit;
 
-      // GetAll campaigns for company
       let campaigns, error;
       let ids: string[] = [];
       try {
         const mappingResult = await fetchCampaignIdsForCompany();
         const { ids: fetchedIds, error: mappingError } = mappingResult;
         if (mappingError) {
-          return res.status(500).json({
-            error: 'Failed to fetch campaign mappings',
-            details: mappingError.message,
-          });
+          return res.status(500).json({ error: 'Failed to fetch campaign mappings', details: mappingError.message });
         }
         ids = fetchedIds ?? [];
         if (ids.length === 0) {
-          return res.status(200).json({
-            success: true,
-            campaigns: [],
-          });
+          return res.status(200).json({ success: true, campaigns: [], total: 0, page, limit });
         }
         const result = await supabase
           .from('campaigns')
-          .select(
-            `*,
-             virality_playbooks(id, name, objective, platforms, content_types, company_id)`
-          )
+          .select('*, virality_playbooks(id, name, objective, platforms, content_types, company_id)')
           .in('id', ids)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
         campaigns = result.data;
         error = result.error;
       } catch (fetchError) {
-        console.error('Supabase query failed with exception:', {
-          error: fetchError,
-          message: fetchError instanceof Error ? fetchError.message : String(fetchError),
-          stack: fetchError instanceof Error ? fetchError.stack : undefined
-        });
-        return res.status(500).json({ 
-          error: 'Failed to fetch campaigns',
-          details: fetchError instanceof Error ? fetchError.message : 'Unknown error during database query',
-          type: 'query_exception'
-        });
+        console.error('[campaigns] list query error', fetchError instanceof Error ? fetchError.message : fetchError);
+        return res.status(500).json({ error: 'Failed to fetch campaigns' });
       }
 
       if (error) {
-        console.error('Error fetching campaigns:', {
-          message: error.message,
-          code: error.code,
-          details: error.details,
-          hint: error.hint
-        });
-        return res.status(500).json({ 
-          error: 'Failed to fetch campaigns',
-          details: error.message,
-          code: error.code
-        });
+        console.error('[campaigns] list supabase error', error.code, error.message);
+        return res.status(500).json({ error: 'Failed to fetch campaigns', details: error.message });
       }
-
-      console.log(`API: Found ${campaigns?.length || 0} campaigns:`, campaigns?.map(c => ({ id: c.id, name: c.name, status: c.status })));
 
       // Enrich name from theme when campaign name is generic "Campaign from themes" (so dashboard shows topic of the theme)
       let themeNameByCampaignId: Record<string, string> = {};
@@ -729,9 +622,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return base;
       });
 
-      return res.status(200).json({ 
+      return res.status(200).json({
         success: true,
-        campaigns: campaignsWithThemeName
+        campaigns: campaignsWithThemeName,
+        total: ids.length,
+        page,
+        limit,
       });
     }
   } catch (error) {

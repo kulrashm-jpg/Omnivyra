@@ -163,5 +163,22 @@ describe('recommendationIntelligenceEnrichment', () => {
       expect(int.expected_transformation).toContain('current friction');
       expect(int.expected_transformation).toContain('desired outcome');
     });
+
+    it('uses sanitized topic in intelligence (strips Business Report 2026, $X Bn)', () => {
+      const profile: CompanyProfile | null = {
+        company_id: 'c1',
+        core_problem_statement: 'confusion',
+        desired_transformation: 'clarity',
+      };
+      const rec = mkRec('Why Data Center Cooling Business Report 2026: $42.81 Bn Market Trends, Opportunities,.', {
+        polished_title: 'Why Data Center Cooling',
+      });
+      const enriched = enrichRecommendationIntelligence([rec], profile);
+      const int = enriched[0].intelligence as RecommendationIntelligence;
+      expect(int.problem_being_solved).not.toContain('Business Report 2026');
+      expect(int.problem_being_solved).not.toContain('$42.81');
+      expect(int.expected_transformation).not.toContain('Business Report 2026');
+      expect(int.expected_transformation).toContain('Data Center Cooling');
+    });
   });
 });

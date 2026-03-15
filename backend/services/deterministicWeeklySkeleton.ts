@@ -237,18 +237,21 @@ async function buildPlatformOptionsByContentType(): Promise<Map<string, string[]
   return out;
 }
 
+/** Backward compatibility: undefined → shared mode (true). */
 function isCrossPlatformSharingEnabled(value: unknown): boolean {
-  if (value == null) return false;
+  if (value == null) return true;
   if (typeof value === 'boolean') return value;
   if (typeof value === 'object' && !Array.isArray(value)) {
     const obj = value as Record<string, unknown>;
     if (typeof obj.enabled === 'boolean') return obj.enabled;
+    if (obj.enabled === undefined && obj.mode === 'unique') return false;
   }
   if (typeof value === 'string') {
     const n = value.trim().toLowerCase();
-    if (n === 'true' || n === 'yes' || n === 'enabled') return true;
+    if (n === 'false' || n === 'no' || n === 'disabled' || n === 'unique') return false;
+    if (n === 'true' || n === 'yes' || n === 'enabled' || n === 'shared') return true;
   }
-  return false;
+  return true;
 }
 
 export async function buildDeterministicWeeklySkeleton(
@@ -342,15 +345,22 @@ export async function buildDeterministicWeeklySkeleton(
       if (n > 0) platform_counts[p] = n;
     }
 
-    const remaining: Record<string, number> = { ...platform_counts };
     const slot_platforms: string[][] = [];
-    for (let i = 0; i < unique; i += 1) {
-      const platformsForSlot = selected_platforms
-        .filter((p) => (remaining[p] ?? 0) > 0)
-        .sort((a, b) => (remaining[b] ?? 0) - (remaining[a] ?? 0) || a.localeCompare(b));
-      if (platformsForSlot.length === 0) break;
-      slot_platforms.push(platformsForSlot);
-      for (const p of platformsForSlot) remaining[p] = Math.max(0, (remaining[p] ?? 0) - 1);
+    if (sharingEnabled) {
+      const remaining: Record<string, number> = { ...platform_counts };
+      for (let i = 0; i < unique; i += 1) {
+        const platformsForSlot = selected_platforms
+          .filter((p) => (remaining[p] ?? 0) > 0)
+          .sort((a, b) => (remaining[b] ?? 0) - (remaining[a] ?? 0) || a.localeCompare(b));
+        if (platformsForSlot.length === 0) break;
+        slot_platforms.push(platformsForSlot);
+        for (const p of platformsForSlot) remaining[p] = Math.max(0, (remaining[p] ?? 0) - 1);
+      }
+    } else {
+      for (const p of selected_platforms) {
+        const count = platform_counts[p] ?? 0;
+        for (let i = 0; i < count; i += 1) slot_platforms.push([p]);
+      }
     }
 
     execution_items.push({

@@ -21,9 +21,16 @@ import {
 } from 'lucide-react';
 import ChatVoiceButton from './ChatVoiceButton';
 import AIGenerationProgress from './AIGenerationProgress';
+import { FormattedAIMessage, formatPlanMarkersForDisplay } from './campaign-ai/FormattedAIMessage';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
 import { getFormatLineForContentType, getIntentLabelForContentType } from '../utils/formatLineForContentType';
 import { getContentCapacityOptionsForMode } from '../utils/contentCapacityOptions';
+import { TARGET_AUDIENCE_CATEGORIES, PROFESSIONAL_SEGMENTS } from '../lib/audienceCategories';
+import { PLATFORM_OPTIONS, PLATFORM_LABELS } from '../backend/constants/platforms';
+import { REQUIRED_EXECUTION_FIELDS } from '../backend/constants/campaignPlanningGatherOrder';
+
+/** Only show quick-picks for canonical GATHER_ORDER questions. No random/archived questions. */
+const GATHER_ORDER_KEYS = new Set<string>([...REQUIRED_EXECUTION_FIELDS, 'capacity_override']);
 
 /** True when the user message indicates they're ready for the final weekly plan (not just answering a question). */
 function isFinalPlanSubmissionMessage(text: string): boolean {
@@ -46,82 +53,6 @@ function getWeeklyPlanTimingByWeeks(weeks: number): { expectedSeconds: number; m
   if (w <= 4) return { expectedSeconds: 75, maxSecondsHint: 180 };   // 4 weeks: ~1.25 min typical, up to 3 min
   if (w <= 8) return { expectedSeconds: 105, maxSecondsHint: 240 };  // 8 weeks: ~1.75 min typical, up to 4 min
   return { expectedSeconds: 135, maxSecondsHint: 300 };               // 12 weeks: ~2.25 min typical, up to 5 min
-}
-
-function formatPlanMarkersForDisplay(raw: string): string {
-  const t = String(raw ?? '');
-  if (!t) return '';
-  // Keep backend markers for parsing, but do not show them to the user.
-  // Replace the end marker with user-friendly text.
-  return t
-    .replace(/^\s*BEGIN_12WEEK_PLAN\s*$/gmi, '')
-    .replace(/^\s*END_12WEEK_PLAN\s*$/gmi, 'END of your weekly plan')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-/** Renders AI message with proper structure: greeting, objective, theme, formats, reach, question */
-function FormattedAIMessage({ message, className = '' }: { message: string; className?: string }) {
-  const renderInline = (text: string): React.ReactNode => {
-    const segments: React.ReactNode[] = [];
-    let s = text;
-    while (s) {
-      const bi = s.indexOf('**');
-      const ii = s.indexOf('*');
-      const nextBi = bi >= 0 ? bi : s.length;
-      const nextIi = (ii >= 0 && (ii !== 0 || s[1] !== '*')) ? ii : s.length;
-      const next = Math.min(nextBi, nextIi);
-      if (next < s.length) {
-        if (next > 0) segments.push(s.slice(0, next));
-        if (s[next] === '*') {
-          if (s[next + 1] === '*') {
-            const end = s.indexOf('**', next + 2);
-            if (end >= 0) {
-              segments.push(<strong key={segments.length}>{s.slice(next + 2, end)}</strong>);
-              s = s.slice(end + 2);
-              continue;
-            }
-          } else {
-            const end = s.indexOf('*', next + 1);
-            if (end >= 0 && end !== next + 1) {
-              segments.push(<em key={segments.length}>{s.slice(next + 1, end)}</em>);
-              s = s.slice(end + 1);
-              continue;
-            }
-          }
-        }
-      }
-      segments.push(s);
-      break;
-    }
-    return <>{segments}</>;
-  };
-  const displayMessage = formatPlanMarkersForDisplay(message);
-  const paragraphs = displayMessage.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
-  return (
-    <div className={`text-sm space-y-4 leading-relaxed ${className}`}>
-      {paragraphs.map((p, i) => {
-        const isGreeting = p.startsWith('Hello!') || (i === 0 && p.includes('help you turn'));
-        const isTheme = p.startsWith('I see your theme:');
-        const isSection = /^\*\*(Target regions|Suggested formats|Estimated reach)/.test(p);
-        const isQuestion = /^\*\*(First question|Next question|Question \d+):/i.test(p);
-        return (
-          <div
-            key={i}
-            className={
-              isGreeting ? 'font-semibold text-gray-900' :
-              isTheme ? 'italic text-gray-700 pl-1 border-l-2 border-indigo-200' :
-              isSection ? 'text-gray-800' :
-              isQuestion ? 'font-semibold text-indigo-800 mt-2 pt-2 border-t border-gray-200' :
-              'text-gray-700'
-            }
-          >
-            {renderInline(p)}
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 interface ChatMessage {
@@ -182,6 +113,8 @@ interface AIChatProps {
   collectedPlanningContext?: Record<string, unknown> | null;
   /** Force fresh planning chat once (ignore cached/loaded history). */
   forceFreshPlanningThread?: boolean;
+  /** When user backs from first question, navigate to strategic card (recommendations page). */
+  onBackToRecommendation?: () => void;
 }
 
 type AIProvider = 'gpt' | 'claude' | 'demo';
@@ -213,7 +146,10 @@ type QuickPickConfig = {
     | 'campaign_types'
     | 'success_metrics'
     | 'tentative_start'
-    | 'content_capacity';
+    | 'content_capacity'
+    | 'cross_platform_sharing'
+    | 'capacity_override'
+    | 'key_messages';
   multi: boolean;
   options: string[];
   /** When set, use primary-then-secondary flow; primary is one, secondaries limited by compatibility. */
@@ -430,12 +366,31 @@ const DURATION_PLAN_LABELS: Record<number, string> = {
 const DURATION_OPTIONS = [4, 6, 8, 12] as const;
 const ABSOLUTE_MAX_WEEKS = 12;
 
+function allowOnlyGatherConfig(cfg: QuickPickConfig | null): QuickPickConfig | null {
+  return cfg && GATHER_ORDER_KEYS.has(cfg.key) ? cfg : null;
+}
+
 function getQuickPickConfig(
   question: string,
   platformOptions: string[],
   maxDurationWeeks?: number | null
 ): QuickPickConfig | null {
   const q = question.toLowerCase();
+  // Capacity validation failed — offer quick actions to unblock (avoids typing + API failures)
+  if (
+    q.includes('capacity validation failed') ||
+    q.includes('override capacity') ||
+    q.includes('reduce counts') ||
+    q.includes('reply with an updated request')
+  ) {
+    return {
+      key: 'capacity_override',
+      multi: false,
+      options: ['Override & proceed', 'Use suggested counts'],
+      helperText:
+        'Choose how to proceed. "Override & proceed" continues with your current counts; "Use suggested counts" applies the recommended reduction.',
+    };
+  }
   if (
     q.includes('how many weeks') ||
     q.includes('campaign run') ||
@@ -461,21 +416,23 @@ function getQuickPickConfig(
         : 'What is the duration of your campaign? (Max ' + max + ' weeks for your plan)',
     };
   }
-  if (q.includes('target audience') || q.includes('who will see your content')) {
+  if (
+    q.includes('core message') ||
+    q.includes('key messages') ||
+    q.includes('audience to remember') ||
+    q.includes('one thing you want people to remember')
+  ) {
     return {
-      key: 'target_audience',
-      multi: true,
-      options: ['Professionals', 'Entrepreneurs', 'Students', 'SMB owners', 'Parents'],
-    };
-  }
-  if ((q.includes('which professionals') && q.includes('mainly speaking')) || q.includes('which group fits')) {
-    return {
-      key: 'audience_professional_segment',
-      multi: true,
-      options: ['Managers', 'Job seekers', 'Founders', 'Corporate employees'],
+      key: 'key_messages',
+      multi: false,
+      options: [],
+      helperText: 'Type your core message(s). What should people remember after reading?',
     };
   }
   if (q.includes('how do you want your content to sound') || q.includes('how should your posts sound')) {
+    return null;
+  }
+  if (false) {
     return {
       key: 'communication_style',
       multi: true,
@@ -590,7 +547,14 @@ function getQuickPickConfig(
       options: Array.from(PLANNING_CONTENT_TYPE_LABELS),
     };
   }
-  if (q.includes('which platforms') || q.includes('platforms will you focus') || q.includes('where will you post')) {
+  if (
+    q.includes('which platforms') ||
+    q.includes('which social media platforms') ||
+    q.includes('social media platforms do you want') ||
+    q.includes('choose from your configured platforms') ||
+    q.includes('platforms will you focus') ||
+    q.includes('where will you post')
+  ) {
     return {
       key: 'platforms',
       multi: true,
@@ -643,6 +607,20 @@ function getQuickPickConfig(
     };
   }
   if (
+    q.includes('same content across all platforms') ||
+    (q.includes('shared') && q.includes('unique')) ||
+    q.includes('unique content for each platform') ||
+    (q.includes('shared') && q.includes('platform')) ||
+    (q.includes('unique') && q.includes('platform'))
+  ) {
+    return {
+      key: 'cross_platform_sharing',
+      multi: false,
+      options: ['Shared (same content across all platforms)', 'Unique (different content per platform)'],
+      helperText: 'Pick one. Shared = post the same content everywhere; Unique = create different content for each platform.',
+    };
+  }
+  if (
     q.includes('content capacity') ||
     q.includes('production capacity') ||
     q.includes('content can you create') ||
@@ -652,6 +630,7 @@ function getQuickPickConfig(
     q.includes('what can your team produce') ||
     q.includes('how will you create') ||
     q.includes('how many pieces per week') ||
+    (q.includes('how many') && q.includes('per week') && (q.includes('posts') || q.includes('videos') || q.includes('blogs'))) ||
     q.includes('create per week') ||
     q.includes('creator-dependent pieces') ||
     q.includes('how many can you create per week') ||
@@ -678,6 +657,127 @@ function computeEligiblePlanningTypeSet(hints: string[]): Set<string> {
   for (const raw of hints || []) {
     const canon = canonicalPlanningTypeLabel(raw);
     if (canon) out.add(canon);
+  }
+  return out;
+}
+
+/** Parse user answer string into form state for quick-pick prefill when going back. */
+function parseUserAnswerToFormState(
+  configKey: string,
+  userText: string
+): Partial<{
+  quickCapacityCounts: Record<string, string>;
+  quickCapacityCreationMode: '' | 'manual' | 'ai-assisted' | 'full-ai';
+  quickDateYear: string;
+  quickDateMonth: string;
+  quickDateDay: string;
+  selectedQuickOptions: string[];
+  quickPickPrimaryStyles: string[];
+  quickPickSecondaryModifiers: string[];
+  quickCustomizeMode: boolean;
+  quickCustomizeText: string;
+  quickPlatformContentTypes: Record<string, string[]>;
+}> {
+  const t = (userText || '').trim();
+  const out: Record<string, any> = {};
+  if (configKey === 'content_capacity' || configKey === 'available_content') {
+    const counts: Record<string, string> = {};
+    const perWeek = configKey === 'content_capacity';
+    // Use /i only (no g) so match() returns capturing groups; with g, m[1] would be undefined.
+    const labelToKey: [RegExp, string][] = [
+      [/\b(\d{1,3})\s*(?:posts?|feed\s*posts?|text\s*posts?)(?:\s*\/\s*week)?\b/i, 'Text posts'],
+      [/\b(\d{1,3})\s*videos?(?:\s*\/\s*week)?\b/i, 'Videos'],
+      [/\b(\d{1,3})\s*reels?(?:\s*\/\s*week)?\b/i, 'Reels'],
+      [/\b(\d{1,3})\s*shorts?(?:\s*\/\s*week)?\b/i, 'Shorts'],
+      [/\b(\d{1,3})\s*long\s*videos?(?:\s*\/\s*week)?\b/i, 'Long Videos'],
+      [/\b(\d{1,3})\s*blogs?(?:\s*\/\s*week)?\b/i, 'Blogs'],
+      [/\b(\d{1,3})\s*articles?(?:\s*\/\s*week)?\b/i, 'Articles'],
+      [/\b(\d{1,3})\s*white\s*papers?(?:\s*\/\s*week)?\b/i, 'White Papers'],
+      [/\b(\d{1,3})\s*carousels?(?:\s*\/\s*week)?\b/i, 'Carousels'],
+      [/\b(\d{1,3})\s*images?(?:\s*\/\s*week)?\b/i, 'Images'],
+      [/\b(\d{1,3})\s*stories?(?:\s*\/\s*week)?\b/i, 'Stories'],
+      [/\b(\d{1,3})\s*threads?(?:\s*\/\s*week)?\b/i, 'Threads'],
+    ];
+    for (const [re, label] of labelToKey) {
+      const m = t.match(re);
+      if (m && m[1]) counts[label] = String(parseInt(m[1], 10));
+    }
+    if (Object.keys(counts).length > 0) out.quickCapacityCounts = counts;
+    if (configKey === 'content_capacity') {
+      if (/\bcreation:\s*manual\b/i.test(t)) out.quickCapacityCreationMode = 'manual';
+      else if (/\bcreation:\s*(?:ai-?assisted|AI-?assisted)\b/i.test(t)) out.quickCapacityCreationMode = 'ai-assisted';
+      else if (/\bcreation:\s*(?:full\s*AI|full\s*ai)\b/i.test(t)) out.quickCapacityCreationMode = 'full-ai';
+    }
+  } else if (configKey === 'tentative_start') {
+    const dateMatch = t.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (dateMatch) {
+      out.quickDateYear = dateMatch[1];
+      out.quickDateMonth = String(parseInt(dateMatch[2], 10));
+      out.quickDateDay = String(parseInt(dateMatch[3], 10));
+    }
+  } else if (configKey === 'platforms') {
+    const platformKeys = ['linkedin', 'instagram', 'facebook', 'twitter', 'x', 'youtube', 'tiktok', 'threads'];
+    const lower = t.toLowerCase();
+    const found = platformKeys.filter((p) => {
+      if (p === 'x') return /\bx\b|twitter/.test(lower);
+      return lower.includes(p);
+    });
+    if (found.length > 0) out.selectedQuickOptions = found;
+  } else if (configKey === 'campaign_duration') {
+    const weeksMatch = t.match(/(\d+)\s*weeks?/i) ?? t.match(/(\d+)/);
+    if (weeksMatch) {
+      out.quickCustomizeMode = true;
+      out.quickCustomizeText = weeksMatch[0];
+    } else {
+      const opts = ['4 weeks', '6 weeks', '8 weeks', '12 weeks'];
+      const found = opts.find((o) => t.toLowerCase().includes(o));
+      if (found) out.selectedQuickOptions = [found];
+    }
+  } else if (configKey === 'communication_style') {
+    const primaryMatch = t.match(/primary:\s*([^.]+)/i);
+    const secondaryMatch = t.match(/secondary:\s*([^.]+)/i);
+    if (primaryMatch) {
+      const parts = primaryMatch[1].split(/[,;]/).map((p) => p.trim()).filter(Boolean);
+      out.quickPickPrimaryStyles = parts;
+    }
+    if (secondaryMatch) {
+      const parts = secondaryMatch[1].split(/[,;]/).map((p) => p.trim()).filter(Boolean);
+      out.quickPickSecondaryModifiers = parts;
+    }
+  } else if (configKey === 'action_expectation') {
+    const primaryMatch = t.match(/primary\s*intent:\s*([^.]+)/i);
+    const actionsMatch = t.match(/actions?:\s*([^.]+)/i);
+    if (primaryMatch) {
+      const parts = primaryMatch[1].split(/[,;]/).map((p) => p.trim()).filter(Boolean);
+      out.quickPickPrimaryStyles = parts;
+    }
+    if (actionsMatch) {
+      const parts = actionsMatch[1].split(/[,;]/).map((p) => p.trim()).filter(Boolean);
+      out.quickPickSecondaryModifiers = parts;
+    }
+  } else if (configKey === 'target_audience' || configKey === 'content_depth' || configKey === 'topic_continuity' || configKey === 'campaign_types' || configKey === 'success_metrics') {
+    const parts = t.split(/[,;]/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 0) out.selectedQuickOptions = parts;
+  } else if (configKey === 'cross_platform_sharing') {
+    const lower = t.toLowerCase();
+    if (/\bshared\b|same content across|same across all/.test(lower) || (lower.includes('shared') && !lower.includes('unique'))) {
+      out.selectedQuickOptions = ['Shared (same content across all platforms)'];
+    } else if (/\bunique\b|different content per|unique per platform|each platform/.test(lower) || (lower.includes('unique') && !lower.includes('shared'))) {
+      out.selectedQuickOptions = ['Unique (different content per platform)'];
+    }
+  } else if (configKey === 'platform_content_types') {
+    const platformParts = t.split(';').map((p) => p.trim()).filter(Boolean);
+    const byPlatform: Record<string, string[]> = {};
+    for (const part of platformParts) {
+      const colonIdx = part.indexOf(':');
+      if (colonIdx > 0) {
+        const platform = part.slice(0, colonIdx).trim().toLowerCase().replace(/\s+/g, '');
+        const rawTypes = part.slice(colonIdx + 1).split(',').map((x) => x.trim()).filter(Boolean);
+        const types = rawTypes.map((x) => canonicalPlanningTypeLabel(x) || x);
+        if (platform && types.length) byPlatform[platform] = types;
+      }
+    }
+    if (Object.keys(byPlatform).length > 0) (out as any).quickPlatformContentTypes = byPlatform;
   }
   return out;
 }
@@ -991,7 +1091,7 @@ type AiHistoryEntry = {
   created_at: string;
 };
 
-export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, recommendationContext, onProgramGenerated, governanceLocked, optimizationContext, prefilledPlanning, initialPlan, standalone = false, vetScope, collectedPlanningContext, forceFreshPlanningThread = false }: AIChatProps) {
+export default function AIChat({ isOpen, onClose, onMinimize, context = "general", companyId, campaignId, campaignData, recommendationContext, onProgramGenerated, governanceLocked, optimizationContext, prefilledPlanning, initialPlan, standalone = false, vetScope, collectedPlanningContext, forceFreshPlanningThread = false, onBackToRecommendation }: AIChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [inputClearKey, setInputClearKey] = useState(0);
@@ -1017,6 +1117,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [replaceSelection, setReplaceSelection] = useState<{ week: number; text: string } | null>(null);
   const [showScheduleConfirm, setShowScheduleConfirm] = useState(false);
   const [isSchedulingPlan, setIsSchedulingPlan] = useState(false);
+  const isBusy = isLoading || isSchedulingPlan;
   const [uiSuccessMessage, setUiSuccessMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'chat' | 'history' | 'audit' | 'execution' | 'content' | 'performance' | 'memory' | 'business' | 'platform'>('chat');
   const [aiHistory, setAiHistory] = useState<AiHistoryEntry[]>([]);
@@ -1072,6 +1173,9 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [quickCustomContentCount, setQuickCustomContentCount] = useState('');
   const [quickCustomPlatform, setQuickCustomPlatform] = useState('');
   const [hideQuickPickPanel, setHideQuickPickPanel] = useState(false);
+  const [quickPickBackIndex, setQuickPickBackIndex] = useState(0); // 0 = current, 1 = previous question
+  const quickPickReplaceTruncateToRef = useRef<number | null>(null); // when submitting from back mode, truncate messages to this index (exclusive of user msg)
+  const isNavigatingBackRef = useRef(false); // skip form reset when intentionally going back
   const [quickDateYear, setQuickDateYear] = useState('');
   const [quickDateMonth, setQuickDateMonth] = useState('');
   const [quickDateDay, setQuickDateDay] = useState('');
@@ -1107,28 +1211,95 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const [hasProvidedExclusiveCampaigns, setHasProvidedExclusiveCampaigns] = useState(false);
   const [lastCollectedPlanningContextFromApi, setLastCollectedPlanningContextFromApi] = useState<Record<string, unknown> | null>(null);
   const [platformCatalogPlatforms, setPlatformCatalogPlatforms] = useState<any[]>([]);
+  const [companyConfiguredPlatforms, setCompanyConfiguredPlatforms] = useState<
+    Array<{ platform: string; content_types: string[] }> | null
+  >(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const freshThreadAppliedRef = useRef<Set<string>>(new Set());
   const planAbortRef = useRef<AbortController | null>(null);
 
+  const resolvedCompanyId = useMemo(() => {
+    if (companyId) return companyId;
+    if (typeof window === 'undefined') return '';
+    try {
+      const urlCompanyId = new URL(window.location.href).searchParams.get('companyId');
+      if (urlCompanyId) return urlCompanyId;
+    } catch {
+      // ignore
+    }
+    const fromCampaign = String((campaignData as any)?.company_id ?? (campaignData as any)?.companyId ?? '').trim();
+    if (fromCampaign) return fromCampaign;
+    return window.localStorage.getItem('selected_company_id') || window.localStorage.getItem('company_id') || '';
+  }, [companyId, campaignData]);
+
+  // Load platform catalog, company config, profile, and duration limit in parallel when company is resolved.
   useEffect(() => {
     let cancelled = false;
-    const loadCatalog = async () => {
-      try {
-        const response = await fetchWithAuth('/api/platform-intelligence/catalog?activeOnly=true&strict=false');
-        if (!response.ok) return;
-        const data = await response.json().catch(() => ({}));
-        const platforms = Array.isArray(data?.platforms) ? data.platforms : [];
-        if (!cancelled) setPlatformCatalogPlatforms(platforms);
-      } catch {
+    const catalogParams = new URLSearchParams({ activeOnly: 'true', strict: 'false' });
+    if (resolvedCompanyId) catalogParams.set('companyId', resolvedCompanyId);
+
+    const fetches: Promise<unknown>[] = [
+      fetchWithAuth(`/api/platform-intelligence/catalog?${catalogParams.toString()}`).then((r) => (r.ok ? r.json() : null)),
+    ];
+    if (resolvedCompanyId) {
+      fetches.push(
+        fetchWithAuth(`/api/company/platform-config?companyId=${encodeURIComponent(resolvedCompanyId)}`).then((r) => (r.ok ? r.json() : null)),
+        fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(resolvedCompanyId)}`).then((r) => (r.ok ? r.json() : null)),
+        fetchWithAuth(`/api/company-plan-duration-limit?companyId=${encodeURIComponent(resolvedCompanyId)}`).then((r) => (r.ok ? r.json() : null)),
+      );
+    } else {
+      setCompanyConfiguredPlatforms(null);
+      setCompanyKeyMessages(null);
+      setCompanyProblemTransformation(null);
+      setPlanDurationLimit(null);
+    }
+
+    Promise.all(fetches).then((results) => {
+      if (cancelled) return;
+      const catalogData = results[0] as any;
+      const platforms = Array.isArray(catalogData?.platforms) ? catalogData.platforms : [];
+      setPlatformCatalogPlatforms(platforms);
+
+      if (resolvedCompanyId && results.length >= 4) {
+        const platformConfigData = results[1] as any;
+        const profileData = results[2] as any;
+        const durationData = results[3] as any;
+
+        const list = Array.isArray(platformConfigData?.platforms) ? platformConfigData.platforms : [];
+        setCompanyConfiguredPlatforms(list.length > 0 ? list : null);
+
+        const p = profileData?.profile;
+        const km = p?.key_messages;
+        if (typeof km === 'string' && km.trim()) setCompanyKeyMessages(km.trim().slice(0, 150));
+        else if (Array.isArray(km) && km.length > 0 && typeof km[0] === 'string' && km[0].trim()) setCompanyKeyMessages(String(km[0]).trim().slice(0, 150));
+        else setCompanyKeyMessages(null);
+        const dt = p?.desired_transformation;
+        const las = p?.life_after_solution;
+        if ((typeof dt === 'string' && dt.trim()) || (typeof las === 'string' && las.trim())) {
+          setCompanyProblemTransformation({
+            desired_transformation: typeof dt === 'string' && dt.trim() ? dt.trim().slice(0, 150) : undefined,
+            life_after_solution: typeof las === 'string' && las.trim() ? las.trim().slice(0, 150) : undefined,
+          });
+        } else setCompanyProblemTransformation(null);
+
+        if (durationData) {
+          setPlanDurationLimit({
+            max_campaign_duration_weeks: Number(durationData.max_campaign_duration_weeks) || 12,
+            plan_key: durationData.plan_key ?? null,
+          });
+        } else setPlanDurationLimit(null);
       }
-    };
-    loadCatalog();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    }).catch(() => {
+      if (!cancelled && resolvedCompanyId) {
+        setCompanyKeyMessages(null);
+        setCompanyProblemTransformation(null);
+        setPlanDurationLimit(null);
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [resolvedCompanyId]);
 
   const platformLabels = useMemo(() => {
     const next: Record<string, string> = {};
@@ -1137,45 +1308,112 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       const name = String(p?.name || '').trim();
       if (key && name) next[key] = name;
     }
+    if (Object.keys(next).length === 0) {
+      for (const { label, value } of PLATFORM_OPTIONS) {
+        next[value] = label;
+      }
+    }
     return next;
   }, [platformCatalogPlatforms]);
 
   const platformQuickPickOptions = useMemo(() => {
+    // Prefer company-configured platforms (only those the company has configured).
+    if (companyConfiguredPlatforms && companyConfiguredPlatforms.length > 0) {
+      return companyConfiguredPlatforms.map((p) => {
+        const key = String(p.platform || '').toLowerCase().replace(/^twitter$/i, 'x').trim();
+        return PLATFORM_LABELS[key] || PLATFORM_LABELS[p.platform?.toLowerCase() ?? ''] || String(p.platform || '').replace(/\b\w/g, (c) => c.toUpperCase());
+      }).filter(Boolean);
+    }
     const names = platformCatalogPlatforms
       .map((p) => String(p?.name || '').trim())
       .filter(Boolean);
+    if (names.length === 0) {
+      return PLATFORM_OPTIONS.map((o) => o.label);
+    }
     return names;
-  }, [platformCatalogPlatforms]);
+  }, [companyConfiguredPlatforms, platformCatalogPlatforms]);
 
   const platformContentTypeOptions = useMemo(() => {
     const next: Record<string, string[]> = {};
-    for (const p of platformCatalogPlatforms) {
-      const key = String(p?.canonical_key || '').toLowerCase().trim();
-      const rawTypes = Array.isArray(p?.supported_content_types) ? p.supported_content_types : [];
-      const labels = rawTypes.map((ct: any) => prettyContentTypeLabel(String(ct))).filter(Boolean);
-      if (key && labels.length > 0) next[key] = labels;
+    // Prefer company-configured platforms (only content types from API config in social platform settings).
+    if (companyConfiguredPlatforms && companyConfiguredPlatforms.length > 0) {
+      for (const p of companyConfiguredPlatforms) {
+        const key = String(p.platform || '').toLowerCase().replace(/^twitter$/i, 'x').trim();
+        const rawTypes = Array.isArray(p.content_types) ? p.content_types : [];
+        const labels = rawTypes.map((ct) => prettyContentTypeLabel(String(ct))).filter(Boolean);
+        if (key && labels.length > 0) next[key] = labels;
+      }
+    }
+    if (Object.keys(next).length === 0) {
+      for (const p of platformCatalogPlatforms) {
+        const key = String(p?.canonical_key || '').toLowerCase().trim();
+        const rawTypes = Array.isArray(p?.supported_content_types) ? p.supported_content_types : [];
+        const labels = rawTypes.map((ct: any) => prettyContentTypeLabel(String(ct))).filter(Boolean);
+        if (key && labels.length > 0) next[key] = labels;
+      }
+    }
+    if (Object.keys(next).length === 0) {
+      const defaultTypes = ['post', 'video', 'image', 'carousel', 'blog'];
+      for (const { value } of PLATFORM_OPTIONS) {
+        next[value] = defaultTypes.map((ct) => prettyContentTypeLabel(ct)).filter(Boolean);
+      }
     }
     return next;
-  }, [platformCatalogPlatforms]);
+  }, [companyConfiguredPlatforms, platformCatalogPlatforms]);
 
   const platformContentTypeRawOptions = useMemo(() => {
     const next: Record<string, string[]> = {};
-    for (const p of platformCatalogPlatforms) {
-      const key = String(p?.canonical_key || '').toLowerCase().trim();
-      const rawTypes = Array.isArray(p?.supported_content_types) ? p.supported_content_types : [];
-      const types = rawTypes.map((ct: any) => String(ct || '').trim()).filter(Boolean);
-      if (key && types.length > 0) next[key] = types;
+    // Prefer company-configured platforms (only content types from API config in social platform settings).
+    if (companyConfiguredPlatforms && companyConfiguredPlatforms.length > 0) {
+      for (const p of companyConfiguredPlatforms) {
+        const key = String(p.platform || '').toLowerCase().replace(/^twitter$/i, 'x').trim();
+        const types = Array.isArray(p.content_types) ? p.content_types.map((ct) => String(ct || '').trim()).filter(Boolean) : [];
+        if (key && types.length > 0) next[key] = types;
+      }
+    }
+    if (Object.keys(next).length === 0) {
+      for (const p of platformCatalogPlatforms) {
+        const key = String(p?.canonical_key || '').toLowerCase().trim();
+        const rawTypes = Array.isArray(p?.supported_content_types) ? p.supported_content_types : [];
+        const types = rawTypes.map((ct: any) => String(ct || '').trim()).filter(Boolean);
+        if (key && types.length > 0) next[key] = types;
+      }
+    }
+    if (Object.keys(next).length === 0) {
+      const defaultTypes = ['post', 'video', 'image', 'carousel', 'blog'];
+      for (const { value } of PLATFORM_OPTIONS) {
+        next[value] = defaultTypes;
+      }
     }
     return next;
-  }, [platformCatalogPlatforms]);
+  }, [companyConfiguredPlatforms, platformCatalogPlatforms]);
 
+  /** Content types for available_content and content_capacity: prefer company-configured platforms' content_types; otherwise catalog supported_content_types. */
   const allCatalogContentTypeQuickPickOptions = useMemo(() => {
-    const raw = new Set<string>(Array.from(PLANNING_CONTENT_TYPE_LABELS).map(canonicalPlanningTypeLabel).filter(Boolean));
-    for (const p of platformCatalogPlatforms || []) {
-      const types = Array.isArray((p as any)?.supported_content_types) ? (p as any).supported_content_types : [];
-      for (const t of types) {
-        const label = canonicalPlanningTypeLabel(prettyContentTypeLabel(String(t || '').trim()));
-        if (label) raw.add(label);
+    const raw = new Set<string>();
+    if (companyConfiguredPlatforms && companyConfiguredPlatforms.length > 0) {
+      for (const p of companyConfiguredPlatforms) {
+        const types = Array.isArray(p?.content_types) ? p.content_types : [];
+        for (const t of types) {
+          const label = canonicalPlanningTypeLabel(prettyContentTypeLabel(String(t || '').trim()));
+          if (label) raw.add(label);
+        }
+      }
+    }
+    const hasCatalog = platformCatalogPlatforms && platformCatalogPlatforms.length > 0;
+    if (raw.size === 0 && hasCatalog) {
+      for (const p of platformCatalogPlatforms) {
+        const types = Array.isArray((p as any)?.supported_content_types) ? (p as any).supported_content_types : [];
+        for (const t of types) {
+          const label = canonicalPlanningTypeLabel(prettyContentTypeLabel(String(t || '').trim()));
+          if (label) raw.add(label);
+        }
+      }
+    }
+    if (raw.size === 0) {
+      for (const l of PLANNING_CONTENT_TYPE_LABELS) {
+        const c = canonicalPlanningTypeLabel(l);
+        if (c) raw.add(c);
       }
     }
     const list = Array.from(raw);
@@ -1225,24 +1463,13 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
         ? platformCatalogPlatforms
             .map((p) => String(p?.canonical_key || '').toLowerCase().trim())
             .filter(Boolean)
-        : [];
+        : PLATFORM_OPTIONS.map((o) => o.value);
     const out = new Set<string>(keys);
     if (out.has('x')) out.add('twitter');
     return Array.from(out);
   }, [platformCatalogPlatforms]);
-  const resolvedCompanyId = useMemo(() => {
-    if (companyId) return companyId;
-    if (typeof window === 'undefined') return '';
-    try {
-      const urlCompanyId = new URL(window.location.href).searchParams.get('companyId');
-      if (urlCompanyId) return urlCompanyId;
-    } catch {
-      // ignore
-    }
-    const fromCampaign = String((campaignData as any)?.company_id ?? (campaignData as any)?.companyId ?? '').trim();
-    if (fromCampaign) return fromCampaign;
-    return window.localStorage.getItem('selected_company_id') || window.localStorage.getItem('company_id') || '';
-  }, [companyId, campaignData]);
+
+  const hasEffectiveCatalog = platformCatalogPlatforms?.length > 0 || PLATFORM_OPTIONS.length > 0;
 
   const ensureCompanyId = (): boolean => {
     if (!resolvedCompanyId) {
@@ -1252,46 +1479,6 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     return true;
   };
 
-  useEffect(() => {
-    if (!resolvedCompanyId) return;
-    fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(resolvedCompanyId)}`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        const p = data?.profile;
-        const km = p?.key_messages;
-        if (typeof km === 'string' && km.trim()) setCompanyKeyMessages(km.trim().slice(0, 150));
-        else if (Array.isArray(km) && km.length > 0 && typeof km[0] === 'string' && km[0].trim()) setCompanyKeyMessages(String(km[0]).trim().slice(0, 150));
-        else setCompanyKeyMessages(null);
-        const dt = p?.desired_transformation;
-        const las = p?.life_after_solution;
-        if ((typeof dt === 'string' && dt.trim()) || (typeof las === 'string' && las.trim())) {
-          setCompanyProblemTransformation({
-            desired_transformation: typeof dt === 'string' && dt.trim() ? dt.trim().slice(0, 150) : undefined,
-            life_after_solution: typeof las === 'string' && las.trim() ? las.trim().slice(0, 150) : undefined,
-          });
-        } else setCompanyProblemTransformation(null);
-      })
-      .catch(() => {
-        setCompanyKeyMessages(null);
-        setCompanyProblemTransformation(null);
-      });
-  }, [resolvedCompanyId]);
-
-  useEffect(() => {
-    if (!resolvedCompanyId) return;
-    let cancelled = false;
-    fetchWithAuth(`/api/company-plan-duration-limit?companyId=${encodeURIComponent(resolvedCompanyId)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (cancelled || !data) return;
-        setPlanDurationLimit({
-          max_campaign_duration_weeks: Number(data.max_campaign_duration_weeks) || 12,
-          plan_key: data.plan_key ?? null,
-        });
-      })
-      .catch(() => setPlanDurationLimit(null));
-    return () => { cancelled = true; };
-  }, [resolvedCompanyId]);
 
   const resolveWorkingDurationWeeks = (): number => {
     const candidates: Array<unknown> = [
@@ -2164,12 +2351,9 @@ This comprehensive approach ensures consistent growth and engagement across all 
     return false;
   };
 
-  /** First question when target audience is known. Both available_content and content_capacity are factored in plan calculation. */
-  const getFirstQuestionWhenTargetAudienceKnown = (): string => {
-    if (hasContentCapacityAlready()) {
-      return '**First question:** Do you have existing content (videos, posts, blogs) for this campaign? Answer "no", "none", or describe what you have. (e.g., 3 videos, 10 posts, 2 blogs)';
-    }
-    return '**First question:** How many creator-dependent pieces can you produce per week? (e.g. 2 videos, 1 carousel — select types and quantities below)';
+  /** First question — matches backend GATHER_ORDER: available_content is always first. */
+  const getFirstQuestion = (): string => {
+    return '**First question:** Do you have existing content (videos, posts, blogs) for this campaign? Answer "no", "none", or describe what you have. (e.g., 3 videos, 10 posts, 2 blogs)';
   };
 
   const buildRecommendationWelcome = (campaignData: any): string => {
@@ -2185,11 +2369,7 @@ This comprehensive approach ensures consistent growth and engagement across all 
     if (prefilledPlanning && Object.keys(prefilledPlanning).length > 0) {
       parts.push('\n\nI already have from your setup:\n' + Object.entries(prefilledPlanning).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n'));
       parts.push(`\n\nI'll ask only what's still needed to build your week plan.`);
-      if (!hasTargetAudienceAlready()) {
-        parts.push(`\n\n**Who is your primary target audience?** (e.g., professionals, entrepreneurs, parents, educators)`);
-      } else {
-        parts.push(`\n\n${getFirstQuestionWhenTargetAudienceKnown()}`);
-      }
+      parts.push(`\n\n${getFirstQuestion()}`);
       return parts.join('');
     }
     if (desc) {
@@ -2204,12 +2384,8 @@ This comprehensive approach ensures consistent growth and engagement across all 
     if (reachEst) {
       parts.push(`\n**Estimated reach:** ${reachEst}`);
     }
-    parts.push(`\n\nI'll ask you one question at a time. We need: target audience, available content (if any—and if you have content, which campaign objective it should serve and which week(s) to slot it into), tentative start date (YYYY-MM-DD format), campaign types, content & production capacity, duration, platforms, key messages, success metrics. Then say "Create my plan" or "I'm ready".`);
-    if (!hasTargetAudienceAlready()) {
-      parts.push(`\n\n**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)`);
-    } else {
-      parts.push(`\n\n${getFirstQuestionWhenTargetAudienceKnown()}`);
-    }
+    parts.push(`\n\nI'll ask you one question at a time. We need: available content (if any), content capacity, exclusive campaigns, action expectation, platforms, platform content requests, key messages, campaign duration. Then say "Create my plan" or "I'm ready".`);
+    parts.push(`\n\n${getFirstQuestion()}`);
     return parts.join('');
   };
 
@@ -2217,28 +2393,26 @@ This comprehensive approach ensures consistent growth and engagement across all 
     const pre = prefilledPlanning;
     if (!pre || Object.keys(pre).length === 0) return '';
     const items = Object.entries(pre).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n');
-    const audienceQuestion = hasTargetAudienceAlready()
-      ? `\n\n${getFirstQuestionWhenTargetAudienceKnown()}\n\n`
-      : '\n\n**Who is your primary target audience?** (e.g., professionals, entrepreneurs, parents, educators)\n\n';
+    const firstQuestion = `\n\n${getFirstQuestion()}\n\n`;
     return `Hello! I'm your AI assistant for "${name}".
 
 I already have these from your campaign setup:
 ${items}
 
 I'll ask only what's still needed to build your week plan.
-${audienceQuestion}`;
+${firstQuestion}`;
   };
 
   const GENERIC_WELCOME = (name: string) => {
     const prefilledIntro = buildPrefilledWelcome(name);
     const base = prefilledIntro || `Hello! I'm your AI assistant for "${name}". I'll ask you one question at a time to build your campaign plan.
 
-**Planning checklist:** target audience, available content (if any—if you have content, we'll ask which objective it serves and which week(s) to slot it into), tentative start date (YYYY-MM-DD format), campaign types, content & production capacity, duration, platforms, key messages, success metrics. Each week will have a concrete theme decided by AI before scheduling.
+**Planning checklist:** available content (if any), content capacity, exclusive campaigns, action expectation, platforms, platform content requests, key messages, campaign duration. Each week will have a concrete theme decided by AI before scheduling.
 
 When we have everything, say "Create my plan" or "I'm ready" and I'll generate it.
 
 `;
-    return base + (prefilledIntro ? '' : '**First question:** Who is your primary target audience? (e.g., professionals, entrepreneurs, parents, educators)');
+    return base + (prefilledIntro ? '' : getFirstQuestion());
   };
 
   const initializeCampaignThread = async (campaignId: string, campaignData: any) => {
@@ -2309,6 +2483,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     }
 
     let restoredSharingFromStorage = false;
+    let restoredPlatformsFromStorage = false;
     if (typeof window !== 'undefined' && campaignId && isPlanningContext) {
       try {
         const formKey = getPlanningFormStorageKey(campaignId);
@@ -2318,9 +2493,14 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             platformContentRequests?: Record<string, Record<string, string>>;
             crossPlatformSharing?: boolean;
             scheduleMode?: string;
+            planningSelectedPlatforms?: string[];
           };
           if (parsed?.platformContentRequests && typeof parsed.platformContentRequests === 'object' && Object.keys(parsed.platformContentRequests).length > 0) {
             setPlanningPlatformContentRequests(parsed.platformContentRequests);
+          }
+          if (Array.isArray(parsed?.planningSelectedPlatforms) && parsed.planningSelectedPlatforms.length > 0) {
+            setPlanningSelectedPlatforms(parsed.planningSelectedPlatforms.map((p) => String(p).toLowerCase().trim()).filter(Boolean));
+            restoredPlatformsFromStorage = true;
           }
           if (typeof parsed?.crossPlatformSharing === 'boolean') {
             setPlanningCrossPlatformSharingEnabled(parsed.crossPlatformSharing);
@@ -2340,6 +2520,21 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       const cross = crossFromPrefilled ?? crossFromCollected;
       if (cross != null && typeof cross === 'object' && 'enabled' in cross) {
         setPlanningCrossPlatformSharingEnabled(Boolean((cross as { enabled?: boolean }).enabled));
+      }
+    }
+    if (!restoredPlatformsFromStorage) {
+      const raw = (prefilledPlanning as any)?.platforms ?? (collectedPlanningContext as any)?.platforms;
+      const platforms = (() => {
+        if (Array.isArray(raw)) {
+          return raw.map((p: any) => String(p ?? '').toLowerCase().trim()).filter(Boolean);
+        }
+        if (typeof raw === 'string' && raw.trim()) {
+          return raw.split(/[,\s]+/).map((p) => p.toLowerCase().trim()).filter(Boolean);
+        }
+        return [];
+      })();
+      if (platforms.length > 0) {
+        setPlanningSelectedPlatforms(Array.from(new Set(platforms.map((p) => (p === 'twitter' ? 'x' : p)))));
       }
     }
   };
@@ -2535,7 +2730,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         return '(e.g., "Yes, proceed with 12 weeks." or "Use 8 weeks instead.")';
       }
       if (q.includes('target audience')) {
-        return '(e.g., professionals, entrepreneurs, parents, educators, students, SMB owners)';
+        return '(e.g., professionals, entrepreneurs, students, parents, educators, homemakers, job seekers, freelancers, retirees)';
       }
       if (q.includes('start') && q.includes('date')) {
         return '(e.g., 2026-08-15)';
@@ -2595,10 +2790,20 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     scrollToBottom();
   }, [messages]);
 
+  const aiMessageIndices = useMemo(
+    () =>
+      messages
+        .map((m, i) => (m.type === 'ai' && m.message ? i : -1))
+        .filter((i) => i >= 0),
+    [messages]
+  );
   const quickPickConfig = useMemo(() => {
-    const lastAi = [...messages].reverse().find((m) => m.type === 'ai' && m.message)?.message || '';
+    const useBack = quickPickBackIndex >= 1 && aiMessageIndices.length > quickPickBackIndex;
+    const aiIndex = useBack ? aiMessageIndices[aiMessageIndices.length - 1 - quickPickBackIndex]! : aiMessageIndices[aiMessageIndices.length - 1];
+    const aiMsg = aiIndex != null ? messages[aiIndex]?.message : '';
+    const lastAi = typeof aiMsg === 'string' ? aiMsg : '';
     const q = extractQuestionCandidate(lastAi);
-    const base = getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks);
+    const base = allowOnlyGatherConfig(getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks));
     if (!base) return base;
     if (base.key === 'available_content') {
       return { ...base, options: allCatalogContentTypeQuickPickOptions };
@@ -2606,11 +2811,29 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     if (base.key === 'content_capacity') {
       return { ...base, options: allCatalogContentTypeQuickPickOptions };
     }
+    if (base.key === 'platforms') {
+      return { ...base, options: platformQuickPickOptions };
+    }
     return base;
-  }, [messages, platformQuickPickOptions, allCatalogContentTypeQuickPickOptions, creatorDependentQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks]);
+  }, [messages, quickPickBackIndex, aiMessageIndices, platformQuickPickOptions, allCatalogContentTypeQuickPickOptions, creatorDependentQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks]);
   const quickPickAiMessageId = useMemo(() => {
     return [...messages].reverse().find((m) => m.type === 'ai' && m.message)?.id ?? null;
   }, [messages]);
+  /** When in back mode, show previous question + user response (so selected response is visible) + editable form. */
+  const displayedMessages = useMemo(() => {
+    if (quickPickBackIndex !== 1 || aiMessageIndices.length < 2) return messages;
+    const prevAiIndex = aiMessageIndices[aiMessageIndices.length - 2]!;
+    const prevUserIndex = prevAiIndex + 1;
+    return messages.slice(0, prevUserIndex + 1);
+  }, [messages, quickPickBackIndex, aiMessageIndices]);
+  /** When in back mode, attach the form to the previous AI message; otherwise to the last. */
+  const quickPickAttachToMessageId = useMemo(() => {
+    if (quickPickBackIndex === 1 && aiMessageIndices.length >= 2) {
+      const prevAiIndex = aiMessageIndices[aiMessageIndices.length - 2]!;
+      return messages[prevAiIndex]?.id ?? quickPickAiMessageId;
+    }
+    return quickPickAiMessageId;
+  }, [quickPickBackIndex, aiMessageIndices, messages, quickPickAiMessageId]);
   const eligiblePlanningTypes = useMemo(() => {
     const fromProps = [
       ...extractPlanningTypeHintsFromCapacityValue((prefilledPlanning as any)?.available_content),
@@ -2627,7 +2850,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       const next = messages[i + 1];
       if (curr?.type !== 'ai' || next?.type !== 'user') continue;
       const q = extractQuestionCandidate(String(curr?.message ?? ''));
-      const cfg = getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks);
+      const cfg = allowOnlyGatherConfig(getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks));
       if (!cfg) continue;
       if (cfg.key === 'available_content' || cfg.key === 'content_capacity') {
         fromHistory.push(...extractPlanningTypeHintsFromCapacityValue(String(next?.message ?? '')));
@@ -2652,6 +2875,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
   const shouldRenderQuickPickInInput = false;
 
   useEffect(() => {
+    if (isNavigatingBackRef.current) {
+      isNavigatingBackRef.current = false;
+      return;
+    }
     setSelectedQuickOptions([]);
     setQuickPickPrimaryStyles([]);
     setQuickPickSecondaryModifiers([]);
@@ -2661,14 +2888,33 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     setQuickCustomContentCount('');
     setQuickCustomPlatform('');
     setHideQuickPickPanel(false);
-    setQuickDateYear('');
-    setQuickDateMonth('');
-    setQuickDateDay('');
+    // tentative_start: ensure previous data is considered — prefill from prefilled/collected when available
+    if (quickPickConfig?.key === 'tentative_start') {
+      const existing =
+        (typeof (prefilledPlanning as any)?.tentative_start === 'string' ? (prefilledPlanning as any).tentative_start : '') ||
+        (typeof (collectedPlanningContext as any)?.tentative_start === 'string' ? (collectedPlanningContext as any).tentative_start : '');
+      const match = typeof existing === 'string' && existing.trim() ? existing.trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/) : null;
+      if (match) {
+        setQuickDateYear(match[1]!);
+        setQuickDateMonth(String(parseInt(match[2]!, 10)));
+        setQuickDateDay(String(parseInt(match[3]!, 10)));
+      } else {
+        setQuickDateYear('');
+        setQuickDateMonth('');
+        setQuickDateDay('');
+      }
+    } else {
+      setQuickDateYear('');
+      setQuickDateMonth('');
+      setQuickDateDay('');
+    }
     setQuickCapacityCounts({});
     setQuickCapacityCreationMode('');
     setShowAllTypeCounters({ available_content: false, content_capacity: false });
     setQuickPlatformContentTypes({});
-  }, [quickPickConfig?.key]);
+    setQuickPickBackIndex(0);
+    quickPickReplaceTruncateToRef.current = null;
+  }, [quickPickConfig?.key, prefilledPlanning, collectedPlanningContext]);
 
   // Persist planning form state (platform content requests, sharing, schedule) so user can start from last unsaved state
   useEffect(() => {
@@ -2684,20 +2930,23 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         platformContentRequests: planningPlatformContentRequests ?? {},
         crossPlatformSharing: planningCrossPlatformSharingEnabled,
         scheduleMode: planningCrossPlatformScheduleMode,
+        planningSelectedPlatforms: planningSelectedPlatforms ?? [],
       };
       window.sessionStorage.setItem(formKey, JSON.stringify(payload));
     } catch (e) {
       console.warn('Could not persist planning form state', e);
     }
-  }, [campaignId, context, planningPlatformContentRequests, planningCrossPlatformSharingEnabled, planningCrossPlatformScheduleMode]);
+  }, [campaignId, context, planningPlatformContentRequests, planningCrossPlatformSharingEnabled, planningCrossPlatformScheduleMode, planningSelectedPlatforms]);
 
-  const sendMessage = async (overrideMessage?: unknown) => {
+  const sendMessage = async (overrideMessage?: unknown, options?: { replaceTruncateTo?: number }) => {
     const safeOverride =
       typeof overrideMessage === 'string'
         ? overrideMessage
         : '';
     const messageText = (safeOverride || newMessage).trim();
     if (!messageText) return;
+
+    const replaceTruncateTo = options?.replaceTruncateTo;
 
     // Persist platform selection so the next question can show only selected platforms.
     if (quickPickConfig?.key === 'platforms') {
@@ -2716,7 +2965,12 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       campaignId
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => {
+      if (typeof replaceTruncateTo === 'number' && replaceTruncateTo >= 0) {
+        return [...prev.slice(0, replaceTruncateTo), userMessage];
+      }
+      return [...prev, userMessage];
+    });
     await saveCampaignMessage(userMessage);
     setNewMessage('');
     setSelectedQuickOptions([]);
@@ -2776,7 +3030,11 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         const targetDay = extractTargetDay(messageText);
         const platforms = extractPlatforms(messageText);
 
-        const conversationHistory = [...messages, userMessage].map((m) => ({
+        const baseMessages =
+          typeof replaceTruncateTo === 'number' && replaceTruncateTo >= 0
+            ? messages.slice(0, replaceTruncateTo)
+            : messages;
+        const conversationHistory = [...baseMessages, userMessage].map((m) => ({
           type: m.type as 'user' | 'ai',
           message: m.message,
         }));
@@ -2940,6 +3198,15 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
 
   const submitQuickPickAnswer = async (config: QuickPickConfig) => {
     if (isBusy) return;
+    const picked = [...selectedQuickOptions];
+    const custom = quickCustomizeText.trim();
+    if (config.key === 'capacity_override' && picked.length > 0) {
+      const msg = picked[0] === 'Override & proceed' ? 'override capacity' : 'use suggested counts';
+      setHideQuickPickPanel(true);
+      setSelectedQuickOptions([]);
+      await sendMessage(msg);
+      return;
+    }
     if (config.progressiveStyle && quickPickPrimaryStyles.length > 0 && (config.key === 'communication_style' || config.key === 'action_expectation')) {
       const primaries = quickPickPrimaryStyles.join(', ');
       let modifiers = quickPickSecondaryModifiers;
@@ -2960,8 +3227,6 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       await sendMessage(answer);
       return;
     }
-    const picked = [...selectedQuickOptions];
-    const custom = quickCustomizeText.trim();
     const captureCountsOverride = (): Record<string, number> | null => {
       const out: Record<string, number> = {};
       for (const [label, raw] of Object.entries(quickCapacityCounts || {})) {
@@ -2981,6 +3246,23 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       return `${n} ${unit}${suffix}${tag}`;
     };
     let answer = '';
+    if (config.key === 'capacity_override') {
+      if (picked.length === 0) {
+        setUiErrorMessage('Please choose "Override & proceed" or "Use suggested counts".');
+        return;
+      }
+      const choice = String(picked[0] || '').trim();
+      answer =
+        choice.toLowerCase().includes('override')
+          ? 'override capacity'
+          : choice.toLowerCase().includes('suggested')
+            ? 'use suggested counts'
+            : choice;
+      setHideQuickPickPanel(true);
+      setSelectedQuickOptions([]);
+      await sendMessage(answer);
+      return;
+    }
     if (config.key === 'campaign_duration') {
       const isElseShare = picked.includes('Else share');
       if ((quickCustomizeMode && custom) || (isElseShare && custom)) {
@@ -3126,6 +3408,12 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
 
       if (quickCustomizeMode && custom) parts.push(custom);
       answer = parts.join('; ');
+    } else if (config.key === 'cross_platform_sharing') {
+      if (picked.length === 0) return;
+      const choice = String(picked[0] ?? '').trim();
+      const isShared = /shared|same\s*content\s*across|same\s*across\s*all/i.test(choice);
+      setPlanningCrossPlatformSharingEnabled(isShared);
+      answer = isShared ? 'Shared' : 'Unique';
     } else if (config.key === 'platform_content_requests') {
       setHasProvidedPlatformContentRequests(true);
       answer = 'Platform content requests captured.';
@@ -3156,8 +3444,134 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         [config.key]: false,
       }));
     }
-    await sendMessage(answer);
+    const truncateTo = quickPickReplaceTruncateToRef.current;
+    if (typeof truncateTo === 'number' && truncateTo >= 0) {
+      quickPickReplaceTruncateToRef.current = null;
+      setQuickPickBackIndex(0);
+      await sendMessage(answer, { replaceTruncateTo: truncateTo });
+    } else {
+      await sendMessage(answer);
+    }
   };
+
+  const handleQuickPickBack = () => {
+    if (aiMessageIndices.length === 1 && onBackToRecommendation) {
+      onBackToRecommendation();
+      return;
+    }
+    if (aiMessageIndices.length < 2) {
+      return;
+    }
+    const prevAiIndex = aiMessageIndices[aiMessageIndices.length - 2]!;
+    const prevUserIndex = prevAiIndex + 1;
+    const prevUserMsg = messages[prevUserIndex];
+    if (!prevUserMsg || prevUserMsg.type !== 'user') {
+      setHideQuickPickPanel(true);
+      return;
+    }
+    const prevAiMsg = messages[prevAiIndex]?.message ?? '';
+    const q = extractQuestionCandidate(String(prevAiMsg));
+    const baseConfig = allowOnlyGatherConfig(getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks));
+    if (!baseConfig) {
+      setHideQuickPickPanel(true);
+      return;
+    }
+    const parsed = parseUserAnswerToFormState(baseConfig.key, String(prevUserMsg.message ?? ''));
+    isNavigatingBackRef.current = true;
+    quickPickReplaceTruncateToRef.current = prevAiIndex + 1;
+    setQuickPickBackIndex(1);
+    setHideQuickPickPanel(false);
+    if (parsed.quickCapacityCounts) setQuickCapacityCounts(parsed.quickCapacityCounts);
+    if (parsed.quickCapacityCreationMode) setQuickCapacityCreationMode(parsed.quickCapacityCreationMode);
+    if (parsed.quickDateYear) setQuickDateYear(parsed.quickDateYear);
+    if (parsed.quickDateMonth) setQuickDateMonth(parsed.quickDateMonth);
+    if (parsed.quickDateDay) setQuickDateDay(parsed.quickDateDay);
+    if (parsed.selectedQuickOptions) setSelectedQuickOptions(parsed.selectedQuickOptions);
+    if (parsed.quickPickPrimaryStyles) setQuickPickPrimaryStyles(parsed.quickPickPrimaryStyles);
+    if (parsed.quickPickSecondaryModifiers) setQuickPickSecondaryModifiers(parsed.quickPickSecondaryModifiers);
+    if (parsed.quickCustomizeMode) setQuickCustomizeMode(parsed.quickCustomizeMode);
+    if (parsed.quickCustomizeText) setQuickCustomizeText(parsed.quickCustomizeText);
+    if ((parsed as any).quickPlatformContentTypes) setQuickPlatformContentTypes((parsed as any).quickPlatformContentTypes);
+    scrollToBottom();
+  };
+
+  /** Go deeper: truncate current Q&A and show the one before. At first question, go to strategic card. */
+  const handleQuickPickBackDeeper = () => {
+    const viewingIdx = aiMessageIndices.length - 1 - quickPickBackIndex;
+    const isFirstQuestion = viewingIdx <= 0;
+    if (isFirstQuestion && onBackToRecommendation) {
+      onBackToRecommendation();
+      return;
+    }
+    const targetAiIndex = aiMessageIndices[viewingIdx]!;
+    setMessages((prev) => prev.slice(0, targetAiIndex));
+    quickPickReplaceTruncateToRef.current = null;
+    setQuickPickBackIndex(0);
+    isNavigatingBackRef.current = true;
+    setHideQuickPickPanel(false);
+    const newAiIndices = messages
+      .slice(0, targetAiIndex)
+      .map((m, i) => (m.type === 'ai' && m.message ? i : -1))
+      .filter((i) => i >= 0);
+    const lastAiIdx = newAiIndices[newAiIndices.length - 1];
+    const lastUserIdx = lastAiIdx != null ? lastAiIdx + 1 : -1;
+    const lastUserMsg = lastUserIdx >= 0 ? messages[lastUserIdx] : null;
+    if (lastUserMsg?.type === 'user') {
+      const aiMsg = lastAiIdx != null ? messages[lastAiIdx]?.message : '';
+      const baseConfig = allowOnlyGatherConfig(
+        getQuickPickConfig(
+          extractQuestionCandidate(String(aiMsg ?? '')),
+          platformQuickPickOptions,
+          planDurationLimit?.max_campaign_duration_weeks
+        )
+      );
+      if (baseConfig) {
+        const parsed = parseUserAnswerToFormState(baseConfig.key, String(lastUserMsg.message ?? ''));
+        if (parsed.quickCapacityCounts) setQuickCapacityCounts(parsed.quickCapacityCounts);
+        if (parsed.quickCapacityCreationMode) setQuickCapacityCreationMode(parsed.quickCapacityCreationMode);
+        if (parsed.quickDateYear) setQuickDateYear(parsed.quickDateYear);
+        if (parsed.quickDateMonth) setQuickDateMonth(parsed.quickDateMonth);
+        if (parsed.quickDateDay) setQuickDateDay(parsed.quickDateDay);
+        if (parsed.selectedQuickOptions) setSelectedQuickOptions(parsed.selectedQuickOptions);
+        if (parsed.quickPickPrimaryStyles) setQuickPickPrimaryStyles(parsed.quickPickPrimaryStyles);
+        if (parsed.quickPickSecondaryModifiers) setQuickPickSecondaryModifiers(parsed.quickPickSecondaryModifiers);
+        if (parsed.quickCustomizeMode) setQuickCustomizeMode(parsed.quickCustomizeMode);
+        if (parsed.quickCustomizeText) setQuickCustomizeText(parsed.quickCustomizeText);
+        if ((parsed as any).quickPlatformContentTypes) setQuickPlatformContentTypes((parsed as any).quickPlatformContentTypes);
+      }
+    }
+    scrollToBottom();
+  };
+
+  const canGoBack =
+    (quickPickBackIndex === 0 &&
+      ((aiMessageIndices.length >= 2 &&
+        messages[aiMessageIndices[aiMessageIndices.length - 2]! + 1]?.type === 'user') ||
+        (aiMessageIndices.length === 1 && !!onBackToRecommendation))) ||
+    (quickPickBackIndex >= 1 &&
+      (aiMessageIndices.length - 1 - quickPickBackIndex > 0 || !!onBackToRecommendation));
+  const hasPreviousQuestion = canGoBack;
+  const quickPickBackButton =
+    hasPreviousQuestion ? (
+      <button
+        type="button"
+        disabled={isBusy}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          if (quickPickBackIndex === 0) {
+            handleQuickPickBack();
+          } else {
+            handleQuickPickBackDeeper();
+          }
+        }}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 mb-2"
+      >
+        {quickPickBackIndex >= 1 && aiMessageIndices.length - 1 - quickPickBackIndex <= 0 && onBackToRecommendation
+          ? '← Back to strategic card'
+          : '← Back'}
+      </button>
+    ) : null;
 
   const renderQuickPickPanel = (config: QuickPickConfig | null) => {
     if (!config || hideQuickPickPanel) return null;
@@ -3176,6 +3590,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       });
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          {quickPickBackButton}
           <div className="text-xs text-gray-600 mb-2">
             Enter counts for any existing content you already have. If none, click <span className="font-semibold">None</span>.
           </div>
@@ -3325,6 +3740,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         quickDateDay.trim().length >= 1;
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          {quickPickBackButton}
           <div className="text-xs text-gray-600 mb-2">
             Select date fields and submit (YYYY-MM-DD).
           </div>
@@ -3401,6 +3817,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       });
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          {quickPickBackButton}
           <div className="text-xs text-gray-600 mb-2">
             <strong>(1) How will you create?</strong> Pick one: Manual, AI‑assisted, or Full AI.
           </div>
@@ -3580,6 +3997,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       });
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          {quickPickBackButton}
           <div className="text-xs text-gray-600 mb-2">
             For each platform, pick the content types you’ll use. Next we’ll set how often (aligned with your capacity).
           </div>
@@ -3687,7 +4105,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     if (config.key === 'platform_content_requests') {
       const platforms = planningSelectedPlatforms || [];
       const hasPlatforms = platforms.length > 0;
-      const hasCatalog = platformCatalogPlatforms && platformCatalogPlatforms.length > 0;
+      const hasCatalog = hasEffectiveCatalog;
       const hasAnyRequest = Object.values(planningPlatformContentRequests || {}).some((byType) =>
         Object.values(byType || {}).some((v) => {
           const n = Number(String(v || '').replace(/\D/g, '').slice(0, 2));
@@ -3869,6 +4287,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       })();
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          {quickPickBackButton}
           <div className="text-xs text-gray-600 mb-2">
             Set frequency per content type per platform (aligned with your capacity), then choose same topic across platforms or different, and same day vs staggered vs AI.
           </div>
@@ -4041,9 +4460,12 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               ) : null}
               {platforms.map((platform) => {
                 const platformName = platformLabels[platform] || platform;
-                const rawTypes = getAllSupportedContentTypeKeysForPlatform(platform, platformContentTypeRawOptions, platformContentTypeOptions);
+                const rawTypesAll = getAllSupportedContentTypeKeysForPlatform(platform, platformContentTypeRawOptions, platformContentTypeOptions);
+                const rawTypes = rawTypesAll.filter((ct) =>
+                  isEligiblePlanningType(prettyContentTypeLabel(ct), eligiblePlanningTypes)
+                );
                 const byType = planningPlatformContentRequests?.[platform] || {};
-                const extraTypes = Object.keys(byType).filter((ct) => !rawTypes.includes(ct));
+                const extraTypes = Object.keys(byType).filter((ct) => !rawTypesAll.includes(ct));
                 const allTypes = [...rawTypes, ...extraTypes];
                 return (
                   <div key={platform} className="bg-white border border-gray-200 rounded-md p-2">
@@ -4142,9 +4564,12 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       );
     }
     if (config.key === 'exclusive_campaigns') {
-      const platforms = planningSelectedPlatforms || [];
+      // exclusive_campaigns comes before platforms in GATHER_ORDER; use catalog/canonical platforms when user hasn't selected yet
+      const platforms = (planningSelectedPlatforms && planningSelectedPlatforms.length > 0)
+        ? planningSelectedPlatforms
+        : Object.keys(platformContentTypeRawOptions || {});
       const hasPlatforms = platforms.length > 0;
-      const hasCatalog = platformCatalogPlatforms && platformCatalogPlatforms.length > 0;
+      const hasCatalog = hasEffectiveCatalog;
       const canAdd = hasPlatforms && hasCatalog;
       const addRow = () => {
         const firstPlatform = platforms[0] || '';
@@ -4156,6 +4581,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       };
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          {quickPickBackButton}
           <div className="text-xs text-gray-600 mb-2">
             Add any platform-exclusive campaigns (per week). If none, submit without adding rows.
           </div>
@@ -4299,7 +4725,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             ) : (
               <button
                 type="button"
-                disabled={isBusy || !hasCatalog || !hasPlatforms}
+                disabled={isBusy || ((planningExclusiveCampaigns?.length ?? 0) > 0 && (!hasCatalog || !hasPlatforms))}
                 onClick={() => submitQuickPickAnswer(config)}
                 className="px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white disabled:opacity-50"
               >
@@ -4326,6 +4752,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       const modifiersLabel = isCta ? 'Select actions (optional):' : 'Select modifiers (optional):';
       return (
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          {quickPickBackButton}
           {config.helperText && (
             <div className="text-xs text-gray-600 mb-2 pb-2 border-b border-gray-200">
               {config.helperText}
@@ -4458,6 +4885,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     }
     return (
       <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+        {quickPickBackButton}
         <div className="text-xs text-gray-600 mb-2">
           {config.helperText ?? (config.multi ? 'Select one or more, then submit.' : 'Pick one, then submit.')}
         </div>
@@ -5679,7 +6107,6 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     return `${weekCount} weeks • ${dayCount} days`;
   };
 
-  const isBusy = isLoading || isSchedulingPlan;
   const isRecsChat = context?.toLowerCase().includes('campaign-recommendations');
 
   // Topic to show in header and placeholder: picked theme from recommendation card, or key message from chat, or campaign name
@@ -6406,7 +6833,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               )}
             </div>
           ) : (
-            messages.map((message) => (
+            displayedMessages.map((message) => (
               <div key={message.id} className={`flex w-full ${message.type === 'user' ? 'justify-end' : 'justify-start'} px-1 sm:px-2`}>
                 <div className={`px-4 py-3 rounded-lg min-w-0 ${
                   message.type === 'user' 
@@ -6430,7 +6857,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                   ) : message.type === 'ai' ? (
                     <>
                       <FormattedAIMessage message={message.message} />
-                      {activeTab === 'chat' && message.id === quickPickAiMessageId
+                      {activeTab === 'chat' && message.id === quickPickAttachToMessageId
                         ? renderQuickPickPanel(quickPickConfig)
                         : null}
                     </>
@@ -7262,7 +7689,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             if (config.key === 'platform_content_requests') {
               const platforms = planningSelectedPlatforms || [];
               const hasPlatforms = platforms.length > 0;
-              const hasCatalog = platformCatalogPlatforms && platformCatalogPlatforms.length > 0;
+              const hasCatalog = hasEffectiveCatalog;
               const hasAnyRequest = Object.values(planningPlatformContentRequests || {}).some((byType) =>
                 Object.values(byType || {}).some((v) => {
                   const n = Number(String(v || '').replace(/\D/g, '').slice(0, 2));
@@ -7320,9 +7747,12 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                             ? new Set(prefs.map((p) => String(p || '').toLowerCase().trim()).filter(Boolean))
                             : null;
                         const rawTypes = rawTypesAll.filter((ct) => {
-                          if (!allowed) return true;
-                          const canon = normalizeCtForPrefs(ct);
-                          return canon ? allowed.has(canon) : false;
+                          if (allowed) {
+                            const canon = normalizeCtForPrefs(ct);
+                            return canon ? allowed.has(canon) : false;
+                          }
+                          // No prefs: filter by content_capacity (only show types selected during configuration stage)
+                          return isEligiblePlanningType(prettyContentTypeLabel(ct), eligiblePlanningTypes);
                         });
                         const effectiveTypes =
                           hasExistingSelection && !showAll
@@ -7346,6 +7776,8 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                               ) : null}
                               {allowed ? (
                                 <span className="text-[11px] text-gray-500">(Filtered by your earlier content-type selection)</span>
+                              ) : eligiblePlanningTypes.size > 0 ? (
+                                <span className="text-[11px] text-gray-500">(Only content types from your capacity setup)</span>
                               ) : null}
                             </div>
                             {effectiveTypes.length === 0 ? (
@@ -7442,9 +7874,12 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               );
             }
             if (config.key === 'exclusive_campaigns') {
-              const platforms = planningSelectedPlatforms || [];
+              const platforms =
+                planningSelectedPlatforms?.length > 0
+                  ? planningSelectedPlatforms
+                  : Object.keys(platformContentTypeRawOptions || {});
               const hasPlatforms = platforms.length > 0;
-              const hasCatalog = platformCatalogPlatforms && platformCatalogPlatforms.length > 0;
+              const hasCatalog = hasEffectiveCatalog;
               const canAdd = hasPlatforms && hasCatalog;
               const addRow = () => {
                 const firstPlatform = platforms[0] || '';
@@ -7568,7 +8003,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                     </button>
                     <button
                       type="button"
-                      disabled={isBusy || !hasCatalog || !hasPlatforms}
+                      disabled={
+                        isBusy ||
+                        (planningExclusiveCampaigns?.length > 0 && (!hasCatalog || !hasPlatforms))
+                      }
                       onClick={() => submitQuickPickAnswer(config)}
                       className="px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white disabled:opacity-50"
                     >
@@ -7829,7 +8267,33 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
           </div>
             );
           })()}
-          
+          {activeTab === 'chat' &&
+            (context?.toLowerCase().includes('campaign-planning') ||
+              context?.toLowerCase().includes('12week-plan') ||
+              context?.toLowerCase().includes('blueprint-plan') ||
+              context?.toLowerCase().includes('campaign-recommendations')) &&
+            hasPreviousQuestion && (
+              <div className="mb-2">
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (quickPickBackIndex === 0) {
+                      handleQuickPickBack();
+                    } else {
+                      handleQuickPickBackDeeper();
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {quickPickBackIndex >= 1 && aiMessageIndices.length - 1 - quickPickBackIndex <= 0 && onBackToRecommendation
+                    ? '← Back to strategic card'
+                    : '← Back'}
+                </button>
+              </div>
+            )}
           <div className="flex items-center gap-2">
             <input
               key={inputClearKey}

@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
+import { updateActivity } from '../../../backend/services/executionPlannerService';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -91,17 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         content = JSON.stringify(updated);
       }
 
-      await supabase
-        .from('daily_content_plans')
-        .update({
-          day_of_week: dayOfWeek,
-          date,
-          content,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', id)
-        .eq('campaign_id', campaignId)
-        .eq('week_number', weekNumber);
+      await updateActivity(id, { day_of_week: dayOfWeek, date, content }, 'board');
     }
 
     await supabase

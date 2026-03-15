@@ -26,13 +26,22 @@ export interface ExecutionModeContext {
 }
 
 const CREATOR_TYPES = new Set([
-  'video', 'reel', 'short', 'audio', 'podcast', 'song',
+  'video', 'reel', 'short', 'audio', 'podcast', 'song', 'live', 'livestream',
 ]);
 const CONDITIONAL_TYPES = new Set([
   'carousel', 'slides', 'slide', 'slideware', 'infographic', 'deck', 'presentation',
+  'image', 'photo', 'graphic', 'visual', 'banner', 'thumbnail',
 ]);
 const AI_AUTOMATED_TYPES = new Set([
-  'text', 'post', 'article', 'thread', 'story', 'tweet', 'blog',
+  'text', 'post', 'article', 'thread', 'story', 'tweet', 'blog', 'update', 'comment', 'reply',
+]);
+
+/**
+ * Platforms that are inherently video/media-first — always CREATOR_REQUIRED
+ * regardless of the content_type assigned.
+ */
+const CREATOR_PLATFORMS = new Set([
+  'youtube', 'tiktok', 'youtu.be',
 ]);
 
 /** Normalize before inference: trim, lowercase, remove separators (_, -, spaces). Ensures video_short, short-video, Video all map consistently. */
@@ -77,6 +86,9 @@ export function inferExecutionMode(
   if (ct.includes('carousel') || ct.includes('slide') || ct.includes('infographic') || ct.includes('deck') || ct.includes('presentation')) {
     return 'CONDITIONAL_AI';
   }
+  if (ct.includes('image') || ct.includes('photo') || ct.includes('graphic') || ct.includes('visual') || ct.includes('banner')) {
+    return 'CONDITIONAL_AI';
+  }
   if (ct.includes('text') || ct.includes('post') || ct.includes('article') || ct.includes('thread') || ct.includes('story')) {
     return 'AI_AUTOMATED';
   }
@@ -84,5 +96,25 @@ export function inferExecutionMode(
   if (raw) {
     console.debug('[execution_mode] unknown content_type:', raw);
   }
-  return 'AI_AUTOMATED';
+  // Unknown types default to CONDITIONAL_AI (safer than AI_AUTOMATED — requires review)
+  return 'CONDITIONAL_AI';
+}
+
+/**
+ * Platform-aware execution mode inference.
+ * Some platforms are inherently video/media-first (YouTube, TikTok) and always
+ * require a creator regardless of the content_type label.
+ */
+export function inferExecutionModeForPlatform(
+  contentType: string,
+  platform?: string | null,
+  context?: ExecutionModeContext
+): ExecutionMode {
+  if (platform) {
+    const p = platform.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    if (CREATOR_PLATFORMS.has(p) || CREATOR_PLATFORMS.has(platform.toLowerCase().trim())) {
+      return 'CREATOR_REQUIRED';
+    }
+  }
+  return inferExecutionMode(contentType, context);
 }

@@ -1,5 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
+import { useCampaignResume } from '../../hooks/useCampaignResume';
+
+/** Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc. */
+function RepurposeDots({ index, total, contentType }: { index: number; total: number; contentType?: string }) {
+  const safeTotal = total < 1 ? 1 : total;
+  const safeIndex = index < 1 ? 1 : index;
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] text-indigo-500" aria-label={safeTotal === 1 ? 'Unique' : `${safeIndex} of ${safeTotal}`}>
+      {Array.from({ length: safeTotal }, (_, i) => (
+        <span key={i} className={i < safeIndex ? 'text-indigo-500' : 'text-gray-300'}>{i < safeIndex ? '●' : '○'}</span>
+      ))}
+      {contentType && <span className="text-gray-400 ml-0.5">{contentType}</span>}
+    </span>
+  );
+}
 import { ArrowLeft, Calendar, ChevronLeft, ChevronRight, Clock, ExternalLink, X } from 'lucide-react';
 import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
 import PlatformIcon from '../../components/ui/PlatformIcon';
@@ -34,6 +49,11 @@ type CalendarActivity = {
   raw_item: Record<string, unknown>;
   /** When set, ownership colors override default card styling (additive). */
   execution_mode?: string;
+  /** Repurpose lineage: e.g. 1/3, 2/3, 3/3 for repurposed content. */
+  repurpose_index?: number;
+  repurpose_total?: number;
+  /** True when this topic already appears on this platform elsewhere — scheduling violation. */
+  repurpose_duplicate?: boolean;
 };
 
 /** Derive ExecutionStatus from job: use job.execution_status if present, else legacy ready_to_schedule → SCHEDULED, else PENDING. */
@@ -186,6 +206,12 @@ export default function CampaignCalendarPage() {
   const plannerWeek = Number(Array.isArray(router.query.week) ? router.query.week[0] : (router.query.week || 0));
   const plannerDay = String(Array.isArray(router.query.day) ? router.query.day[0] : (router.query.day || '')).trim();
 
+  useCampaignResume({
+    campaignId: campaignId || undefined,
+    page: 'campaign-calendar',
+    extraParams: plannerWeek > 0 ? { week: String(plannerWeek), ...(plannerDay ? { day: plannerDay } : {}) } : undefined,
+  });
+
   const [isLoading, setIsLoading] = useState(true);
   const [campaignName, setCampaignName] = useState('Campaign Calendar');
   const [activities, setActivities] = useState<CalendarActivity[]>([]);
@@ -307,8 +333,9 @@ export default function CampaignCalendarPage() {
               const status = String(plan.status ?? 'planned').toLowerCase();
               const execution_status: ExecutionStatus = status === 'scheduled' || status === 'ready' ? 'SCHEDULED' : 'PENDING';
               const raw = (plan.dailyObject && typeof plan.dailyObject === 'object') ? plan.dailyObject : plan;
+              const planId = String(plan.id ?? `daily-${weekNumber}-${idx}`);
               return {
-                execution_id: String(plan.id ?? `daily-${weekNumber}-${idx}`),
+                execution_id: planId,
                 week_number: weekNumber,
                 day: dayOfWeek,
                 date,
@@ -319,10 +346,44 @@ export default function CampaignCalendarPage() {
                 execution_status,
                 execution_jobs: [],
                 raw_item: raw,
+                // repurpose_index / repurpose_total assigned in the post-processing pass below
               };
             });
             mapped = fromDaily;
           }
+        }
+
+        // Assign repurpose_index / repurpose_total campaign-wide.
+        // Duplicate (topic + platform) pairs are flagged as repurpose_duplicate=true.
+        const repurposeGroups = new Map<string, number[]>(); // title → [arrayIndex, ...] (unique platform only)
+        const duplicateIndices = new Set<number>();
+        mapped.forEach((a, i) => {
+          const key = (a.title ?? '').trim();
+          if (!key) return;
+          const existing = repurposeGroups.get(key) ?? [];
+          const plat = (a.platform ?? '').toLowerCase().trim();
+          if (plat && existing.some((idx) => (mapped[idx].platform ?? '').toLowerCase().trim() === plat)) {
+            duplicateIndices.add(i); // scheduling violation
+            return;
+          }
+          existing.push(i);
+          repurposeGroups.set(key, existing);
+        });
+        // Mark violations
+        duplicateIndices.forEach((i) => {
+          mapped[i] = { ...mapped[i], repurpose_duplicate: true };
+        });
+        for (const indices of repurposeGroups.values()) {
+          const sorted = [...indices].sort((a, b) => {
+            const dA = mapped[a].date || '9999-99-99';
+            const dB = mapped[b].date || '9999-99-99';
+            if (dA !== dB) return dA.localeCompare(dB);
+            return (mapped[a].platform ?? '').localeCompare(mapped[b].platform ?? '');
+          });
+          const total = sorted.length;
+          sorted.forEach((arrayIdx, rank) => {
+            mapped[arrayIdx] = { ...mapped[arrayIdx], repurpose_index: rank + 1, repurpose_total: total };
+          });
         }
 
         if (!cancelled) {
@@ -534,9 +595,24 @@ export default function CampaignCalendarPage() {
               <p className="text-sm text-gray-600">{campaignName}</p>
             </div>
           </div>
-          <span className="text-xs text-gray-600 bg-white border border-gray-200 rounded-full px-2 py-1">
-            Tentative scheduling only
-          </span>
+          <div className="flex items-center gap-2">
+            {campaignId && (
+              <button
+                onClick={() => {
+                  const companyId = typeof router.query.companyId === 'string' ? router.query.companyId : '';
+                  router.push(`/campaign-daily-plan/${encodeURIComponent(campaignId)}${companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''}`);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 text-xs font-medium"
+                title="Go to daily execution planner"
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                Daily Plan
+              </button>
+            )}
+            <span className="text-xs text-gray-600 bg-white border border-gray-200 rounded-full px-2 py-1">
+              Tentative scheduling only
+            </span>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 mb-3">
@@ -693,7 +769,14 @@ export default function CampaignCalendarPage() {
                                       </>
                                     )}
                                     <div className="flex items-start justify-between gap-3 mt-1.5">
-                                      <h4 className="text-base font-semibold text-gray-900">{activity.title}</h4>
+                                      <h4 className="text-base font-semibold text-gray-900">
+                                        {activity.title}
+                                      </h4>
+                                      <RepurposeDots
+                                        index={activity.repurpose_index ?? 1}
+                                        total={activity.repurpose_total ?? 1}
+                                        contentType={activity.content_type}
+                                      />
                                       <div className="flex items-center gap-2">
                                         <span className="text-xs leading-none" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (modeLabel ?? undefined)}>{execDot}</span>
                                         <span className={`text-[11px] px-2 py-1 rounded-full font-medium border ${getExecutionStatusBadgeClasses(activity.execution_status)}`}>

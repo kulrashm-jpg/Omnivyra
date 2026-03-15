@@ -1,8 +1,7 @@
 import { Queue } from 'bullmq';
+import { getRedisConfig } from './bullmqClient';
 
+// Uses REDIS_URL from environment (via bullmqClient), not hardcoded localhost
 export const jobQueue = new Queue('engine-jobs', {
-  connection: {
-    host: '127.0.0.1',
-    port: 6379,
-  },
+  connection: getRedisConfig(),
 });

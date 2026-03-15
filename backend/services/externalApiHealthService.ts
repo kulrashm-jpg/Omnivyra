@@ -132,7 +132,26 @@ export const updateApiHealth = async (input: {
     }
 
     if (upsertError) {
-      console.warn('Failed to persist API health record', { apiId: input.apiId });
+      const isSchemaError =
+        (upsertError as { code?: string })?.code === 'PGRST205' ||
+        (upsertError.message?.toLowerCase().includes('could not find the table') ?? false) ||
+        ((upsertError.message?.toLowerCase().includes('relation') ?? false) &&
+          (upsertError.message?.toLowerCase().includes('does not exist') ?? false));
+      if (isSchemaError) {
+        if (!(globalThis as any).__external_api_health_schema_hint_shown) {
+          (globalThis as any).__external_api_health_schema_hint_shown = true;
+          console.warn(
+            'external_api_health table not found. Run database/external_api_health.sql to create it. API health tracking will be skipped.'
+          );
+        }
+      } else {
+        const err = upsertError as { code?: string; message?: string };
+        console.warn('Failed to persist API health record', {
+          apiId: input.apiId,
+          code: err?.code,
+          message: err?.message,
+        });
+      }
     }
 
     return {
@@ -146,7 +165,10 @@ export const updateApiHealth = async (input: {
       reliability_score: reliabilityScore,
     };
   } catch (error) {
-    console.warn('API health update failed', { apiId: input.apiId });
+    console.warn('API health update failed', {
+      apiId: input.apiId,
+      error: (error as Error)?.message,
+    });
     return null;
   }
 };

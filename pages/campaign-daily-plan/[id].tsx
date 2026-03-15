@@ -1,26 +1,22 @@
 /**
- * Daily Content Plan — week×day grid template.
- * Replaces the previous "view plan and work on daily" destination.
- * Features: Regenerate (per week), drag-and-drop activities, click activity → Activity Content Workspace.
+ * Daily Execution Planner — single-week focus.
+ * Week selector → 7-day strip → selected day panel.
+ * Features: Regenerate (per week), click activity → Activity Content Workspace.
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
-import { ArrowLeft, Calendar, GripVertical, RefreshCw, ExternalLink } from 'lucide-react';
-import { getAiLookingAheadMessage } from '@/lib/aiLookingAheadMessage';
-import { getAiStrategicConfidence } from '@/lib/aiStrategicConfidence';
-import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
-import PlatformIcon from '../../components/ui/PlatformIcon';
+import { AlertTriangle, ArrowLeft, Calendar, CheckCircle, Loader2, Sparkles, X } from 'lucide-react';
+import AIGenerationProgress from '@/components/AIGenerationProgress';
 import { blueprintItemToUnifiedExecutionUnit } from '@/lib/planning/unifiedExecutionAdapter';
 import { applyDistributionForWeek } from '@/lib/planning/distributionEngine';
 import { detectMasterContentGroups } from '@/lib/planning/masterContentGrouping';
 import { buildRepurposingContext } from '@/lib/planning/repurposingContext';
 import { buildMasterContentDocument } from '@/lib/planning/masterContentDocument';
-import { buildWeeklyActivitiesFromExecutionItems } from '@/lib/planning/weeklyActivityAdapter';
-import { analyzeWeeklyDistribution } from '@/lib/planning/contentDistributionIntelligence';
-import WeeklyActivityBoard from '@/components/weekly-board/WeeklyActivityBoard';
+import { CampaignDailyPlanSingleWeekView } from '@/components/campaign-daily-plan/CampaignDailyPlanSingleWeekView';
 import type { UnifiedExecutionUnit } from '@/lib/planning/unifiedExecutionAdapter';
-import type { WeeklyActivity } from '@/lib/planning/weeklyActivityAdapter';
+import { fetchWithAuth } from '@/components/community-ai/fetchWithAuth';
+import { useCampaignResume } from '@/hooks/useCampaignResume';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -39,6 +35,8 @@ type GridActivity = {
   execution_mode?: string;
   /** Creator brief for preview line (from weekly enrichment). */
   creator_instruction?: Record<string, unknown>;
+  /** Source of the plan row: 'AI', 'blueprint', or null (unknown). */
+  generation_source?: string | null;
 };
 
 function nonEmpty(v: unknown): string {
@@ -53,7 +51,15 @@ export default function CampaignDailyPlanPage() {
   const focusDay = String(Array.isArray(router.query.day) ? router.query.day[0] : (router.query.day ?? '')).trim();
   const focusDate = String(Array.isArray(router.query.date) ? router.query.date[0] : (router.query.date ?? '')).trim();
   const focusTime = String(Array.isArray(router.query.time) ? router.query.time[0] : (router.query.time ?? '')).trim();
-  const weekRefsMap = useRef<Record<number, HTMLDivElement | null>>({});
+
+  const resumeParams: Record<string, string> = {};
+  if (Number.isFinite(focusWeek) && focusWeek > 0) resumeParams.week = String(focusWeek);
+  if (focusDay) resumeParams.day = focusDay;
+  useCampaignResume({
+    campaignId: id || undefined,
+    page: 'campaign-daily-plan',
+    extraParams: Object.keys(resumeParams).length > 0 ? resumeParams : undefined,
+  });
 
   const [campaignName, setCampaignName] = useState('');
   const [campaignStartDate, setCampaignStartDate] = useState<string | null>(null);
@@ -64,24 +70,41 @@ export default function CampaignDailyPlanPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [regeneratingWeek, setRegeneratingWeek] = useState<number | null>(null);
-  const [dragged, setDragged] = useState<GridActivity | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ week: number; day: string } | null>(null);
+  const [isRepurposeScheduling, setIsRepurposeScheduling] = useState(false);
+  const [campaignScheduled, setCampaignScheduled] = useState(false);
+  const [showScheduleConfirm, setShowScheduleConfirm] = useState(false);
+  const [scheduledPostCount, setScheduledPostCount] = useState<number | null>(null);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [selectedWeekIndex, setSelectedWeekIndex] = useState(0);
+  const [selectedDayIndex, setSelectedDayIndex] = useState(0);
 
-  const fetchWithAuth = useCallback(async (input: RequestInfo, init?: RequestInit) => {
-    const res = await fetch(input, { ...init, credentials: 'include' });
-    return res;
-  }, []);
+  useEffect(() => {
+    if (!notice) return;
+    // Keep errors visible; auto-clear success/info after 5s
+    if (notice.type === 'error') return;
+    const t = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   const loadData = useCallback(async () => {
     if (!id) return;
     setIsLoading(true);
     setError(null);
     try {
-      const [planRes, weeklyRes, campaignRes] = await Promise.all([
+      const [planRes, weeklyRes, campaignRes, stageRes, dailyRes] = await Promise.all([
         fetchWithAuth(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(id)}`),
         fetchWithAuth(`/api/campaigns/get-weekly-plans?campaignId=${encodeURIComponent(id)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`),
         companyId ? fetchWithAuth(`/api/campaigns?type=campaign&campaignId=${encodeURIComponent(id)}&companyId=${encodeURIComponent(companyId)}`) : Promise.resolve(null),
+        fetchWithAuth(`/api/campaigns/stage-availability-batch?campaignIds=${encodeURIComponent(id)}`),
+        fetchWithAuth(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(id)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`),
       ]);
+
+      if (stageRes?.ok) {
+        const stageData = await stageRes.json().catch(() => ({}));
+        const counts = stageData?.availability?.[id]?.counts ?? {};
+        const scheduledPosts = Number(counts?.scheduledPosts ?? 0);
+        setCampaignScheduled(scheduledPosts > 0);
+      }
 
       let name = 'Daily Content Plan';
       let durationWeeks: number | null = null;
@@ -98,8 +121,9 @@ export default function CampaignDailyPlanPage() {
 
       const plans: Array<{ weekNumber?: number; week?: number; theme?: string }> = [];
       if (weeklyRes.ok) {
-        const w = await weeklyRes.json().catch(() => []);
-        if (Array.isArray(w)) plans.push(...w);
+        const w = await weeklyRes.json().catch(() => ({}));
+        const plansArray = Array.isArray(w) ? w : (Array.isArray((w as any)?.plans) ? (w as any).plans : []);
+        plans.push(...plansArray);
       }
       setWeeklyPlans(plans);
 
@@ -108,7 +132,8 @@ export default function CampaignDailyPlanPage() {
       setPlanWeeks(rawPlanWeeks);
       const totalFromPlan = rawPlanWeeks.length;
       const totalFromWeekly = plans.length;
-      setTotalWeeks(Math.max(1, durationWeeks ?? 0, totalFromPlan, totalFromWeekly));
+      const strategyDuration = Number((payload?.draftPlan?.strategy_context ?? payload?.committedPlan?.strategy_context)?.duration_weeks) || 0;
+      setTotalWeeks(Math.max(1, durationWeeks ?? 0, strategyDuration, totalFromPlan, totalFromWeekly));
 
       let memoryProfile: { campaign_id: string; action_acceptance_rate: Record<string, number>; platform_confidence_average: Record<string, number>; total_events: number } | null = null;
       if (id) {
@@ -120,57 +145,81 @@ export default function CampaignDailyPlanPage() {
         }
       }
       const mapped: GridActivity[] = [];
-      for (const week of rawPlanWeeks) {
-        const weekNumber = Number((week as any)?.week ?? (week as any)?.week_number ?? 0) || 0;
-        const items = Array.isArray((week as any)?.daily_execution_items) ? (week as any).daily_execution_items : [];
-        const units = items.map((item: any) => blueprintItemToUnifiedExecutionUnit(item, week, id));
-        const result = applyDistributionForWeek(units, week as Record<string, unknown>, memoryProfile);
-        const distributedUnits = result.units;
-        detectMasterContentGroups(distributedUnits);
-        distributedUnits.forEach((unit, itemIndex: number) => {
-          const item = items[itemIndex];
-          const execution_id = unit.execution_id || `execution-${weekNumber}-${itemIndex}`;
-          const day = unit.day || DAYS[itemIndex % 7];
-          mapped.push({
-            id: execution_id,
-            execution_id,
-            week_number: unit.week_number,
-            day,
-            title: unit.title,
-            platform: unit.platform,
-            content_type: unit.content_type ?? 'post',
-            raw_item: item && typeof item === 'object' ? item : {},
-            ...(unit.execution_mode ? { execution_mode: unit.execution_mode } : {}),
-            ...(unit.creator_instruction ? { creator_instruction: unit.creator_instruction } : {}),
-          });
+
+      // Prefer daily_content_plans when it has data (execution engine is source of truth for populated campaigns)
+      const dailyPayload = dailyRes.ok ? await dailyRes.json().catch(() => []) : [];
+      const dailyPlans: any[] = Array.isArray(dailyPayload) ? dailyPayload : [];
+      if (!dailyRes.ok) {
+        if (typeof window !== 'undefined') {
+          console.warn('[DAILY_PLAN_TRACE] daily-plans API returned', dailyRes.status, '- auth or server error; check you have access to this campaign');
+        }
+        setNotice({
+          type: dailyRes.status === 401 || dailyRes.status === 403 ? 'error' : 'info',
+          message:
+            dailyRes.status === 401
+              ? 'Sign in to load daily plans. Activities in the database will appear once authenticated.'
+              : dailyRes.status === 403
+                ? 'You do not have access to this campaign. Daily plans require campaign role.'
+                : `Daily plans API returned ${dailyRes.status}. Check console for details.`,
         });
       }
+      if (dailyPlans.length > 0) {
+        dailyPlans.forEach((plan: any, idx: number) => {
+          const weekNumber = Number(plan.weekNumber ?? plan.week_number ?? 1) || 1;
+          const dayOfWeek = nonEmpty(plan.dayOfWeek ?? plan.day_of_week) || 'Monday';
+          const title = nonEmpty(plan.title ?? plan.topic ?? (plan.dailyObject as any)?.topicTitle) || 'Untitled';
+          const raw = (plan.dailyObject && typeof plan.dailyObject === 'object') ? plan.dailyObject : plan;
+          const execution_mode = typeof (raw?.execution_mode ?? plan?.execution_mode) === 'string' ? (raw?.execution_mode ?? plan?.execution_mode) : undefined;
+          const creator_instruction = (raw?.creator_instruction ?? (plan as any)?.creator_instruction) && typeof (raw?.creator_instruction ?? (plan as any)?.creator_instruction) === 'object' ? (raw?.creator_instruction ?? (plan as any)?.creator_instruction) as Record<string, unknown> : undefined;
+          mapped.push({
+            id: String(plan.id ?? `daily-${weekNumber}-${idx}`),
+            execution_id: String(plan.id ?? `daily-${weekNumber}-${idx}`),
+            week_number: weekNumber,
+            day: dayOfWeek,
+            title,
+            platform: nonEmpty(plan.platform).toLowerCase() || 'linkedin',
+            content_type: String(plan.content_type ?? (plan.dailyObject as any)?.contentType ?? 'post').toLowerCase(),
+            raw_item: raw,
+            planId: plan.id,
+            ...(execution_mode ? { execution_mode } : {}),
+            ...(creator_instruction ? { creator_instruction } : {}),
+            generation_source: plan.generation_source ?? null,
+          });
+        });
+        if (typeof window !== 'undefined') {
+          console.log('[DAILY_PLAN_TRACE] loadData: loaded', mapped.length, 'activities from daily_content_plans (preferred)');
+        }
+      }
 
+      // Fallback to blueprint when daily_content_plans is empty
       if (mapped.length === 0) {
-        const dailyRes = await fetchWithAuth(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(id)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`);
-        if (dailyRes.ok) {
-          const dailyPlans: any[] = await dailyRes.json().catch(() => []);
-          dailyPlans.forEach((plan: any, idx: number) => {
-            const weekNumber = Number(plan.weekNumber ?? plan.week_number ?? 1) || 1;
-            const dayOfWeek = nonEmpty(plan.dayOfWeek ?? plan.day_of_week) || 'Monday';
-            const title = nonEmpty(plan.title ?? plan.topic ?? (plan.dailyObject as any)?.topicTitle) || 'Untitled';
-            const raw = (plan.dailyObject && typeof plan.dailyObject === 'object') ? plan.dailyObject : plan;
-            const execution_mode = typeof (raw?.execution_mode ?? plan?.execution_mode) === 'string' ? (raw?.execution_mode ?? plan?.execution_mode) : undefined;
-            const creator_instruction = (raw?.creator_instruction ?? (plan as any)?.creator_instruction) && typeof (raw?.creator_instruction ?? (plan as any)?.creator_instruction) === 'object' ? (raw?.creator_instruction ?? (plan as any)?.creator_instruction) as Record<string, unknown> : undefined;
+        for (const week of rawPlanWeeks) {
+          const weekNumber = Number((week as any)?.week ?? (week as any)?.week_number ?? 0) || 0;
+          const items = Array.isArray((week as any)?.daily_execution_items) ? (week as any).daily_execution_items : [];
+          const units = items.map((item: any) => blueprintItemToUnifiedExecutionUnit(item, week, id));
+          const result = applyDistributionForWeek(units, week as Record<string, unknown>, memoryProfile);
+          const distributedUnits = result.units;
+          detectMasterContentGroups(distributedUnits);
+          distributedUnits.forEach((unit, itemIndex: number) => {
+            const item = items[itemIndex];
+            const execution_id = unit.execution_id || `execution-${weekNumber}-${itemIndex}`;
+            const day = unit.day || DAYS[itemIndex % 7];
             mapped.push({
-              id: String(plan.id ?? `daily-${weekNumber}-${idx}`),
-              execution_id: String(plan.id ?? `daily-${weekNumber}-${idx}`),
-              week_number: weekNumber,
-              day: dayOfWeek,
-              title,
-              platform: nonEmpty(plan.platform).toLowerCase() || 'linkedin',
-              content_type: String(plan.content_type ?? (plan.dailyObject as any)?.contentType ?? 'post').toLowerCase(),
-              raw_item: raw,
-              planId: plan.id,
-              ...(execution_mode ? { execution_mode } : {}),
-              ...(creator_instruction ? { creator_instruction } : {}),
+              id: execution_id,
+              execution_id,
+              week_number: unit.week_number,
+              day,
+              title: unit.title,
+              platform: unit.platform,
+              content_type: unit.content_type ?? 'post',
+              raw_item: item && typeof item === 'object' ? item : {},
+              ...(unit.execution_mode ? { execution_mode: unit.execution_mode } : {}),
+              ...(unit.creator_instruction ? { creator_instruction: unit.creator_instruction } : {}),
             });
           });
+        }
+        if (typeof window !== 'undefined' && mapped.length > 0) {
+          console.log('[DAILY_PLAN_TRACE] loadData: loaded', mapped.length, 'activities from blueprint (fallback)');
         }
       }
 
@@ -180,48 +229,156 @@ export default function CampaignDailyPlanPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [id, companyId, fetchWithAuth]);
+  }, [id, companyId]);
+
+  const loadDataRef = useRef<() => Promise<void> | null>(null);
+  loadDataRef.current = loadData;
+
+  const handleRepurposeAndSchedule = useCallback(async () => {
+    if (!id || isRepurposeScheduling) return;
+    setIsRepurposeScheduling(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetchWithAuth(`/api/campaigns/${id}/repurpose-and-schedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data?.error || data?.message || 'Failed to repurpose and schedule.';
+        setNotice({ type: 'error', message: msg });
+        return;
+      }
+      const count = data?.scheduled ?? data?.count ?? data?.rowsScheduled ?? data?.scheduledCount ?? null;
+      if (count != null) setScheduledPostCount(Number(count));
+      setNotice({ type: 'success', message: `Campaign scheduled successfully${count != null ? ` — ${count} posts queued` : ''}.` });
+      setCampaignScheduled(true);
+      setShowScheduleConfirm(false);
+      await loadDataRef.current?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to repurpose and schedule.';
+      setNotice({ type: 'error', message: msg });
+    } finally {
+      setIsRepurposeScheduling(false);
+    }
+  }, [id, isRepurposeScheduling, fetchWithAuth]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  useEffect(() => {
-    if (!router.isReady || !Number.isFinite(focusWeek) || isLoading) return;
-    const el = weekRefsMap.current[focusWeek];
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  /** Dynamic week generation from campaign duration */
+  const weeksToShow = React.useMemo(
+    () => Array.from({ length: totalWeeks }, (_, i) => i + 1),
+    [totalWeeks]
+  );
+
+  /** Add days to date string */
+  const addDays = useCallback((start: string | null, days: number): string => {
+    if (!start || !/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      return d.toISOString().slice(0, 10);
     }
-  }, [router.isReady, focusWeek, isLoading]);
+    const base = new Date(start + 'T00:00:00');
+    base.setDate(base.getDate() + days);
+    return base.toISOString().slice(0, 10);
+  }, []);
+
+  const getWeekdayName = useCallback((iso: string): string => {
+    try {
+      return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' });
+    } catch {
+      return 'Monday';
+    }
+  }, []);
+
+  /** Default selection on initial load: Week 1 (or focusWeek), first day with activities or day 0 */
+  const initialSelectionDone = useRef(false);
+  useEffect(() => {
+    if (isLoading || initialSelectionDone.current) return;
+    initialSelectionDone.current = true;
+    const focusWeekNum = Number.isFinite(focusWeek) && focusWeek >= 1 ? focusWeek : 1;
+    const idx = weeksToShow.indexOf(focusWeekNum);
+    if (idx >= 0) setSelectedWeekIndex(idx);
+    const wn = weeksToShow[idx >= 0 ? idx : 0] ?? 1;
+    const weekActs = activities.filter((a) => a.week_number === wn);
+    for (let i = 0; i < 7; i++) {
+      const dateStr = addDays(campaignStartDate, idx >= 0 ? idx * 7 + i : i);
+      const weekday = getWeekdayName(dateStr);
+      if (weekActs.some((a) => (a.day ?? '').toLowerCase() === weekday.toLowerCase())) {
+        setSelectedDayIndex(i);
+        return;
+      }
+    }
+    if (focusDay) {
+      const dayIdx = DAYS.findIndex((d) => d.toLowerCase() === focusDay.toLowerCase());
+      if (dayIdx >= 0) setSelectedDayIndex(dayIdx);
+    } else {
+      setSelectedDayIndex(0);
+    }
+  }, [isLoading, weeksToShow, activities, campaignStartDate, focusWeek, focusDay, addDays, getWeekdayName]);
+
+  /** When week changes: select first day with activities or day 0 */
+  const handleWeekSelect = useCallback(
+    (wn: number) => {
+      const idx = weeksToShow.indexOf(wn);
+      setSelectedWeekIndex(idx >= 0 ? idx : 0);
+      const weekNumber = weeksToShow[idx >= 0 ? idx : 0] ?? 1;
+      const weekActs = activities.filter((a) => a.week_number === weekNumber);
+      for (let i = 0; i < 7; i++) {
+        const dateStr = addDays(campaignStartDate, (idx >= 0 ? idx : 0) * 7 + i);
+        const weekday = getWeekdayName(dateStr);
+        if (weekActs.some((a) => (a.day ?? '').toLowerCase() === weekday.toLowerCase())) {
+          setSelectedDayIndex(i);
+          return;
+        }
+      }
+      setSelectedDayIndex(0);
+    },
+    [weeksToShow, activities, campaignStartDate, addDays, getWeekdayName]
+  );
 
   /** Staggered times for multiple platforms on the same day. */
   const STAGGERED_TIMES = ['09:00', '10:30', '12:00', '14:00', '15:30', '17:00', '18:30', '20:00'];
 
   const openActivityWorkspace = (activity: GridActivity) => {
     const raw = activity.raw_item;
-    const hasNested = (raw as any)?.writer_content_brief != null || (raw as any)?.intent != null;
+    // For AI-generated plans, `raw` is the API plan object. Parse rich data from content JSON if available.
+    const parsedContent = (() => {
+      try {
+        const c = (raw as any)?.content ?? (raw as any)?.dailyObject;
+        if (c && typeof c === 'string' && c.startsWith('{')) return JSON.parse(c) as Record<string, unknown>;
+        if (c && typeof c === 'object') return c as Record<string, unknown>;
+        return null;
+      } catch { return null; }
+    })();
+    const richRaw: Record<string, unknown> = parsedContent ? { ...raw, ...parsedContent } : (raw as Record<string, unknown>);
+    const hasNested = (richRaw as any)?.writer_content_brief != null || (richRaw as any)?.intent != null;
     const dailyExecutionItem = hasNested
-      ? { ...raw }
+      ? { ...richRaw }
       : {
-          ...raw,
+          ...richRaw,
           topic: activity.title,
           title: activity.title,
           platform: activity.platform,
           content_type: activity.content_type,
           intent: {
-            objective: (raw as any)?.dailyObjective ?? (raw as any)?.objective,
-            pain_point: (raw as any)?.whatProblemAreWeAddressing ?? (raw as any)?.summary,
-            outcome_promise: (raw as any)?.whatShouldReaderLearn ?? (raw as any)?.introObjective,
-            cta_type: (raw as any)?.desiredAction ?? (raw as any)?.cta,
+            objective: (richRaw as any)?.dailyObjective ?? (richRaw as any)?.objective,
+            pain_point: (richRaw as any)?.whatProblemAreWeAddressing ?? (richRaw as any)?.summary,
+            outcome_promise: (richRaw as any)?.whatShouldReaderLearn ?? (richRaw as any)?.introObjective,
+            cta_type: (richRaw as any)?.desiredAction ?? (richRaw as any)?.cta,
           },
           writer_content_brief: {
-            topicTitle: (raw as any)?.topicTitle ?? (raw as any)?.topic ?? activity.title,
-            writingIntent: (raw as any)?.writingIntent ?? (raw as any)?.description,
-            whatShouldReaderLearn: (raw as any)?.whatShouldReaderLearn ?? (raw as any)?.introObjective,
-            whatProblemAreWeAddressing: (raw as any)?.whatProblemAreWeAddressing ?? (raw as any)?.summary,
-            desiredAction: (raw as any)?.desiredAction ?? (raw as any)?.cta,
-            narrativeStyle: (raw as any)?.narrativeStyle ?? (raw as any)?.brandVoice,
-            topicGoal: (raw as any)?.dailyObjective ?? (raw as any)?.objective,
+            topicTitle: (richRaw as any)?.topicTitle ?? (richRaw as any)?.topic ?? activity.title,
+            writingIntent: (richRaw as any)?.writingIntent ?? (richRaw as any)?.description,
+            whatShouldReaderLearn: (richRaw as any)?.whatShouldReaderLearn ?? (richRaw as any)?.introObjective,
+            whatProblemAreWeAddressing: (richRaw as any)?.whatProblemAreWeAddressing ?? (richRaw as any)?.summary,
+            desiredAction: (richRaw as any)?.desiredAction ?? (richRaw as any)?.cta,
+            narrativeStyle: (richRaw as any)?.narrativeStyle ?? (richRaw as any)?.brandVoice,
+            topicGoal: (richRaw as any)?.dailyObjective ?? (richRaw as any)?.objective,
           },
         };
 
@@ -257,7 +414,7 @@ export default function CampaignDailyPlanPage() {
       time: STAGGERED_TIMES[idx % STAGGERED_TIMES.length],
       status: 'planned',
       title: activity.title,
-      description: String((raw as any)?.writingIntent ?? (raw as any)?.description ?? ''),
+      description: String((richRaw as any)?.writingIntent ?? (richRaw as any)?.description ?? ''),
       sequence_index: idx + 1,
       total_distributions: totalDistributions,
     }));
@@ -287,7 +444,7 @@ export default function CampaignDailyPlanPage() {
       activityId: activity.execution_id,
       title: activity.title,
       topic: activity.title,
-      description: String((raw as any)?.writingIntent ?? (raw as any)?.description ?? ''),
+      description: String((richRaw as any)?.writingIntent ?? (richRaw as any)?.description ?? ''),
       dailyExecutionItem,
       source: 'daily' as const,
       schedules,
@@ -304,29 +461,72 @@ export default function CampaignDailyPlanPage() {
     }
   };
 
-  const openWorkspaceFromCard = (activity: WeeklyActivity) => {
-    const dayFull = DAYS[activity.scheduled_day - 1] ?? 'Monday';
-    const gridLike: GridActivity = {
-      id: activity.execution_id ?? activity.content_code,
-      execution_id: activity.execution_id ?? activity.content_code,
-      week_number: activity.week_number ?? 1,
-      day: dayFull,
-      title: activity.topic,
-      platform: activity.platform,
-      content_type: activity.content_type,
-      raw_item: activity.raw_slot,
-    };
-    openActivityWorkspace(gridLike);
-  };
+  const [generatingFromAI, setGeneratingFromAI] = useState(false);
 
-  const handleImprovePlan = (weekNumber: number) => {
-    router.push(
-      `/campaign-planning?campaignId=${encodeURIComponent(id)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}&week=${weekNumber}&openChat=1`
-    );
-  };
+  /** Drag-and-drop: save updated day assignments to DB via save-week-daily-plan */
+  const handleSaveDayChanges = useCallback(async (weekNumber: number, moves: Array<{ planId: string; day: string }>) => {
+    if (!id || moves.length === 0) return;
+    try {
+      const res = await fetchWithAuth('/api/campaigns/save-week-daily-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId: id,
+          weekNumber,
+          items: moves.map((m) => ({ id: m.planId, dayOfWeek: m.day })),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setNotice({ type: 'error', message: err?.error || 'Failed to save day changes.' });
+        return;
+      }
+      setNotice({ type: 'success', message: 'Day assignments saved.' });
+      await loadDataRef.current?.();
+    } catch (e) {
+      setNotice({ type: 'error', message: e instanceof Error ? e.message : 'Failed to save day changes.' });
+    }
+  }, [id, fetchWithAuth]);
+
+  /** Source B: AI expansion — single API call generates 7 days and persists to daily_content_plans */
+  const handleGenerateFromAI = useCallback(async (weekNumber: number) => {
+    if (!id || generatingFromAI) return;
+    if (typeof window !== 'undefined') console.log('[DAILY_PLAN_TRACE] BUTTON_TRIGGERED Generate from AI', { weekNumber });
+    setGeneratingFromAI(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetchWithAuth('/api/campaigns/generate-ai-daily-plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId: id,
+          weekNumber,
+          companyId: companyId || undefined,
+          provider: 'demo',
+        }),
+      });
+      const data = res.ok ? await res.json().catch(() => ({})) : null;
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.error || errData?.details || 'Failed to generate daily plans');
+      }
+      const rowsInserted = data?.rowsInserted ?? 7;
+      setNotice({ type: 'success', message: `Generated ${rowsInserted} daily plans.` });
+      await loadDataRef.current?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to generate from AI.';
+      setError(msg);
+      setNotice({ type: 'error', message: msg });
+    } finally {
+      setGeneratingFromAI(false);
+    }
+  }, [id, companyId, fetchWithAuth, generatingFromAI]);
 
   const handleRegenerateWeek = async (weekNumber: number) => {
+    if (typeof window !== 'undefined') console.log('[DAILY_PLAN_TRACE] BUTTON_TRIGGERED Regenerate', { weekNumber });
     setRegeneratingWeek(weekNumber);
+    setError(null);
     try {
       const res = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
         method: 'POST',
@@ -341,64 +541,19 @@ export default function CampaignDailyPlanPage() {
           distribution_mode: 'staggered',
         }),
       });
-      if (res.ok) await loadData();
-      else throw new Error('Regenerate failed');
+      if (res.ok) {
+        await loadData();
+        setNotice({ type: 'success', message: 'Week regenerated — plans updated with latest frequency and content type settings.' });
+        return;
+      }
+      // Blueprint-based generation failed for any reason — always fall back to AI.
+      await handleGenerateFromAI(weekNumber);
     } catch (e) {
-      setError('Failed to regenerate week. Try again.');
+      setError(e instanceof Error ? e.message : 'Failed to regenerate week. Try again.');
     } finally {
       setRegeneratingWeek(null);
     }
   };
-
-  const handleDrop = async (targetWeek: number, targetDay: string) => {
-    if (!dragged || !id) return;
-    setDropTarget(null);
-    setDragged(null);
-    if (dragged.week_number === targetWeek && dragged.day === targetDay) return;
-    if (dragged.week_number !== targetWeek) return; // only same-week move supported for now
-    if (!dragged.planId) return; // only daily_content_plans can be moved
-    const res = await fetchWithAuth('/api/campaigns/save-week-daily-plan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        campaignId: id,
-        weekNumber: targetWeek,
-        items: [{ id: dragged.planId, dayOfWeek: targetDay }],
-      }),
-    });
-    if (res.ok) {
-      setActivities((prev) =>
-        prev.map((a) =>
-          a.id === dragged.id ? { ...a, day: targetDay } : a
-        )
-      );
-    }
-  };
-
-  const weeksToShow = React.useMemo(() => {
-    return Array.from({ length: totalWeeks }, (_, i) => i + 1);
-  }, [totalWeeks]);
-
-  const aiPreviewByWeek = useMemo(() => {
-    const m: Record<number, string | null> = {};
-    weeklyPlans.forEach((p) => {
-      const wn = (p as { weekNumber?: number; week?: number }).weekNumber ?? (p as { week?: number }).week;
-      if (wn != null) m[wn] = getAiLookingAheadMessage(p as any);
-    });
-    return m;
-  }, [weeklyPlans]);
-
-  const aiConfidenceByWeek = useMemo(() => {
-    const m: Record<number, string | null> = {};
-    weeklyPlans.forEach((p) => {
-      const wn = (p as { weekNumber?: number; week?: number }).weekNumber ?? (p as { week?: number }).week;
-      if (wn != null) m[wn] = getAiStrategicConfidence(p as any);
-    });
-    return m;
-  }, [weeklyPlans]);
-
-  const getActivitiesFor = (weekNumber: number, day: string) =>
-    activities.filter((a) => a.week_number === weekNumber && a.day === day);
 
   if (!id) {
     return (
@@ -419,23 +574,91 @@ export default function CampaignDailyPlanPage() {
   return (
     <>
       <Head>
-        <title>Daily Content Plan{campaignName ? ` — ${campaignName}` : ''}</title>
+        <title>Daily Execution Planner{campaignName ? ` — ${campaignName}` : ''}</title>
       </Head>
+      {generatingFromAI && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-md">
+            <AIGenerationProgress
+              isActive={true}
+              message="Generating 7 daily plans"
+              expectedSeconds={25}
+              maxSecondsHint={60}
+              rotatingMessages={[
+                'Generating Monday…',
+                'Generating Tuesday…',
+                'Generating Wednesday…',
+                'Generating Thursday…',
+                'Generating Friday…',
+                'Generating Saturday…',
+                'Generating Sunday…',
+                'Saving to database…',
+              ]}
+            />
+          </div>
+        </div>
+      )}
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
           <div className="flex items-center justify-between mb-6">
             <button
+              type="button"
               onClick={() => router.push(`/campaign-details/${id}${companyId ? `?companyId=${companyId}` : ''}`)}
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
+              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 active:scale-[0.98] transition-transform px-2 py-1 rounded hover:bg-gray-100"
             >
               <ArrowLeft className="w-5 h-5" />
               Back to campaign
             </button>
             <h1 className="text-xl font-bold text-gray-900">
-              Daily Content Plan{campaignName ? ` — ${campaignName}` : ''}
+              Daily Execution Planner{campaignName ? ` — ${campaignName}` : ''}
             </h1>
-            <div />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => router.push(`/campaign-calendar/${id}${companyId ? `?companyId=${companyId}` : ''}`)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium"
+                title="Open calendar view"
+              >
+                <Calendar className="w-4 h-4" />
+                Calendar
+              </button>
+              {!campaignScheduled ? (
+                <button
+                  onClick={() => setShowScheduleConfirm(true)}
+                  disabled={isRepurposeScheduling}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 text-sm font-medium disabled:opacity-50"
+                  title="Generate platform-specific content for every activity and place on the posting calendar"
+                >
+                  {isRepurposeScheduling ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Scheduling…
+                    </>
+                  ) : (
+                    'Repurpose & Schedule Campaign'
+                  )}
+                </button>
+              ) : (
+                <span className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-100 text-emerald-800 text-sm font-medium">
+                  <CheckCircle className="w-4 h-4" />
+                  Scheduled{scheduledPostCount != null ? ` (${scheduledPostCount})` : ''}
+                </span>
+              )}
+            </div>
           </div>
+
+          {notice && (
+            <div
+              className={`mb-4 rounded-lg border px-4 py-2 text-sm ${
+                notice.type === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                  : notice.type === 'error'
+                  ? 'border-red-200 bg-red-50 text-red-800'
+                  : 'border-sky-200 bg-sky-50 text-sky-800'
+              }`}
+            >
+              {notice.message}
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 rounded-lg border border-red-200 bg-red-50 text-red-800 px-4 py-2 text-sm">
@@ -444,7 +667,7 @@ export default function CampaignDailyPlanPage() {
           )}
 
           <p className="text-sm text-gray-600 mb-4">
-            All weeks are shown below. Weeks without daily activities have empty day cells—use <strong>Regenerate</strong> to generate them. Drag activities between days to reorder. Click an activity to open the Activity Content Workspace. Changes here match the weekly plan page.
+            Select a week and day to view activities. Use <strong>Regenerate</strong> to generate daily activities, then <strong>drag activities between days</strong> to rearrange and click <strong>Save day changes</strong>. Click an activity to open the Activity Content Workspace.
           </p>
 
           {(focusDate || focusTime) && (
@@ -477,171 +700,125 @@ export default function CampaignDailyPlanPage() {
             </div>
           )}
 
-          <div className="space-y-6">
-            {weeksToShow.map((weekNumber) => {
-              const weekPlan = weeklyPlans.find((p) => (p.weekNumber ?? p.week) === weekNumber);
-              const theme = weekPlan?.theme || `Week ${weekNumber} Theme`;
-              const distributionStrategy = (weekPlan as any)?.distribution_strategy;
-              const distributionReason = (weekPlan as any)?.distribution_reason;
-              const planningAdjustmentReason = (weekPlan as any)?.planning_adjustment_reason;
-              const planningAdjustmentsSummary = (weekPlan as any)?.planning_adjustments_summary;
-              const momentumAdjustments = (weekPlan as any)?.momentum_adjustments;
-              const recoveredTopics = (weekPlan as any)?.week_extras?.recovered_topics as Array<{ topic: string; recovered_from_week: number }> | undefined;
-              const isRegenerating = regeneratingWeek === weekNumber;
-              const isFocusedWeek = Number.isFinite(focusWeek) && focusWeek === weekNumber;
-              return (
-                <div
-                  key={weekNumber}
-                  ref={(el) => { weekRefsMap.current[weekNumber] = el; }}
-                  className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
-                  data-week={weekNumber}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            {weeksToShow.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 py-12 text-center">
+                <p className="text-sm text-gray-600">No weeks in this plan yet.</p>
+                <p className="text-xs text-gray-400">Go back to Campaign Details to generate a week plan, then return here.</p>
+                <button
+                  type="button"
+                  onClick={() => router.push(`/campaign-details/${id}${companyId ? `?companyId=${companyId}` : ''}`)}
+                  className="mt-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
                 >
-                  <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-200">
-                    <h2 className="font-semibold text-gray-900">Week {weekNumber}: {theme}</h2>
-                    {distributionStrategy && (
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        Distribution: {String(distributionStrategy).replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())}
-                      </p>
-                    )}
-                    {distributionReason && (
-                      <p className="text-xs text-gray-500 mt-0.5">Why: {distributionReason}</p>
-                    )}
-                    {planningAdjustmentReason && (
-                      <p className="text-xs text-gray-500 mt-0.5">{planningAdjustmentReason}</p>
-                    )}
-                    {planningAdjustmentsSummary?.text && (
-                      <p className="text-xs text-gray-500 mt-0.5">What changed: {planningAdjustmentsSummary.text}</p>
-                    )}
-                    {momentumAdjustments?.absorbed_from_week?.length ? (
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        Momentum adjusted from Week {momentumAdjustments.absorbed_from_week.join(', ')}
-                        {momentumAdjustments.momentum_transfer_strength ? (
-                          <> · Momentum: {momentumAdjustments.momentum_transfer_strength.charAt(0).toUpperCase() + momentumAdjustments.momentum_transfer_strength.slice(1)} adjustment</>
-                        ) : null}
-                      </p>
-                    ) : null}
-                    {recoveredTopics?.length ? (
-                      <p className="text-xs text-gray-500 mt-0.5" title={recoveredTopics.map((r) => r.topic).join(', ')}>
-                        Narrative recovered from Week {[...new Set(recoveredTopics.map((r) => r.recovered_from_week))].join(', ')}
-                      </p>
-                    ) : null}
-                    {aiPreviewByWeek[weekNumber] ? (
-                      <p className="text-xs text-slate-500 italic mt-0.5">AI Preview: {aiPreviewByWeek[weekNumber]}</p>
-                    ) : null}
-                    {aiConfidenceByWeek[weekNumber] ? (
-                      <p className="text-xs text-slate-400 italic mt-0.5">{aiConfidenceByWeek[weekNumber]}</p>
-                    ) : null}
-                    <button
-                      onClick={() => handleRegenerateWeek(weekNumber)}
-                      disabled={isRegenerating}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-100 text-indigo-700 hover:bg-indigo-200 text-sm font-medium disabled:opacity-50"
-                    >
-                      <RefreshCw className={`w-4 h-4 ${isRegenerating ? 'animate-spin' : ''}`} />
-                      Regenerate
-                    </button>
-                  </div>
-                  {(() => {
-                    const weekData = planWeeks.find((w: any) => (w?.week ?? w?.week_number) === weekNumber);
-                    const execItems = Array.isArray((weekData as any)?.execution_items) ? (weekData as any).execution_items : [];
-                    const hasSlots = execItems.some((e: any) => Array.isArray(e?.topic_slots) && e.topic_slots.length > 0);
-                    if (!hasSlots) return null;
-                    const cardActivities = buildWeeklyActivitiesFromExecutionItems(weekData);
-                    const distributionInsights = Array.isArray((weekData as any)?.distribution_insights)
-                      ? (weekData as any).distribution_insights
-                      : analyzeWeeklyDistribution(weekData, {
-                          campaignStartDate: campaignStartDate ?? undefined,
-                          weekNumber,
-                        });
-                    return (
-                      <div className="px-4 py-3 border-b border-gray-200 bg-white">
-                        <WeeklyActivityBoard
-                          activities={cardActivities}
-                          weekNumber={weekNumber}
-                          weekTheme={theme}
-                          campaignId={id}
-                          distributionInsights={distributionInsights}
-                          onOpenWorkspace={openWorkspaceFromCard}
-                          onImprovePlan={() => handleImprovePlan(weekNumber)}
-                          onEditApplied={loadData}
-                        />
-                      </div>
-                    );
-                  })()}
-                  <div className="grid grid-cols-7 gap-px bg-gray-200">
-                    {DAYS.map((day) => {
-                      const cellActivities = getActivitiesFor(weekNumber, day);
-                      const isDropTarget = dropTarget?.week === weekNumber && dropTarget?.day === day;
-                      const isFocusedDay = isFocusedWeek && focusDay && day.toLowerCase() === focusDay.toLowerCase();
-                      return (
-                        <div
-                          key={day}
-                          onDragOver={(e) => { e.preventDefault(); setDropTarget({ week: weekNumber, day }); }}
-                          onDragLeave={() => setDropTarget((t) => (t?.week === weekNumber && t?.day === day ? null : t))}
-                          onDrop={(e) => { e.preventDefault(); handleDrop(weekNumber, day); }}
-                          className={`min-h-[100px] bg-white p-2 ${isDropTarget ? 'ring-2 ring-indigo-400 bg-indigo-50/50' : ''} ${isFocusedDay ? 'ring-2 ring-emerald-400 bg-emerald-50/70' : ''}`}
-                          data-day={day}
+                  Go to Campaign Details
+                </button>
+              </div>
+            ) : (
+              (() => {
+                const weekNumber = weeksToShow[selectedWeekIndex] ?? 1;
+                const weekActivities = activities.filter((a) => a.week_number === weekNumber);
+                const hasActivities = weekActivities.length > 0;
+                return (
+                  <>
+                    {!hasActivities ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 mb-4 flex items-center justify-between gap-4">
+                        <span>No daily activities for Week {weekNumber} yet.</span>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateFromAI(weekNumber)}
+                          disabled={generatingFromAI}
+                          className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-700 text-white text-xs font-medium hover:bg-amber-800 disabled:opacity-50"
                         >
-                          <div className="text-xs font-medium text-gray-500 mb-1">{day.slice(0, 3)}</div>
-                          <div className="space-y-1">
-                            {cellActivities.map((act) => {
-                              const execMode = (act.execution_mode ?? 'AI_AUTOMATED') as 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI';
-                              const intel = getExecutionIntelligence(execMode);
-                              const modeColors = intel.colorClasses;
-                              const actClass = modeColors
-                                ? `flex flex-col gap-0.5 rounded border p-1.5 cursor-pointer group ${modeColors.card} hover:opacity-90`
-                                : 'flex flex-col gap-0.5 rounded border border-gray-200 bg-gray-50 hover:bg-indigo-50 hover:border-indigo-200 p-1.5 cursor-pointer group';
-                              const execDot = execMode === 'AI_AUTOMATED' ? '🟢' : execMode === 'CONDITIONAL_AI' ? '🟡' : '🔴';
-                              const modeLabel = intel.label;
-                              const modeExplanation = intel.explanation;
-                              const creatorInst = act.creator_instruction ?? (act.raw_item?.creator_instruction && typeof act.raw_item.creator_instruction === 'object' ? act.raw_item.creator_instruction as Record<string, unknown> : null);
-                              const creatorPreview = creatorInst?.targetAudience ? `Audience: ${String(creatorInst.targetAudience)}` : creatorInst?.objective ? `Goal: ${String(creatorInst.objective)}` : null;
-                              return (
-                              <div
-                                key={act.id}
-                                draggable
-                                onDragStart={() => setDragged(act)}
-                                onDragEnd={() => setDragged(null)}
-                                onClick={() => openActivityWorkspace(act)}
-                                className={actClass}
-                              >
-                                <div className="flex items-center gap-1 w-full">
-                                  <span className="text-[9px] leading-none shrink-0" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (modeLabel ?? undefined)}>{execDot}</span>
-                                  <GripVertical className="w-3 h-3 text-gray-400 shrink-0 opacity-0 group-hover:opacity-100" />
-                                  <span className="text-xs text-gray-800 truncate flex-1" title={act.title}>
-                                    {act.title.slice(0, 24)}{act.title.length > 24 ? '…' : ''}
-                                  </span>
-                                  <span className="shrink-0"><PlatformIcon platform={act.platform} size={12} showLabel className="text-[10px] text-gray-500" /></span>
-                                  <ExternalLink className="w-3 h-3 text-gray-400 shrink-0" />
-                                </div>
-                                <div className="font-medium text-[10px] text-gray-800">{modeLabel ?? 'AI Ready'}</div>
-                                {modeExplanation && <div className="text-[9px] text-gray-500">{modeExplanation}</div>}
-                                {execMode === 'CONDITIONAL_AI' && (
-                                  <>
-                                    <span className="inline-block text-[9px] px-1 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 w-fit">Template Required</span>
-                                    <span className="block text-[9px] text-gray-500">Template unlocks AI generation</span>
-                                  </>
-                                )}
-                                {creatorPreview && (
-                                  <span className="text-[9px] text-gray-500 truncate" title={creatorPreview}>{creatorPreview}</span>
-                                )}
-                              </div>
-                            );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
+                          Generate from AI
+                        </button>
+                      </div>
+                    ) : null}
+                    <CampaignDailyPlanSingleWeekView
+                      weeksToShow={weeksToShow}
+                      activities={activities}
+                      weeklyPlans={weeklyPlans}
+                      campaignStartDate={campaignStartDate}
+                      selectedWeekIndex={selectedWeekIndex}
+                      selectedDayIndex={selectedDayIndex}
+                      onWeekSelect={handleWeekSelect}
+                      onDaySelect={setSelectedDayIndex}
+                      onActivityClick={openActivityWorkspace}
+                      onRegenerateWeek={handleRegenerateWeek}
+                      regeneratingWeek={regeneratingWeek}
+                      onGenerateFromAI={handleGenerateFromAI}
+                      generatingFromAI={generatingFromAI}
+                      onSaveDayChanges={handleSaveDayChanges}
+                    />
+                  </>
+                );
+              })()
+            )}
           </div>
-
-          {weeksToShow.length > 0 && (
-            <p className="text-xs text-gray-500 mt-4">And so on… Add more weeks from the main plan.</p>
-          )}
         </div>
       </div>
+
+      {/* Confirmation dialog for "Repurpose & Schedule" */}
+      {showScheduleConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-md bg-white rounded-xl shadow-xl border border-gray-200 p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <h2 className="text-base font-semibold text-gray-900 mb-1">Schedule entire campaign?</h2>
+                <p className="text-sm text-gray-600">
+                  This will generate platform-adapted content for every activity in all {totalWeeks} weeks and add them to your posting calendar. Activities already scheduled will be skipped.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setShowScheduleConfirm(false)}
+                disabled={isRepurposeScheduling}
+                className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRepurposeAndSchedule}
+                disabled={isRepurposeScheduling}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {isRepurposeScheduling ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Scheduling…
+                  </>
+                ) : (
+                  'Confirm & Schedule'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Post-scheduling success banner with View Calendar CTA */}
+      {campaignScheduled && (
+        <div className="fixed bottom-6 right-6 z-40 flex items-center gap-3 bg-emerald-600 text-white px-5 py-3 rounded-xl shadow-lg">
+          <CheckCircle className="w-5 h-5 shrink-0" />
+          <span className="text-sm font-medium">
+            Campaign scheduled{scheduledPostCount != null ? ` — ${scheduledPostCount} posts queued` : ''}
+          </span>
+          <button
+            onClick={() => router.push(`/campaign-calendar/${id}${companyId ? `?companyId=${companyId}` : ''}`)}
+            className="ml-2 px-3 py-1 rounded-lg bg-white text-emerald-700 text-xs font-semibold hover:bg-emerald-50"
+          >
+            View Calendar →
+          </button>
+          <button
+            onClick={() => setCampaignScheduled(false)}
+            className="ml-1 text-emerald-200 hover:text-white"
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </>
   );
 }

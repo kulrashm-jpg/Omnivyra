@@ -25,8 +25,10 @@ const COLLAPSED_VISIBLE = 6;
 type Props = {
   /** Company-specific strategic aspects (from profile / recommendation_strategic_config). */
   aspects: string[];
-  selectedAspect: string | null;
-  onChange: (aspect: string | null) => void;
+  /** Multiple aspects; treated as OR (recommendations match any selected). */
+  selectedAspects: string[];
+  /** Called when selection changes. */
+  onAspectsChange: (aspects: string[]) => void;
   /** When set, only these aspects are clickable (e.g. after user picked Offerings first). Null = all active. */
   enabledAspectIds?: Set<string> | null;
 };
@@ -36,8 +38,8 @@ const sortAtoZ = (a: string, b: string) =>
 
 export default function StrategicAspectSelector({
   aspects,
-  selectedAspect,
-  onChange,
+  selectedAspects,
+  onAspectsChange,
   enabledAspectIds = null,
 }: Props) {
   const [search, setSearch] = useState('');
@@ -53,9 +55,19 @@ export default function StrategicAspectSelector({
   const visible = expanded ? filtered : filtered.slice(0, COLLAPSED_VISIBLE);
   const hasMore = filtered.length > COLLAPSED_VISIBLE;
 
+  const toggleAspect = (aspect: string) => {
+    if (!enabledAspectIds || enabledAspectIds.has(aspect)) {
+      const next = selectedAspects.includes(aspect)
+        ? selectedAspects.filter((a) => a !== aspect)
+        : [...selectedAspects, aspect];
+      onAspectsChange(next);
+    }
+  };
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4">
-      <h3 className="text-sm font-semibold text-gray-800 mb-3">Strategic aspect</h3>
+      <h3 className="text-sm font-semibold text-gray-800 mb-3">Strategic aspects</h3>
+      <p className="text-xs text-gray-500 mb-2">Select multiple — treated as OR (recommendations match any selected).</p>
       <div className="mb-3">
         <input
           type="search"
@@ -73,14 +85,14 @@ export default function StrategicAspectSelector({
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {visible.map((aspect) => {
-          const selected = selectedAspect === aspect;
+          const selected = selectedAspects.includes(aspect);
           const enabled = enabledAspectIds == null || enabledAspectIds.has(aspect);
           return (
             <button
               key={aspect}
               type="button"
               disabled={!enabled}
-              onClick={() => (enabled ? onChange(selected ? null : aspect) : undefined)}
+              onClick={() => toggleAspect(aspect)}
               className={`text-left p-3 rounded-lg border text-sm transition-colors ${
                 !enabled
                   ? 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed'

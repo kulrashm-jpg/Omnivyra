@@ -9,7 +9,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { companyId, regions, context_mode, focused_modules, additional_direction } = req.body || {};
+    const { companyId, regions, context_mode, focused_modules, additional_direction, insight_source } = req.body || {};
 
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
@@ -58,14 +58,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const contextPayload =
-      context_mode != null || focused_modules != null || additional_direction != null
+    const resolvedInsightSource =
+      insight_source === 'api' || insight_source === 'llm' || insight_source === 'hybrid'
+        ? insight_source
+        : 'hybrid';
+    const contextPayload = {
+      ...(context_mode != null || focused_modules != null || additional_direction != null
         ? {
             context_mode: context_mode ?? 'FULL',
             focused_modules: Array.isArray(focused_modules) ? focused_modules : undefined,
             additional_direction: typeof additional_direction === 'string' ? additional_direction : undefined,
           }
-        : null;
+        : {}),
+      insight_source: resolvedInsightSource,
+    };
 
     const { data: job, error: insertError } = await supabase
       .from('market_pulse_jobs_v1')

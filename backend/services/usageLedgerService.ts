@@ -74,6 +74,8 @@ export async function logUsageEvent(params: {
 
   source_name: string;
   process_type: string;
+  /** User-facing product area (e.g. 'Daily Plan', 'Recommendations'). Derived in aiGateway. */
+  feature_area?: string | null;
 
   input_tokens?: number | null;
   output_tokens?: number | null;
@@ -100,6 +102,7 @@ export async function logUsageEvent(params: {
       model_version: params.model_version ?? null,
       source_name: params.source_name,
       process_type: params.process_type,
+      feature_area: params.feature_area ?? null,
       input_tokens: params.input_tokens ?? null,
       output_tokens: params.output_tokens ?? null,
       total_tokens: params.total_tokens ?? null,

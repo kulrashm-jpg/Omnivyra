@@ -1,0 +1,55 @@
+/**
+ * Campaign Planner two-row layout
+ * Row 1: CampaignContextBar | StrategySetupPanel | ExecutionSetupPanel
+ * Row 2: PlanningCanvas (70%) | AI Copilot (30%)
+ */
+
+.plannerPage {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 20px;
+}
+
+.plannerSetupRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 20px;
+  align-items: stretch;
+}
+
+.plannerSetupRow > * {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plannerSetupRow .setupCard {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+}
+
+.rowTwoFields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.plannerExecutionRow {
+  display: grid;
+  grid-template-columns: 70% 30%;
+  gap: 20px;
+}
+
+@media (max-width: 1199px) {
+  .plannerSetupRow {
+    grid-template-columns: 1fr;
+  }
+
+  .plannerExecutionRow {
+    grid-template-columns: 1fr;
+  }
+}

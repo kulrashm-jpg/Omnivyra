@@ -1,11 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
-import { ArrowLeft, ChevronDown, ChevronUp, CheckCircle2, Loader2, MessageSquare, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Bookmark, ChevronDown, ChevronUp, CheckCircle2, ExternalLink, Loader2, MessageSquare, Plus, Save, Send, Sparkles, Trash2, UserPlus, X } from 'lucide-react';
 import { getAiLookingAheadMessage } from '@/lib/aiLookingAheadMessage';
 import { getAiStrategicConfidence } from '@/lib/aiStrategicConfidence';
 import { getViewMode } from '@/utils/getViewMode';
 import { VIEW_RULES } from '@/utils/viewVisibilityMatrix';
+import { inferExecutionMode } from '@/backend/services/executionModeInference';
 import { executeMasterContentPipeline, executeVariantImprovement } from '@/lib/planning/executeMasterContentPipeline';
+import CreatorContentPanel from '@/components/activity-workspace/CreatorContentPanel';
+import ActivityDiscussionTab from '@/components/activity-workspace/ActivityDiscussionTab';
+import { useCompanyContext } from '@/components/CompanyContext';
 import { computeVariantIntelligence } from '@/lib/intelligence/executionIntelligence';
 import PlatformIcon from '@/components/ui/PlatformIcon';
 
@@ -73,8 +77,282 @@ function asObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** Build a compact image search query from topic + description. */
+function buildImageQuery(topic: string, description: string): string {
+  const STOPWORDS = new Set([
+    'the','a','an','is','are','was','were','be','been','being','have','has','had',
+    'do','does','did','will','would','could','should','may','might','shall','can',
+    'to','of','in','for','on','with','at','by','from','as','into','through',
+    'but','or','and','not','no','so','yet','if','while','when','where','who',
+    'which','how','this','that','these','those','i','me','my','we','our','you',
+    'your','he','she','it','they','them','their','its','we','about','just','also',
+    'than','then','so','up','out','more','very','what','there','their','all',
+  ]);
+
+  // Extract 2 meaningful keywords from description
+  const descWords = description
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 3 && !STOPWORDS.has(w));
+
+  const unique = [...new Set(descWords)].slice(0, 2);
+  const base = topic.trim().slice(0, 50);
+  return unique.length > 0 ? `${base} ${unique.join(' ')}` : base;
+}
+
+/**
+ * Strip hashtag blocks baked into generated_content by older pipeline versions.
+ * Hashtags now live exclusively in discoverability_meta.hashtags and are rendered
+ * by PlatformContentPreview separately — they must not appear in the content string.
+ */
+function stripBakedHashtags(content: string): string {
+  if (!content) return content;
+  // Remove one or more lines that consist entirely of #word tokens (leading or trailing)
+  const hashtagLine = /^(#\w+\s*)+$/;
+  const lines = content.split('\n');
+  // Strip from end
+  while (lines.length > 0 && hashtagLine.test(lines[lines.length - 1].trim())) lines.pop();
+  // Strip from start
+  while (lines.length > 0 && hashtagLine.test(lines[0].trim())) lines.shift();
+  return lines.join('\n').trim();
+}
+
+/** Inline stock image picker — searches Unsplash/Pexels/Pixabay via /api/images/search. */
+function ImagePicker({
+  topic,
+  description,
+  onSelect,
+  selectedUrl,
+}: {
+  topic: string;
+  description?: string;
+  onSelect: (img: { url: string; thumb: string; attribution: string } | null) => void;
+  selectedUrl?: string;
+}) {
+  const autoQuery = buildImageQuery(topic, description ?? '');
+  const [query, setQuery] = React.useState(autoQuery);
+  const [results, setResults] = React.useState<Array<{ id: string; thumb: string; full: string; alt: string; attribution: string }>>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [searched, setSearched] = React.useState(false);
+
+  const search = async (q: string) => {
+    if (!q.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/images/search?q=${encodeURIComponent(q.trim())}&per_page=4`);
+      const data = await res.json();
+      if (!res.ok) { setError(data?.error ?? 'Search failed'); return; }
+      setResults(data.results ?? []);
+      setSearched(true);
+    } catch {
+      setError('Failed to fetch images');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Auto-search on mount using topic + description keywords
+  React.useEffect(() => {
+    if (autoQuery.trim()) search(autoQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && search(query)}
+          placeholder="Search images…"
+          className="flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-800 focus:outline-none focus:border-indigo-400"
+        />
+        <button
+          type="button"
+          onClick={() => search(query)}
+          disabled={loading}
+          className="px-2.5 py-1 rounded bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {loading ? '…' : 'Search'}
+        </button>
+        {selectedUrl && (
+          <button
+            type="button"
+            onClick={() => onSelect(null)}
+            className="px-2 py-1 rounded border border-red-200 text-red-600 text-xs hover:bg-red-50"
+            title="Remove selected image"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+
+      {error && <p className="text-[11px] text-red-500 mb-2">{error}</p>}
+
+      {results.length > 0 ? (
+        <div className="grid grid-cols-2 gap-2">
+          {results.map((img) => (
+            <button
+              key={img.id}
+              type="button"
+              onClick={() => onSelect({ url: img.full, thumb: img.thumb, attribution: img.attribution })}
+              className={`relative rounded overflow-hidden aspect-video focus:outline-none ${
+                selectedUrl === img.full ? 'ring-2 ring-indigo-500' : 'hover:ring-2 hover:ring-gray-400'
+              }`}
+              title={img.attribution}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={img.thumb} alt={img.alt} className="w-full h-full object-cover" loading="lazy" />
+              {selectedUrl === img.full && (
+                <div className="absolute inset-0 bg-indigo-500/20 flex items-center justify-center">
+                  <span className="text-white text-lg">✓</span>
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      ) : searched && !loading ? (
+        <p className="text-[11px] text-gray-400 text-center py-3">No images found. Try different keywords.</p>
+      ) : !searched && !loading ? (
+        <p className="text-[11px] text-gray-400 text-center py-3">Searching for "{topic}"…</p>
+      ) : null}
+
+      {selectedUrl && (
+        <p className="text-[9px] text-gray-400 mt-1.5 leading-tight">
+          {results.find((r) => r.full === selectedUrl)?.attribution ?? 'Image selected'}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Platform-specific post preview — minimal, shows content as it would appear on the platform. */
+function PlatformContentPreview({
+  platform,
+  contentType,
+  content,
+  hashtags,
+  imageUrl,
+}: {
+  platform: string;
+  contentType: string;
+  content: string;
+  hashtags?: string[];
+  imageUrl?: string;
+}) {
+  const plat = platform.toLowerCase();
+  const lines = content.split('\n').filter((l) => l.trim() !== '');
+  const firstLine = lines[0] ?? '';
+  const rest = lines.slice(1);
+  const hashtagStr = hashtags && hashtags.length > 0 ? hashtags.join(' ') : '';
+  const charCount = content.length;
+
+  const imgEl = imageUrl ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={imageUrl} alt="attached" className="w-full rounded-lg object-cover max-h-48 mt-2" />
+  ) : null;
+
+  // Twitter/X — compact bubble with char counter
+  if (plat === 'twitter' || plat === 'x') {
+    const limit = 280;
+    const over = charCount > limit;
+    return (
+      <div className="rounded-xl border border-gray-200 bg-white p-3 text-sm font-sans shadow-sm">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="w-8 h-8 rounded-full bg-gray-200 shrink-0" />
+          <div>
+            <div className="text-xs font-bold text-gray-900">Your Account</div>
+            <div className="text-[10px] text-gray-400">@handle · now</div>
+          </div>
+        </div>
+        <p className="text-[13px] text-gray-900 whitespace-pre-wrap leading-snug">{content}</p>
+        {hashtagStr && <p className="text-[12px] text-sky-500 mt-1">{hashtagStr}</p>}
+        {imgEl}
+        <div className={`text-[10px] mt-2 text-right ${over ? 'text-red-500 font-semibold' : 'text-gray-400'}`}>
+          {charCount}/{limit}
+        </div>
+      </div>
+    );
+  }
+
+  // LinkedIn — card with bold opener, paragraph body
+  if (plat === 'linkedin') {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm font-sans shadow-sm">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-9 h-9 rounded-full bg-blue-100 shrink-0" />
+          <div>
+            <div className="text-xs font-semibold text-gray-900">Your Name</div>
+            <div className="text-[10px] text-gray-400">Your Title · 1st · now</div>
+          </div>
+        </div>
+        {firstLine && <p className="text-[13px] font-semibold text-gray-900 mb-1.5 leading-snug">{firstLine}</p>}
+        {rest.map((l, i) => <p key={i} className="text-[13px] text-gray-700 mb-1 leading-relaxed">{l}</p>)}
+        {hashtagStr && <p className="text-[12px] text-blue-600 mt-2">{hashtagStr}</p>}
+        {imgEl}
+        <div className="text-[10px] text-gray-400 mt-2">{charCount} chars</div>
+      </div>
+    );
+  }
+
+  // YouTube — title + description format
+  if (plat === 'youtube') {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm text-sm font-sans">
+        {imageUrl
+          // eslint-disable-next-line @next/next/no-img-element
+          ? <img src={imageUrl} alt="thumbnail" className="w-full object-cover max-h-36" />
+          : <div className="bg-gray-100 h-28 flex items-center justify-center text-gray-400 text-xs">[Thumbnail]</div>
+        }
+        <div className="p-3">
+          <div className="text-[13px] font-bold text-gray-900 mb-1 leading-snug">{firstLine || contentType}</div>
+          <div className="text-[12px] text-gray-600 whitespace-pre-wrap leading-relaxed">{rest.join('\n') || content}</div>
+          {hashtagStr && <p className="text-[11px] text-blue-500 mt-2">{hashtagStr}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  // Instagram / TikTok — image placeholder + caption
+  if (plat === 'instagram' || plat === 'tiktok') {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm text-sm font-sans">
+        {imageUrl
+          // eslint-disable-next-line @next/next/no-img-element
+          ? <img src={imageUrl} alt="visual" className="w-full object-cover max-h-40" />
+          : <div className="bg-gray-100 h-24 flex items-center justify-center text-gray-400 text-xs">[{contentType} visual]</div>
+        }
+        <div className="p-3">
+          <span className="text-[12px] font-semibold text-gray-900 mr-1">yourhandle</span>
+          <span className="text-[12px] text-gray-700 whitespace-pre-wrap">{firstLine}</span>
+          {rest.length > 0 && <p className="text-[12px] text-gray-600 mt-1">{rest.join(' ')}</p>}
+          {hashtagStr && <p className="text-[11px] text-blue-500 mt-1">{hashtagStr}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  // Default (Reddit, Facebook, etc.) — clean card
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm font-sans shadow-sm">
+      {firstLine && <p className="text-[13px] font-semibold text-gray-900 mb-1.5 leading-snug">{firstLine}</p>}
+      {rest.map((l, i) => <p key={i} className="text-[13px] text-gray-700 mb-1 leading-relaxed">{l}</p>)}
+      {hashtagStr && <p className="text-[12px] text-blue-500 mt-2">{hashtagStr}</p>}
+      {imgEl}
+      <div className="text-[10px] text-gray-400 mt-2">{charCount} chars</div>
+    </div>
+  );
+}
+
+import { apiFetch } from '@/lib/apiFetch';
+
 export default function ActivityWorkspacePage() {
   const router = useRouter();
+  const { user } = useCompanyContext();
   const queryWorkspaceKey = useMemo(() => {
     const raw = Array.isArray(router.query.workspaceKey) ? router.query.workspaceKey[0] : router.query.workspaceKey;
     return String(raw || '').trim();
@@ -108,6 +386,7 @@ export default function ActivityWorkspacePage() {
   const [refineInputByScheduleId, setRefineInputByScheduleId] = useState<Record<string, string>>({});
   const [refineMessagesByScheduleId, setRefineMessagesByScheduleId] = useState<Record<string, RefineChatMessage[]>>({});
   const [finalizedByScheduleId, setFinalizedByScheduleId] = useState<Record<string, boolean>>({});
+  const [schedulingByScheduleId, setSchedulingByScheduleId] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [systemBlockExpanded, setSystemBlockExpanded] = useState(false);
   const [selectedVariantTab, setSelectedVariantTab] = useState<string>('');
@@ -116,6 +395,10 @@ export default function ActivityWorkspacePage() {
   const [improvedByScheduleId, setImprovedByScheduleId] = useState<Record<string, boolean>>({});
   const [isAutoImprovingByScheduleId, setIsAutoImprovingByScheduleId] = useState<Record<string, boolean>>({});
   const [autoAppliedByScheduleId, setAutoAppliedByScheduleId] = useState<Record<string, boolean>>({});
+  // Image attachment per schedule slot: null = text-only, object = image selected
+  const [imageByScheduleId, setImageByScheduleId] = useState<Record<string, { url: string; thumb: string; attribution: string } | null>>({});
+  // Whether the image picker is open for a given slot
+  const [showImagePickerByScheduleId, setShowImagePickerByScheduleId] = useState<Record<string, boolean>>({});
   const [strategicMemoryProfile, setStrategicMemoryProfile] = useState<{
     campaign_id: string;
     action_acceptance_rate: Record<string, number>;
@@ -125,6 +408,18 @@ export default function ActivityWorkspacePage() {
   const [showAddVariantForm, setShowAddVariantForm] = useState(false);
   const [addVariantContentType, setAddVariantContentType] = useState('');
   const [addVariantPlatform, setAddVariantPlatform] = useState('');
+  const [activityTab, setActivityTab] = useState<'content' | 'community_responses' | 'discussion'>('content');
+  const [communitySignals, setCommunitySignals] = useState<Array<{
+    id: string;
+    author?: string | null;
+    content?: string | null;
+    platform: string;
+    signal_type: string;
+    engagement_score: number;
+    detected_at: string;
+    conversation_url?: string | null;
+  }>>([]);
+  const [communitySignalsLoading, setCommunitySignalsLoading] = useState(false);
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
   const normalizeKey = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -206,6 +501,29 @@ export default function ActivityWorkspacePage() {
   useEffect(() => {
     schedules.forEach((s) => { fetchPlatformRules(s.platform); });
   }, [schedulePlatformsKey]);
+
+  useEffect(() => {
+    if (activityTab !== 'community_responses' || !payload?.campaignId) {
+      setCommunitySignals([]);
+      return;
+    }
+    const companyId = payload.companyId || payload.campaignId;
+    const activityId = payload.activityId || queryExecutionId;
+    if (!companyId) return;
+    let cancelled = false;
+    setCommunitySignalsLoading(true);
+    const params = new URLSearchParams({ companyId });
+    if (payload.campaignId) params.set('campaignId', payload.campaignId);
+    if (activityId) params.set('activityId', activityId);
+    fetch(`/api/engagement/campaign-signals?${params}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : { signals: [] }))
+      .then((data) => {
+        if (!cancelled) setCommunitySignals(data?.signals ?? []);
+      })
+      .catch(() => { if (!cancelled) setCommunitySignals([]); })
+      .finally(() => { if (!cancelled) setCommunitySignalsLoading(false); });
+    return () => { cancelled = true; };
+  }, [activityTab, payload?.campaignId, payload?.companyId, payload?.activityId, queryExecutionId]);
 
   useEffect(() => {
     const campaignId = payload?.campaignId ?? '';
@@ -297,6 +615,37 @@ export default function ActivityWorkspacePage() {
     };
   }, [router.isReady, workspaceKey, queryCampaignId, queryExecutionId, queryWorkspaceKey]);
 
+  // Auto-persist payload + schedules to sessionStorage whenever they change so state
+  // is never lost between sessions without requiring "Save Changes".
+  const _didInitialLoad = useRef(false);
+  useEffect(() => {
+    if (!isLoaded || !workspaceKey) return;
+    if (!_didInitialLoad.current) {
+      // Skip the first fire (that's just the initial read from sessionStorage)
+      _didInitialLoad.current = true;
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(workspaceKey, JSON.stringify({ ...(payload || {}), schedules }));
+    } catch (_) {}
+  }, [payload, schedules, isLoaded, workspaceKey]);
+
+  // Restore finalized/scheduled button state from persisted schedule statuses on load.
+  // This ensures "Schedule" button re-appears after a page reload without user needing to re-finalize.
+  useEffect(() => {
+    if (!isLoaded || schedules.length === 0) return;
+    const restored: Record<string, boolean> = {};
+    schedules.forEach((s) => {
+      if (s.status === 'finalized' || s.status === 'scheduled') {
+        restored[s.id] = true;
+      }
+    });
+    if (Object.keys(restored).length > 0) {
+      setFinalizedByScheduleId(restored);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded]);
+
   const dailyRaw = asObject(payload?.dailyExecutionItem);
   const nestedBrief = asObject(dailyRaw?.writer_content_brief);
   const nestedIntent = asObject(dailyRaw?.intent);
@@ -324,6 +673,25 @@ export default function ActivityWorkspacePage() {
   const hasMasterGenerated =
     String(masterContent?.generation_status || '').toLowerCase() === 'generated' ||
     String(masterContent?.content || '').trim().length > 0;
+
+  /** Creator activities: video, carousel, story, reel, image, short — require uploaded asset as master source. */
+  const contentType = String((dailyRaw?.content_type ?? dailyRaw?.contentType ?? 'post') as string).trim().toLowerCase();
+  const executionMode = String((dailyRaw?.execution_mode ?? '') as string).trim() || inferExecutionMode(contentType);
+  // Show creator panel for CREATOR_REQUIRED (video/reel/short) AND CONDITIONAL_AI (carousel/image/infographic)
+  const isCreatorActivity = executionMode === 'CREATOR_REQUIRED' || executionMode === 'CONDITIONAL_AI';
+  const creatorAsset = asObject(dailyRaw?.creator_asset);
+  const hasCreatorAsset = Boolean(
+    creatorAsset &&
+    (String(creatorAsset.url ?? '').trim() ||
+      (Array.isArray(creatorAsset.files) && creatorAsset.files.length > 0) ||
+      (creatorAsset.platformUploads && Object.values(creatorAsset.platformUploads as Record<string, { url?: string; externalLink?: string }>).some((u) => u?.url?.trim() || u?.externalLink?.trim())))
+  );
+  const creatorHasMasterSource = hasCreatorAsset && (
+    String(creatorAsset?.description ?? '').trim() ||
+    String(creatorAsset?.transcript ?? '').trim() ||
+    String(creatorAsset?.theme ?? '').trim() ||
+    String(payload?.topic ?? payload?.title ?? '').trim()
+  );
 
   /** When opened from daily view topic click: no delete, show add platform only. */
   const isDailyTopicView = payload?.source === 'daily';
@@ -841,7 +1209,7 @@ export default function ActivityWorkspacePage() {
     }
     try {
       setIsRefiningByScheduleId((prev) => ({ ...prev, [schedule.id]: true }));
-      const response = await fetch('/api/activity-workspace/content', {
+      const response = await apiFetch('/api/activity-workspace/content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -901,9 +1269,61 @@ export default function ActivityWorkspacePage() {
     updateSchedule(schedule.id, { status: 'finalized' });
   };
 
-  const scheduleFinalizedContent = (schedule: ScheduleItem) => {
-    updateSchedule(schedule.id, { status: 'scheduled' });
-    notify('success', `Scheduled ${labelize(schedule.platform)} ${labelize(schedule.contentType)}.`);
+  const scheduleFinalizedContent = async (schedule: ScheduleItem) => {
+    const variant = findVariantForSchedule(schedule);
+    const rawContent = String((variant as any)?.generated_content || '').trim();
+
+    if (!rawContent) {
+      notify('info', 'Generate and finalize content before scheduling.');
+      return;
+    }
+    if (!schedule.date) {
+      notify('info', 'Set a date for this schedule item first.');
+      return;
+    }
+
+    // Append hashtags from discoverability_meta (single source of truth)
+    const hashtags: string[] = Array.isArray((variant as any)?.discoverability_meta?.hashtags)
+      ? (variant as any).discoverability_meta.hashtags
+      : [];
+    const hashtagLine = hashtags.filter(Boolean).join(' ');
+    const fullContent = hashtagLine ? `${rawContent}\n\n${hashtagLine}` : rawContent;
+
+    const campaignId = String(payload?.campaignId || '').trim();
+    const companyId = String(payload?.companyId || '').trim();
+    const executionId = String((payload?.dailyExecutionItem as any)?.execution_id || '').trim();
+
+    setSchedulingByScheduleId((prev) => ({ ...prev, [schedule.id]: true }));
+    try {
+      const r = await apiFetch('/api/activity-workspace/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId,
+          companyId,
+          executionId,
+          platform: schedule.platform,
+          contentType: schedule.contentType,
+          title: String(payload?.title || payload?.topic || schedule.title || '').trim(),
+          content: fullContent,
+          scheduledDate: schedule.date,
+          scheduledTime: schedule.time || '09:00',
+          repurposeIndex: schedule.sequence_index ?? 1,
+          repurposeTotal: schedule.total_distributions ?? 1,
+        }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        notify('error', String(err?.error || 'Failed to schedule post'));
+        return;
+      }
+      updateSchedule(schedule.id, { status: 'scheduled' });
+      notify('success', `Scheduled ${labelize(schedule.platform)} ${labelize(schedule.contentType)} for ${schedule.date} — visible on the dashboard calendar.`);
+    } catch (e: any) {
+      notify('error', String(e?.message || 'Failed to schedule post'));
+    } finally {
+      setSchedulingByScheduleId((prev) => ({ ...prev, [schedule.id]: false }));
+    }
   };
 
   const saveAndSendBack = () => {
@@ -965,7 +1385,7 @@ export default function ActivityWorkspacePage() {
   const handleGenerateMasterContent = async () => {
     try {
       setIsGeneratingMaster(true);
-      const response = await fetch('/api/activity-workspace/content', {
+      const response = await apiFetch('/api/activity-workspace/content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1083,7 +1503,7 @@ export default function ActivityWorkspacePage() {
     try {
       setRepurposingByScheduleId((prev) => ({ ...prev, [schedule.id]: true }));
       const currentDaily = asObject(payload?.dailyExecutionItem) || {};
-      const response = await fetch('/api/activity-workspace/content', {
+      const response = await apiFetch('/api/activity-workspace/content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1134,6 +1554,82 @@ export default function ActivityWorkspacePage() {
       notify('error', `Failed to repurpose content: ${String((error as any)?.message || error)}`);
     } finally {
       setRepurposingByScheduleId((prev) => ({ ...prev, [schedule.id]: false }));
+    }
+  };
+
+  const handleCreatorAssetSaved = (asset: { type: string; url?: string; files?: string[]; description?: string; transcript?: string; theme?: string }) => {
+    setPayload((prev) => {
+      if (!prev) return prev;
+      const current = asObject(prev.dailyExecutionItem) || {};
+      return {
+        ...prev,
+        dailyExecutionItem: {
+          ...current,
+          creator_asset: asset,
+          content_status: 'READY_FOR_PROMOTION',
+        },
+      };
+    });
+  };
+
+  const handleGenerateCreatorPromotion = async () => {
+    const campaignId = String(payload?.campaignId ?? '').trim();
+    const executionId = String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? '').trim();
+    const currentDaily = asObject(payload?.dailyExecutionItem) || {};
+    if (!campaignId || !executionId) {
+      notify('info', 'Campaign and activity context required.');
+      return;
+    }
+    try {
+      setIsGeneratingVariants(true);
+      const response = await apiFetch('/api/activity-workspace/content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generate_variants',
+          activity: buildActivityRequestPayload(),
+          schedules: schedules.length > 0 ? schedules : [{ id: 'default', platform: 'linkedin', contentType: 'post' }],
+          dailyExecutionItem: {
+            ...currentDaily,
+            creator_asset: creatorAsset,
+            master_content: null,
+            platform_variants: platformVariants,
+          },
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(String(data?.message || data?.error || 'Failed to generate promotion content'));
+      }
+      const incoming = Array.isArray(data.platform_variants) ? data.platform_variants : [];
+      const mergedByKey = new Map<string, Record<string, unknown>>();
+      for (const variant of platformVariants) {
+        const key = `${normalizeKey(variant.platform)}::${normalizeKey(variant.content_type)}`;
+        mergedByKey.set(key, variant);
+      }
+      for (const variant of incoming) {
+        const key = `${normalizeKey((variant as any)?.platform)}::${normalizeKey((variant as any)?.content_type)}`;
+        if (key !== '::') mergedByKey.set(key, variant as Record<string, unknown>);
+      }
+      const mergedVariants = Array.from(mergedByKey.values());
+      setPayload((prev) => {
+        if (!prev) return prev;
+        const current = asObject(prev.dailyExecutionItem) || {};
+        return {
+          ...prev,
+          dailyExecutionItem: {
+            ...current,
+            creator_asset: creatorAsset,
+            platform_variants: mergedVariants,
+          },
+        };
+      });
+      notify('success', 'Promotion content generated.');
+    } catch (error) {
+      console.error('Generate creator promotion failed:', error);
+      notify('error', `Failed to generate: ${String((error as any)?.message || error)}`);
+    } finally {
+      setIsGeneratingVariants(false);
     }
   };
 
@@ -1238,6 +1734,139 @@ export default function ActivityWorkspacePage() {
           </div>
         </div>
 
+        <div className="flex gap-1 border-b border-gray-200 mb-2">
+          <button
+            type="button"
+            onClick={() => setActivityTab('content')}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 -mb-px ${
+              activityTab === 'content' ? 'border-indigo-600 text-indigo-600 bg-white' : 'border-transparent text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            Content
+          </button>
+          <button
+            type="button"
+            onClick={() => setActivityTab('community_responses')}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 -mb-px flex items-center gap-1.5 ${
+              activityTab === 'community_responses' ? 'border-indigo-600 text-indigo-600 bg-white' : 'border-transparent text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <MessageSquare className="h-4 w-4" />
+            Community Responses
+          </button>
+          <button
+            type="button"
+            onClick={() => setActivityTab('discussion')}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 -mb-px flex items-center gap-1.5 ${
+              activityTab === 'discussion' ? 'border-indigo-600 text-indigo-600 bg-white' : 'border-transparent text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            Discussion
+          </button>
+        </div>
+
+        {activityTab === 'discussion' ? (
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden min-h-[240px]">
+            {payload?.campaignId && (queryExecutionId || payload?.activityId) ? (
+              <ActivityDiscussionTab
+                campaignId={payload.campaignId}
+                activityId={queryExecutionId || payload.activityId || ''}
+                currentUserId={user?.userId ?? ''}
+                fetchWithAuth={async (input, init) => {
+                  const { data } = await (await import('../utils/supabaseClient')).supabase.auth.getSession();
+                  const token = data.session?.access_token;
+                  return fetch(input, { ...init, headers: { ...(init?.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+                }}
+              />
+            ) : (
+              <div className="p-6 text-sm text-gray-500">Open an activity to view discussion.</div>
+            )}
+          </div>
+        ) : activityTab === 'community_responses' ? (
+          <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+            <h2 className="text-lg font-semibold text-gray-900">Community Responses</h2>
+            <p className="text-sm text-gray-600">
+              Comments, mentions, and discussion threads linked to this campaign activity.
+            </p>
+            {communitySignalsLoading ? (
+              <div className="flex items-center gap-2 py-8 text-gray-500">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Loading signals...
+              </div>
+            ) : communitySignals.length === 0 ? (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-6 text-center text-sm text-gray-600">
+                No community responses yet. Engagement signals appear when comments, mentions, or discussions are detected for this activity.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {communitySignals.map((sig) => (
+                  <div
+                    key={sig.id}
+                    className="rounded-lg border border-gray-200 p-4 bg-gray-50/50 hover:bg-gray-50 space-y-2"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">
+                          <span className="font-medium text-gray-900">{sig.author || 'Anonymous'}</span>
+                          <span>·</span>
+                          <PlatformIcon platform={sig.platform} size={12} showLabel />
+                          <span className="capitalize">{sig.signal_type.replace(/_/g, ' ')}</span>
+                          <span>·</span>
+                          <span>Score: {(Number(sig.engagement_score) * 100).toFixed(0)}%</span>
+                          <span>·</span>
+                          <span>{sig.detected_at ? new Date(sig.detected_at).toLocaleDateString() : '—'}</span>
+                        </div>
+                        <p className="text-sm text-gray-800 line-clamp-3">{sig.content || '—'}</p>
+                        {sig.conversation_url && (
+                          <a
+                            href={sig.conversation_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:underline mt-1"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            View thread
+                          </a>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          className="p-2 rounded border border-gray-300 text-gray-600 hover:bg-white hover:text-indigo-600"
+                          title="Reply"
+                        >
+                          <MessageSquare className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="p-2 rounded border border-gray-300 text-gray-600 hover:bg-white hover:text-amber-600"
+                          title="Bookmark"
+                        >
+                          <Bookmark className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="p-2 rounded border border-gray-300 text-gray-600 hover:bg-white hover:text-emerald-600"
+                          title="Mark as lead"
+                        >
+                          <UserPlus className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="p-2 rounded border border-gray-300 text-gray-600 hover:bg-white hover:text-blue-600"
+                          title="Export to CRM"
+                        >
+                          <Send className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+        <>
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
           <h2 className="text-lg font-semibold text-gray-900">Writer Context</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
@@ -1281,6 +1910,88 @@ export default function ActivityWorkspacePage() {
             </div>
           )}
         </div>
+
+        {isCreatorActivity && (
+          <CreatorContentPanel
+            theme={topicText || String(payload?.title ?? '')}
+            productionBrief={String(writerBrief?.writingIntent ?? payload?.description ?? '')}
+            talkingPoints={
+              Array.isArray((writerBrief as any)?.key_points) ? (writerBrief as any).key_points
+                : Array.isArray((writerBrief as any)?.keyPoints) ? (writerBrief as any).keyPoints
+                : []
+            }
+            contentType={contentType}
+            platforms={suggestedPlatforms}
+            creatorInstructions={dailyRaw?.creator_instruction as Record<string, unknown> | undefined}
+            creatorAsset={creatorAsset as { type: 'video' | 'image' | 'carousel'; url?: string; files?: string[]; platformUploads?: Record<string, { url?: string; externalLink?: string; caption?: string; slides?: string[] }>; description?: string; transcript?: string; theme?: string } | undefined}
+            onAssetSaved={(asset) => {
+              setPayload((prev) => {
+                if (!prev) return prev;
+                const current = asObject(prev.dailyExecutionItem) || {};
+                return {
+                  ...prev,
+                  dailyExecutionItem: {
+                    ...current,
+                    creator_asset: asset,
+                    content_status: 'READY_FOR_PROMOTION',
+                  },
+                };
+              });
+            }}
+            onGeneratePromotion={async () => {
+              const current = asObject(payload?.dailyExecutionItem) || {};
+              const itemWithCreator = {
+                ...current,
+                creator_asset: creatorAsset,
+                master_content: undefined,
+              };
+              try {
+                setIsGeneratingVariants(true);
+                const res = await apiFetch('/api/activity-workspace/content', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    action: 'generate_variants',
+                    activity: buildActivityRequestPayload(),
+                    schedules,
+                    dailyExecutionItem: itemWithCreator,
+                  }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data?.error ?? data?.message ?? 'Failed to generate promotion content');
+                const incoming = Array.isArray(data.platform_variants) ? data.platform_variants : [];
+                const mergedByKey = new Map<string, Record<string, unknown>>();
+                for (const v of platformVariants) {
+                  const key = `${normalizeKey(v.platform)}::${normalizeKey(v.content_type)}`;
+                  mergedByKey.set(key, v);
+                }
+                for (const v of incoming) {
+                  const key = `${normalizeKey((v as any)?.platform)}::${normalizeKey((v as any)?.content_type)}`;
+                  if (key !== '::') mergedByKey.set(key, v as Record<string, unknown>);
+                }
+                setPayload((prev) => {
+                  if (!prev) return prev;
+                  const cur = asObject(prev.dailyExecutionItem) || {};
+                  return {
+                    ...prev,
+                    dailyExecutionItem: { ...cur, platform_variants: Array.from(mergedByKey.values()) },
+                  };
+                });
+                notify('success', 'Promotion content generated.');
+              } catch (err) {
+                notify('error', String((err as Error)?.message ?? 'Failed'));
+              } finally {
+                setIsGeneratingVariants(false);
+              }
+            }}
+            isGeneratingPromotion={isGeneratingVariants}
+            campaignId={String(payload?.campaignId ?? '')}
+            executionId={String(payload?.activityId ?? (dailyRaw?.execution_id ?? ''))}
+            weekNumber={Number(payload?.weekNumber) || 1}
+            day={String(payload?.day ?? 'Monday')}
+            onNotice={notify}
+          />
+        )}
 
         {VIEW_RULES[viewMode].showCreatorBrief && dailyRaw?.creator_instruction && typeof dailyRaw.creator_instruction === 'object' && (
           <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
@@ -1539,7 +2250,7 @@ export default function ActivityWorkspacePage() {
                       const marketing = buildMarketingSupport(
                         item.platform,
                         item.contentType,
-                        String((matchedVariant as any)?.generated_content || ''),
+                        stripBakedHashtags(String((matchedVariant as any)?.generated_content || '')),
                         matchedVariant
                       );
                       return (
@@ -1547,14 +2258,24 @@ export default function ActivityWorkspacePage() {
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex flex-wrap items-center gap-2">
                             {finalizedByScheduleId[item.id] && (
-                              <button
-                                type="button"
-                                onClick={() => scheduleFinalizedContent(item)}
-                                className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700"
-                              >
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                                Schedule
-                              </button>
+                              item.status === 'scheduled' ? (
+                                /* Frozen state — already scheduled. Editing content will unlock this. */
+                                <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-100 border border-emerald-300 px-2.5 py-1 text-xs font-medium text-emerald-700 cursor-default select-none">
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  Scheduled
+                                </span>
+                              ) : (
+                                /* Active — finalized but not yet scheduled, or re-finalized after edit */
+                                <button
+                                  type="button"
+                                  onClick={() => scheduleFinalizedContent(item)}
+                                  disabled={!!schedulingByScheduleId[item.id]}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  {schedulingByScheduleId[item.id] ? 'Scheduling…' : 'Schedule'}
+                                </button>
+                              )
                             )}
                             <span className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 inline-flex items-center gap-1">
                               <PlatformIcon platform={item.platform} size={12} showLabel />
@@ -1592,10 +2313,14 @@ export default function ActivityWorkspacePage() {
                               type="button"
                               onClick={() => finalizeRepurposeForSchedule(item)}
                               disabled={!matchedVariant || !!isRefiningByScheduleId[item.id]}
-                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium disabled:opacity-50 ${
+                                (matchedVariant as any)?.refinement_status === 'edited'
+                                  ? 'border-amber-400 bg-amber-500 text-white hover:bg-amber-600'
+                                  : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                              }`}
                             >
                               <CheckCircle2 className="h-3.5 w-3.5" />
-                              Finalize
+                              {(matchedVariant as any)?.refinement_status === 'edited' ? 'Re-Finalize' : 'Finalize'}
                             </button>
                             {!isDailyTopicView && (
                               <button
@@ -1631,6 +2356,7 @@ export default function ActivityWorkspacePage() {
                             <input
                               type="date"
                               value={item.date || ''}
+                              min={new Date().toISOString().split('T')[0]}
                               onChange={(e) => updateSchedule(item.id, { date: e.target.value })}
                               className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700"
                             />
@@ -1927,10 +2653,81 @@ export default function ActivityWorkspacePage() {
                               <div className="text-[11px] text-gray-600">
                                 Utilization: content {marketing.utilization.contentPct ?? '—'}% (target 90%), title {marketing.utilization.titlePct ?? '—'}%, meta {marketing.utilization.metaDescriptionPct ?? '—'}%, hashtags {marketing.utilization.hashtagsPct ?? '—'}%, keywords {marketing.utilization.keywordsPct ?? '—'}%
                               </div>
+                              {/* Post format toggle: Text only / Text + Image */}
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Format</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setImageByScheduleId((prev) => ({ ...prev, [item.id]: null }));
+                                    setShowImagePickerByScheduleId((prev) => ({ ...prev, [item.id]: false }));
+                                  }}
+                                  className={`px-2.5 py-1 rounded text-[11px] font-medium border transition-colors ${
+                                    !imageByScheduleId[item.id]
+                                      ? 'bg-indigo-600 text-white border-indigo-600'
+                                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                                  }`}
+                                >
+                                  Text only
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowImagePickerByScheduleId((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
+                                  className={`px-2.5 py-1 rounded text-[11px] font-medium border transition-colors ${
+                                    imageByScheduleId[item.id]
+                                      ? 'bg-indigo-600 text-white border-indigo-600'
+                                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                                  }`}
+                                >
+                                  {imageByScheduleId[item.id] ? '✓ Image attached' : '+ Add image'}
+                                </button>
+                              </div>
+
+                              {/* Image picker — shown when user wants to add an image */}
+                              {showImagePickerByScheduleId[item.id] && (
+                                <div className="mb-3">
+                                  <ImagePicker
+                                    topic={String(payload?.title ?? payload?.topic ?? item.platform)}
+                                    description={String(payload?.description ?? '')}
+                                    selectedUrl={imageByScheduleId[item.id]?.url}
+                                    onSelect={(img) => {
+                                      setImageByScheduleId((prev) => ({ ...prev, [item.id]: img }));
+                                      if (img) setShowImagePickerByScheduleId((prev) => ({ ...prev, [item.id]: false }));
+                                    }}
+                                  />
+                                </div>
+                              )}
+
+                              {/* Platform preview — shows how the post will look */}
+                              <div className="mb-2">
+                                <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Preview</div>
+                                <PlatformContentPreview
+                                  platform={item.platform}
+                                  contentType={item.contentType}
+                                  content={stripBakedHashtags(String((matchedVariant as any)?.generated_content || ''))}
+                                  hashtags={
+                                    Array.isArray((matchedVariant as any)?.discoverability_meta?.hashtags)
+                                      ? (matchedVariant as any).discoverability_meta.hashtags
+                                      : marketing.hashtags.length > 0 ? marketing.hashtags : undefined
+                                  }
+                                  imageUrl={imageByScheduleId[item.id]?.url}
+                                />
+                              </div>
+                              {/* Editable textarea */}
+                              <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Edit</div>
                               <textarea
-                                className="w-full min-h-[120px] rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700"
-                                value={String((matchedVariant as any)?.generated_content || '')}
+                                className={`w-full min-h-[120px] rounded border bg-white px-3 py-2 text-sm text-gray-700 ${
+                                  finalizedByScheduleId[item.id]
+                                    ? 'border-amber-300 focus:border-amber-400 focus:ring-1 focus:ring-amber-300'
+                                    : 'border-gray-300'
+                                }`}
+                                value={stripBakedHashtags(String((matchedVariant as any)?.generated_content || ''))}
                                 onChange={(e) => {
+                                  // Reset finalized state so user must re-finalize after editing
+                                  if (finalizedByScheduleId[item.id]) {
+                                    setFinalizedByScheduleId((prev) => ({ ...prev, [item.id]: false }));
+                                    updateSchedule(item.id, { status: 'in-progress' });
+                                  }
                                   const next = [...platformVariants];
                                   const existingIndex = next.findIndex(
                                     (variant) =>
@@ -1942,6 +2739,8 @@ export default function ActivityWorkspacePage() {
                                     platform: item.platform,
                                     content_type: item.contentType,
                                     generated_content: e.target.value,
+                                    refinement_finalized: false,
+                                    refinement_status: 'edited',
                                   };
                                   if (existingIndex >= 0) {
                                     next[existingIndex] = nextVariant;
@@ -1955,6 +2754,9 @@ export default function ActivityWorkspacePage() {
                                   setPayload((prev) => (prev ? { ...prev, dailyExecutionItem: nextDaily } : prev));
                                 }}
                               />
+                              {(matchedVariant as any)?.refinement_status === 'edited' && !finalizedByScheduleId[item.id] && (
+                                <p className="text-[11px] text-amber-600 mt-1">Content edited — press Finalize to confirm before scheduling.</p>
+                              )}
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
                                 <div className="rounded border border-gray-200 bg-gray-50 p-2">
                                   <div className="font-semibold text-gray-700">Title</div>
@@ -1990,6 +2792,8 @@ export default function ActivityWorkspacePage() {
             )}
           </div>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

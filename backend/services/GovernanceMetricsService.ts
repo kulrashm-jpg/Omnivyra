@@ -4,6 +4,8 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { getCampaignsByIds } from '../db/campaignStore';
+import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 
 const COOLDOWN_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -47,18 +49,6 @@ export interface GovernanceSummary {
     constraints: GovernanceConstraintMetrics;
     priority: GovernancePriorityMetrics;
   };
-}
-
-/**
- * Fetch campaign IDs that belong to a company (via campaign_versions).
- */
-async function getCompanyCampaignIds(companyId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('campaign_versions')
-    .select('campaign_id')
-    .eq('company_id', companyId);
-  if (error) return [];
-  return Array.from(new Set((data || []).map((r: any) => r.campaign_id).filter(Boolean)));
 }
 
 /**
@@ -115,9 +105,7 @@ export async function getGovernanceSummary(companyId: string): Promise<Governanc
   const [logByInitiator, logByPreempted, campaignsRows, pendingRequests, approvedRequests, rejectedRequests] = await Promise.all([
     supabase.from('campaign_preemption_log').select('id, preempted_campaign_id, executed_at, initiator_campaign_id').in('initiator_campaign_id', campaignIds),
     supabase.from('campaign_preemption_log').select('id, preempted_campaign_id, executed_at, initiator_campaign_id').in('preempted_campaign_id', campaignIds),
-    campaignIds.length > 0
-      ? supabase.from('campaigns').select('id, execution_status, blueprint_status, last_preempted_at, priority_level').in('id', campaignIds)
-      : Promise.resolve({ data: [] }),
+    getCampaignsByIds(campaignIds, 'id, execution_status, blueprint_status, last_preempted_at, priority_level'),
     supabase.from('campaign_preemption_requests').select('id').in('initiator_campaign_id', campaignIds).eq('status', 'PENDING'),
     supabase.from('campaign_preemption_requests').select('id').in('initiator_campaign_id', campaignIds).eq('status', 'EXECUTED').gte('approved_at', t30),
     supabase.from('campaign_preemption_requests').select('id').in('initiator_campaign_id', campaignIds).eq('status', 'REJECTED').gte('rejected_at', t30),
@@ -134,7 +122,7 @@ export async function getGovernanceSummary(companyId: string): Promise<Governanc
   const preemptionsLast30 = logs.filter((l: any) => l.executed_at >= t30).length;
   const preemptionsLast7 = logs.filter((l: any) => l.executed_at >= t7).length;
 
-  const campaigns = campaignsRows.data || [];
+  const campaigns = campaignsRows || [];
   const preemptedInvalidated = campaigns.filter(
     (c: any) => String(c.execution_status || '').toUpperCase() === 'PREEMPTED'
   ).length;

@@ -1,10 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
-import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical } from 'lucide-react';
+import PlatformIcon from './ui/PlatformIcon';
+import { getPlatformLabel } from '../utils/platformIcons';
 import { useCompanyContext } from './CompanyContext';
 import Header from './Header';
 import { supabase } from '../utils/supabaseClient';
 import { getStageLabelWithDuration } from '../backend/types/CampaignStage';
+import { navigateToCampaign, buildResumeUrl, loadCampaignResume } from '../lib/campaignResumeStore';
+import FloatingChatPanel, { type CollaborationMessage } from './collaboration/FloatingChatPanel';
+import DayDetailPanel, { type DayActivity } from './collaboration/DayDetailPanel';
 
 interface Campaign {
   id: string;
@@ -48,10 +53,33 @@ type CalendarActivity = {
   weekNumber?: number;
 };
 
+/** Activity-level event from scheduled_posts (dashboard calendar) */
+type ActivityEvent = {
+  type: 'activity';
+  date: string;
+  platform: string;
+  title: string;
+  repurpose_index: number;
+  repurpose_total: number;
+  campaign_id: string;
+  content_type: string;
+  execution_id?: string;
+  scheduled_post_id?: string;
+  status?: string;
+  scheduled_for?: string | null;
+  is_overdue?: boolean;
+};
+
+/** Union for calendar day cells: activity events or campaign-stage fallback */
+type CalendarDayItem = CalendarActivity | ActivityEvent;
+
+function isActivityEvent(item: CalendarDayItem): item is ActivityEvent {
+  return (item as ActivityEvent).type === 'activity';
+}
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { selectedCompanyId, isAdmin, isLoading, hasPermission, userRole } = useCompanyContext();
+  const { selectedCompanyId, isAdmin, isLoading, hasPermission, userRole, user } = useCompanyContext();
   const canCreateCampaign = hasPermission('CREATE_CAMPAIGN');
   const canScheduleContent = hasPermission('SCHEDULE_CONTENT');
   const [activeTab, setActiveTab] = useState('overview');
@@ -76,8 +104,28 @@ export default function DashboardPage() {
   const [calendarCampaignFilter, setCalendarCampaignFilter] = useState<string>('all');
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<string>('all');
   const [calendarWeekFilter, setCalendarWeekFilter] = useState<string>('all');
+  const [calendarActivityEvents, setCalendarActivityEvents] = useState<Record<string, ActivityEvent[]>>({});
+  const [calendarActivityEventsLoading, setCalendarActivityEventsLoading] = useState(false);
+  const [calendarStageFilter, setCalendarStageFilter] = useState<CalendarExecutionStage | null>(null);
+  const [calendarStageEvents, setCalendarStageEvents] = useState<ActivityEvent[]>([]);
+  const [calendarStageEventsLoading, setCalendarStageEventsLoading] = useState(false);
+  const [dayDetailPanelDate, setDayDetailPanelDate] = useState<string | null>(null);
+  const [chatPanel, setChatPanel] = useState<{ mode: 'activity' | 'day'; activityId?: string; campaignId: string; date?: string } | null>(null);
+  type MessageCount = { total: number; unread: number };
+  const [activityMessageCounts, setActivityMessageCounts] = useState<Record<string, MessageCount>>({});
+  const [calendarMessageCounts, setCalendarMessageCounts] = useState<Record<string, MessageCount>>({});
+  const getMsgCount = (c: MessageCount | undefined) => (c ? c.total : 0);
+  const getUnreadCount = (c: MessageCount | undefined) => (c ? c.unread : 0);
+  const [dayChatMessages, setDayChatMessages] = useState<CollaborationMessage[]>([]);
+  const [dayChatLoading, setDayChatLoading] = useState(false);
+  const [dayDetailMessages, setDayDetailMessages] = useState<CollaborationMessage[]>([]);
+  const [dayDetailMessagesLoading, setDayDetailMessagesLoading] = useState(false);
+  const [activityChatMessages, setActivityChatMessages] = useState<CollaborationMessage[]>([]);
+  const [activityChatLoading, setActivityChatLoading] = useState(false);
+  const [chatRefresh, setChatRefresh] = useState(0);
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [pendingDeleteCampaignId, setPendingDeleteCampaignId] = useState<string | null>(null);
+  const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
   const isCompanyAdmin = (userRole || '').toString() === 'COMPANY_ADMIN';
 
@@ -132,6 +180,10 @@ export default function DashboardPage() {
   const campaignIds = campaigns.map((c) => c.id).filter(Boolean).join(',');
   const [expandingCampaignId, setExpandingCampaignId] = useState<string | null>(null);
 
+  /** Normalize message count (APIs return { total, unread }) */
+  const getMsgTotal = (c: { total: number; unread: number } | undefined) => c?.total ?? 0;
+  const getMsgUnread = (c: { total: number; unread: number } | undefined) => c?.unread ?? 0;
+
   const formatDateKey = (date: Date) => {
     const y = date.getFullYear();
     const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -164,6 +216,48 @@ export default function DashboardPage() {
     if (raw.includes('draft') || raw.includes('plan') || raw.includes('pending')) return 'planned';
     return 'other';
   };
+  /** Maps a scheduled_post's status + overdue flag to one of the legend stages. */
+  const getEventStage = (ev: ActivityEvent): CalendarExecutionStage => {
+    if (ev.is_overdue) return 'overdue';
+    const s = ev.status || 'scheduled';
+    if (s === 'published') return 'content_shared';
+    if (s === 'publishing') return 'content_shared';
+    if (s === 'draft') return 'content_created';
+    return 'content_scheduled'; // scheduled
+  };
+
+  /** Fetch all posts for a given stage (no date bounds) and populate the stage list panel. */
+  const fetchStageEvents = (stage: CalendarExecutionStage) => {
+    if (!selectedCompanyId) return;
+    setCalendarStageFilter(stage);
+    setCalendarStageEventsLoading(true);
+    const campaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : undefined;
+    fetchWithAuth(
+      `/api/calendar/activity-events?start=2020-01-01&end=2099-12-31&companyId=${encodeURIComponent(selectedCompanyId)}&stageFilter=1${campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : ''}`
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: any[]) => {
+        const all: ActivityEvent[] = (Array.isArray(data) ? data : []).map((ev: any) => ({
+          type: 'activity' as const,
+          date: ev.date || '',
+          platform: ev.platform,
+          title: ev.title,
+          repurpose_index: ev.repurpose_index ?? 1,
+          repurpose_total: ev.repurpose_total ?? 1,
+          campaign_id: ev.campaign_id,
+          content_type: ev.content_type || 'post',
+          execution_id: ev.execution_id,
+          scheduled_post_id: ev.scheduled_post_id,
+          status: ev.status,
+          scheduled_for: ev.scheduled_for,
+          is_overdue: ev.is_overdue,
+        }));
+        setCalendarStageEvents(all.filter((ev) => getEventStage(ev) === stage));
+      })
+      .catch(() => setCalendarStageEvents([]))
+      .finally(() => setCalendarStageEventsLoading(false));
+  };
+
   const getCalendarStageAppearance = (stage: CalendarExecutionStage): { badge: string; dot: string; label: string } => {
     switch (stage) {
       case 'daily_cards':
@@ -277,6 +371,18 @@ export default function DashboardPage() {
     const statusMatch = calendarStatusFilter === 'all' || statusCategory === calendarStatusFilter;
     return campaignMatch && statusMatch;
   });
+  const getPlatformColorForCalendar = (platform: string): string => {
+    const p = (platform || '').toLowerCase();
+    const map: Record<string, string> = {
+      linkedin: 'bg-blue-100 text-blue-700 border-blue-200',
+      facebook: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+      instagram: 'bg-pink-100 text-pink-700 border-pink-200',
+      youtube: 'bg-red-100 text-red-700 border-red-200',
+      twitter: 'bg-gray-900 text-gray-100 border-gray-700',
+      x: 'bg-gray-900 text-gray-100 border-gray-700',
+    };
+    return map[p] || 'bg-gray-100 text-gray-700 border-gray-200';
+  };
   const getCalendarActivitiesForDate = (date: Date): CalendarActivity[] => {
     const dayStart = new Date(date);
     dayStart.setHours(0, 0, 0, 0);
@@ -312,6 +418,103 @@ export default function DashboardPage() {
     });
     return activities;
   };
+
+  /** Feature 4: Platform color strip (left border 4px) */
+  const getPlatformBorderColor = (platform: string): string => {
+    const p = (platform || '').toLowerCase();
+    if (p === 'linkedin') return 'border-l-blue-500';
+    if (p === 'instagram') return 'border-l-pink-500';
+    if (p === 'youtube') return 'border-l-red-500';
+    if (p === 'twitter' || p === 'x') return 'border-l-gray-900';
+    if (p === 'facebook') return 'border-l-indigo-500';
+    return 'border-l-gray-400';
+  };
+
+  /** Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc. */
+  const RepurposeDots = ({ index, total, contentType }: { index: number; total: number; contentType?: string }) => {
+    const safeTotal = total < 1 ? 1 : total;
+    const safeIndex = index < 1 ? 1 : index;
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] text-indigo-600" aria-label={safeTotal === 1 ? 'Unique' : `Repurpose ${safeIndex} of ${safeTotal}`}>
+        {Array.from({ length: safeTotal }, (_, i) => (
+          <span key={i} className={i < safeIndex ? 'text-indigo-600' : 'text-gray-300'}>
+            {i < safeIndex ? '●' : '○'}
+          </span>
+        ))}
+        {contentType && <span className="text-gray-400 font-normal ml-0.5">{contentType}</span>}
+      </span>
+    );
+  };
+
+  const [draggedActivity, setDraggedActivity] = useState<ActivityEvent | null>(null);
+  const [dropTargetDate, setDropTargetDate] = useState<string | null>(null);
+
+  const handleRescheduleDrop = useCallback(
+    async (newDate: string) => {
+      if (!draggedActivity?.scheduled_post_id || !selectedCompanyId) return;
+      try {
+        const res = await fetchWithAuth('/api/schedule/reschedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scheduled_post_id: draggedActivity.scheduled_post_id,
+            new_date: newDate,
+            companyId: selectedCompanyId,
+          }),
+          credentials: 'include',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          setCalendarActivityEvents((prev) => {
+            const oldDate = draggedActivity.date;
+            if (!oldDate) return prev;
+            const next = { ...prev };
+            const oldList = next[oldDate] || [];
+            const newList = oldList.filter((a) => isActivityEvent(a) && a.scheduled_post_id !== draggedActivity.scheduled_post_id);
+            if (newList.length === 0) delete next[oldDate];
+            else next[oldDate] = newList;
+            const targetList = next[newDate] || [];
+            const updated = { ...draggedActivity, date: newDate };
+            next[newDate] = [...targetList.filter((a) => !(isActivityEvent(a) && a.scheduled_post_id === draggedActivity.scheduled_post_id)), updated];
+            return next;
+          });
+          notify('success', 'Post rescheduled');
+        } else {
+          notify('error', data?.error || 'Failed to reschedule');
+        }
+      } catch {
+        notify('error', 'Failed to reschedule');
+      } finally {
+        setDraggedActivity(null);
+        setDropTargetDate(null);
+      }
+    },
+    [draggedActivity, selectedCompanyId, notify]
+  );
+
+  /** Items for a calendar day: activity events when available, else campaign-stage fallback */
+  const getCalendarDayItems = (date: Date): CalendarDayItem[] => {
+    const dateKey = formatDateKey(date);
+    const events = calendarActivityEvents[dateKey];
+    if (events && events.length > 0) {
+      const filtered =
+        calendarCampaignFilter === 'all'
+          ? events
+          : events.filter((e) => e.campaign_id === calendarCampaignFilter);
+      return filtered;
+    }
+    return getCalendarActivitiesForDate(date);
+  };
+
+  const handleActivityEventClick = (evt: ActivityEvent, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (evt.execution_id) {
+      router.push(`/activity-workspace?campaignId=${encodeURIComponent(evt.campaign_id)}&executionId=${encodeURIComponent(evt.execution_id)}`);
+    } else {
+      router.push(`/campaign-calendar/${encodeURIComponent(evt.campaign_id)}${evt.date ? `?date=${encodeURIComponent(evt.date)}` : ''}`);
+    }
+  };
+
   const selectedCalendarCampaign = campaigns.find((campaign) => campaign.id === calendarCampaignFilter) || null;
 
   useEffect(() => {
@@ -326,6 +529,196 @@ export default function DashboardPage() {
       .then((data) => setStageAvailability(data.availability || {}))
       .catch(() => setStageAvailability({}));
   }, [campaignIds]);
+
+  useEffect(() => {
+    if (activeTab !== 'calendar' || !selectedCompanyId) return;
+    const year = calendarCurrentDate.getFullYear();
+    const month = calendarCurrentDate.getMonth();
+    const start = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const end = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    setCalendarActivityEventsLoading(true);
+    const campaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : undefined;
+    fetchWithAuth(
+      `/api/calendar/activity-events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&companyId=${encodeURIComponent(selectedCompanyId)}${campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : ''}`
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        const list = Array.isArray(data) ? data : [];
+        // Build flat list first (repurpose index computed campaign-wide below)
+        const allItems: ActivityEvent[] = [];
+        list.forEach((ev: any) => {
+          const d = ev.date || '';
+          if (!d) return;
+          allItems.push({ type: 'activity', date: d, platform: ev.platform, title: ev.title, repurpose_index: 1, repurpose_total: 1, campaign_id: ev.campaign_id, content_type: ev.content_type || 'post', execution_id: ev.execution_id, scheduled_post_id: ev.scheduled_post_id, status: ev.status, scheduled_for: ev.scheduled_for, is_overdue: ev.is_overdue });
+        });
+        // Recompute repurpose_index/total campaign-wide: group by title across ALL dates,
+        // sort chronologically — total = how many times topic appears in campaign.
+        const titleGroups = new Map<string, number[]>();
+        allItems.forEach((item, i) => {
+          const key = (item.title ?? '').trim();
+          if (!key) return;
+          const g = titleGroups.get(key) ?? [];
+          // Same topic can only appear once per platform — skip duplicates
+          const plat = (item.platform ?? '').toLowerCase().trim();
+          if (plat && g.some((idx) => (allItems[idx].platform ?? '').toLowerCase().trim() === plat)) return;
+          g.push(i);
+          titleGroups.set(key, g);
+        });
+        for (const indices of titleGroups.values()) {
+          // null/empty date sorts last so real scheduled posts always get lower indices
+          const sorted = [...indices].sort((a, b) => {
+            const dA = allItems[a].date || '9999-99-99';
+            const dB = allItems[b].date || '9999-99-99';
+            return dA.localeCompare(dB);
+          });
+          const total = sorted.length;
+          sorted.forEach((idx, rank) => {
+            allItems[idx] = { ...allItems[idx], repurpose_index: rank + 1, repurpose_total: total };
+          });
+        }
+        // Re-bucket into byDate for calendar rendering
+        const byDate: Record<string, ActivityEvent[]> = {};
+        allItems.forEach((item) => {
+          if (!byDate[item.date]) byDate[item.date] = [];
+          byDate[item.date].push(item);
+        });
+        setCalendarActivityEvents(byDate);
+      })
+      .catch(() => setCalendarActivityEvents({}))
+      .finally(() => setCalendarActivityEventsLoading(false));
+  }, [activeTab, selectedCompanyId, calendarCurrentDate, calendarCampaignFilter]);
+
+  // Calendar message counts for vertical markers
+  useEffect(() => {
+    if (activeTab !== 'calendar' || !campaignIds || !calendarCurrentDate) return;
+    const year = calendarCurrentDate.getFullYear();
+    const month = calendarCurrentDate.getMonth();
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const dates: string[] = [];
+    for (let d = 1; d <= lastDay; d++) {
+      dates.push(`${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+    }
+    const ids = campaignIds.split(',').filter(Boolean);
+    const authId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : ids[0];
+    if (!authId) return;
+    const url = `/api/calendar/message-counts?campaignIds=${encodeURIComponent(campaignIds)}&dates=${encodeURIComponent(dates.join(','))}`;
+    fetchWithAuth(url)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((data) => setCalendarMessageCounts(typeof data === 'object' && data !== null ? data as Record<string, any> : {}))
+      .catch(() => setCalendarMessageCounts({}));
+  }, [activeTab, campaignIds, calendarCurrentDate, calendarCampaignFilter]);
+
+  // Activity message counts for comment indicators
+  useEffect(() => {
+    if (activeTab !== 'calendar' || !calendarSelectedDate) return;
+    const day = parseDateKey(calendarSelectedDate);
+    const items = getCalendarDayItems(day);
+    const acts = items.filter((i): i is ActivityEvent => isActivityEvent(i) && !!i.execution_id);
+    if (acts.length === 0) {
+      setActivityMessageCounts({});
+      return;
+    }
+    const byCampaign: Record<string, string[]> = {};
+    acts.forEach((a) => {
+      const cid = a.campaign_id;
+      if (!byCampaign[cid]) byCampaign[cid] = [];
+      if (a.execution_id && !byCampaign[cid].includes(a.execution_id)) byCampaign[cid].push(a.execution_id);
+    });
+    const merged: Record<string, { total: number; unread: number }> = {};
+    Promise.all(
+      Object.entries(byCampaign).map(([cid, aids]) =>
+        fetchWithAuth(`/api/activity/message-counts?campaignId=${encodeURIComponent(cid)}&activityIds=${encodeURIComponent(aids.join(','))}`)
+          .then((r) => (r.ok ? r.json() : {}))
+          .then((data) => {
+            if (typeof data === 'object') Object.assign(merged, data);
+          })
+      )
+    ).then(() => setActivityMessageCounts({ ...merged }));
+  }, [activeTab, calendarSelectedDate, calendarActivityEvents, calendarCampaignFilter]);
+
+  // Load messages when chat panel opens
+  useEffect(() => {
+    if (!chatPanel?.campaignId) return;
+    if (chatPanel.mode === 'day' && chatPanel.date) {
+      setDayChatLoading(true);
+      setDayChatMessages([]);
+      fetchWithAuth(`/api/calendar/messages?campaignId=${encodeURIComponent(chatPanel.campaignId)}&date=${encodeURIComponent(chatPanel.date)}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => setDayChatMessages(Array.isArray(data) ? data : []))
+        .catch(() => setDayChatMessages([]))
+        .finally(() => setDayChatLoading(false));
+    } else if (chatPanel.mode === 'activity' && chatPanel.activityId) {
+      setActivityChatLoading(true);
+      setActivityChatMessages([]);
+      fetchWithAuth(`/api/activity/messages?activityId=${encodeURIComponent(chatPanel.activityId)}&campaignId=${encodeURIComponent(chatPanel.campaignId)}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => setActivityChatMessages(Array.isArray(data) ? data : []))
+        .catch(() => setActivityChatMessages([]))
+        .finally(() => setActivityChatLoading(false));
+    }
+  }, [chatPanel?.mode, chatPanel?.campaignId, chatPanel?.date, chatPanel?.activityId, chatRefresh]);
+
+  useEffect(() => {
+    if (!dayDetailPanelDate) {
+      setDayDetailMessages([]);
+      return;
+    }
+    const cid = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '');
+    if (!cid) return;
+    setDayDetailMessagesLoading(true);
+    fetchWithAuth(`/api/calendar/messages?campaignId=${encodeURIComponent(cid)}&date=${encodeURIComponent(dayDetailPanelDate)}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setDayDetailMessages(Array.isArray(data) ? data : []))
+      .catch(() => setDayDetailMessages([]))
+      .finally(() => setDayDetailMessagesLoading(false));
+  }, [dayDetailPanelDate, calendarCampaignFilter, calendarFilteredCampaigns]);
+
+  const handleDayDetailSend = async (text: string) => {
+    if (!dayDetailPanelDate) return;
+    const cid = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '');
+    if (!cid) return;
+    const res = await fetchWithAuth('/api/calendar/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaignId: cid, date: dayDetailPanelDate, message_text: text }),
+    });
+    if (res.ok) {
+      const msg = await res.json();
+      setDayDetailMessages((prev) => [...prev, msg]);
+      setCalendarMessageCounts((c) => ({
+        ...c,
+        [dayDetailPanelDate]: { total: getMsgTotal(c[dayDetailPanelDate]) + 1, unread: getMsgUnread(c[dayDetailPanelDate]) },
+      }));
+    }
+  };
+
+  const handleChatSend = async (text: string) => {
+    if (!chatPanel?.campaignId) return;
+    if (chatPanel.mode === 'day' && chatPanel.date) {
+      const res = await fetchWithAuth('/api/calendar/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId: chatPanel.campaignId, date: chatPanel.date, message_text: text }),
+      });
+      if (res.ok) {
+        const msg = await res.json();
+        setDayChatMessages((prev) => [...prev, msg]);
+        setChatRefresh((c) => c + 1);
+      }
+    } else if (chatPanel.mode === 'activity' && chatPanel.activityId) {
+      const res = await fetchWithAuth('/api/activity/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activityId: chatPanel.activityId, campaignId: chatPanel.campaignId, message_text: text }),
+      });
+      if (res.ok) {
+        const msg = await res.json();
+        setActivityChatMessages((prev) => [...prev, msg]);
+        setChatRefresh((c) => c + 1);
+      }
+    }
+  };
 
   const handleExpandToWeekPlans = async (campaignId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -481,8 +874,17 @@ export default function DashboardPage() {
     }
   };
 
-  const confirmDeleteCampaign = async () => {
-    if (!selectedCompanyId || !pendingDeleteCampaignId) return;
+  const confirmDeleteCampaign = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    e?.preventDefault();
+    if (!pendingDeleteCampaignId) return;
+    if (!selectedCompanyId) {
+      notify('error', 'Please select a company before deleting campaigns.');
+      setPendingDeleteCampaignId(null);
+      return;
+    }
+    const campaignIdToDelete = pendingDeleteCampaignId;
+    setIsDeletingCampaign(true);
     try {
       const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
       const deleteResponse = await fetchWithAuth(deleteUrl, {
@@ -504,19 +906,20 @@ export default function DashboardPage() {
       }
     } catch (error) {
       console.error('Error deleting campaign:', error);
-      notify('error', `Error deleting campaign: ${error.message}`);
+      notify('error', `Error deleting campaign: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
+      setIsDeletingCampaign(false);
       setPendingDeleteCampaignId(null);
     }
   };
 
   const handleViewCampaign = (campaignId: string) => {
-    const params = new URLSearchParams();
-    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
-    window.location.href = `/campaign-details/${campaignId}${params.toString() ? `?${params.toString()}` : ''}`;
+    navigateToCampaign(campaignId, selectedCompanyId);
   };
 
   const buildPlanningWorkspaceUrl = (campaignId: string) => {
+    const saved = loadCampaignResume(campaignId);
+    if (saved) return buildResumeUrl(saved, selectedCompanyId);
     const params = new URLSearchParams();
     if (selectedCompanyId) params.set('companyId', selectedCompanyId);
     const qs = params.toString();
@@ -592,7 +995,7 @@ export default function DashboardPage() {
                 </button>
               )}
               <button
-                onClick={() => window.location.href = '/create-campaign'}
+                onClick={() => window.location.href = '/campaign-planner?mode=direct'}
                 disabled={!canCreateCampaign}
                 title={
                   canCreateCampaign ? 'Start a new campaign from scratch (no recommendation)' : 'You do not have permission to create campaigns.'
@@ -781,7 +1184,7 @@ export default function DashboardPage() {
                     <h3 className="text-lg font-medium text-gray-900 mb-2">No campaigns yet</h3>
                     <p className="text-gray-600 mb-6">Create your first campaign to get started</p>
                     <button 
-                      onClick={() => window.location.href = '/create-campaign'}
+                      onClick={() => window.location.href = '/campaign-planner?mode=direct'}
                       disabled={!canCreateCampaign}
                       title={
                         canCreateCampaign ? 'Start from scratch (no recommendation)' : 'You do not have permission to create campaigns.'
@@ -863,8 +1266,8 @@ export default function DashboardPage() {
                           >
                             <span>Delete this campaign? This cannot be undone.</span>
                             <div className="flex items-center gap-2">
-                              <button type="button" onClick={() => setPendingDeleteCampaignId(null)} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
-                              <button type="button" onClick={confirmDeleteCampaign} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700">Delete</button>
+                              <button type="button" onClick={(e) => { e.stopPropagation(); setPendingDeleteCampaignId(null); }} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
+                              <button type="button" onClick={(e) => { e.stopPropagation(); confirmDeleteCampaign(e); }} disabled={isDeletingCampaign} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed">{(isDeletingCampaign ? 'Deleting…' : 'Delete')}</button>
                             </div>
                           </div>
                         )}
@@ -962,15 +1365,15 @@ export default function DashboardPage() {
             </div>
                 
             {/* Quick Actions */}
-            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl p-6 text-white">
+            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-6 items-stretch">
+              <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="p-2 bg-white/20 rounded-lg">
                     <Users className="h-6 w-6" />
                   </div>
                   <h3 className="text-lg font-semibold leading-snug">Company Profile</h3>
                 </div>
-                <p className="text-indigo-100 mb-4">
+                <p className="text-indigo-100 mb-4 flex-1">
                   Start here to define your company intelligence profile
                 </p>
                 <button
@@ -980,14 +1383,14 @@ export default function DashboardPage() {
                   Open Profile
                 </button>
               </div>
-              <div className="bg-gradient-to-br from-slate-500 to-gray-700 rounded-2xl p-6 text-white">
+              <div className="bg-gradient-to-br from-slate-500 to-gray-700 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="p-2 bg-white/20 rounded-lg">
                     <Settings className="h-6 w-6" />
                   </div>
                   <h3 className="text-lg font-semibold leading-snug">External APIs</h3>
                 </div>
-                <p className="text-gray-100 mb-4">
+                <p className="text-gray-100 mb-4 flex-1">
                   Configure external sources for trend signals
                 </p>
                 <button
@@ -1000,31 +1403,14 @@ export default function DashboardPage() {
                   Manage APIs
                 </button>
               </div>
-              <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl p-6 text-white lg:min-w-[calc(100%+16px)] lg:-ml-2 lg:-mr-2">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <TrendingUp className="h-6 w-6" />
-                  </div>
-                  <h3 className="text-lg font-semibold leading-snug">Recommendations</h3>
-                </div>
-                <p className="text-emerald-100 mb-4">
-                  Generate trend-based campaign recommendations
-                </p>
-                <button
-                  onClick={() => window.location.href = '/recommendations'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-                >
-                  View Recommendations
-                </button>
-              </div>
-              <div className="bg-gradient-to-br from-slate-600 to-slate-800 rounded-2xl p-6 text-white">
+              <div className="bg-gradient-to-br from-slate-600 to-slate-800 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="p-2 bg-white/20 rounded-lg">
                     <Settings className="h-6 w-6" />
                   </div>
                   <h3 className="text-lg font-semibold leading-snug">Social Platform Settings</h3>
                 </div>
-                <p className="text-slate-100 mb-4">
+                <p className="text-slate-100 mb-4 flex-1">
                   Define publishing rules per platform
                 </p>
                 <button
@@ -1034,14 +1420,31 @@ export default function DashboardPage() {
                   Configure Platforms
                 </button>
               </div>
-              <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl p-6 text-white">
+              <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-white/20 rounded-lg">
+                    <TrendingUp className="h-6 w-6" />
+                  </div>
+                  <h3 className="text-lg font-semibold leading-snug">Recommendations</h3>
+                </div>
+                <p className="text-emerald-100 mb-4 flex-1 leading-relaxed">
+                  Generate trend-based campaign recommendations
+                </p>
+                <button
+                  onClick={() => window.location.href = '/recommendations'}
+                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                >
+                  View Recommendations
+                </button>
+              </div>
+              <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="p-2 bg-white/20 rounded-lg">
                     <Calendar className="h-6 w-6" />
                   </div>
                   <h3 className="text-lg font-semibold leading-snug">Schedule Content</h3>
                 </div>
-                <p className="text-green-100 mb-4">Plan and schedule your content calendar</p>
+                <p className="text-green-100 mb-4 flex-1">Plan and schedule your content calendar</p>
                 <button
                   onClick={() => setActiveTab('calendar')}
                   disabled={!canScheduleContent}
@@ -1067,7 +1470,7 @@ export default function DashboardPage() {
                 <p className="text-gray-600 mt-1">Manage and track all your content campaigns</p>
               </div>
               <button
-                onClick={() => window.location.href = '/create-campaign'}
+                onClick={() => window.location.href = '/campaign-planner?mode=direct'}
                 disabled={!canCreateCampaign}
                 title={
                   canCreateCampaign ? '' : 'You do not have permission to create campaigns.'
@@ -1111,7 +1514,7 @@ export default function DashboardPage() {
                   </h3>
                   <p className="text-gray-600 mb-8">Create your first campaign to get started with content management</p>
                   <button 
-                    onClick={() => window.location.href = '/create-campaign'}
+                    onClick={() => window.location.href = '/campaign-planner?mode=direct'}
                     disabled={!canCreateCampaign}
                     title={
                       canCreateCampaign ? 'Start from scratch (no recommendation)' : 'You do not have permission to create campaigns.'
@@ -1198,8 +1601,8 @@ export default function DashboardPage() {
                           >
                             <span>Delete this campaign? This cannot be undone.</span>
                             <div className="flex items-center gap-2">
-                              <button type="button" onClick={() => setPendingDeleteCampaignId(null)} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
-                              <button type="button" onClick={confirmDeleteCampaign} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700">Delete</button>
+                              <button type="button" onClick={(e) => { e.stopPropagation(); setPendingDeleteCampaignId(null); }} className="px-3 py-1.5 rounded border border-amber-300 bg-white hover:bg-amber-100">Cancel</button>
+                              <button type="button" onClick={(e) => { e.stopPropagation(); confirmDeleteCampaign(e); }} disabled={isDeletingCampaign} className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed">{(isDeletingCampaign ? 'Deleting…' : 'Delete')}</button>
                             </div>
                           </div>
                         )}
@@ -1542,57 +1945,195 @@ export default function DashboardPage() {
                 ))}
               </div>
 
-              <div className="mb-4 flex flex-wrap items-center gap-2">
-                {([
-                  'weekly_planning',
-                  'daily_cards',
-                  'content_created',
-                  'content_scheduled',
-                  'content_shared',
-                  'overdue',
-                ] as CalendarExecutionStage[]).map((stage) => {
-                  const appearance = getCalendarStageAppearance(stage);
-                  return (
-                    <span key={`calendar-stage-${stage}`} className={`px-2 py-1 text-xs rounded-full ${appearance.badge}`}>
-                      {appearance.label}
-                    </span>
-                  );
-                })}
-              </div>
+              {/* Legend — clickable to view all activities in that stage */}
+              {(() => {
+                const allMonthEvents = Object.values(calendarActivityEvents).flat();
+                const stageCounts: Partial<Record<CalendarExecutionStage, number>> = {};
+                allMonthEvents.forEach((ev) => {
+                  const s = getEventStage(ev);
+                  stageCounts[s] = (stageCounts[s] ?? 0) + 1;
+                });
+                const clickableStages: CalendarExecutionStage[] = ['content_created', 'content_scheduled', 'content_shared', 'overdue'];
+                return (
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    {(['weekly_planning', 'daily_cards', 'content_created', 'content_scheduled', 'content_shared', 'overdue'] as CalendarExecutionStage[]).map((stage) => {
+                      const appearance = getCalendarStageAppearance(stage);
+                      const count = stageCounts[stage] ?? 0;
+                      const isActive = calendarStageFilter === stage;
+                      const isClickable = clickableStages.includes(stage);
+                      if (!isClickable) {
+                        return (
+                          <span key={stage} className={`px-2 py-1 text-xs rounded-full ${appearance.badge}`}>
+                            {appearance.label}
+                          </span>
+                        );
+                      }
+                      return (
+                        <button
+                          key={stage}
+                          type="button"
+                          onClick={() => {
+                            if (calendarStageFilter === stage) {
+                              setCalendarStageFilter(null);
+                              setCalendarStageEvents([]);
+                            } else {
+                              fetchStageEvents(stage);
+                            }
+                          }}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-full border transition-all ${appearance.badge} ${isActive ? 'ring-2 ring-offset-1 ring-gray-400' : 'opacity-80 hover:opacity-100'}`}
+                        >
+                          {appearance.label}
+                          {count > 0 && (
+                            <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-white/30 text-[10px] font-bold">
+                              {count}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {calendarStageFilter && (
+                      <button
+                        type="button"
+                        onClick={() => { setCalendarStageFilter(null); setCalendarStageEvents([]); }}
+                        className="px-2 py-1 text-xs rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100"
+                      >
+                        ✕ Clear filter
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Stage list panel — shown when a legend tab is active */}
+              {calendarStageFilter && (() => {
+                const appearance = getCalendarStageAppearance(calendarStageFilter);
+                return (
+                  <div className="mb-4 rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                    <div className={`px-4 py-2 flex items-center justify-between ${appearance.badge}`}>
+                      <span className="font-semibold text-sm">{appearance.label} — All Activities</span>
+                      {calendarStageEventsLoading && <span className="text-xs opacity-75">Loading…</span>}
+                      {!calendarStageEventsLoading && <span className="text-xs opacity-75">{calendarStageEvents.length} item{calendarStageEvents.length !== 1 ? 's' : ''}</span>}
+                    </div>
+                    {calendarStageEventsLoading ? (
+                      <div className="px-4 py-6 text-sm text-gray-500 text-center">Loading activities…</div>
+                    ) : calendarStageEvents.length === 0 ? (
+                      <div className="px-4 py-6 text-sm text-gray-500 text-center">No activities in this stage.</div>
+                    ) : (
+                      <div className="divide-y divide-gray-100 max-h-72 overflow-y-auto">
+                        {calendarStageEvents.map((ev, i) => {
+                          const colorClass = getPlatformColorForCalendar(ev.platform);
+                          return (
+                            <div
+                              key={`stage-ev-${i}`}
+                              className="flex items-center justify-between px-4 py-3 hover:bg-gray-50 cursor-pointer"
+                              onClick={() => ev.execution_id && setChatPanel({ mode: 'activity', activityId: ev.execution_id, campaignId: ev.campaign_id, date: ev.date })}
+                            >
+                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                                <div className={`p-1.5 rounded-lg shrink-0 ${colorClass}`}>
+                                  <PlatformIcon platform={ev.platform} size={16} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-medium text-gray-900 truncate">{ev.title}</p>
+                                  <p className="text-xs text-gray-500 capitalize">{ev.platform} · {ev.content_type} · {ev.date}</p>
+                                </div>
+                              </div>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleActivityEventClick(ev); }}
+                                className="ml-3 shrink-0 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+                              >
+                                Open
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {calendarView === 'month' ? (
                 <div className="grid grid-cols-7 gap-2">
                   {getDaysInMonth(calendarCurrentDate).map((day, idx) => {
                     if (!day) return <div key={`empty-${idx}`} className="h-28 rounded-lg bg-gray-50 border border-gray-100" />;
                     const dateKey = formatDateKey(day);
-                    const dayActivities = getCalendarActivitiesForDate(day);
+                    const dayItems = getCalendarDayItems(day);
                     const isToday = dateKey === formatDateKey(new Date());
                     const isSelected = calendarSelectedDate === dateKey;
+                    const dayCampaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '');
+                    const dayCount = calendarMessageCounts[dateKey];
+                    const hasDayChat = getMsgTotal(dayCount) > 0;
+                    const dayUnread = getMsgUnread(dayCount);
                     return (
                       <button
                         key={dateKey}
-                        onClick={() => setCalendarSelectedDate(dateKey)}
-                        className={`h-28 text-left p-2 rounded-lg border transition-colors ${
+                        onClick={() => { setCalendarSelectedDate(dateKey); setDayDetailPanelDate(dateKey); }}
+                        onDragOver={(e) => { e.preventDefault(); setDropTargetDate(dateKey); }}
+                        onDragLeave={() => setDropTargetDate((d) => (d === dateKey ? null : d))}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setDropTargetDate(null);
+                          if (draggedActivity?.scheduled_post_id) handleRescheduleDrop(dateKey);
+                        }}
+                        className={`h-28 text-left p-2 rounded-lg border transition-colors relative ${
                           isSelected
                             ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200'
-                            : isToday
-                              ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200'
-                              : 'border-gray-200 bg-white hover:bg-gray-50'
+                            : dropTargetDate === dateKey
+                              ? 'border-indigo-400 bg-indigo-50/50 ring-2 ring-indigo-200'
+                              : isToday
+                                ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200'
+                                : 'border-gray-200 bg-white hover:bg-gray-50'
                         }`}
                       >
-                        <div className="text-xs font-semibold text-gray-800">{day.getDate()}</div>
-                        <div className="mt-1 space-y-1">
-                          {dayActivities.slice(0, 2).map((activity, index) => {
-                            const appearance = getCalendarStageAppearance(activity.stage);
+                        {hasDayChat && dayCampaignId && (
+                          <div
+                            onClick={(e) => { e.stopPropagation(); setChatPanel({ mode: 'day', campaignId: dayCampaignId, date: dateKey }); }}
+                            className="absolute left-1 top-2 bottom-2 w-3 flex items-center justify-center text-indigo-600 hover:text-indigo-800 cursor-pointer border-l-2 border-indigo-400 rounded"
+                            title="Team Chat"
+                          >
+                            <span className="text-[10px] font-bold">{dayUnread > 0 ? dayUnread : '|'}</span>
+                          </div>
+                        )}
+                        <div className={hasDayChat && dayCampaignId ? 'pl-4' : ''}>
+                          <div className="text-xs font-semibold text-gray-800">{day.getDate()}</div>
+                          <div className="mt-1 space-y-1">
+                          {dayItems.slice(0, 3).map((item, index) => {
+                            if (isActivityEvent(item)) {
+                              const colorClass = getPlatformColorForCalendar(item.platform);
+                              const borderColor = getPlatformBorderColor(item.platform);
+                              const isDraggable = !!item.scheduled_post_id;
+                              return (
+                                <div
+                                  key={`${dateKey}-activity-${item.scheduled_post_id ?? index}`}
+                                  draggable={isDraggable}
+                                  onDragStart={(e) => { if (isDraggable) { e.stopPropagation(); e.dataTransfer.setData('application/json', JSON.stringify(item)); setDraggedActivity(item); } }}
+                                  onDragEnd={() => setDraggedActivity(null)}
+                                  onClick={(e) => { e.stopPropagation(); handleActivityEventClick(item); }}
+                                  className={`text-[11px] px-1.5 py-0.5 rounded truncate inline-flex items-center gap-0.5 cursor-pointer hover:opacity-90 border-l-4 ${borderColor} ${colorClass}`}
+                                >
+                                  {isDraggable && <GripVertical className="w-3 h-3 shrink-0 opacity-50" />}
+                                  <PlatformIcon platform={item.platform} size={10} />
+                                  <span>{getPlatformLabel(item.platform)} — {item.title}</span>
+                                  {<RepurposeDots index={item.repurpose_index} total={item.repurpose_total} contentType={item.content_type} />}
+                                </div>
+                              );
+                            }
+                            const appearance = getCalendarStageAppearance((item as CalendarActivity).stage);
                             return (
-                              <div key={`${dateKey}-${activity.campaign.id}-${index}`} className={`text-[11px] px-1.5 py-0.5 rounded truncate ${appearance.badge}`}>
-                                {activity.label}
+                              <div key={`${dateKey}-${(item as CalendarActivity).campaign.id}-${index}`} className={`text-[11px] px-1.5 py-0.5 rounded truncate ${appearance.badge}`}>
+                                {(item as CalendarActivity).label}
                               </div>
                             );
                           })}
-                          {dayActivities.length > 2 && (
-                            <div className="text-[11px] text-gray-500">+{dayActivities.length - 2} more</div>
+                          {dayItems.length > 3 && (
+                            <div
+                              className="text-[11px] text-indigo-600 hover:underline cursor-pointer"
+                              onClick={(e) => { e.stopPropagation(); setDayDetailPanelDate(dateKey); }}
+                            >
+                              +{dayItems.length - 3} more
+                            </div>
                           )}
+                        </div>
                         </div>
                       </button>
                     );
@@ -1602,26 +2143,53 @@ export default function DashboardPage() {
                 <div className="grid grid-cols-7 gap-2">
                   {getWeekDays(calendarCurrentDate).map((day) => {
                     const dateKey = formatDateKey(day);
-                    const dayActivities = getCalendarActivitiesForDate(day);
+                    const dayActivities = getCalendarDayItems(day);
                     const isToday = dateKey === formatDateKey(new Date());
                     const isSelected = calendarSelectedDate === dateKey;
                     return (
                       <button
                         key={`week-${dateKey}`}
                         onClick={() => setCalendarSelectedDate(dateKey)}
-                        className={`h-36 text-left p-2 rounded-lg border transition-colors ${
+                        onDragOver={(e) => { e.preventDefault(); setDropTargetDate(dateKey); }}
+                        onDragLeave={() => setDropTargetDate((d) => (d === dateKey ? null : d))}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setDropTargetDate(null);
+                          if (draggedActivity?.scheduled_post_id) handleRescheduleDrop(dateKey);
+                        }}
+                        className={`h-36 text-left p-2 rounded-lg border transition-colors relative ${
                           isSelected
                             ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200'
-                            : isToday
-                              ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200'
-                              : 'border-gray-200 bg-white hover:bg-gray-50'
+                            : dropTargetDate === dateKey
+                              ? 'border-indigo-400 bg-indigo-50/50 ring-2 ring-indigo-200'
+                              : isToday
+                                ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200'
+                                : 'border-gray-200 bg-white hover:bg-gray-50'
                         }`}
                       >
+                        {getMsgTotal(calendarMessageCounts[dateKey]) > 0 && (
+                          <div
+                            onClick={(e) => { e.stopPropagation(); setChatPanel({ mode: 'day', campaignId: calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (campaignIds.split(',')[0] || ''), date: dateKey }); }}
+                            className="absolute left-1 top-1 bottom-1 w-0.5 bg-indigo-500 rounded hover:bg-indigo-600 cursor-pointer"
+                            title="Team Chat"
+                            aria-label="Open team chat"
+                          />
+                        )}
                         <div className="text-xs font-semibold text-gray-800">
                           {day.toLocaleDateString('en-US', { weekday: 'short' })} {day.getDate()}
                         </div>
                         <div className="mt-1 space-y-1">
                           {dayActivities.slice(0, 4).map((activity, index) => {
+                            if (isActivityEvent(activity)) {
+                              const colorClass = getPlatformColorForCalendar(activity.platform);
+                              return (
+                                <div key={`week-${dateKey}-act-${index}`} className={`text-[11px] px-1.5 py-0.5 rounded truncate inline-flex items-center gap-0.5 ${colorClass}`}>
+                                  <PlatformIcon platform={activity.platform} size={10} />
+                                  <span className="ml-0.5 truncate">{getPlatformLabel(activity.platform)} — {activity.title}</span>
+                                  {<RepurposeDots index={activity.repurpose_index} total={activity.repurpose_total} contentType={activity.content_type} />}
+                                </div>
+                              );
+                            }
                             const appearance = getCalendarStageAppearance(activity.stage);
                             return (
                               <div key={`week-item-${dateKey}-${activity.campaign.id}-${index}`} className={`text-[11px] px-1.5 py-0.5 rounded truncate ${appearance.badge}`}>
@@ -1654,13 +2222,60 @@ export default function DashboardPage() {
               {calendarSelectedDate ? (
                 (() => {
                   const day = parseDateKey(calendarSelectedDate);
-                  const dayActivities = getCalendarActivitiesForDate(day);
+                  const dayActivities = getCalendarDayItems(day);
                   if (dayActivities.length === 0) {
                     return <p className="text-sm text-gray-600">No campaign activities scheduled for this day.</p>;
                   }
                   return (
                     <div className="space-y-3">
                       {dayActivities.map((activity, index) => {
+                        if (isActivityEvent(activity)) {
+                          const colorClass = getPlatformColorForCalendar(activity.platform);
+                          const msgCount = activity.execution_id ? activityMessageCounts[activity.execution_id] : undefined;
+                          const msgTotal = getMsgTotal(msgCount);
+                          const msgUnread = getMsgUnread(msgCount);
+                          const dayCampaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '');
+                          return (
+                            <div
+                              key={`detail-act-${calendarSelectedDate}-${index}`}
+                              className="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-3 cursor-pointer hover:bg-gray-50"
+                              onClick={(e) => {
+                                if (activity.execution_id && (e.target as HTMLElement).closest('button')) return;
+                                if (activity.execution_id) setChatPanel({ mode: 'activity', activityId: activity.execution_id, campaignId: activity.campaign_id, date: activity.date });
+                              }}
+                            >
+                              <div className="flex items-center gap-3 flex-1 min-w-0">
+                                <div className={`p-2 rounded-lg shrink-0 ${colorClass}`}>
+                                  <PlatformIcon platform={activity.platform} size={20} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-medium text-gray-900 truncate capitalize">{activity.content_type}</p>
+                                  <p className="text-sm text-gray-700 truncate">{activity.title}</p>
+                                  <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
+                                    {<RepurposeDots index={activity.repurpose_index} total={activity.repurpose_total} contentType={activity.content_type} />}
+                                    {activity.date && <span>{activity.date}</span>}
+                                  </div>
+                                </div>
+                                {msgTotal > 0 && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setChatPanel({ mode: 'activity', activityId: activity.execution_id!, campaignId: activity.campaign_id, date: activity.date }); }}
+                                    className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-medium"
+                                    title="Activity Discussion"
+                                  >
+                                    <MessageSquare className="w-3.5 h-3.5" />
+                                    {msgTotal}{msgUnread > 0 ? ` • ${msgUnread} new` : ''}
+                                  </button>
+                                )}
+                              </div>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleActivityEventClick(activity); }}
+                                className="ml-2 shrink-0 text-sm text-indigo-600 hover:text-indigo-800"
+                              >
+                                Open
+                              </button>
+                            </div>
+                          );
+                        }
                         const appearance = getCalendarStageAppearance(activity.stage);
                         return (
                           <div key={`detail-${activity.campaign.id}-${calendarSelectedDate}-${index}`} className="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-3">
@@ -1933,6 +2548,53 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+      {chatPanel && user?.userId && (
+        <FloatingChatPanel
+          title={chatPanel.mode === 'day' && chatPanel.date
+            ? `Team Chat — ${parseDateKey(chatPanel.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`
+            : 'Activity Discussion'}
+          messages={chatPanel.mode === 'day' ? dayChatMessages : activityChatMessages}
+          loading={chatPanel.mode === 'day' ? dayChatLoading : activityChatLoading}
+          currentUserId={user.userId}
+          onSend={handleChatSend}
+          onClose={() => setChatPanel(null)}
+          inputPlaceholder="Write message..."
+        />
+      )}
+      {dayDetailPanelDate && user?.userId && (() => {
+        const dayActivities: DayActivity[] = getCalendarDayItems(parseDateKey(dayDetailPanelDate))
+          .filter((i): i is ActivityEvent => isActivityEvent(i))
+          .map((a) => ({
+            execution_id: a.execution_id,
+            scheduled_post_id: a.scheduled_post_id,
+            platform: a.platform,
+            title: a.title,
+            content_type: a.content_type,
+            repurpose_index: a.repurpose_index,
+            repurpose_total: a.repurpose_total,
+            date: a.date,
+            time: undefined,
+            campaign_id: a.campaign_id,
+          }));
+        return (
+          <DayDetailPanel
+            dateKey={dayDetailPanelDate}
+            dateLabel={parseDateKey(dayDetailPanelDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+            activities={dayActivities}
+            messages={dayDetailMessages}
+            loadingMessages={dayDetailMessagesLoading}
+            currentUserId={user.userId}
+            campaignId={calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '')}
+            onClose={() => setDayDetailPanelDate(null)}
+            onSendMessage={handleDayDetailSend}
+            onActivityClick={(act) => {
+              if (act.execution_id) {
+                router.push(`/activity-workspace?campaignId=${encodeURIComponent(act.campaign_id)}&executionId=${encodeURIComponent(act.execution_id)}`);
+              }
+            }}
+        />
+        );
+      })()}
     </div>
   );
 }
@@ -2041,3 +2703,4 @@ const CampaignProgress: React.FC<{ campaignId: string; companyId?: string | null
     </div>
   );
 };
+

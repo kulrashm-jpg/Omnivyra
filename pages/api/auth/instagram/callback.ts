@@ -35,7 +35,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body: new URLSearchParams({
         client_id: process.env.INSTAGRAM_CLIENT_ID || '',
         client_secret: process.env.INSTAGRAM_CLIENT_SECRET || '',
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001'}/api/auth/instagram/callback`,
+        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/instagram/callback`,
         code: code as string,
       })
     });

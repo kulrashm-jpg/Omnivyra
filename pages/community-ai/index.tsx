@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
+import { MessageSquare } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
@@ -129,6 +131,7 @@ type WebhookItem = {
 };
 
 export default function CommunityAiHome() {
+  const router = useRouter();
   const { selectedCompanyId } = useCompanyContext();
   const tenantId = selectedCompanyId || '';
 
@@ -600,6 +603,29 @@ export default function CommunityAiHome() {
         </div>
       )}
 
+      <SectionCard title="Community Engagement" subtitle="Monitor conversations, identify opportunities, and engage with communities across connected platforms.">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="p-3 rounded-lg bg-indigo-50 text-indigo-600 shrink-0">
+              <MessageSquare className="h-6 w-6" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Community Engagement</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                Monitor conversations, identify opportunities, and engage with communities across connected platforms.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => router.push('/engagement')}
+            className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors shrink-0"
+          >
+            Open Engagement Console
+          </button>
+        </div>
+      </SectionCard>
+
       <SectionCard title="Monitoring & KPI Overview">
         <div className="flex items-center justify-between mb-3">
           <div className="text-sm text-gray-600">Operational KPIs</div>
@@ -1037,6 +1063,15 @@ export default function CommunityAiHome() {
           <div className="border rounded-lg p-4">
             <div className="text-xs text-gray-500">Unanswered comments</div>
             <div className="text-lg font-semibold text-gray-900">{attentionCounts.unanswered}</div>
+            {attentionCounts.unanswered > 0 && (
+              <button
+                type="button"
+                onClick={() => router.push('/engagement')}
+                className="text-xs text-indigo-600 hover:text-indigo-800 mt-1"
+              >
+                Reply Now →
+              </button>
+            )}
           </div>
           <div className="border rounded-lg p-4">
             <div className="text-xs text-gray-500">Pending actions</div>

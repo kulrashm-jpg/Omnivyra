@@ -14,6 +14,8 @@ export interface ScheduledPost {
   maxRetries: number;
   createdAt: Date;
   updatedAt: Date;
+  repurpose_index?: number;
+  repurpose_total?: number;
 }
 
 export interface PostingJob {

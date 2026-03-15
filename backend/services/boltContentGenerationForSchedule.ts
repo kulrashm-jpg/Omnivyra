@@ -7,6 +7,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { updateActivity } from './executionPlannerPersistence';
 import { generateMasterContentFromIntent } from './contentGenerationPipeline';
 import { buildPlatformVariantsFromMaster } from './contentGenerationPipeline';
 
@@ -89,68 +90,98 @@ function buildItemFromEnriched(
   };
 }
 
+export type GenerateContentProgressOptions = {
+  /** Called when transitioning between creating (master) and repurposing (variants) phases. */
+  onPhase?: (phase: 'creating' | 'repurposing') => void;
+};
+
+/** Process up to N topic groups in parallel to speed up BOLT content generation. */
+const CONTENT_GEN_CONCURRENCY = 2;
+
 /**
  * Generate master content and platform variants for all daily plan activities.
+ * Processes topic groups with limited concurrency (2) for speed.
  * Returns a map: `${rowId}` -> generated_content for each daily plan row.
  */
 export async function generateContentForDailyPlans(
   campaignId: string,
-  dailyPlans: DailyPlanRow[]
+  dailyPlans: DailyPlanRow[],
+  options?: GenerateContentProgressOptions
 ): Promise<Map<string, string>> {
   const contentMap = new Map<string, string>();
   if (!campaignId || !Array.isArray(dailyPlans) || dailyPlans.length === 0) return contentMap;
 
   const groups = groupPlansByTopicAndWeek(dailyPlans);
+  const groupEntries = Array.from(groups.entries());
+  let phaseCreatingFired = false;
+  let phaseRepurposingFired = false;
 
-  for (const [, rows] of groups) {
-    if (rows.length === 0) continue;
+  async function processGroup(rows: DailyPlanRow[]): Promise<{ id: string; content: string }[]> {
+    if (rows.length === 0) return [];
     const first = rows[0]!;
     const parsed = tryParseJson<Record<string, unknown>>(first.content);
-    if (!parsed || typeof parsed !== 'object') continue;
+    if (!parsed || typeof parsed !== 'object') return [];
 
     const platformTargets = rows.map((r) => ({
       platform: String(r.platform || '').trim().toLowerCase(),
       content_type: String(r.content_type || 'post').trim().toLowerCase(),
     })).filter((t) => t.platform);
-
-    if (platformTargets.length === 0) continue;
+    if (platformTargets.length === 0) return [];
 
     const item = buildItemFromEnriched(parsed, platformTargets);
+    const master = await generateMasterContentFromIntent(item);
+    (item as any).master_content = master;
+    (item as any).master_content = { ...master, generation_status: 'generated' };
+    const variants = await buildPlatformVariantsFromMaster(item);
+    const variantByKey = new Map<string, string>();
+    for (const v of variants) {
+      const key = `${String(v.platform).toLowerCase()}::${String(v.content_type).toLowerCase()}`;
+      if (v.generated_content) variantByKey.set(key, v.generated_content);
+    }
 
-    try {
-      const master = await generateMasterContentFromIntent(item);
-      (item as any).master_content = master;
-      (item as any).master_content = {
-        ...master,
-        generation_status: 'generated',
-      };
-
-      const variants = await buildPlatformVariantsFromMaster(item);
-      const variantByKey = new Map<string, string>();
-      for (const v of variants) {
-        const key = `${String(v.platform).toLowerCase()}::${String(v.content_type).toLowerCase()}`;
-        if (v.generated_content) variantByKey.set(key, v.generated_content);
-      }
-
-      for (const row of rows) {
-        const platform = String(row.platform || '').trim().toLowerCase();
-        const contentType = String(row.content_type || 'post').trim().toLowerCase();
-        const key = `${platform}::${contentType}`;
-        const content = variantByKey.get(key);
-        if (content) {
-          contentMap.set(row.id, content);
-          const parsed = tryParseJson<Record<string, unknown>>(row.content);
-          if (parsed && typeof parsed === 'object') {
-            const updated = { ...parsed, generated_content: content };
-            await supabase
-              .from('daily_content_plans')
-              .update({ content: JSON.stringify(updated) })
-              .eq('id', row.id);
-          }
+    const updates: { id: string; content: string }[] = [];
+    for (const row of rows) {
+      const platform = String(row.platform || '').trim().toLowerCase();
+      const contentType = String(row.content_type || 'post').trim().toLowerCase();
+      const key = `${platform}::${contentType}`;
+      const content = variantByKey.get(key);
+      if (content) {
+        contentMap.set(row.id, content);
+        const p = tryParseJson<Record<string, unknown>>(row.content);
+        if (p && typeof p === 'object') {
+          const updated = { ...p, generated_content: content };
+          updates.push({ id: row.id, content: JSON.stringify(updated) });
         }
       }
-    } catch (err) {
-      console.warn('[bolt-content-gen] Failed for topic', first.topic, (err as Error)?.message);
+    }
+    return updates;
+  }
+
+  for (let i = 0; i < groupEntries.length; i += CONTENT_GEN_CONCURRENCY) {
+    const batch = groupEntries.slice(i, i + CONTENT_GEN_CONCURRENCY);
+    if (!phaseCreatingFired) {
+      phaseCreatingFired = true;
+      options?.onPhase?.('creating');
+    }
+    const results = await Promise.all(
+      batch.map(([, rows]) => processGroup(rows).catch((err) => {
+        const first = rows[0];
+        if (first) console.warn('[bolt-content-gen] Failed for topic', first.topic, (err as Error)?.message);
+        return [] as { id: string; content: string }[];
+      }))
+    );
+    if (!phaseRepurposingFired) {
+      phaseRepurposingFired = true;
+      options?.onPhase?.('repurposing');
+    }
+    const allUpdates = results.flat();
+    if (allUpdates.length > 0) {
+      const { updateActivity } = await import('./executionPlannerPersistence');
+      await Promise.all(
+        allUpdates.map(({ id, content }) =>
+          updateActivity(id, { content }, 'board')
+        )
+      );
     }
   }
 

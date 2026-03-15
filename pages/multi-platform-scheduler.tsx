@@ -426,6 +426,7 @@ export default function MultiPlatformScheduler() {
                         <Input
                           type="date"
                           value={platformContents[platform]?.scheduledFor ? new Date(platformContents[platform].scheduledFor).toISOString().split('T')[0] : ''}
+                          min={new Date().toISOString().split('T')[0]}
                           onChange={(e) => handleContentChange(platform, 'scheduledFor', new Date(e.target.value).toISOString())}
                           className="w-full p-2 bg-white/5 border border-white/10 rounded-lg text-white"
                         />

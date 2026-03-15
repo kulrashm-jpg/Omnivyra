@@ -108,7 +108,23 @@ type ApiSource = {
     last_test_at?: string | null;
     last_test_latency_ms?: number | null;
   } | null;
+  company_limits?: { daily_limit: number | null; signal_limit: number | null } | null;
+  usage_today?: { request_count: number; signals_generated: number } | null;
 };
+
+/** Classify API error for display (API key, quota, rate limit, etc.) */
+function classifyApiError(
+  code?: string | null,
+  message?: string | null
+): 'api_key' | 'quota' | 'rate_limit' | null {
+  const c = String(code || '').toLowerCase();
+  const m = String(message || '').toLowerCase();
+  if (c === '401' || m.includes('unauthorized') || (m.includes('invalid') && (m.includes('key') || m.includes('api')))) return 'api_key';
+  if (c === '403' || m.includes('forbidden') || m.includes('access denied')) return 'api_key';
+  if (c === '429' || m.includes('rate limit') || m.includes('too many requests')) return 'rate_limit';
+  if (m.includes('quota') || m.includes('limit exceeded') || m.includes('exceeded')) return 'quota';
+  return null;
+}
 
 type ExternalApiPreset = {
   id?: string;
@@ -153,6 +169,13 @@ const emptyForm: Partial<ApiSource> = {
   is_preset: false,
 };
 
+/** Test scenarios for Super Admin API testing — 2–3 preset category/geo combos. */
+const TEST_SCENARIOS = [
+  { id: 'trends', label: 'Trends', category: 'trends', geo: 'US' },
+  { id: 'ai', label: 'AI Technology', category: 'AI technology', geo: 'US' },
+  { id: 'marketing', label: 'Marketing', category: 'marketing', geo: 'US' },
+] as const;
+
 export default function ExternalApisPage() {
   const router = useRouter();
   const {
@@ -186,6 +209,8 @@ export default function ExternalApisPage() {
   const [queryJson, setQueryJson] = useState('{}');
   const [headerJson, setHeaderJson] = useState('{}');
   const [testResult, setTestResult] = useState<any>(null);
+  const [testGeo, setTestGeo] = useState('US');
+  const [selectedTestScenario, setSelectedTestScenario] = useState<string | null>(null);
   const [isSavingPreset, setIsSavingPreset] = useState(false);
   const [activeTab, setActiveTab] = useState<'global' | 'request-new' | 'queue' | 'usage'>('global');
   const [runtime, setRuntime] = useState<any>(null);
@@ -202,6 +227,7 @@ export default function ExternalApisPage() {
   const [lastHealthCheckAt, setLastHealthCheckAt] = useState<Date | null>(null);
   const [testAllRunning, setTestAllRunning] = useState(false);
   const [testAllSummary, setTestAllSummary] = useState<{ healthy: number; warning: number; failed: number } | null>(null);
+  const [testConnectionLoadingId, setTestConnectionLoadingId] = useState<string | null>(null);
   const [expandedCardIds, setExpandedCardIds] = useState<Set<string>>(new Set());
   const [actionsOpenId, setActionsOpenId] = useState<string | null>(null);
   const [requestForm, setRequestForm] = useState({
@@ -228,6 +254,10 @@ export default function ExternalApisPage() {
     : hasPermission('MANAGE_EXTERNAL_APIS');
   const [platformAccessDenied, setPlatformAccessDenied] = useState(false);
   const canManagePresets = canManageExternalApis;
+  /** Run Test + Actions: show for Super Admin / platform admins. URL fallback for mode=platform when context is delayed. */
+  const showRunTestAndActions =
+    canManageExternalApis ||
+    (typeof window !== 'undefined' && window.location.href.includes('mode=platform'));
   const companyContextId = isPlatformCatalogMode ? (platformCompanyId || null) : selectedCompanyId;
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
@@ -885,6 +915,8 @@ export default function ExternalApisPage() {
         platform_type: form.platform_type || 'social',
         headers: resolved.headers,
         query_params: resolved.queryParams,
+        category: form.category || '',
+        geo: testGeo || 'US',
       };
       const url = companyContextId
         ? `/api/external-apis/test?companyId=${companyContextId}`
@@ -926,12 +958,46 @@ export default function ExternalApisPage() {
     }
   };
 
-  const testExistingApi = async (id: string) => {
+  const testConnectionApi = async (id: string) => {
     try {
       resetMessages();
-      const url = companyContextId
-        ? `/api/external-apis/${id}/test?companyId=${companyContextId}`
-        : `/api/external-apis/${id}/test?scope=platform`;
+      setTestConnectionLoadingId(id);
+      const params = new URLSearchParams();
+      if (companyContextId) params.set('companyId', companyContextId);
+      else params.set('scope', 'platform');
+      const url = `/api/external-apis/${id}/test-connection?${params.toString()}`;
+      const response = await fetchWithAuth(url, { method: 'POST' });
+      const data = await response.json();
+      setApiTestResults((prev) => ({
+        ...prev,
+        [id]: { ...data, response: { ok: data.success }, tested_at: new Date().toISOString() },
+      }));
+      if (data.success) {
+        setSuccessMessage(`Connection successful (${data.latency_ms ?? 0}ms)`);
+      } else {
+        setErrorMessage(data.message || 'Connection failed');
+      }
+      await loadApis();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Connection test failed');
+      setApiTestResults((prev) => ({
+        ...prev,
+        [id]: { success: false, response: { ok: false }, message: (error as Error)?.message },
+      }));
+    } finally {
+      setTestConnectionLoadingId(null);
+    }
+  };
+
+  const testExistingApi = async (id: string, scenario?: { category: string; geo: string }) => {
+    try {
+      resetMessages();
+      const params = new URLSearchParams();
+      if (companyContextId) params.set('companyId', companyContextId);
+      else params.set('scope', 'platform');
+      if (scenario?.category) params.set('category', scenario.category);
+      if (scenario?.geo) params.set('geo', scenario.geo);
+      const url = `/api/external-apis/${id}/test?${params.toString()}`;
       console.log('DASHBOARD_API_CALL', url);
       const response = await fetchWithAuth(url);
       const data = await response.json();
@@ -1600,6 +1666,58 @@ export default function ExternalApisPage() {
               </div>
             </div>
 
+            {showRunTestAndActions && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <h3 className="text-sm font-semibold text-amber-900 mb-2">Test Parameters (Super Admin)</h3>
+                <p className="text-xs text-amber-800 mb-3">
+                  Choose a scenario or edit category/geo before Test Fetch.
+                </p>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {TEST_SCENARIOS.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTestScenario(s.id);
+                        setForm((prev) => ({ ...prev, category: s.category }));
+                        setTestGeo(s.geo);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
+                        selectedTestScenario === s.id
+                          ? 'bg-amber-600 text-white'
+                          : 'bg-white border border-amber-300 text-amber-800 hover:bg-amber-100'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-amber-900 mb-1">Category (editable)</label>
+                    <input
+                      className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
+                      placeholder="e.g. trends, AI technology"
+                      value={form.category || ''}
+                      onChange={(e) => {
+                        setForm((prev) => ({ ...prev, category: e.target.value }));
+                        setSelectedTestScenario(null);
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-amber-900 mb-1">Geo (editable)</label>
+                    <input
+                      className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
+                      placeholder="e.g. US, GB"
+                      value={testGeo}
+                      onChange={(e) => setTestGeo(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-3">
               <button
                 onClick={saveApi}
@@ -1700,7 +1818,7 @@ export default function ExternalApisPage() {
                   : '—'}
               </span>
             </div>
-            {canManageExternalApis && (
+            {showRunTestAndActions && (
               <button
                 type="button"
                 onClick={runAllTests}
@@ -1737,6 +1855,12 @@ export default function ExternalApisPage() {
                 const expanded = expandedCardIds.has(api.id);
                 const actionsOpen = actionsOpenId === api.id;
                 const statusDot = status === 'healthy' ? 'bg-green-500' : status === 'warning' ? 'bg-amber-500' : 'bg-red-500';
+                const limits = api.company_limits;
+                const today = api.usage_today;
+                const dailyExceeded = limits?.daily_limit != null && (today?.request_count ?? 0) >= limits.daily_limit;
+                const signalExceeded = limits?.signal_limit != null && (today?.signals_generated ?? 0) >= limits.signal_limit;
+                const limitExceeded = dailyExceeded || signalExceeded;
+                const errorClass = classifyApiError(api.usage_summary?.last_error_code, api.usage_summary?.last_error_message);
                 return (
                 <div key={api.id} className="border rounded-lg p-4">
                   <div className="flex items-start justify-between gap-4">
@@ -1758,6 +1882,38 @@ export default function ExternalApisPage() {
                             {api.is_preset ? 'VISIBLE' : 'Hidden'}
                           </span>
                         )}
+                        {(() => {
+                          const limits = api.company_limits;
+                          const today = api.usage_today;
+                          const dailyExceeded = limits?.daily_limit != null && (today?.request_count ?? 0) >= limits.daily_limit;
+                          const signalExceeded = limits?.signal_limit != null && (today?.signals_generated ?? 0) >= limits.signal_limit;
+                          const limitExceeded = dailyExceeded || signalExceeded;
+                          const errorClass = classifyApiError(api.usage_summary?.last_error_code, api.usage_summary?.last_error_message);
+                          return (
+                            <>
+                              {limitExceeded && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700" title="Plan limit exceeded">
+                                  Limit exceeded
+                                </span>
+                              )}
+                              {errorClass === 'api_key' && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700" title={api.usage_summary?.last_error_message || 'API key or auth issue'}>
+                                  API key issue
+                                </span>
+                              )}
+                              {errorClass === 'quota' && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700" title={api.usage_summary?.last_error_message || 'Quota exceeded'}>
+                                  Quota exceeded
+                                </span>
+                              )}
+                              {errorClass === 'rate_limit' && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700" title={api.usage_summary?.last_error_message || 'Rate limited'}>
+                                  Rate limited
+                                </span>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                       <div className="mt-1 flex items-center gap-3 flex-wrap">
                         <label className="text-xs text-gray-600 flex items-center gap-1">
@@ -1785,6 +1941,8 @@ export default function ExternalApisPage() {
                       </div>
                     </div>
                     <div className="relative shrink-0">
+                      {showRunTestAndActions && (
+                        <>
                       <button
                         type="button"
                         onClick={() => setActionsOpenId(actionsOpen ? null : api.id)}
@@ -1796,14 +1954,19 @@ export default function ExternalApisPage() {
                         <>
                           <div className="fixed inset-0 z-10" onClick={() => setActionsOpenId(null)} />
                           <div className="absolute right-0 top-full mt-1 py-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
-                            {canManageExternalApis && (
+                            {(
                               <>
+                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { testConnectionApi(api.id); setActionsOpenId(null); }} disabled={testConnectionLoadingId === api.id}>
+                                  {testConnectionLoadingId === api.id ? 'Testing…' : 'Test Connection'}
+                                </button>
                                 <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { validateApi(api.id); setActionsOpenId(null); }}>
                                   Validate Credentials
                                 </button>
-                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { testExistingApi(api.id); setActionsOpenId(null); }}>
-                                  Run Test
-                                </button>
+                                {TEST_SCENARIOS.map((s) => (
+                                  <button key={s.id} type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { testExistingApi(api.id, { category: s.category, geo: s.geo }); setActionsOpenId(null); }}>
+                                    Run Test ({s.label})
+                                  </button>
+                                ))}
                                 <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { setActiveTab('queue'); setActionsOpenId(null); }}>
                                   View Logs
                                 </button>
@@ -1818,6 +1981,8 @@ export default function ExternalApisPage() {
                           </div>
                         </>
                       )}
+                    </>
+                  )}
                     </div>
                   </div>
 
@@ -1840,6 +2005,12 @@ export default function ExternalApisPage() {
                         <div><span className="text-gray-500">ENV Key:</span> {api.api_key_env_name || api.api_key_name}</div>
                       )}
                       <div><span className="text-gray-500">Usage:</span> Enabled users {api.enabled_user_count ?? 0} • {api.purpose} • {api.method || 'GET'} • {api.auth_type || 'none'}</div>
+                      {(limits?.daily_limit != null || limits?.signal_limit != null) && (
+                        <div><span className="text-gray-500">Plan usage:</span> {limits?.daily_limit != null ? `Daily ${today?.request_count ?? 0}/${limits.daily_limit}` : ''}{limits?.daily_limit != null && limits?.signal_limit != null ? ' • ' : ''}{limits?.signal_limit != null ? `Signals ${today?.signals_generated ?? 0}/${limits.signal_limit}` : ''}</div>
+                      )}
+                      {(api.usage_summary?.last_error_message || api.usage_summary?.last_error_code) && (
+                        <div className="text-red-600"><span className="text-gray-500">Last error:</span> {api.usage_summary.last_error_code ? `[${api.usage_summary.last_error_code}] ` : ''}{api.usage_summary.last_error_message || '—'}</div>
+                      )}
                       {api.is_preset && findPresetByName(api.name)?.description && (
                         <div className="text-gray-500">{findPresetByName(api.name)?.description}</div>
                       )}

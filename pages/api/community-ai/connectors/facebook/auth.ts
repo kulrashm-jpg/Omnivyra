@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireManageConnectors } from '../utils';
+import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
+import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 
 const buildState = (value: Record<string, string>) => {
   const json = JSON.stringify(value);
@@ -25,13 +26,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await requireManageConnectors(req, res, organizationId);
   if (!access) return;
 
-  const clientId = process.env.FACEBOOK_CLIENT_ID;
+  const credentials = await getOAuthCredentialsForPlatform('facebook');
+  const clientId = credentials?.client_id;
   if (!clientId) {
-    return res.status(500).json({ error: 'FACEBOOK_CLIENT_ID is not configured' });
+    return res.status(500).json({ error: 'Facebook OAuth is not configured. Super Admin must configure platform_oauth_configs or env vars.' });
   }
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
-  const redirectUri = `${baseUrl}/api/community-ai/connectors/facebook/callback`;
+  const redirectUri = getCommunityAiConnectorCallbackUrl('facebook');
   const redirectTo =
     typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';
   const state = buildState({

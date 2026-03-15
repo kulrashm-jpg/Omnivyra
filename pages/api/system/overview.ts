@@ -5,6 +5,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getCampaignCount } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 
@@ -282,8 +283,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // --- Campaigns ---
     try {
-      const { data: campaignRows } = await supabase.from('campaigns').select('id');
-      tenantGrowth.total_campaigns = (campaignRows ?? []).length;
+      tenantGrowth.total_campaigns = await getCampaignCount();
     } catch (_) {}
 
     // Active campaigns (posts updated/published in last 7d)

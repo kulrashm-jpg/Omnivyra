@@ -328,13 +328,6 @@ export async function refineLanguageOutput(
         return refineSingleString(str, cardType, resolvedTone);
       });
       recordTelemetry(cardType, resolvedTone);
-      if (process.env.NODE_ENV === 'development') {
-        console.debug('[language-refinement] Language refinement executed', {
-          card_type: cardType,
-          campaign_tone: resolvedTone,
-          item_count: refined.length,
-        });
-      }
       return {
         refined,
         metadata: { applied: true, method: 'rule' },
@@ -351,13 +344,6 @@ export async function refineLanguageOutput(
 
     const refined = refineSingleString(str, cardType, resolvedTone);
     recordTelemetry(cardType, resolvedTone);
-    if (process.env.NODE_ENV === 'development') {
-      console.debug('[language-refinement] Language refinement executed', {
-        card_type: cardType,
-        campaign_tone: resolvedTone,
-        length: refined.length,
-      });
-    }
     return {
       refined,
       metadata: { applied: true, method: 'rule' },

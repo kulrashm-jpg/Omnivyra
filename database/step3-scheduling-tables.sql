@@ -2,7 +2,7 @@
 -- Run this after step 2 is complete
 
 -- Scheduled Posts Table (main scheduling entity)
-CREATE TABLE scheduled_posts (
+CREATE TABLE IF NOT EXISTS scheduled_posts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     social_account_id UUID NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,
@@ -94,7 +94,7 @@ CREATE TABLE scheduled_posts (
 );
 
 -- Recurring Posts Table
-CREATE TABLE recurring_posts (
+CREATE TABLE IF NOT EXISTS recurring_posts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     social_account_id UUID NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,

@@ -15,7 +15,7 @@ import { shouldRejectPost } from './leadNoiseFilter';
 import { generateIntentClusters } from './leadClusterService';
 
 const QUALIFIED_THRESHOLD = 0.6;
-const TOP_SLOTS_PER_COMPANY = 50;
+const TOP_SLOTS_PER_COMPANY = 15;
 const QUALITY_WEIGHT = 0.7;
 const ENGAGEMENT_WEIGHT = 0.3;
 
@@ -344,12 +344,12 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
 
   const { data: allActive } = await supabase
     .from('lead_signals_v1')
-    .select('id')
+    .select('id, created_at')
     .eq('company_id', companyId)
     .eq('status', 'ACTIVE')
-    .order('total_score', { ascending: false });
+    .order('created_at', { ascending: false });
 
-  const list = (allActive ?? []) as { id: string }[];
+  const list = (allActive ?? []) as { id: string; created_at: string }[];
   const toArchive = list.slice(TOP_SLOTS_PER_COMPANY);
   for (const { id } of toArchive) {
     await supabase.from('lead_signals_v1').update({ status: 'ARCHIVED' }).eq('id', id);

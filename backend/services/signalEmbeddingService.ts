@@ -9,12 +9,15 @@ import OpenAI from 'openai';
 const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
 const EMBEDDING_DIM = 1536;
 
+// Singleton — reuses HTTP connection pool across embedding calls
+let _embeddingClient: OpenAI | null = null;
 function getClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing OPENAI_API_KEY for embeddings');
+  if (!_embeddingClient) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error('Missing OPENAI_API_KEY for embeddings');
+    _embeddingClient = new OpenAI({ apiKey });
   }
-  return new OpenAI({ apiKey });
+  return _embeddingClient;
 }
 
 /**

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
+import { useCompanyContext } from "../components/CompanyContext";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Calendar, Clock, Send, AlertCircle, CheckCircle, Plus, Settings, Sparkles, Eye, EyeOff, Zap, TrendingUp, Users, BarChart3, Image, Video, FileText, Hash, Globe, Smartphone, Monitor, Wand2, Brain, Rocket, Star, Heart, MessageCircle, Share, Target, Activity, ExternalLink } from "lucide-react";
@@ -7,6 +8,7 @@ import PlatformIcon from "@/components/ui/PlatformIcon";
 
 export default function CreativeScheduler() {
   const router = useRouter();
+  const { selectedCompanyId } = useCompanyContext();
   const [activeStep, setActiveStep] = useState(0);
   const [isAnimating, setIsAnimating] = useState(false);
   const [hoveredCard, setHoveredCard] = useState<string | null>(null);
@@ -179,11 +181,9 @@ export default function CreativeScheduler() {
     }
   }, [router.query]);
 
-  const handleConnectAccount = (platform: string) => {
-    console.log(`Initiating ${platform} OAuth connection...`);
-    
-    // Redirect to OAuth URL in the same window
-    window.location.href = `/api/auth/${platform}`;
+  const handleConnectAccount = (_platform: string) => {
+    // Phase 5: Single Connect entry point — all platform connections via /community-ai/connectors
+    router.push(selectedCompanyId ? `/community-ai/connectors` : '/community-ai/connectors');
   };
 
   const handleDisconnectAccount = async (platform: string) => {
@@ -858,6 +858,7 @@ export default function CreativeScheduler() {
                       <input
                         type="date"
                         value={formData.scheduledDate}
+                        min={new Date().toISOString().split('T')[0]}
                         onChange={(e) => setFormData(prev => ({ ...prev, scheduledDate: e.target.value }))}
                         className="w-full p-4 bg-white/10 border border-white/20 rounded-xl text-white focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-all duration-200"
                       />

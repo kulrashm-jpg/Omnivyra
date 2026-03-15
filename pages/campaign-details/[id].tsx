@@ -42,10 +42,23 @@ import { PreemptionHistory } from '../../components/governance/PreemptionHistory
 import { TradeOffSuggestionList } from '../../components/governance/TradeOffSuggestionList';
 import { truncateMeaningfulTitle } from '../../lib/ui/truncateMeaningfulTitle';
 import { getExecutionIntelligence } from '../../utils/getExecutionIntelligence';
+import { isCreatorDependentContentType } from '../../utils/contentTaxonomy';
 import { getFormatLineForContentType, getIntentLabelForContentType, toneForUserDisplay } from '../../utils/formatLineForContentType';
 import PlatformIcon from '../../components/ui/PlatformIcon';
 import { getViewMode } from '../../utils/getViewMode';
 import { VIEW_RULES } from '../../utils/viewVisibilityMatrix';
+import {
+  saveWizardState,
+  loadWizardState,
+  clearWizardState,
+  defaultQuestionnaireAnswers,
+  type QuestionnaireAnswers,
+  type PrePlanningResult,
+} from '../../utils/campaignWizardStorage';
+import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
+import { useCampaignWizard, createCampaignWizardStore } from '../../store/campaignWizardStore';
+import { hydrateWizardFromSnapshot, exportWizardToSaveWizardStatePayload, exportWizardToPlanningContext } from '../../lib/wizard/campaignWizardAdapter';
+import { useCampaignResume } from '../../hooks/useCampaignResume';
 
 interface Campaign {
   id: string;
@@ -269,6 +282,12 @@ export default function CampaignDetails() {
   const [recommendationId, setRecommendationId] = useState<string | null>(null);
   const [performanceSummary, setPerformanceSummary] = useState<PerformanceSummary | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'governance'>('overview');
+
+  useCampaignResume({
+    campaignId: typeof id === 'string' ? id : undefined,
+    page: 'campaign-details',
+    extraParams: activeTab !== 'overview' ? { tab: activeTab } : undefined,
+  });
   const [governanceStatus, setGovernanceStatus] = useState<{
     governance: { durationWeeks: number | null; priorityLevel: string; blueprintStatus: string; durationLocked: boolean; lastPreemptedAt: string | null; cooldownActive: boolean; blueprintImmutable?: boolean; blueprintFrozen?: boolean };
     latestGovernanceEvent: { eventType: string; eventStatus: string; createdAt: string; metadata: Record<string, unknown> } | null;
@@ -332,17 +351,9 @@ export default function CampaignDetails() {
   const [prefilledPlanning, setPrefilledPlanning] = useState<Record<string, unknown> | null>(null);
   const [showAIChat, setShowAIChat] = useState(false);
   const didAutoOpenChatRef = useRef(false);
-  const [prePlanningResult, setPrePlanningResult] = useState<{
-    status: string;
-    requested_weeks: number;
-    recommended_duration: number;
-    max_weeks_allowed: number;
-    min_weeks_required?: number;
-    limiting_constraints: Array<{ name: string; reasoning: string }>;
-    blocking_constraints: Array<{ name: string; reasoning: string }>;
-    trade_off_options: Array<{ type: string; newDurationWeeks?: number; reasoning: string; [k: string]: unknown }>;
-    explanation_summary: string;
-  } | null>(null);
+  const hasRestoredWizardStateRef = useRef(false);
+  const wizardStateDbSaveTimeoutRef = useRef<number | null>(null);
+  const [planDurationLimit, setPlanDurationLimit] = useState<{ max_campaign_duration_weeks?: number } | null>(null);
   const [prePlanningLoading, setPrePlanningLoading] = useState(false);
   const [requestedWeeksForPreplan, setRequestedWeeksForPreplan] = useState(12);
   const [isRegeneratingBlueprint, setIsRegeneratingBlueprint] = useState(false);
@@ -358,15 +369,14 @@ export default function CampaignDetails() {
   const [negotiationLoading, setNegotiationLoading] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState<{ suggested_weeks: number; rationale: string } | null>(null);
   const [aiSuggestionLoading, setAiSuggestionLoading] = useState(false);
-  const [prePlanningWizardStep, setPrePlanningWizardStep] = useState(0);
-  const [plannedStartDate, setPlannedStartDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 7);
-    return d.toISOString().split('T')[0];
-  });
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
-  const [questionnaireAnswers, setQuestionnaireAnswers] = useState<{
+  const [frequencyValidation, setFrequencyValidation] = useState<{
+    frequency_summary?: { weekly_unique_content_required: number; total_content_required: number };
+    validation?: { valid: boolean; warnings: Array<{ code: string; message: string }>; errors: Array<{ code: string; message: string }> };
+  } | null>(null);
+  const frequencyValidationTimeoutRef = useRef<number | null>(null);
+  const [questionnaireAnswersLegacy, setQuestionnaireAnswersLegacy] = useState<{
     availableVideo: number;
     availablePost: number;
     availableBlog: number;
@@ -390,11 +400,174 @@ export default function CampaignDetails() {
     inHouseNotes: '',
   });
 
+  const [prePlanningWizardStepLegacy, setPrePlanningWizardStepLegacy] = useState(0);
+  const [crossPlatformSharingEnabledLegacy, setCrossPlatformSharingEnabledLegacy] = useState(true);
+  const [plannedStartDateLegacy, setPlannedStartDateLegacy] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().split('T')[0];
+  });
+  const [prePlanningResultLegacy, setPrePlanningResultLegacy] = useState<{
+    status: string;
+    requested_weeks: number;
+    recommended_duration: number;
+    max_weeks_allowed: number;
+    min_weeks_required?: number;
+    limiting_constraints: Array<{ name: string; reasoning: string }>;
+    blocking_constraints: Array<{ name: string; reasoning: string }>;
+    trade_off_options: Array<{ type: string; newDurationWeeks?: number; reasoning: string; [k: string]: unknown }>;
+    explanation_summary: string;
+  } | null>(null);
+
+  const wizardStore = useCampaignWizard(ENABLE_UNIFIED_CAMPAIGN_WIZARD ? (id as string) : null);
+
+  const prePlanningWizardStep = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.step : prePlanningWizardStepLegacy;
+  const setPrePlanningWizardStep = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.setStep : setPrePlanningWizardStepLegacy;
+  const crossPlatformSharingEnabled = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.crossPlatformSharingEnabled : crossPlatformSharingEnabledLegacy;
+  const setCrossPlatformSharingEnabled = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.setDistributionMode : setCrossPlatformSharingEnabledLegacy;
+  const plannedStartDate = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.plannedStartDate : plannedStartDateLegacy;
+  const setPlannedStartDate = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.setPlannedStartDate : setPlannedStartDateLegacy;
+  const prePlanningResult = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.prePlanningResult : prePlanningResultLegacy;
+  const setPrePlanningResult = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.setPrePlanningResult : setPrePlanningResultLegacy;
+  const questionnaireAnswers = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.questionnaireAnswers : questionnaireAnswersLegacy;
+  const setQuestionnaireAnswers = ENABLE_UNIFIED_CAMPAIGN_WIZARD ? wizardStore.setQuestionnaireAnswers : setQuestionnaireAnswersLegacy;
+
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), 3200);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    if (!effectiveCompanyId) return;
+    fetchWithAuth(`/api/company-plan-duration-limit?companyId=${encodeURIComponent(effectiveCompanyId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setPlanDurationLimit(d ? { max_campaign_duration_weeks: d.max_campaign_duration_weeks } : null))
+      .catch(() => setPlanDurationLimit(null));
+  }, [effectiveCompanyId]);
+
+  // Frequency validation (700ms debounce)
+  useEffect(() => {
+    if (!effectiveCompanyId || typeof id !== 'string') return;
+    if (frequencyValidationTimeoutRef.current) {
+      window.clearTimeout(frequencyValidationTimeoutRef.current);
+      frequencyValidationTimeoutRef.current = null;
+    }
+    frequencyValidationTimeoutRef.current = window.setTimeout(() => {
+      frequencyValidationTimeoutRef.current = null;
+      const platforms = (prefilledPlanning as any)?.platforms
+        ? String((prefilledPlanning as any).platforms).split(',').map((p: string) => p.trim()).filter(Boolean)
+        : ['linkedin'];
+      const duration = requestedWeeksForPreplan || 12;
+      fetchWithAuth('/api/campaigns/validate-frequency', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: effectiveCompanyId,
+          duration_weeks: duration,
+          platforms,
+          cross_platform_sharing_enabled: crossPlatformSharingEnabled,
+          content_mix: {
+            post_per_week: questionnaireAnswers.postPerWeek,
+            video_per_week: questionnaireAnswers.videoPerWeek,
+            blog_per_week: questionnaireAnswers.blogPerWeek,
+            reel_per_week: 0,
+            article_per_week: 0,
+            song_per_week: questionnaireAnswers.songPerWeek,
+          },
+          available_content: {
+            post: questionnaireAnswers.availablePost,
+            video: questionnaireAnswers.availableVideo,
+            blog: questionnaireAnswers.availableBlog,
+          },
+          weekly_capacity: {
+            post: questionnaireAnswers.postPerWeek,
+            video: questionnaireAnswers.videoPerWeek,
+            blog: questionnaireAnswers.blogPerWeek,
+          },
+        }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          setFrequencyValidation(d || null);
+          if (ENABLE_UNIFIED_CAMPAIGN_WIZARD && id && d) {
+            const store = createCampaignWizardStore(id);
+            store.setState({
+              frequencySummary: d.frequency_summary,
+              validation: d.validation,
+            });
+          }
+        })
+        .catch(() => setFrequencyValidation(null));
+    }, 700);
+    return () => {
+      if (frequencyValidationTimeoutRef.current) {
+        window.clearTimeout(frequencyValidationTimeoutRef.current);
+        frequencyValidationTimeoutRef.current = null;
+      }
+    };
+  }, [
+    effectiveCompanyId,
+    id,
+    crossPlatformSharingEnabled,
+    questionnaireAnswers.postPerWeek,
+    questionnaireAnswers.videoPerWeek,
+    questionnaireAnswers.blogPerWeek,
+    questionnaireAnswers.songPerWeek,
+    questionnaireAnswers.availablePost,
+    questionnaireAnswers.availableVideo,
+    questionnaireAnswers.availableBlog,
+    requestedWeeksForPreplan,
+    prefilledPlanning,
+  ]);
+
+  // Autosave wizard state to localStorage (500ms debounce) — skip when using unified store (Zustand persist)
+  useEffect(() => {
+    if (ENABLE_UNIFIED_CAMPAIGN_WIZARD || typeof id !== 'string' || !id) return;
+    const t = window.setTimeout(() => {
+      saveWizardState(id, {
+        step: prePlanningWizardStep,
+        questionnaireAnswers,
+        plannedStartDate,
+        prePlanningResult: prePlanningResult as any,
+        crossPlatformSharingEnabled,
+      });
+    }, 500);
+    return () => window.clearTimeout(t);
+  }, [id, prePlanningWizardStep, questionnaireAnswers, plannedStartDate, prePlanningResult, crossPlatformSharingEnabled]);
+
+  // Autosave wizard state to DB (5s debounce)
+  useEffect(() => {
+    if (typeof id !== 'string' || !id || !effectiveCompanyId) return;
+    if (wizardStateDbSaveTimeoutRef.current) {
+      window.clearTimeout(wizardStateDbSaveTimeoutRef.current);
+      wizardStateDbSaveTimeoutRef.current = null;
+    }
+    wizardStateDbSaveTimeoutRef.current = window.setTimeout(() => {
+      wizardStateDbSaveTimeoutRef.current = null;
+      const payload = ENABLE_UNIFIED_CAMPAIGN_WIZARD
+        ? exportWizardToSaveWizardStatePayload(createCampaignWizardStore(id).getState())
+        : {
+            step: prePlanningWizardStep,
+            questionnaire_answers: questionnaireAnswers,
+            planned_start_date: plannedStartDate,
+            pre_planning_result: prePlanningResult,
+            cross_platform_sharing_enabled: crossPlatformSharingEnabled,
+            updated_at: new Date().toISOString(),
+          };
+      fetchWithAuth(`/api/campaigns/${encodeURIComponent(id)}/save-wizard-state`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    }, 5000);
+    return () => {
+      if (wizardStateDbSaveTimeoutRef.current) {
+        window.clearTimeout(wizardStateDbSaveTimeoutRef.current);
+        wizardStateDbSaveTimeoutRef.current = null;
+      }
+    };
+  }, [id, effectiveCompanyId, prePlanningWizardStep, questionnaireAnswers, plannedStartDate, prePlanningResult, crossPlatformSharingEnabled]);
 
   const displayWeeklyTitle = (value: string | undefined | null, fallback = 'Untitled Topic') => {
     const raw = String(value ?? '').trim();
@@ -580,6 +753,15 @@ export default function CampaignDetails() {
       setSelectedCompanyId(fromUrl);
     }
   }, [companyIdFromUrl, selectedCompanyId, setSelectedCompanyId]);
+
+  // Restore tab from URL (set by campaign resume)
+  useEffect(() => {
+    if (!router.isReady) return;
+    const tabParam = Array.isArray(router.query.tab) ? router.query.tab[0] : router.query.tab;
+    if (tabParam === 'performance' || tabParam === 'governance') {
+      setActiveTab(tabParam);
+    }
+  }, [router.isReady, router.query.tab]);
 
   useEffect(() => {
     if (!router.isReady || plannerQueryConsumed) return;
@@ -790,6 +972,58 @@ export default function CampaignDetails() {
           return d.toISOString().split('T')[0];
         })();
         setPlannedStartDate(c?.start_date || defaultStart);
+
+        // Restore wizard state: DB snapshot vs localStorage (use newer)
+        if (!hasRestoredWizardStateRef.current && campaignId) {
+          hasRestoredWizardStateRef.current = true;
+          const dbWs = campaignData.wizardState as { step?: number; questionnaire_answers?: Record<string, unknown>; planned_start_date?: string; pre_planning_result?: Record<string, unknown> | null; updated_at?: string } | undefined;
+          const localWs = loadWizardState(campaignId);
+          const dbUpdatedAt = dbWs?.updated_at ? new Date(dbWs.updated_at).getTime() : 0;
+          const localUpdatedAt = localWs?.updatedAt ? new Date(localWs.updatedAt).getTime() : 0;
+          const useDb = dbUpdatedAt > 0 && dbUpdatedAt >= localUpdatedAt;
+          const useLocal = localUpdatedAt > 0 && localUpdatedAt > dbUpdatedAt;
+          if (ENABLE_UNIFIED_CAMPAIGN_WIZARD) {
+            const store = createCampaignWizardStore(campaignId);
+            if (useDb && dbWs) {
+              const snapshot = {
+                wizard_state: { ...dbWs, cross_platform_sharing_enabled: (dbWs as any).cross_platform_sharing_enabled },
+                cross_platform_sharing: campaignData.prefilledPlanning?.cross_platform_sharing,
+                context_payload: campaignData.prefilledPlanning?.platforms ? { platforms: String((campaignData.prefilledPlanning as any).platforms).split(',').map((p: string) => p.trim()).filter(Boolean) } : undefined,
+              };
+              const hydrated = hydrateWizardFromSnapshot(snapshot);
+              if (Object.keys(hydrated).length > 0) store.setState(hydrated);
+            } else if (useLocal && localWs) {
+              store.setState({
+                step: localWs.step,
+                questionnaireAnswers: localWs.questionnaireAnswers,
+                plannedStartDate: localWs.plannedStartDate,
+                prePlanningResult: localWs.prePlanningResult as any,
+                crossPlatformSharingEnabled: localWs.crossPlatformSharingEnabled ?? true,
+              });
+            }
+          } else if (useDb && dbWs) {
+            setPrePlanningWizardStep(typeof dbWs.step === 'number' ? dbWs.step : 0);
+            if ((dbWs as { cross_platform_sharing_enabled?: boolean }).cross_platform_sharing_enabled !== undefined) {
+              setCrossPlatformSharingEnabled((dbWs as { cross_platform_sharing_enabled?: boolean }).cross_platform_sharing_enabled !== false);
+            }
+            const qa = dbWs.questionnaire_answers;
+            if (qa && typeof qa === 'object') {
+              setQuestionnaireAnswers((prev) => ({ ...defaultQuestionnaireAnswers, ...prev, ...qa } as QuestionnaireAnswers));
+            }
+            if (typeof dbWs.planned_start_date === 'string' && dbWs.planned_start_date.trim()) {
+              setPlannedStartDate(dbWs.planned_start_date.trim());
+            }
+            if (dbWs.pre_planning_result && typeof dbWs.pre_planning_result === 'object') {
+              setPrePlanningResult(dbWs.pre_planning_result as any);
+            }
+          } else if (useLocal && localWs) {
+            setPrePlanningWizardStep(localWs.step);
+            setQuestionnaireAnswers(localWs.questionnaireAnswers);
+            setPlannedStartDate(localWs.plannedStartDate);
+            if (localWs.prePlanningResult) setPrePlanningResult(localWs.prePlanningResult as any);
+            if (localWs.crossPlatformSharingEnabled !== undefined) setCrossPlatformSharingEnabled(localWs.crossPlatformSharingEnabled);
+          }
+        }
       }
 
       // Load weekly plans
@@ -935,6 +1169,27 @@ export default function CampaignDetails() {
           return next;
         });
         notify('success', `Week ${weekNumber} has been enhanced with AI.`);
+      } else {
+        // Blueprint-based generation failed (no blueprint, no execution items, etc.)
+        // Always fall back to AI generation regardless of error type.
+        const fallbackRes = await fetchWithAuth('/api/campaigns/generate-ai-daily-plans', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            campaignId: id,
+            weekNumber,
+            companyId: effectiveCompanyId,
+            provider: 'demo',
+          }),
+        });
+        if (fallbackRes.ok) {
+          await loadCampaignDetails(id as string);
+          setEditedWeekDailyPlans((prev) => { const next = { ...prev }; delete next[weekNumber]; return next; });
+          notify('success', `Generated 7 daily plans for week ${weekNumber}.`);
+        } else {
+          const fbErr = await fallbackRes.json().catch(() => ({}));
+          notify('error', fbErr?.error || 'Failed to generate daily plans.');
+        }
       }
     } catch (error) {
       console.error('Error enhancing week:', error);
@@ -1012,15 +1267,12 @@ export default function CampaignDetails() {
   const enhanceAllWeeksWithAI = async () => {
     if (!id || !campaign?.start_date || !(campaign as any).duration_weeks || !effectiveCompanyId) return;
     const total = (campaign as any).duration_weeks as number;
-    const weeksWithDaily = new Set(dailyPlans.map((d) => d.weekNumber));
-    const pendingWeeks = Array.from({ length: total }, (_, i) => i + 1).filter((w) => !weeksWithDaily.has(w));
-    if (pendingWeeks.length === 0) {
-      router.push(buildDailyPlanPageUrl(id as string));
-      return;
-    }
+    // Generate for ALL weeks in the campaign (not just pending), so this always produces a full plan.
+    const allWeeks = Array.from({ length: total }, (_, i) => i + 1);
     setIsEnhancingAllWeeks(true);
+    let generatedCount = 0;
     try {
-      for (const weekNumber of pendingWeeks) {
+      for (const weekNumber of allWeeks) {
         const weekPlan = weeklyPlans.find((w) => w.weekNumber === weekNumber);
         const response = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
           method: 'POST',
@@ -1036,12 +1288,21 @@ export default function CampaignDetails() {
           }),
         });
         if (!response.ok) {
-          const err = await response.json().catch(() => ({}));
-          notify('error', err?.error || `Failed to generate daily plan for week ${weekNumber}.`);
-          break;
+          // Blueprint-based generation failed — always fall back to AI for this week.
+          const fallbackRes = await fetchWithAuth('/api/campaigns/generate-ai-daily-plans', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ campaignId: id, weekNumber, companyId: effectiveCompanyId, provider: 'demo' }),
+          });
+          if (!fallbackRes.ok) {
+            const fbErr = await fallbackRes.json().catch(() => ({}));
+            notify('error', fbErr?.error || `Failed to generate plans for week ${weekNumber}.`);
+            break;
+          }
         }
+        generatedCount += 1;
       }
-      notify('success', pendingWeeks.length > 0 ? `Daily plans created for ${pendingWeeks.length} week(s). Opening daily plan page.` : 'Opening daily plan.');
+      notify('success', `Daily plans generated for ${generatedCount} of ${total} week(s). Opening daily plan page.`);
       router.push(buildDailyPlanPageUrl(id as string));
     } catch (error) {
       console.error('Error enhancing all weeks:', error);
@@ -1384,6 +1645,7 @@ export default function CampaignDetails() {
               campaign_duration: weeks,
               tentative_start: plannedStartDate || campaign?.start_date,
               preplanning_form_completed: true,
+              cross_platform_sharing: { enabled: crossPlatformSharingEnabled },
             };
             const hasAvailable =
               q.availableVideo > 0 || q.availablePost > 0 || q.availableBlog > 0 || q.availableSong > 0;
@@ -1432,6 +1694,7 @@ export default function CampaignDetails() {
               setBlueprintRegenerateFailedMsg(null);
               setBlueprintGeneratedSuccess(true);
               setTimeout(() => setBlueprintGeneratedSuccess(false), 6000);
+              clearWizardState(campaign.id);
               // Keep behavior aligned with "Ask AI": open chat after generation.
               setShowAIChat(true);
             }
@@ -1447,7 +1710,7 @@ export default function CampaignDetails() {
           await loadCampaignDetails(campaign.id);
         } else if (data?.status === 'NEGOTIATE' || data?.status === 'REJECTED') {
           setPrePlanningResult(
-            prePlanningResult
+            (prePlanningResult
               ? {
                   ...prePlanningResult,
                   status: data.status,
@@ -1458,7 +1721,7 @@ export default function CampaignDetails() {
                   limiting_constraints: data.limiting_constraints ?? prePlanningResult.limiting_constraints ?? [],
                   trade_off_options: data.trade_off_options ?? prePlanningResult.trade_off_options ?? [],
                 }
-              : null
+              : null) as any
           );
         }
       } else {
@@ -1755,6 +2018,42 @@ export default function CampaignDetails() {
                       )}
                       {prePlanningWizardStep === 4 && (
                         <>
+                          <div className="p-4 rounded-lg border border-indigo-100 bg-indigo-50/50 mb-4">
+                            <h3 className="font-medium text-gray-900 mb-2">Posting distribution</h3>
+                            <p className="text-sm text-gray-600 mb-3">
+                              Choose how content is distributed across platforms.
+                            </p>
+                            <div className="flex flex-col gap-3">
+                              <label className="flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer hover:bg-white/50 transition-colors"
+                                style={{ borderColor: !crossPlatformSharingEnabled ? 'rgb(99 102 241)' : 'rgb(229 231 235)' }}>
+                                <input
+                                  type="radio"
+                                  name="posting-distribution"
+                                  checked={!crossPlatformSharingEnabled}
+                                  onChange={() => setCrossPlatformSharingEnabled(false)}
+                                  className="mt-1"
+                                />
+                                <div>
+                                  <span className="font-medium text-gray-900">Unique posting</span>
+                                  <p className="text-sm text-gray-600">One post → one platform only</p>
+                                </div>
+                              </label>
+                              <label className="flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer hover:bg-white/50 transition-colors"
+                                style={{ borderColor: crossPlatformSharingEnabled ? 'rgb(99 102 241)' : 'rgb(229 231 235)' }}>
+                                <input
+                                  type="radio"
+                                  name="posting-distribution"
+                                  checked={crossPlatformSharingEnabled}
+                                  onChange={() => setCrossPlatformSharingEnabled(true)}
+                                  className="mt-1"
+                                />
+                                <div>
+                                  <span className="font-medium text-gray-900">Shared posting</span>
+                                  <p className="text-sm text-gray-600">One post → can be distributed to multiple platforms</p>
+                                </div>
+                              </label>
+                            </div>
+                          </div>
                           <div className="p-4 rounded-lg border border-gray-200 bg-gray-50">
                             <h3 className="font-medium text-gray-900 mb-2">How much more content can you create per week?</h3>
                             <p className="text-sm text-gray-600 mb-4">
@@ -1823,6 +2122,28 @@ export default function CampaignDetails() {
                               </div>
                             </div>
                           </div>
+                          {frequencyValidation?.frequency_summary && (
+                            <div className={`p-4 rounded-lg border ${frequencyValidation?.validation?.valid === false && (frequencyValidation?.validation?.errors?.length ?? 0) > 0 ? 'border-red-200 bg-red-50' : frequencyValidation?.validation?.warnings?.length ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50'}`}>
+                              {frequencyValidation.validation?.errors?.length ? (
+                                <>
+                                  <p className="text-sm font-medium text-red-800 mb-1">Validation issues</p>
+                                  {frequencyValidation.validation.errors.map((e, i) => (
+                                    <p key={i} className="text-sm text-red-700">{e.message}</p>
+                                  ))}
+                                </>
+                              ) : frequencyValidation.validation?.warnings?.length ? (
+                                <>
+                                  <p className="text-sm font-medium text-amber-800 mb-1">Recommendations</p>
+                                  {frequencyValidation.validation.warnings.map((w, i) => (
+                                    <p key={i} className="text-sm text-amber-700">{w.message}</p>
+                                  ))}
+                                  <p className="text-sm text-emerald-700 mt-2">Campaign requires {frequencyValidation.frequency_summary.weekly_unique_content_required} unique pieces/week ({frequencyValidation.frequency_summary.total_content_required} total).</p>
+                                </>
+                              ) : (
+                                <p className="text-sm text-emerald-700">Campaign requires {frequencyValidation.frequency_summary.weekly_unique_content_required} unique pieces/week ({frequencyValidation.frequency_summary.total_content_required} total).</p>
+                              )}
+                            </div>
+                          )}
                           <div className="flex gap-2">
                             <button
                               onClick={() => {
@@ -1839,7 +2160,8 @@ export default function CampaignDetails() {
                             </button>
                             <button
                               onClick={() => setPrePlanningWizardStep(5)}
-                              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                              disabled={(frequencyValidation?.validation?.errors?.length ?? 0) > 0}
+                              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               Next
                             </button>
@@ -1937,7 +2259,7 @@ export default function CampaignDetails() {
                                       setRequestedWeeksForPreplan(aiSuggestion!.suggested_weeks);
                                       await runPrePlanningFlow(aiSuggestion!.suggested_weeks);
                                     }}
-                                    disabled={prePlanningLoading || blueprintImmutable || blueprintFrozen || governanceLocked}
+                                    disabled={prePlanningLoading || blueprintImmutable || blueprintFrozen || governanceLocked || (frequencyValidation?.validation?.errors?.length ?? 0) > 0}
                                     className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
                                   >
                                     Proceed with {aiSuggestion.suggested_weeks} weeks
@@ -1999,38 +2321,39 @@ export default function CampaignDetails() {
               </>
             ) : (
               <div className="space-y-4">
+                {(() => { const ppr = prePlanningResult as PrePlanningResult; return (<>
                 <div className="p-4 bg-gray-50 rounded-lg">
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{prePlanningResult.explanation_summary}</p>
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{ppr.explanation_summary}</p>
                 </div>
-                {prePlanningResult.limiting_constraints?.length > 0 && (
+                {(ppr.limiting_constraints as any[])?.length > 0 && (
                   <div>
                     <h3 className="font-medium text-gray-900 mb-1">Limiting constraints</h3>
                     <ul className="text-sm text-gray-600 list-disc pl-5">
-                      {prePlanningResult.limiting_constraints.map((c, i) => (
+                      {(ppr.limiting_constraints as any[]).map((c, i) => (
                         <li key={i}>{c.reasoning}</li>
                       ))}
                     </ul>
                   </div>
                 )}
-                {prePlanningResult.blocking_constraints?.length > 0 && (
+                {(ppr.blocking_constraints as any[])?.length > 0 && (
                   <div>
                     <h3 className="font-medium text-gray-900 mb-1">Blocking constraints</h3>
                     <ul className="text-sm text-gray-600 list-disc pl-5">
-                      {prePlanningResult.blocking_constraints.map((c, i) => (
+                      {(ppr.blocking_constraints as any[]).map((c, i) => (
                         <li key={i}>{c.reasoning}</li>
                       ))}
                     </ul>
                   </div>
                 )}
                 <div className="flex flex-wrap gap-3 pt-4">
-                  {(prePlanningResult.status === 'APPROVED' || prePlanningResult.status === 'NEGOTIATE') && (
+                  {(ppr.status === 'APPROVED' || ppr.status === 'NEGOTIATE') && (
                     <button
-                      onClick={() => acceptDuration(prePlanningResult.recommended_duration)}
+                      onClick={() => acceptDuration((ppr.recommended_duration as number))}
                       disabled={prePlanningLoading || blueprintImmutable || blueprintFrozen || governanceLocked}
                       className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
                     >
                       {prePlanningLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-                      {prePlanningLoading ? 'Accepting & generating blueprint…' : `Accept & generate blueprint (${prePlanningResult.recommended_duration} weeks)`}
+                      {prePlanningLoading ? 'Accepting & generating blueprint…' : `Accept & generate blueprint (${ppr.recommended_duration} weeks)`}
                     </button>
                   )}
                   {prePlanningLoading && (
@@ -2042,11 +2365,11 @@ export default function CampaignDetails() {
                       />
                     </div>
                   )}
-                  {prePlanningResult.trade_off_options?.map((opt, i) =>
+                  {(ppr.trade_off_options as any[])?.map((opt, i) =>
                     opt.newDurationWeeks != null ? (
                       <button
                         key={i}
-                        onClick={() => acceptDuration(opt.newDurationWeeks!)}
+                        onClick={() => acceptDuration(opt.newDurationWeeks)}
                         disabled={prePlanningLoading || blueprintImmutable || blueprintFrozen || governanceLocked}
                         className="px-4 py-2 bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 disabled:opacity-50"
                       >
@@ -2062,12 +2385,13 @@ export default function CampaignDetails() {
                     Ask AI
                   </button>
                   <button
-                    onClick={() => setPrePlanningResult(null)}
+                    onClick={() => setPrePlanningResult(null as any)}
                     className="px-4 py-2 text-gray-600 hover:text-gray-900"
                   >
                     Cancel
                   </button>
                 </div>
+                </>); })()}
               </div>
             )}
           </div>
@@ -2629,26 +2953,32 @@ export default function CampaignDetails() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => router.push(buildPlanningWorkspaceUrl(campaign.id))}
-                    disabled={!campaign?.start_date || !(campaign as any).duration_weeks}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="View plan and work on daily content for each week"
-                  >
-                    <Calendar className="h-4 w-4" />
-                    View Plan & Work on Daily
-                  </button>
-                  <button 
+                    type="button"
                     onClick={enhanceAllWeeksWithAI}
                     disabled={!campaign?.start_date || !(campaign as any).duration_weeks || isEnhancingAllWeeks}
                     className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Generate daily plans for all weeks that don't have one yet, then open the daily plan page"
+                    title={!campaign?.start_date || !(campaign as any).duration_weeks
+                      ? "Set campaign start date and duration in pre-planning first."
+                      : "AI generates daily activities for all weeks from the weekly plan, then opens the daily planner."}
                   >
                     {isEnhancingAllWeeks ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <Sparkles className="h-4 w-4" />
                     )}
-                    Generate Daily Plans & Open Planner
+                    {isEnhancingAllWeeks ? 'Generating…' : 'Generate Daily Plans (AI)'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push(buildDailyPlanPageUrl(campaign.id))}
+                    disabled={!campaign?.start_date || !(campaign as any).duration_weeks}
+                    className="px-4 py-2 border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 rounded-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={!campaign?.start_date || !(campaign as any).duration_weeks
+                      ? "Set campaign start date and duration in pre-planning first."
+                      : "Open the daily planner to view, drag, and manage existing activities week by week."}
+                  >
+                    <Calendar className="h-4 w-4" />
+                    Open Daily Planner
                   </button>
                 </div>
               </div>
@@ -2902,6 +3232,7 @@ export default function CampaignDetails() {
                                 enhanceWeekWithAI(weekNumber);
                               }}
                               disabled={isGeneratingWeek === weekNumber || !campaign?.start_date || !(campaign as any).duration_weeks}
+                              title="Enhance this week's content plan with AI — generates topics, content briefs and execution slots"
                               className="px-3 py-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-sm rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all flex items-center gap-1 disabled:opacity-50"
                             >
                               {isGeneratingWeek === weekNumber ? (
@@ -2909,14 +3240,22 @@ export default function CampaignDetails() {
                               ) : (
                                 <Sparkles className="h-3 w-3" />
                               )}
-                              [+]
+                              {isGeneratingWeek === weekNumber ? 'Enhancing…' : 'Enhance with AI'}
                             </button>
-                            
-                            {isExpanded ? (
-                              <ChevronDown className="h-5 w-5 text-gray-400" />
-                            ) : (
-                              <ChevronRight className="h-5 w-5 text-gray-400" />
-                            )}
+
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); toggleWeekExpansion(weekNumber); }}
+                              title={isExpanded ? 'Collapse week details' : 'Expand week details'}
+                              className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
+                              aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="h-5 w-5" />
+                              ) : (
+                                <ChevronRight className="h-5 w-5" />
+                              )}
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -3006,7 +3345,9 @@ export default function CampaignDetails() {
                                     {hasEnrichedTopics && (
                                       <div className="mt-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
                                         {topicsWithExecution.map((topic, idx) => {
-                                          const execMode = (topic?.topicExecution?.execution_mode ?? (topic as any)?.execution_mode ?? 'AI_AUTOMATED') as 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI';
+                                          const contentType = topic?.topicExecution?.contentType ?? (topic as any)?.contentType ?? (topic as any)?.content_type;
+                                          const storedExecMode = (topic?.topicExecution?.execution_mode ?? (topic as any)?.execution_mode ?? 'AI_AUTOMATED') as 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI';
+                                          const execMode = isCreatorDependentContentType(contentType) ? 'CREATOR_REQUIRED' : storedExecMode;
                                           const intel = getExecutionIntelligence(execMode);
                                           const modeColors = intel.colorClasses;
                                           const cardClass = modeColors ? modeColors.card : getActivityColorClasses(topic?.topicExecution?.contentType).card;
@@ -3254,9 +3595,16 @@ export default function CampaignDetails() {
                               <div className="text-center py-4 text-gray-500">
                                 <Calendar className="h-8 w-8 mx-auto mb-2 text-gray-400" />
                                 <p>No daily plans generated yet</p>
-                                <button 
-                                  onClick={() => enhanceWeekWithAI(weekNumber)}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    enhanceWeekWithAI(weekNumber);
+                                  }}
                                   disabled={!campaign?.start_date || !(campaign as any).duration_weeks}
+                                  title={!campaign?.start_date || !(campaign as any).duration_weeks
+                                    ? 'Set campaign start date and duration in Pre-planning first'
+                                    : 'Generate daily plans for this week'}
                                   className="mt-2 px-3 py-1 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                   Generate Daily Plans
@@ -3716,12 +4064,27 @@ export default function CampaignDetails() {
               setTimeout(() => document.getElementById('content-blueprint')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
             }
           }}
+          onBackToRecommendation={
+            recommendationId && effectiveCompanyId && router.query.fromRecommendation
+              ? () => {
+                  setShowAIChat(false);
+                  const params = new URLSearchParams();
+                  params.set('companyId', effectiveCompanyId);
+                  params.set('recommendationId', recommendationId);
+                  router.push(`/recommendations?${params.toString()}`);
+                }
+              : undefined
+          }
           collectedPlanningContext={(() => {
             const ctx: Record<string, unknown> = {};
             if (campaign?.start_date) ctx.tentative_start = campaign.start_date;
             if (campaign?.duration_weeks != null) ctx.campaign_duration = campaign.duration_weeks;
             if (campaign?.duration_weeks != null) ctx.preplanning_form_completed = true;
-            if (typeof window !== 'undefined' && campaign?.id) {
+            if (ENABLE_UNIFIED_CAMPAIGN_WIZARD && campaign?.id) {
+              const wizardCtx = exportWizardToPlanningContext(createCampaignWizardStore(campaign.id).getState());
+              Object.assign(ctx, wizardCtx);
+            }
+            if (typeof window !== 'undefined' && campaign?.id && !ENABLE_UNIFIED_CAMPAIGN_WIZARD) {
               try {
                 const stored = sessionStorage.getItem(`campaign_planning_context_${campaign.id}`);
                 if (stored) {

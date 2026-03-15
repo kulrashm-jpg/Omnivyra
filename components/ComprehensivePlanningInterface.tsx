@@ -246,10 +246,11 @@ export default function ComprehensivePlanningInterface({
       }
 
       // Load weekly plans
-      const weeklyResponse = await fetch(`/api/campaigns/weekly-plans?campaignId=${campaignId}`);
+      const weeklyResponse = await fetch(`/api/campaigns/get-weekly-plans?campaignId=${campaignId}`);
       if (weeklyResponse.ok) {
         const weeklyData = await weeklyResponse.json();
-        setWeeklyPlans(weeklyData);
+        const plans = Array.isArray(weeklyData?.plans) ? weeklyData.plans : (Array.isArray(weeklyData) ? weeklyData : []);
+        setWeeklyPlans(plans);
       }
 
       // Load platform strategies
@@ -258,6 +259,31 @@ export default function ComprehensivePlanningInterface({
         const platformData = await platformResponse.json();
         setPlatformStrategies(platformData);
       }
+
+      // Load daily plans
+      const dailyResponse = await fetch(`/api/campaigns/daily-plans?campaignId=${campaignId}`);
+      if (dailyResponse.ok) {
+        const dailyData = await dailyResponse.json();
+        const mapped: DailyPlan[] = (Array.isArray(dailyData) ? dailyData : []).map((p: any) => ({
+          id: String(p.id ?? `day-${p.weekNumber}-${p.dayOfWeek}`),
+          weekNumber: p.weekNumber ?? 1,
+          dayOfWeek: p.dayOfWeek ?? 'Monday',
+          date: p.date ?? '',
+          platform: p.platform ?? 'instagram',
+          contentType: p.contentType ?? p.content_type ?? 'post',
+          title: p.title ?? '',
+          content: p.content ?? '',
+          description: p.description ?? '',
+          mediaRequirements: p.mediaRequirements ?? { type: 'image', dimensions: '1080x1080', aspectRatio: '1:1' },
+          hashtags: p.hashtags ?? [],
+          callToAction: p.cta ?? '',
+          optimalPostingTime: p.scheduledTime ?? p.optimalPostingTime ?? '09:00',
+          targetMetrics: p.targetMetrics ?? { impressions: 1000, engagements: 50, clicks: 10 },
+          status: p.status ?? 'planned',
+          priority: (p.priority ?? 'medium') as 'low' | 'medium' | 'high',
+        }));
+        setDailyPlans(mapped);
+      }
     } catch (error) {
       console.error('Error loading campaign data:', error);
     } finally {
@@ -265,8 +291,8 @@ export default function ComprehensivePlanningInterface({
     }
   };
 
-  const generateAIContent = async (type: string, context: any) => {
-    setIsLoading(true);
+  const generateAIContent = async (type: string, context: any, options?: { skipLoading?: boolean }) => {
+    if (!options?.skipLoading) setIsLoading(true);
     try {
       const response = await fetch('/api/ai/generate-content', {
         method: 'POST',
@@ -286,7 +312,29 @@ export default function ComprehensivePlanningInterface({
     } catch (error) {
       console.error('Error generating AI content:', error);
     } finally {
-      setIsLoading(false);
+      if (!options?.skipLoading) setIsLoading(false);
+    }
+  };
+
+  const handleGenerateContentPillars = async () => {
+    setShowAIModal(false);
+    const content = await generateAIContent('content_pillars', {
+      objective: campaignStrategy.objective,
+      targetAudience: campaignStrategy.targetAudience,
+      keyPlatforms: campaignStrategy.keyPlatforms,
+    });
+    if (content?.pillars && Array.isArray(content.pillars)) {
+      const pillars: ContentPillar[] = content.pillars.map((p: any, i: number) => ({
+        id: p.id || `pillar-${i + 1}`,
+        name: p.name || `Pillar ${i + 1}`,
+        description: p.description || '',
+        percentage: p.percentage ?? 20,
+        contentTypes: p.contentTypes || ['post', 'story'],
+        platforms: p.platforms || campaignStrategy.keyPlatforms,
+        hashtagCategories: p.hashtagCategories || [],
+        visualStyle: p.visualStyle || { colors: [], fonts: [], templates: [] },
+      }));
+      setCampaignStrategy(prev => ({ ...prev, contentPillars: pillars }));
     }
   };
 
@@ -350,50 +398,81 @@ export default function ComprehensivePlanningInterface({
     }
   };
 
-  const handleGenerateDailyPlan = async (weekNumber: number, dayOfWeek: string) => {
+  const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
+
+  const computeDayDate = (weekNumber: number, dayOfWeek: string): string => {
+    const startDate = (campaignData as { start_date?: string })?.start_date;
+    if (!startDate || !/^\d{4}-\d{2}-\d{2}/.test(startDate)) {
+      const d = new Date();
+      d.setDate(d.getDate() + (weekNumber - 1) * 7 + DAYS_OF_WEEK.indexOf(dayOfWeek as typeof DAYS_OF_WEEK[number]));
+      return d.toISOString().split('T')[0];
+    }
+    const base = new Date(startDate.replace(/T.*/, 'T00:00:00'));
+    const dayIndex = DAYS_OF_WEEK.indexOf(dayOfWeek as typeof DAYS_OF_WEEK[number]);
+    base.setDate(base.getDate() + (weekNumber - 1) * 7 + dayIndex);
+    return base.toISOString().split('T')[0];
+  };
+
+  /** Uses shared API: single call generates 7 days and persists to daily_content_plans */
+  const handleGenerateAllDaysForWeek = async (weekNumber: number) => {
+    if (!campaignId) return;
     setIsLoading(true);
     try {
-      const weeklyPlan = weeklyPlans.find(w => w.weekNumber === weekNumber);
-      const aiContent = await generateAIContent('daily_plan', {
-        weekNumber,
-        dayOfWeek,
-        weeklyPlan,
-        campaignStrategy
+      const saveRes = await fetch('/api/campaigns/generate-ai-daily-plans', {
+        credentials: 'include',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId,
+          weekNumber,
+          companyId: (campaignData as { company_id?: string })?.company_id,
+          provider: 'demo',
+        }),
       });
-
-      const newDailyPlan: DailyPlan = {
-        id: `day-${weekNumber}-${dayOfWeek}`,
-        weekNumber,
-        dayOfWeek,
-        date: new Date().toISOString().split('T')[0], // This should be calculated properly
-        platform: aiContent.platform || 'instagram',
-        contentType: aiContent.contentType || 'post',
-        title: aiContent.title || '',
-        content: aiContent.content || '',
-        description: aiContent.description || '',
-        mediaRequirements: aiContent.mediaRequirements || {
-          type: 'image',
-          dimensions: '1080x1080',
-          aspectRatio: '1:1'
-        },
-        hashtags: aiContent.hashtags || [],
-        callToAction: aiContent.callToAction || '',
-        optimalPostingTime: aiContent.optimalTime || '09:00',
-        targetMetrics: aiContent.targetMetrics || {
-          impressions: 1000,
-          engagements: 50,
-          clicks: 10
-        },
-        status: 'planned',
-        priority: 'medium'
-      };
-
-      setDailyPlans(prev => [...prev.filter(d => d.id !== newDailyPlan.id), newDailyPlan]);
+      if (!saveRes.ok) {
+        const err = await saveRes.json().catch(() => ({}));
+        console.warn('Generate AI daily plans failed:', err?.error || saveRes.statusText);
+        return;
+      }
+      const data = await saveRes.json().catch(() => ({}));
+      const rowsInserted = data?.rowsInserted ?? 0;
+      if (rowsInserted > 0) {
+        const res = await fetch(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(campaignId)}`);
+        if (res.ok) {
+          const loaded = await res.json().catch(() => []);
+          const plansArray = Array.isArray(loaded) ? loaded : loaded?.plans ?? [];
+          const forWeek = plansArray.filter((p: any) => Number(p.weekNumber ?? p.week_number) === weekNumber);
+          const mapped: DailyPlan[] = forWeek.map((p: any) => ({
+            id: p.id ?? `day-${weekNumber}-${p.dayOfWeek ?? p.day_of_week}`,
+            weekNumber,
+            dayOfWeek: p.dayOfWeek ?? p.day_of_week ?? 'Monday',
+            date: p.date ?? computeDayDate(weekNumber, p.dayOfWeek ?? p.day_of_week ?? 'Monday'),
+            platform: (p.platform || 'linkedin').toLowerCase(),
+            contentType: (p.contentType ?? p.content_type ?? 'post').toLowerCase(),
+            title: p.title ?? p.topic ?? '',
+            content: p.content ?? '',
+            description: p.description ?? '',
+            mediaRequirements: { type: 'image', dimensions: '1080x1080', aspectRatio: '1:1' },
+            hashtags: p.hashtags ?? [],
+            callToAction: p.cta ?? '',
+            optimalPostingTime: p.scheduledTime ?? p.scheduled_time ?? '09:00',
+            targetMetrics: p.targetMetrics ?? { impressions: 1000, engagements: 50, clicks: 10 },
+            status: 'planned',
+            priority: 'medium',
+          }));
+          setDailyPlans(prev => [...prev.filter(d => d.weekNumber !== weekNumber), ...mapped]);
+        }
+      }
     } catch (error) {
-      console.error('Error generating daily plan:', error);
+      console.error('Error generating all days:', error);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  /** Uses shared API: generates full week and persists to daily_content_plans (single-day UI triggers full week gen) */
+  const handleGenerateDailyPlan = async (weekNumber: number, _dayOfWeek: string) => {
+    await handleGenerateAllDaysForWeek(weekNumber);
   };
 
   const renderOverviewTab = () => (
@@ -698,7 +777,7 @@ export default function ComprehensivePlanningInterface({
             <div className="flex items-center justify-between">
               <h4 className="text-lg font-medium">Week {selectedWeek} - Daily Breakdown</h4>
               <button
-                onClick={() => handleGenerateDailyPlan(selectedWeek, 'Monday')}
+                onClick={() => handleGenerateAllDaysForWeek(selectedWeek)}
                 className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white px-4 py-2 rounded-lg flex items-center gap-2"
               >
                 <Sparkles className="h-4 w-4" />
@@ -1088,10 +1167,7 @@ export default function ComprehensivePlanningInterface({
                   Cancel
                 </button>
                 <button
-                  onClick={() => {
-                    // Generate content pillars using AI
-                    setShowAIModal(false);
-                  }}
+                  onClick={handleGenerateContentPillars}
                   className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-4 py-2 rounded-lg"
                 >
                   Generate

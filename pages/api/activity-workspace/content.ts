@@ -49,45 +49,79 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (improvementType === 'ADD_DISCOVERABILITY') {
         const discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
-        const hashtagLine = Array.isArray(discoverabilityMeta?.hashtags) && discoverabilityMeta.hashtags.length > 0
-          ? '\n\n' + (discoverabilityMeta.hashtags as string[]).join(' ')
-          : '';
+        // Store hashtags in discoverability_meta only — do NOT append to generated_content.
+        // The preview layer renders hashtags from discoverability_meta.hashtags separately.
         const improved_variant = {
           ...variant,
           discoverability_meta: discoverabilityMeta,
-          generated_content: currentContent + hashtagLine,
+          generated_content: currentContent,
         };
         return res.status(200).json({ success: true, improved_variant });
       }
 
-      const instructions: Record<ImprovementType, string> = {
-        IMPROVE_CTA: 'Add a clear call-to-action at the end (e.g. Learn more, Sign up, Try now, Book a demo). Keep the rest of the content unchanged. Return only the revised content.',
-        IMPROVE_HOOK: 'Make the first line or opening sentence shorter and punchier (under 100 characters). Keep the rest of the content unchanged. Return only the revised content.',
-        ADD_DISCOVERABILITY: '',
-      };
-      const instruction = instructions[improvementType];
-      if (!instruction) {
+      if (!['IMPROVE_CTA', 'IMPROVE_HOOK'].includes(improvementType)) {
         return res.status(400).json({ error: 'Unsupported improvement type' });
       }
+
+      // Build a plain-text prompt — avoids JSON parsing confusion in the model
+      const lines = currentContent.split('\n');
+      const firstLine = lines[0] ?? '';
+      const restLines = lines.slice(1).join('\n');
+      const lastSentenceIdx = currentContent.search(/[.!?][^.!?]*$/);
+      const beforeLastSentence = lastSentenceIdx > 0 ? currentContent.slice(0, lastSentenceIdx + 1).trimEnd() : '';
+      const lastSentence = lastSentenceIdx > 0 ? currentContent.slice(lastSentenceIdx + 1).trim() : currentContent.trim();
+
+      const systemPrompt =
+        improvementType === 'IMPROVE_HOOK'
+          ? [
+              'You are a social content editor. Your ONLY job: rewrite the FIRST LINE of the content to be punchier and under 100 characters.',
+              'STRICT RULES:',
+              '1. Output the COMPLETE content — first line replaced, every other line UNCHANGED.',
+              '2. Do NOT touch any line after the first.',
+              '3. Do NOT add anything at the end.',
+              '4. Return plain text only — no labels, no commentary.',
+            ].join('\n')
+          : [
+              'You are a social content editor. Your ONLY job: rewrite the LAST SENTENCE (or last 1-2 sentences) of the content to be a stronger, more specific call-to-action.',
+              'STRICT RULES:',
+              '1. Output the COMPLETE content — everything before the last sentence UNCHANGED, last sentence replaced with a better CTA.',
+              '2. Do NOT append a new line at the bottom — the new CTA replaces the existing ending in-place.',
+              '3. Do NOT touch anything before the last sentence.',
+              '4. Return plain text only — no labels, no commentary.',
+            ].join('\n');
+
+      const userPrompt =
+        improvementType === 'IMPROVE_HOOK'
+          ? [
+              `Platform: ${platform} | Type: ${contentType}`,
+              '',
+              '## FIRST LINE (rewrite this):',
+              firstLine,
+              '',
+              '## REST OF CONTENT (keep exactly as-is):',
+              restLines,
+              '',
+              'Output the complete revised content now:',
+            ].join('\n')
+          : [
+              `Platform: ${platform} | Type: ${contentType}`,
+              '',
+              '## CONTENT BEFORE LAST SENTENCE (keep exactly as-is):',
+              beforeLastSentence || currentContent,
+              '',
+              '## LAST SENTENCE (replace with a stronger CTA):',
+              lastSentence || '(no ending sentence found — add a CTA at the end)',
+              '',
+              'Output the complete revised content now:',
+            ].join('\n');
+
       const aiResult = await generateCampaignPlan({
         companyId: null,
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
         temperature: 0.2,
         messages: [
-          {
-            role: 'system',
-            content: 'You are a senior social content editor. Apply only the requested change. Return only the revised content plain text, no explanation.',
-          },
-          {
-            role: 'user',
-            content: JSON.stringify({
-              platform,
-              content_type: contentType,
-              instruction,
-              current_content: currentContent,
-              intent: (dailyExecutionItemRaw as any)?.intent ?? null,
-            }),
-          },
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userPrompt },
         ],
       });
       let revised = String(aiResult?.output || '').trim();
@@ -215,14 +249,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    if (!item.master_content || String((item.master_content as any)?.generation_status || '').toLowerCase() !== 'generated') {
+    const creatorAsset = asObject((dailyExecutionItemRaw as any)?.creator_asset);
+    const hasCreatorAsset = creatorAsset && (
+      String(creatorAsset.url ?? '').trim() || (Array.isArray(creatorAsset.files) && creatorAsset.files.length > 0)
+    );
+    const creatorMasterText = hasCreatorAsset
+      ? (String(creatorAsset.description ?? '').trim() || String(creatorAsset.transcript ?? '').trim() || String(creatorAsset.theme ?? '').trim() || String(item.topic ?? item.title ?? '').trim())
+      : '';
+
+    if (!item.master_content && !creatorMasterText) {
       return res.status(400).json({
         error: 'MASTER_CONTENT_REQUIRED',
-        message: 'Generate master content before platform variants.',
+        message: 'Generate master content or upload creator asset (with description/transcript/theme) before platform variants.',
       });
     }
 
-    const variants = await buildPlatformVariantsFromMaster(item);
+    const itemWithMaster = creatorMasterText
+      ? {
+          ...item,
+          master_content: {
+            id: `creator-${item.execution_id}`,
+            generated_at: new Date().toISOString(),
+            content: creatorMasterText,
+            generation_status: 'generated' as const,
+            generation_source: 'creator' as const,
+            content_type_mode: 'text' as const,
+          },
+        }
+      : item;
+
+    const variants = await buildPlatformVariantsFromMaster(itemWithMaster);
     return res.status(200).json({
       success: true,
       platform_variants: variants,

@@ -156,7 +156,7 @@ export default function TopicManagement() {
 
   const generateAITopics = async () => {
     try {
-      const response = await fetch('/api/ai/generate-topics', {
+      const response = await fetch('/api/ai/topic-suggestions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 

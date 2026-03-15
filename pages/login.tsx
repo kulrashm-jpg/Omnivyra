@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { supabase } from '../utils/supabaseClient';
 
@@ -56,7 +57,7 @@ export default function LoginPage() {
         {status && <div className="text-sm text-green-600">{status}</div>}
         {error && <div className="text-sm text-red-600">{error}</div>}
         <div className="text-sm text-gray-600">
-          New here? <a className="text-indigo-600" href="/signup">Create an account</a>
+          New here? <Link className="text-indigo-600" href="/signup">Create an account</Link>
         </div>
       </div>
     </div>

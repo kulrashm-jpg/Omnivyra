@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
+import { ArrowLeft } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
@@ -25,25 +26,17 @@ const resolveStatus = (record: ConnectorRecord): ConnectorStatus => {
   return new Date(record.expires_at).getTime() < Date.now() ? 'expired' : 'connected';
 };
 
-const DISPLAY_LIST: ConnectorRecord[] = [
-  { platform: 'linkedin', displayName: 'LinkedIn', status: 'disconnected', expires_at: null },
-  { platform: 'facebook', displayName: 'Facebook', status: 'disconnected', expires_at: null },
-  { platform: 'instagram', displayName: 'Instagram', status: 'disconnected', expires_at: null },
-  { platform: 'twitter', displayName: 'Twitter', status: 'disconnected', expires_at: null },
-  { platform: 'reddit', displayName: 'Reddit', status: 'disconnected', expires_at: null },
-];
-
 export default function CommunityAiConnectors() {
   const { selectedCompanyId } = useCompanyContext();
   const router = useRouter();
   const tenantId = selectedCompanyId || '';
-  const [connectors, setConnectors] = useState<ConnectorRecord[]>(DISPLAY_LIST);
+  const [connectors, setConnectors] = useState<ConnectorRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const fetchStatus = React.useCallback(async () => {
     if (!tenantId) {
-      setConnectors(DISPLAY_LIST);
+      setConnectors([]);
       setLoading(false);
       return;
     }
@@ -55,27 +48,40 @@ export default function CommunityAiConnectors() {
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setErrorMessage(body?.error || res.statusText || 'Failed to load status');
-        setConnectors(DISPLAY_LIST);
+        const errCode = body?.error;
+        const msg =
+          errCode === 'FORBIDDEN_ROLE'
+            ? 'You need Company Admin, Content Publisher, or Content Reviewer role to manage connectors. Contact your organization admin if you need access.'
+            : errCode === 'COMPANY_ACCESS_DENIED'
+              ? 'You do not have access to this company. Please select a company you belong to.'
+              : errCode === 'UNAUTHORIZED'
+                ? 'Please sign in to manage connectors.'
+                : body?.error || res.statusText || 'Failed to load status';
+        setErrorMessage(msg);
+        setConnectors([]);
         return;
       }
-      const list = (await res.json()) as { platform: string; expires_at?: string | null; connected: boolean }[];
+      const data = (await res.json()) as {
+        connections: { platform: string; expires_at?: string | null; connected: boolean }[];
+        configured_platforms: { platform: string; displayName: string }[];
+      };
+      const list = data?.connections ?? [];
+      const configured = data?.configured_platforms ?? [];
       const byPlatform = new Map(list.map((r) => [r.platform.toLowerCase(), r]));
-      setConnectors(
-        DISPLAY_LIST.map((entry) => {
-          const fromDb = byPlatform.get(entry.platform);
-          if (!fromDb) return { ...entry, status: 'disconnected' as const, expires_at: null };
-          return {
-            ...entry,
-            status: 'connected' as const,
-            expires_at: fromDb.expires_at ?? null,
-          };
-        })
-      );
+      const displayList = configured.map((entry) => {
+        const fromDb = byPlatform.get(entry.platform);
+        if (!fromDb) return { ...entry, status: 'disconnected' as const, expires_at: null };
+        return {
+          ...entry,
+          status: 'connected' as const,
+          expires_at: fromDb.expires_at ?? null,
+        };
+      });
+      setConnectors(displayList);
       setErrorMessage(null);
     } catch (e) {
       setErrorMessage(e instanceof Error ? e.message : 'Failed to load status');
-      setConnectors(DISPLAY_LIST);
+      setConnectors([]);
     } finally {
       setLoading(false);
     }
@@ -132,7 +138,17 @@ export default function CommunityAiConnectors() {
     <CommunityAiLayout
       title="Connectors"
       context={{ tenant_id: tenantId, organization_id: tenantId }}
+      showChat={false}
     >
+      <button
+        type="button"
+        onClick={() => router.push('/social-platforms')}
+        className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 mb-4"
+        aria-label="Back to Configured Platforms"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back
+      </button>
       {errorMessage && (
         <div className="bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg p-3">
           {errorMessage}
@@ -141,7 +157,7 @@ export default function CommunityAiConnectors() {
 
       <SectionCard
         title="Connected Platforms"
-        subtitle="Manage Community-AI connectors for engagement actions."
+        subtitle="Connect your social accounts for engagement actions. Only platforms with OAuth configured in your environment appear below."
       >
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm text-left text-gray-700">
@@ -194,7 +210,7 @@ export default function CommunityAiConnectors() {
               {resolved.length === 0 && (
                 <tr>
                   <td className="px-3 py-3 text-gray-400" colSpan={4}>
-                    No connectors configured.
+                    No social platforms configured for this company. Add LinkedIn, Facebook, Instagram, Twitter, or Reddit in Social Platforms or Company Profile, then return here to connect them.
                   </td>
                 </tr>
               )}

@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient';
+import { updateActivity } from '../../../backend/services/executionPlannerService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PUT') {
@@ -25,25 +26,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       'Random': ['LinkedIn', 'Twitter', 'Facebook', 'Instagram', 'YouTube', 'TikTok', 'Pinterest'],
     };
 
-    // Update the daily plan with new platforms
-    const { data: updatedPlan, error } = await supabase
-      .from('daily_content_plans')
-      .update({
+    await updateActivity(
+      dayPlanId,
+      {
         platforms: platforms,
         posting_strategy: `Custom platforms: ${platforms.join(', ')}`,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', dayPlanId)
-      .select()
-      .single();
+      },
+      'board'
+    );
 
-    if (error) {
-      console.error('Error updating platforms:', error);
-      return res.status(500).json({ 
-        error: 'Failed to update platforms', 
-        details: error.message 
-      });
-    }
+    const { data: updatedPlan } = await supabase
+      .from('daily_content_plans')
+      .select('*')
+      .eq('id', dayPlanId)
+      .maybeSingle();
 
     // Return suggested platforms based on content type
     const suggestedPlatforms = platformMapping[contentType] || [];

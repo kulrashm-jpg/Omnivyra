@@ -85,6 +85,18 @@ function deriveDiamondType(polishFlags: {
 export function enrichRecommendationCards<T extends ResultLike>(result: T): T {
   if (!Array.isArray(result.trends_used) || result.trends_used.length === 0) return result;
 
+  // Deduplicate by exact topic (normalized) so each trend has exactly one card
+  const seenTopics = new Set<string>();
+  const uniqueByTopic = result.trends_used.filter((card) => {
+    const key = String(card.topic ?? '').trim().toLowerCase();
+    if (!key || seenTopics.has(key)) return false;
+    seenTopics.add(key);
+    return true;
+  });
+  if (uniqueByTopic.length < result.trends_used.length) {
+    result = { ...result, trends_used: uniqueByTopic } as T;
+  }
+
   const stageByTopic = toStageMetaByTopic(result.strategy_sequence);
   const pt = result.company_context?.problem_transformation ?? null;
   const brand = result.company_context?.brand ?? null;

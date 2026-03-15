@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { getRecommendationsForCompany } from '../../../../backend/services/intelligenceOrchestrationService';
+import { formatForUserOutput } from '../../../../backend/utils/refineUserFacingResponse';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -22,7 +23,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       windowHours,
       buildGraph,
     });
-    return res.status(200).json({ recommendations });
+    const refined = await formatForUserOutput({ recommendations });
+    return res.status(200).json(refined);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to fetch recommendations';
     console.error('[intelligence/recommendations]', message);

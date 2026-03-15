@@ -25,6 +25,8 @@ type ApiSource = {
     success_count: number;
     failure_count: number;
   } | null;
+  company_limits?: { daily_limit: number | null; signal_limit: number | null } | null;
+  usage_today?: { request_count: number; signals_generated: number };
   usage_by_feature?: Array<{
     feature: string;
     request_count: number;
@@ -175,6 +177,20 @@ const parseJsonObject = (value: string) => {
 
 const requiresAuth = (authType?: string | null) =>
   ['api_key', 'bearer', 'query', 'header'].includes(String(authType || 'none'));
+
+/** Classify API error for display (API key, quota, rate limit, etc.) */
+function classifyApiError(
+  code?: string | null,
+  message?: string | null
+): 'api_key' | 'quota' | 'rate_limit' | null {
+  const c = String(code || '').toLowerCase();
+  const m = String(message || '').toLowerCase();
+  if (c === '401' || m.includes('unauthorized') || (m.includes('invalid') && (m.includes('key') || m.includes('api')))) return 'api_key';
+  if (c === '403' || m.includes('forbidden') || m.includes('access denied')) return 'api_key';
+  if (c === '429' || m.includes('rate limit') || m.includes('too many requests')) return 'rate_limit';
+  if (m.includes('quota') || m.includes('limit exceeded') || m.includes('exceeded')) return 'quota';
+  return null;
+}
 
 const formatPercent = (value: number) => `${Math.round(value * 100)}%`;
 
@@ -789,6 +805,12 @@ export default function ExternalApiAccessPage() {
                   ? `Failure rate ${formatPercent(failureRate)} • Last error ${usage.last_error_message || '—'}`
                   : 'No usage data yet';
                 const isPending = pendingRequestNames.has(api.name.toLowerCase());
+                const limits = api.company_limits;
+                const today = api.usage_today;
+                const dailyExceeded = limits?.daily_limit != null && (today?.request_count ?? 0) >= limits.daily_limit;
+                const signalExceeded = limits?.signal_limit != null && (today?.signals_generated ?? 0) >= limits.signal_limit;
+                const limitExceeded = dailyExceeded || signalExceeded;
+                const errorClass = classifyApiError(usage?.last_error_code, usage?.last_error_message);
                 return (
                   <div key={api.id} className="border rounded-lg p-4">
                     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -842,6 +864,38 @@ export default function ExternalApiAccessPage() {
                               title={healthTooltip}
                             >
                               Degraded
+                            </span>
+                          )}
+                          {limitExceeded && (
+                            <span
+                              className="text-[11px] px-2 py-0.5 rounded-full bg-red-100 text-red-700"
+                              title="Plan limit exceeded. API calls may be blocked until reset."
+                            >
+                              Limit exceeded
+                            </span>
+                          )}
+                          {errorClass === 'api_key' && (
+                            <span
+                              className="text-[11px] px-2 py-0.5 rounded-full bg-red-100 text-red-700"
+                              title={usage?.last_error_message || 'API key or auth issue'}
+                            >
+                              API key issue
+                            </span>
+                          )}
+                          {errorClass === 'quota' && (
+                            <span
+                              className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700"
+                              title={usage?.last_error_message || 'Quota exceeded'}
+                            >
+                              Quota exceeded
+                            </span>
+                          )}
+                          {errorClass === 'rate_limit' && (
+                            <span
+                              className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700"
+                              title={usage?.last_error_message || 'Rate limited'}
+                            >
+                              Rate limited
                             </span>
                           )}
                         </div>
@@ -903,12 +957,33 @@ export default function ExternalApiAccessPage() {
                       </div>
                     )}
 
+                    {(limits?.daily_limit != null || limits?.signal_limit != null) && (
+                      <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                        {limits?.daily_limit != null && (
+                          <span className={limitExceeded ? 'text-red-600 font-medium' : 'text-gray-600'}>
+                            Daily: {(today?.request_count ?? 0)}/{limits.daily_limit}
+                            {dailyExceeded && ' (exceeded)'}
+                          </span>
+                        )}
+                        {limits?.signal_limit != null && (
+                          <span className={signalExceeded ? 'text-red-600 font-medium' : 'text-gray-600'}>
+                            Signals: {(today?.signals_generated ?? 0)}/{limits.signal_limit}
+                            {signalExceeded && ' (exceeded)'}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
                       <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                         <div className="text-gray-500">Requests (14d)</div>
                         <div className="text-lg font-semibold text-gray-900">
                           {api.usage_company?.total_calls ?? 0}
                         </div>
+                        {limits?.daily_limit != null && (
+                          <div className={`text-[11px] mt-1 ${limitExceeded ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                            Today: {today?.request_count ?? 0}/{limits.daily_limit}
+                          </div>
+                        )}
                       </div>
                       <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                         <div className="text-gray-500">Success rate</div>
@@ -925,6 +1000,11 @@ export default function ExternalApiAccessPage() {
                             ? new Date(usage.last_success_at).toLocaleDateString()
                             : '—'}
                         </div>
+                        {limits?.signal_limit != null && (
+                          <div className={`text-[11px] mt-1 ${limitExceeded ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                            Signals today: {(today?.signals_generated ?? 0)}/{limits.signal_limit}
+                          </div>
+                        )}
                       </div>
                     </div>
 

@@ -62,6 +62,8 @@ export async function saveStructuredCampaignPlan(input: {
   executionMomentumMetadata?: Record<string, unknown>;
   /** Momentum recovery suggestions when momentum is WEAK (from momentumRecoveryAdvisor). */
   momentumRecoveryMetadata?: Record<string, unknown>;
+  /** Structure hash from manual planner (SHA256 of calendar_plan.activities) for skeleton change detection. */
+  structure_hash?: string;
 }): Promise<void> {
   const plan = { weeks: input.weeks, campaign_id: input.campaignId };
   const blueprint: CampaignBlueprint = fromStructuredPlan(plan);
@@ -77,8 +79,8 @@ export async function saveStructuredCampaignPlan(input: {
         }
       : undefined;
   const blueprintToSave =
-    executionIntelligence
-      ? ({ ...blueprint, executionIntelligence } as any)
+    executionIntelligence || input.structure_hash
+      ? ({ ...blueprint, executionIntelligence, structure_hash: input.structure_hash } as any)
       : (blueprint as any);
 
   const { error } = await supabase

@@ -48,6 +48,8 @@ export interface ScheduledPost {
   published_at?: string;
   created_at: string;
   updated_at: string;
+  repurpose_index?: number;
+  repurpose_total?: number;
 }
 
 export interface SocialAccount {
@@ -221,6 +223,23 @@ export async function updateScheduledPostOnPublish(
 
   if (error) {
     throw new Error(`Failed to update scheduled post: ${error.message}`);
+  }
+
+  // Sync platform_post_id to daily_content_plans.external_post_id — single batch update
+  const { data: plans } = await supabase
+    .from('daily_content_plans')
+    .select('id')
+    .eq('scheduled_post_id', postId);
+
+  if (plans?.length) {
+    const planIds = (plans as { id: string }[]).map((p) => p.id);
+    const { error: syncError } = await supabase
+      .from('daily_content_plans')
+      .update({ external_post_id: platformPostId })
+      .in('id', planIds);
+    if (syncError) {
+      console.warn(`[queries] Could not batch-sync external_post_id: ${syncError.message}`);
+    }
   }
 }
 

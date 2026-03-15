@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import { supabase } from '../utils/supabaseClient';
@@ -18,6 +19,12 @@ import {
   TrendingUp,
   FileText,
   DollarSign,
+  Coins,
+  Globe,
+  Save,
+  ChevronDown,
+  ChevronUp,
+  EyeOff,
 } from 'lucide-react';
 
 interface DeletionAudit {
@@ -149,6 +156,26 @@ export default function SuperAdminPanel() {
   const [pendingPolicy, setPendingPolicy] = useState<CommunityAiPolicy | null>(null);
   const [pendingPolicyLabel, setPendingPolicyLabel] = useState('');
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  // Social platform OAuth config state
+  const OAUTH_PLATFORMS = [
+    { platform_key: 'linkedin',  platform_label: 'LinkedIn',     configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+    { platform_key: 'twitter',   platform_label: 'X (Twitter)',  configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+    { platform_key: 'youtube',   platform_label: 'YouTube',      configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+    { platform_key: 'instagram', platform_label: 'Instagram',    configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+    { platform_key: 'facebook',  platform_label: 'Facebook',     configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+    { platform_key: 'tiktok',    platform_label: 'TikTok',       configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+    { platform_key: 'pinterest', platform_label: 'Pinterest',    configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+    { platform_key: 'reddit',    platform_label: 'Reddit',       configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+  ];
+  const [socialPlatforms, setSocialPlatforms] = useState<any[]>(OAUTH_PLATFORMS);
+  const [loadingSocialPlatforms, setLoadingSocialPlatforms] = useState(false);
+  const [expandedPlatform, setExpandedPlatform] = useState<string | null>(null);
+  const [oauthForm, setOauthForm] = useState<Record<string, { client_id: string; client_secret: string; enabled: boolean }>>(
+    Object.fromEntries(OAUTH_PLATFORMS.map((p) => [p.platform_key, { client_id: '', client_secret: '', enabled: false }]))
+  );
+  const [savingOauth, setSavingOauth] = useState<string | null>(null);
+  const [oauthSaveMsg, setOauthSaveMsg] = useState<{ platform: string; type: 'success' | 'error'; text: string } | null>(null);
+  const [showSecretFor, setShowSecretFor] = useState<string | null>(null);
   const [pricingPlans, setPricingPlans] = useState<Array<{ id: string; plan_key: string; name: string; description?: string | null; monthly_price?: number | null }>>([]);
   const [plansLimits, setPlansLimits] = useState<Record<string, Record<string, number | null>>>({});
   const [plansDraftLimits, setPlansDraftLimits] = useState<Record<string, Record<string, string>>>({});
@@ -175,23 +202,82 @@ export default function SuperAdminPanel() {
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
-    const headers = {
-      ...(init?.headers || {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    };
-    const options: RequestInit = {
+    return fetch(input, {
       ...init,
-      headers,
-    };
-    if (!token) {
-      options.credentials = 'include';
+      credentials: 'include', // always send cookies (super_admin_session) alongside Bearer token
+      headers: {
+        ...(init?.headers || {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  };
+
+  const loadSocialPlatforms = async () => {
+    setLoadingSocialPlatforms(true);
+    try {
+      const r = await fetchWithAuth('/api/super-admin/platform-oauth-configs');
+      if (r.ok) {
+        const data = await r.json();
+        const apiPlatforms: any[] = data.platforms || [];
+        if (apiPlatforms.length > 0) {
+          // Merge API-enriched status into our always-visible list
+          setSocialPlatforms((prev) =>
+            prev.map((p) => {
+              const fromApi = apiPlatforms.find((a: any) => a.platform_key === p.platform_key);
+              return fromApi ? { ...p, ...fromApi } : p;
+            })
+          );
+          setOauthForm((prev) => {
+            const next = { ...prev };
+            for (const p of apiPlatforms) {
+              next[p.platform_key] = { client_id: '', client_secret: '', enabled: p.enabled ?? false };
+            }
+            return next;
+          });
+        }
+      }
+    } catch (e) { console.error('Failed to load platform OAuth configs', e); }
+    finally { setLoadingSocialPlatforms(false); }
+  };
+
+  const saveOauthConfig = async (platformKey: string) => {
+    const form = oauthForm[platformKey];
+    if (!form?.client_id) {
+      setOauthSaveMsg({ platform: platformKey, type: 'error', text: 'Client ID is required' });
+      return;
     }
-    return fetch(input, options);
+    setSavingOauth(platformKey);
+    setOauthSaveMsg(null);
+    try {
+      const r = await fetchWithAuth('/api/super-admin/platform-oauth-configs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform: platformKey, client_id: form.client_id, client_secret: form.client_secret, enabled: form.enabled }),
+      });
+      if (r.ok) {
+        setOauthSaveMsg({ platform: platformKey, type: 'success', text: 'Saved successfully' });
+        loadSocialPlatforms();
+        setExpandedPlatform(null);
+      } else {
+        const err = await r.json().catch(() => ({}));
+        setOauthSaveMsg({ platform: platformKey, type: 'error', text: err.error || 'Failed to save' });
+      }
+    } catch (e: any) {
+      setOauthSaveMsg({ platform: platformKey, type: 'error', text: e.message });
+    } finally {
+      setSavingOauth(null);
+    }
   };
 
   useEffect(() => {
     loadSuperAdminData();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'social-platforms' && socialPlatforms.length === 0 && !loadingSocialPlatforms) {
+      loadSocialPlatforms();
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     setRbacDraftPermissions(rbacPermissions || {});
@@ -487,7 +573,7 @@ export default function SuperAdminPanel() {
     setPlansSaveSuccess(null);
   };
 
-  const handleSavePlanLimits = async (plan: { id: string; plan_key: string; name: string }) => {
+  const handleSavePlanLimits = async (plan: { id: string; plan_key: string; name: string; description?: string | null; monthly_price?: number | null }) => {
     setIsSavingPlan(plan.id);
     setPlansSaveError(null);
     setPlansSaveSuccess(null);
@@ -840,9 +926,11 @@ export default function SuperAdminPanel() {
             { id: 'campaign-health', label: 'Campaign Health', icon: TrendingUp },
             { id: 'company-users', label: 'Companies & Users', icon: Users },
             { id: 'plans', label: 'Pricing & Plans', icon: DollarSign },
+            { id: 'consumption', label: 'Consumption', icon: Coins },
             { id: 'rbac', label: 'RBAC', icon: Key },
             { id: 'community-ai', label: 'Community-AI', icon: Activity },
             { id: 'audit', label: 'Audit Logs', icon: Eye },
+            { id: 'social-platforms', label: 'Social Platforms', icon: Globe },
             { id: 'blog', label: 'Blog', icon: FileText },
             ...(canShowExternalApisTab
               ? [{ id: 'external-apis', label: 'External API Control', icon: Key }]
@@ -851,6 +939,7 @@ export default function SuperAdminPanel() {
             const Icon = tab.icon;
             const isExternalApiControl = tab.id === 'external-apis';
             const isBlog = tab.id === 'blog';
+            const isConsumption = tab.id === 'consumption';
             return (
               <button
                 key={tab.id}
@@ -863,7 +952,12 @@ export default function SuperAdminPanel() {
                     router.push('/admin/blog');
                     return;
                   }
+                  if (isConsumption) {
+                    router.push('/super-admin/consumption');
+                    return;
+                  }
                   setActiveTab(tab.id);
+                  if (tab.id === 'social-platforms') loadSocialPlatforms();
                 }}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
                   activeTab === tab.id
@@ -942,7 +1036,7 @@ export default function SuperAdminPanel() {
             </div>
 
             {canShowExternalApisTab && (
-              <a
+              <Link
                 href="/external-apis?mode=platform"
                 className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors no-underline ${
                   externalApisHealth?.status === 'healthy'
@@ -956,7 +1050,7 @@ export default function SuperAdminPanel() {
                 {externalApisHealth != null
                   ? `External APIs: ${externalApisHealth.status === 'healthy' ? 'HEALTHY' : 'ATTENTION REQUIRED'}`
                   : 'External API Control — Configure & Approval Queue'}
-              </a>
+              </Link>
             )}
 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200">
@@ -1826,6 +1920,125 @@ export default function SuperAdminPanel() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'social-platforms' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Platform OAuth Credentials</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">Configure Client ID &amp; Secret for each platform. Company admins use these credentials to connect their social accounts.</p>
+                </div>
+                <button onClick={loadSocialPlatforms} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500" title="Refresh">
+                  <RefreshCw className={`h-4 w-4 ${loadingSocialPlatforms ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {socialPlatforms.map((p) => (
+                  <div key={p.platform_key} className="px-6 py-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Globe className="h-4 w-4 text-gray-400 shrink-0" />
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-gray-900 text-sm">{p.platform_label}</span>
+                            {p.configured ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <CheckCircle className="h-3 w-3" /> Configured
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">
+                                <XCircle className="h-3 w-3" /> Not configured
+                              </span>
+                            )}
+                            {p.enabled && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-600 border border-blue-200">Enabled</span>}
+                          </div>
+                          {p.configured && (
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              Client ID: {p.client_id_preview} · Secret: {p.has_client_secret ? '••••••' : 'not set'}
+                              {p.updated_at && ` · Updated ${new Date(p.updated_at).toLocaleDateString()}`}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setExpandedPlatform(expandedPlatform === p.platform_key ? null : p.platform_key)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors shrink-0"
+                      >
+                        {expandedPlatform === p.platform_key ? <><ChevronUp className="h-3.5 w-3.5" /> Close</> : <><ChevronDown className="h-3.5 w-3.5" /> {p.configured ? 'Update' : 'Configure'}</>}
+                      </button>
+                    </div>
+
+                    {expandedPlatform === p.platform_key && (
+                      <div className="mt-4 bg-gray-50 rounded-lg border border-gray-200 p-4 space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-700 mb-1">Client ID *</label>
+                            <input
+                              type="text"
+                              value={oauthForm[p.platform_key]?.client_id || ''}
+                              onChange={(e) => setOauthForm((prev) => ({ ...prev, [p.platform_key]: { ...prev[p.platform_key], client_id: e.target.value } }))}
+                              placeholder={p.configured ? 'Enter to replace…' : 'Paste Client ID…'}
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-700 mb-1">Client Secret</label>
+                            <div className="relative">
+                              <input
+                                type={showSecretFor === p.platform_key ? 'text' : 'password'}
+                                value={oauthForm[p.platform_key]?.client_secret || ''}
+                                onChange={(e) => setOauthForm((prev) => ({ ...prev, [p.platform_key]: { ...prev[p.platform_key], client_secret: e.target.value } }))}
+                                placeholder={p.has_client_secret ? 'Enter to replace…' : 'Paste Client Secret…'}
+                                className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowSecretFor((prev) => prev === p.platform_key ? null : p.platform_key)}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                title={showSecretFor === p.platform_key ? 'Hide' : 'Show'}
+                              >
+                                {showSecretFor === p.platform_key ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id={`enabled-${p.platform_key}`}
+                            checked={oauthForm[p.platform_key]?.enabled ?? false}
+                            onChange={(e) => setOauthForm((prev) => ({ ...prev, [p.platform_key]: { ...prev[p.platform_key], enabled: e.target.checked } }))}
+                            className="rounded border-gray-300"
+                          />
+                          <label htmlFor={`enabled-${p.platform_key}`} className="text-xs text-gray-700">Enable this platform (company admins can connect accounts)</label>
+                        </div>
+                        {oauthSaveMsg?.platform === p.platform_key && (
+                          <div className={`text-xs px-3 py-2 rounded-lg ${oauthSaveMsg.type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                            {oauthSaveMsg.text}
+                          </div>
+                        )}
+                        <div className="flex justify-end">
+                          <button
+                            onClick={() => saveOauthConfig(p.platform_key)}
+                            disabled={savingOauth === p.platform_key}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                          >
+                            <Save className="h-3.5 w-3.5" />
+                            {savingOauth === p.platform_key ? 'Saving…' : 'Save Credentials'}
+                          </button>
+                        </div>
+                        <div className="text-xs text-gray-400 border-t border-gray-200 pt-2">
+                          Credentials are encrypted with AES-256-GCM before storage. Only the first 6 characters of the Client ID are shown after saving.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </div>

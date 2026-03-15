@@ -217,29 +217,13 @@ export default function CampaignPlanning() {
     }
 
     if (mode === 'create') {
-      console.log('Create mode - starting fresh campaign');
-      // Don't load any existing campaign, start fresh
-      setCampaignId(null);
-      setCampaignData({
-        id: '',
-        name: 'New Campaign',
-        timeframe: 'quarter',
-        startDate: '',
-        endDate: '',
-        description: '',
-        goals: []
-      });
-      // Clear any existing campaign data and stop loading
-      setIsLoading(false);
-      console.log('Create mode initialized - campaignId:', null, 'campaignData:', {
-        id: '',
-        name: 'New Campaign',
-        timeframe: 'quarter',
-        startDate: '',
-        endDate: '',
-        description: '',
-        goals: []
-      });
+      // Create mode disabled; redirect to Campaign Planner (canonical creation entry)
+      window.location.href = '/campaign-planner?mode=direct';
+      return;
+    } else if (!existingCampaignId) {
+      // No campaignId and not create mode; redirect to planner
+      window.location.href = '/campaign-planner?mode=direct';
+      return;
     } else if (mode === 'edit') {
       // Edit mode entrypoint removed; send users to campaign details page instead.
       console.warn('Edit mode entrypoint removed, redirecting to campaign details/campaigns');
@@ -2233,6 +2217,7 @@ export default function CampaignPlanning() {
                   <input
                     type="date"
                     value={campaignData.startDate}
+                    min={new Date().toISOString().split('T')[0]}
                     onChange={(e) => setCampaignData({ ...campaignData, startDate: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200"
                   />
@@ -2243,6 +2228,7 @@ export default function CampaignPlanning() {
                   <input
                     type="date"
                     value={campaignData.endDate}
+                    min={campaignData.startDate || new Date().toISOString().split('T')[0]}
                     onChange={(e) => setCampaignData({ ...campaignData, endDate: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200"
                   />

@@ -35,10 +35,9 @@ export default function WeeklyActivityCard({
 }: WeeklyActivityCardProps) {
   const [hover, setHover] = useState(false);
   const borderClass = getExecutionCategoryBorder(activity.execution_mode);
-  const showRepurpose =
-    activity.repurpose_total != null &&
-    activity.repurpose_total > 1 &&
-    activity.repurpose_index != null;
+  const repurposeIndex = activity.repurpose_index ?? 1;
+  const repurposeTotal = activity.repurpose_total ?? 1;
+  const showRepurpose = repurposeTotal >= 1;
 
   return (
     <div
@@ -51,13 +50,21 @@ export default function WeeklyActivityCard({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      {/* Repurpose indicator - top-right */}
+      {/* Repurpose dots - top-right */}
       {showRepurpose && (
         <div
-          className="absolute top-2 right-2 text-xs font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded"
-          aria-label={`Repurpose ${activity.repurpose_index} of ${activity.repurpose_total}`}
+          className="absolute top-2 right-2 inline-flex items-center gap-0.5"
+          aria-label={repurposeTotal === 1 ? 'Unique' : `${repurposeIndex} of ${repurposeTotal}`}
         >
-          {activity.repurpose_index}/{activity.repurpose_total}
+          {Array.from({ length: repurposeTotal }, (_, i) => (
+            <span
+              key={i}
+              className={i < repurposeIndex ? 'text-indigo-500' : 'text-gray-300'}
+              style={{ fontSize: 8 }}
+            >
+              {i < repurposeIndex ? '●' : '○'}
+            </span>
+          ))}
         </div>
       )}
 

@@ -1,12 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../../../../backend/db/supabaseClient';
 import { setToken, TokenObject } from '../../../../backend/auth/tokenStore';
-
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -15,30 +11,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { code, state, error } = req.query;
 
+  function parseState(s: string | undefined): { companyId?: string; returnTo?: string } {
+    if (!s || typeof s !== 'string') return {};
+    const [base, returnTo] = s.split('|');
+    const result: { companyId?: string; returnTo?: string } = {};
+    if (returnTo?.startsWith('/')) result.returnTo = returnTo;
+    if (base.startsWith('c:')) {
+      const parts = base.split(':');
+      if (parts.length >= 2) result.companyId = parts[1];
+    }
+    return result;
+  }
+
+  const { returnTo: earlyReturnTo } = parseState(state as string);
+  const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
+
   if (error) {
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error as string)}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
-    return res.redirect('/creative-scheduler?error=No authorization code received');
+    return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
   try {
     const platform = 'youtube';
-    
-    // Exchange code for access token (YouTube uses Google OAuth)
+    const { companyId, returnTo } = parseState(state as string);
+
+    const credentials = await getOAuthCredentialsForPlatform(platform);
+    if (!credentials?.client_id || !credentials?.client_secret) {
+      return res.redirect(
+        `${errDest}?error=${encodeURIComponent('YouTube OAuth not configured — ask your Super Admin to add credentials.')}`
+      );
+    }
+
     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams({
-        client_id: process.env.YOUTUBE_CLIENT_ID || '',
-        client_secret: process.env.YOUTUBE_CLIENT_SECRET || '',
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001'}/api/auth/youtube/callback`,
+        client_id: credentials.client_id,
+        client_secret: credentials.client_secret,
+        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/youtube/callback`,
         grant_type: 'authorization_code',
         code: code as string,
-      })
+      }),
     });
 
     if (!tokenResponse.ok) {
@@ -65,12 +83,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error('Failed to get YouTube channel info');
     }
 
-    // Get user_id from state
-    const userId = (state as string)?.split('_')[0] || process.env.DEFAULT_USER_ID || '';
-    
+    const { user } = await getSupabaseUserFromRequest(req);
+    const userId = user?.id || process.env.DEFAULT_USER_ID || '';
+
     if (!userId) {
       console.error('No user_id available - cannot save account');
-      return res.redirect(`/creative-scheduler?error=${encodeURIComponent('User session required')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
     }
 
     const accountName = channel.snippet?.title || 'YouTube Channel';
@@ -141,11 +159,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log('✅ YouTube account saved successfully:', { accountId, accountName });
 
-    return res.redirect(`/creative-scheduler?connected=${platform}&account=${encodeURIComponent(accountName)}`);
+    const successDest = returnTo || '/social-platforms';
+    const sep = successDest.includes('?') ? '&' : '?';
+    return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('YouTube OAuth callback error:', error);
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error.message)}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
 

@@ -1,7 +1,7 @@
 export {};
 
 async function main() {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line
   const { runCampaignAiPlan } = require('../backend/services/campaignAiOrchestrator');
   const campaignId = process.argv[2];
   if (!campaignId) {

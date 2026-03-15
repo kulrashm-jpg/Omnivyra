@@ -43,6 +43,17 @@ function normalizePlatformKey(raw: string): string {
   return n;
 }
 
+function resolveCrossPlatformSharing(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.enabled === 'boolean') return obj.enabled;
+    if (obj.enabled === undefined && (obj as any).mode === 'unique') return false;
+  }
+  return true;
+}
+
 /**
  * Derive platform_content_requests from a blueprint (first week with data).
  * Used to validate strategy blueprints when explicit platform_content_requests is not provided.
@@ -127,9 +138,7 @@ export function validateCapacityAndFrequency(
     }
   }
 
-  const sharingEnabled = input.cross_platform_sharing != null
-    ? Boolean((input.cross_platform_sharing as any)?.enabled ?? input.cross_platform_sharing)
-    : false;
+  const sharingEnabled = resolveCrossPlatformSharing(input.cross_platform_sharing);
   const repurposingEnabled = input.content_repurposing != null
     ? Boolean((input.content_repurposing as any)?.enabled ?? input.content_repurposing)
     : sharingEnabled;
@@ -157,9 +166,7 @@ export function validateCapacityAndFrequency(
       available_content_total: result.available_content_total,
       effective_capacity_total: result.effective_capacity_total,
       exclusive_campaigns_total: result.exclusive_campaigns_total,
-      cross_platform_sharing: input.cross_platform_sharing != null
-        ? Boolean((input.cross_platform_sharing as any)?.enabled ?? input.cross_platform_sharing)
-        : false,
+      cross_platform_sharing: input.cross_platform_sharing,
       campaign_intent: input.campaign_intent ?? undefined,
       content_types: input.content_types ?? undefined,
     });

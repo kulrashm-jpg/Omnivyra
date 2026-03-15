@@ -29,6 +29,10 @@ import { getCachedStrategyProfile } from '../../../backend/services/strategyProf
 import { getLatestCampaignVersionByCampaignId } from '../../../backend/db/campaignVersionStore';
 import type { CampaignBlueprintWeek, WeeklyTopicWritingBrief } from '../../../backend/types/CampaignBlueprint';
 import { filterBoltContentTypeMix } from '../../../backend/utils/boltTextContentConfig';
+import {
+  getExecutionCategoryForContentType,
+  executionCategoryToAiGenerated,
+} from '../../../backend/services/plannerActivityCardService';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -1048,13 +1052,17 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         });
         executionValidationItems.push(enriched);
 
+        const contentType = String((validated.dailyItem as any)?.contentType || item.contentType || 'post');
+        const execCategory = getExecutionCategoryForContentType(contentType);
+        const aiGenerated = executionCategoryToAiGenerated(execCategory);
+
         const row = {
           campaign_id: campaignId,
           week_number: weekNumber,
           day_of_week: dayName,
           date,
           platform: normalizePlatformKey(platform),
-          content_type: String((validated.dailyItem as any)?.contentType || item.contentType || 'post'),
+          content_type: contentType,
           title: item.topicTitle,
           content: JSON.stringify(enriched),
           topic: item.topicTitle,
@@ -1068,7 +1076,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           posting_strategy: `Week ${weekNumber} Day ${item.dayIndex} — ${item.topicReference}`,
           status: 'planned',
           priority: 'medium',
-          ai_generated: false,
+          ai_generated: aiGenerated,
           target_audience: item.whoAreWeWritingFor,
         };
         rowsWithContent.push({ row, contentObj: enriched });
@@ -1301,10 +1309,18 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     }
 
   if (allRowsToInsert.length > 0) {
-    const { error: insertError } = await supabase.from('daily_content_plans').insert(allRowsToInsert);
-    if (insertError) {
-      console.error('Error saving daily plans:', insertError);
-      throw new Error('Failed to save daily plans');
+    const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
+    const byWeek = new Map<number, typeof allRowsToInsert>();
+    for (const row of allRowsToInsert) {
+      const wn = Number((row as { week_number?: number })?.week_number) || 1;
+      if (!byWeek.has(wn)) byWeek.set(wn, []);
+      byWeek.get(wn)!.push(row);
+    }
+    for (const [wn, rows] of byWeek) {
+      await saveWeekPlans(campaignId, wn, rows as any, 'blueprint');
+    }
+    if (process.env.NODE_ENV !== 'test') {
+      console.log('[EXECUTION_ENGINE] source=blueprint saveWeekPlans completed', { campaignId, weeks: [...byWeek.keys()], totalRows: allRowsToInsert.length });
     }
   }
 
@@ -1336,6 +1352,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const result = await generateWeeklyStructure((req.body || {}) as GenerateWeeklyStructureInput);
     return res.status(200).json(result);
   } catch (error) {
+    const err = error as { code?: string };
+    if (err?.code === 'WEEK_EXECUTION_LOCKED') {
+      return res.status(423).json({ error: 'WEEK_EXECUTION_LOCKED', message: 'Week is executing; regeneration blocked.' });
+    }
     console.error('Error in generate weekly structure API:', error);
     const msg = error instanceof Error ? error.message : 'Internal server error';
     return res.status(500).json({ error: msg });

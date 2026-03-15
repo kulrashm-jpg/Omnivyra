@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { getCommunityAiActionById } from '../../../../backend/db/communityAiActionStore';
 import { enforceActionRole, requireTenantScope } from '../utils';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
 import { executeAction } from '../../../../backend/services/communityAiActionExecutor';
@@ -45,11 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'APPROVAL_REQUIRED' });
   }
 
-  const { data: action, error } = await supabase
-    .from('community_ai_actions')
-    .select('*')
-    .eq('id', actionId)
-    .single();
+  const { data: action, error } = await getCommunityAiActionById(actionId);
 
   if (error || !action) {
     return res.status(404).json({ error: 'ACTION_NOT_FOUND' });
@@ -87,10 +84,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const validation = validateActionAgainstPlaybook(
     {
-      action_type: action.action_type,
+      action_type: action.action_type as 'like' | 'reply' | 'schedule' | 'follow' | 'share',
       text: finalText,
       execution_mode: executionMode,
-      risk_level: action.risk_level,
+      risk_level: action.risk_level as 'high' | 'medium' | 'low',
     },
     playbook,
     null
@@ -129,13 +126,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tenant_id: action.tenant_id,
       organization_id: action.organization_id,
       platform: action.platform,
-      action_type: action.action_type,
+      action_type: action.action_type as 'like' | 'reply' | 'schedule' | 'follow' | 'share',
       target_id: action.target_id,
       suggested_text: finalText,
       playbook_id: action.playbook_id,
       requires_approval: action.requires_approval,
       requires_human_approval: action.requires_human_approval,
-      risk_level: action.risk_level,
+      risk_level: action.risk_level as 'high' | 'medium' | 'low',
       execution_mode: executionMode,
       tone_used: action.tone_used,
     },

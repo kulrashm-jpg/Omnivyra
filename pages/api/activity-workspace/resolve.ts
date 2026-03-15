@@ -156,6 +156,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       'Untitled';
     const master_content_id = (raw as any)?.master_content_id ?? (dailyExecutionItem as any)?.master_content_id;
     const creator_card = (raw as any)?.creator_card ?? (dailyExecutionItem as any)?.creator_card;
+    let creator_asset = (raw as any)?.creator_asset ?? (dailyExecutionItem as any)?.creator_asset;
+    let content_status = (raw as any)?.content_status ?? (dailyExecutionItem as any)?.content_status;
+    const { data: dailyPlanRow } = await supabase
+      .from('daily_content_plans')
+      .select('creator_asset, content_status')
+      .eq('campaign_id', campaignId)
+      .eq('execution_id', targetExecId)
+      .maybeSingle();
+    if (dailyPlanRow?.creator_asset != null) {
+      creator_asset = dailyPlanRow.creator_asset;
+    }
+    if (dailyPlanRow?.content_status != null) {
+      content_status = dailyPlanRow.content_status;
+    }
     const distribution_strategy = (found.week as any)?.distribution_strategy ?? null;
     const distribution_reason = (found.week as any)?.distribution_reason ?? null;
     const planning_adjustment_reason = (found.week as any)?.planning_adjustment_reason ?? null;
@@ -192,6 +206,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...dailyExecutionItem,
         ...(master_content_id != null ? { master_content_id } : {}),
         ...(creator_card != null && typeof creator_card === 'object' ? { creator_card } : {}),
+        ...(creator_asset != null && typeof creator_asset === 'object' ? { creator_asset } : {}),
+        ...(content_status != null ? { content_status } : {}),
       },
       schedules: [],
       ...(master_content_id != null ? { master_content_id } : {}),

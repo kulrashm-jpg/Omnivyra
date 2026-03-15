@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { getCompanyClusters } from '../../../backend/services/companyIntelligenceService';
+import { formatForUserOutput } from '../../../backend/utils/refineUserFacingResponse';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -19,7 +20,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const skipCache = String(req.query.skipCache ?? '').toLowerCase() === 'true';
 
     const clusters = await getCompanyClusters(companyId, { windowHours, skipCache });
-    return res.status(200).json({ clusters });
+    const refined = await formatForUserOutput({ clusters });
+    return res.status(200).json(refined);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to fetch company clusters';
     console.error('[company-intelligence/clusters]', message);

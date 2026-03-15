@@ -5,7 +5,7 @@
 
 import { evaluateCampaignDuration } from './HorizonConstraintEvaluator';
 import type { DurationEvaluationResult } from '../types/CampaignDuration';
-import { supabase } from '../db/supabaseClient';
+import { getCampaignById } from '../db/campaignStore';
 import { listAssetsWithLatestContent } from '../db/contentAssetStore';
 import { getLatestCampaignVersion } from '../db/campaignVersionStore';
 import { getProfile } from './companyProfileService';
@@ -83,10 +83,10 @@ export async function runPrePlanning(input: PrePlanningInput): Promise<DurationE
     listAssetsWithLatestContent({ campaignId }),
     getLatestCampaignVersion(companyId, campaignId),
     getProfile(companyId, { autoRefine: false, languageRefine: true }),
-    supabase.from('campaigns').select('id, budget, start_date, end_date, priority_level, execution_status, blueprint_status, duration_locked').eq('id', campaignId).maybeSingle(),
+    getCampaignById<{ id: string; budget?: number; start_date?: string; end_date?: string; priority_level?: string; execution_status?: string; blueprint_status?: string; duration_locked?: boolean }>(campaignId, 'id, budget, start_date, end_date, priority_level, execution_status, blueprint_status, duration_locked'),
   ]);
 
-  const campaignRow = campaignResult?.data;
+  const campaignRow = campaignResult;
   const existing_content_count = contentAssets?.length ?? 0;
 
   const snapshot = campaignVersion?.campaign_snapshot;

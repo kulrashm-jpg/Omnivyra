@@ -23,14 +23,14 @@ export interface AnalyzeWeeklyDistributionOptions {
 
 type WeekPlan = Record<string, unknown>;
 
-const PLATFORM_FREQUENCY_LIMITS: Record<string, number> = {
+export const PLATFORM_FREQUENCY_LIMITS: Record<string, number> = {
   linkedin: 5,
   twitter: 10,
   x: 10,
   default: 15,
 };
 
-const CONTENT_TYPE_FREQUENCY_LIMITS: Record<string, number> = {
+export const CONTENT_TYPE_FREQUENCY_LIMITS: Record<string, number> = {
   blog: 3,
 };
 

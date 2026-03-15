@@ -9,7 +9,8 @@ export type BalanceWorkloadInput = {
   weekly_capacity_total: number;
   available_content_total: number;
   effective_capacity_total?: number;
-  cross_platform_sharing?: boolean | null;
+  /** { enabled: boolean } or boolean. undefined → shared mode (true). */
+  cross_platform_sharing?: { enabled?: boolean } | boolean | null;
   campaign_intent?: string | null;
   content_types?: string[] | null;
   exclusive_campaigns_total?: number;
@@ -37,6 +38,17 @@ const CONTENT_TYPE_PRIORITY: Record<string, number> = {
 function priority(contentType: string): number {
   const key = String(contentType ?? '').trim().toLowerCase();
   return CONTENT_TYPE_PRIORITY[key] ?? 1;
+}
+
+function resolveCrossPlatformSharingEnabled(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.enabled === 'boolean') return obj.enabled;
+    if (obj.enabled === undefined && (obj as any).mode === 'unique') return false;
+  }
+  return true;
 }
 
 function normalizePlatformKey(raw: string): string {
@@ -123,7 +135,7 @@ export function balanceWorkload(input: BalanceWorkloadInput): BalanceWorkloadRes
     input.effective_capacity_total ??
     Math.max(0, (input.weekly_capacity_total ?? 0) - (input.exclusive_campaigns_total ?? 0));
   const supply = (input.available_content_total ?? 0) + supplyTotal;
-  const sharingEnabled = Boolean(input.cross_platform_sharing);
+  const sharingEnabled = resolveCrossPlatformSharingEnabled(input.cross_platform_sharing);
   const originalTotal = computeUniqueTotal(rows, sharingEnabled);
   if (originalTotal <= 0) return null;
   if (supply <= 0) return null;

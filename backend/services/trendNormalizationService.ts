@@ -44,6 +44,8 @@ const normalizeString = (value: any) => String(value || '').trim();
 
 export const normalizeYouTubeTrends = (raw: any, ctx: NormalizationContext = {}): TrendSignal[] => {
   const items = Array.isArray(raw?.items) ? raw.items : [];
+  const source = ctx.sourceName || 'YouTube';
+  const confidence = 0.8;
   return items
     .map((item: any) => {
       const title = normalizeString(item?.snippet?.title || item?.title);
@@ -55,13 +57,13 @@ export const normalizeYouTubeTrends = (raw: any, ctx: NormalizationContext = {})
         ? item.viewCount
         : undefined;
       return {
-        source: ctx.sourceName || 'YouTube',
+        source,
         title,
         description,
         volume,
         geo: ctx.geo,
         category: ctx.category,
-        confidence: computeConfidence({ sourceName: ctx.sourceName, health: ctx.health, volume }),
+        confidence,
         raw: item,
       };
     })
@@ -70,6 +72,8 @@ export const normalizeYouTubeTrends = (raw: any, ctx: NormalizationContext = {})
 
 export const normalizeNewsApiTrends = (raw: any, ctx: NormalizationContext = {}): TrendSignal[] => {
   const articles = Array.isArray(raw?.articles) ? raw.articles : [];
+  const source = ctx.sourceName || 'NewsAPI';
+  const confidence = 0.7;
   const totalResults = typeof raw?.totalResults === 'number' ? raw.totalResults : undefined;
   return articles
     .map((article: any) => {
@@ -78,52 +82,91 @@ export const normalizeNewsApiTrends = (raw: any, ctx: NormalizationContext = {})
       const description = normalizeString(article?.description || article?.content);
       const volume = totalResults;
       return {
-        source: ctx.sourceName || 'NewsAPI',
+        source,
         title,
         description,
         volume,
         geo: ctx.geo,
         category: ctx.category,
-        confidence: computeConfidence({ sourceName: ctx.sourceName, health: ctx.health, volume }),
+        confidence,
         raw: article,
       };
     })
     .filter(Boolean) as TrendSignal[];
 };
 
+/**
+ * Google Trends RSS — after RSS→JSON conversion: response.rss.channel[0].item[]
+ */
+export const normalizeGoogleTrendsRss = (raw: any, ctx: NormalizationContext = {}): TrendSignal[] => {
+  const source = ctx.sourceName || 'GoogleTrends';
+  const confidence = 0.75;
+  const channel = raw?.rss?.channel;
+  const channelObj = Array.isArray(channel) ? channel[0] : channel;
+  const items = Array.isArray(channelObj?.item) ? channelObj.item : [];
+  const signals = items
+    .map((item: any) => {
+      const title = normalizeString(item?.title);
+      if (!title) return null;
+      const description = normalizeString(item?.description || item?.link || '');
+      return {
+        source,
+        title,
+        description,
+        geo: ctx.geo,
+        category: ctx.category,
+        confidence,
+        raw: item,
+      };
+    })
+    .filter(Boolean) as TrendSignal[];
+  if (signals.length > 0) {
+    console.log('[normalize] google trends signals extracted', { count: signals.length });
+  }
+  return signals;
+};
+
 export const normalizeRedditTrends = (raw: any, ctx: NormalizationContext = {}): TrendSignal[] => {
   const children = Array.isArray(raw?.data?.children) ? raw.data.children : [];
-  return children
+  const source = ctx.sourceName || 'Reddit';
+  const confidence = 0.65;
+  const signals = children
     .map((item: any) => {
-      const data = item?.data || item;
-      const title = normalizeString(data?.title || data?.name);
+      const post = item?.data || item;
+      const title = normalizeString(post?.title || post?.name);
       if (!title) return null;
-      const description = normalizeString(data?.subreddit || data?.selftext || '');
-      const volume = typeof data?.score === 'number'
-        ? data.score
-        : typeof data?.ups === 'number'
-        ? data.ups
-        : typeof data?.upvotes === 'number'
-        ? data.upvotes
-        : undefined;
+      const description = normalizeString(post?.subreddit || post?.selftext || '');
+      const volume =
+        typeof post?.score === 'number'
+          ? post.score
+          : typeof post?.ups === 'number'
+            ? post.ups
+            : typeof post?.upvotes === 'number'
+              ? post.upvotes
+              : undefined;
       return {
-        source: ctx.sourceName || 'Reddit',
+        source,
         title,
         description,
         volume,
         geo: ctx.geo,
         category: ctx.category,
-        confidence: computeConfidence({ sourceName: ctx.sourceName, health: ctx.health, volume }),
-        raw: data,
+        confidence,
+        raw: post,
       };
     })
     .filter(Boolean) as TrendSignal[];
+  if (signals.length > 0) {
+    console.log('[normalize] reddit signals extracted', { count: signals.length });
+  }
+  return signals;
 };
 
 const extractGenericList = (raw: any): any[] => {
   if (Array.isArray(raw)) return raw;
   if (Array.isArray(raw?.items)) return raw.items;
   if (Array.isArray(raw?.results)) return raw.results;
+  if (Array.isArray(raw?.organic_results)) return raw.organic_results;
   if (Array.isArray(raw?.data?.items)) return raw.data.items;
   if (Array.isArray(raw?.data)) return raw.data;
   return [];
@@ -131,15 +174,17 @@ const extractGenericList = (raw: any): any[] => {
 
 export const normalizeGenericTrends = (raw: any, ctx: NormalizationContext = {}): TrendSignal[] => {
   const items = extractGenericList(raw);
+  const source = ctx.sourceName || 'GenericAPI';
+  const confidence = 0.5;
   return items
     .map((item: any) => {
       const title = normalizeString(
         item?.title ||
           item?.name ||
-          item?.topic ||
           item?.query ||
-          item?.term ||
+          item?.topic ||
           item?.keyword ||
+          item?.term ||
           item?.headline
       );
       if (!title) return null;
@@ -155,17 +200,13 @@ export const normalizeGenericTrends = (raw: any, ctx: NormalizationContext = {})
           ? item.views
           : undefined;
       return {
-        source: ctx.sourceName || 'External API',
+        source,
         title,
         description,
         volume: volumeCandidate,
         geo: ctx.geo,
         category: ctx.category,
-        confidence: computeConfidence({
-          sourceName: ctx.sourceName,
-          health: ctx.health,
-          volume: volumeCandidate,
-        }),
+        confidence,
         raw: item,
       };
     })
@@ -173,6 +214,8 @@ export const normalizeGenericTrends = (raw: any, ctx: NormalizationContext = {})
 };
 
 export const normalizeSerpApiTrends = (raw: any, ctx: NormalizationContext = {}): TrendSignal[] => {
+  const source = ctx.sourceName || 'SerpAPI';
+  const confidence = 0.6;
   const trendResults = Array.isArray(raw?.trend_results)
     ? raw.trend_results
     : Array.isArray(raw?.related_queries)
@@ -183,18 +226,18 @@ export const normalizeSerpApiTrends = (raw: any, ctx: NormalizationContext = {})
     : [];
   const fromTrendResults = trendResults
     .map((item: any) => {
-      const title = normalizeString(item?.query || item?.topic || item?.title);
+      const title = normalizeString(item?.query || item?.title || item?.keyword || item?.topic);
       if (!title) return null;
       const description = normalizeString(item?.description || '');
       const volume = typeof item?.value === 'number' ? item.value : undefined;
       return {
-        source: ctx.sourceName || 'SerpAPI',
+        source,
         title,
         description,
         volume,
         geo: ctx.geo,
         category: ctx.category,
-        confidence: computeConfidence({ sourceName: ctx.sourceName, health: ctx.health, volume }),
+        confidence,
         raw: item,
       };
     })
@@ -204,18 +247,20 @@ export const normalizeSerpApiTrends = (raw: any, ctx: NormalizationContext = {})
 
   return timeline
     .map((item: any) => {
-      const title = normalizeString(item?.formattedTime || item?.time || item?.date);
+      const title = normalizeString(
+        item?.query || item?.keyword || item?.topic || item?.title || item?.formattedTime || item?.time || item?.date
+      );
       if (!title) return null;
-      const description = normalizeString(item?.topic || item?.title || '');
+      const description = normalizeString(item?.topic || item?.title || item?.description || '');
       const volume = Array.isArray(item?.value) ? Number(item.value[0]) : item?.value;
       return {
-        source: ctx.sourceName || 'SerpAPI',
+        source,
         title,
         description,
         volume: typeof volume === 'number' ? volume : undefined,
         geo: ctx.geo,
         category: ctx.category,
-        confidence: computeConfidence({ sourceName: ctx.sourceName, health: ctx.health, volume }),
+        confidence,
         raw: item,
       };
     })
@@ -236,13 +281,38 @@ export const normalizeExternalTrends = (input: {
     sourceName,
     health: input.health,
   };
+  const payload = input.payload;
   const normalizedName = sourceName.toLowerCase();
-  if (normalizedName.includes('youtube')) return normalizeYouTubeTrends(input.payload, context);
-  if (normalizedName.includes('news')) return normalizeNewsApiTrends(input.payload, context);
-  if (normalizedName.includes('reddit')) return normalizeRedditTrends(input.payload, context);
-  if (normalizedName.includes('serp') || normalizedName.includes('google'))
-    return normalizeSerpApiTrends(input.payload, context);
-  return normalizeGenericTrends(input.payload, context);
+
+  // Structure-based detection (before source name)
+  if (payload && typeof payload === 'object' && payload.rss?.channel) {
+    const signals = normalizeGoogleTrendsRss(payload, context);
+    if (signals.length > 0) return signals;
+  }
+  if (payload && typeof payload === 'object' && Array.isArray(payload.data?.children)) {
+    const signals = normalizeRedditTrends(payload, context);
+    if (signals.length > 0) return signals;
+  }
+
+  // Source name-based detection
+  let signals: TrendSignal[] = [];
+  if (normalizedName.includes('youtube')) {
+    signals = normalizeYouTubeTrends(payload, context);
+  } else if (normalizedName.includes('news')) {
+    signals = normalizeNewsApiTrends(payload, context);
+  } else if (normalizedName.includes('reddit')) {
+    signals = normalizeRedditTrends(payload, context);
+  } else if (normalizedName.includes('serp') || normalizedName.includes('google')) {
+    signals = normalizeSerpApiTrends(payload, context);
+  } else if (normalizedName.includes('google')) {
+    signals = normalizeGoogleTrendsRss(payload, context);
+  } else {
+    signals = normalizeGenericTrends(payload, context);
+  }
+  if (signals.length === 0) {
+    signals = normalizeGenericTrends(payload, { ...context, sourceName: sourceName || 'GenericAPI' });
+  }
+  return signals;
 };
 
 export const normalizeTrends = (
@@ -263,5 +333,18 @@ export const normalizeTrends = (
       category: result.category,
     })
   );
-  return normalized.filter((item) => item.title);
+  const filtered = (normalized ?? []).filter((item) => item && item.title);
+  const sourceNames = rawResults.map((r) => r.source?.name ?? r.source?.id ?? 'unknown').join(', ');
+  if (filtered.length === 0) {
+    const payloadHints = rawResults.map((r) => {
+      if (!r.payload) return 'null';
+      if (Array.isArray(r.payload)) return `array[${r.payload.length}]`;
+      if (typeof r.payload === 'object') return `keys:${Object.keys(r.payload).slice(0, 5).join(',')}`;
+      return typeof r.payload;
+    });
+    console.log('[normalize] no signals extracted', { sources: sourceNames || 'none', payloadHints });
+  } else {
+    console.log('[normalize] signals extracted', { count: filtered.length, sources: sourceNames });
+  }
+  return filtered;
 };

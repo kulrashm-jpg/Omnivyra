@@ -31,6 +31,7 @@ import {
   type PrimaryCampaignTypeId,
   type SecondaryOptionId,
 } from '../../../lib/campaignTypeHierarchy';
+import { TARGET_AUDIENCE_CATEGORIES, PROFESSIONAL_SEGMENTS } from '../../../lib/audienceCategories';
 
 const TYPE = 'TREND';
 
@@ -86,6 +87,8 @@ export type StrategicPayload = {
   company_context: Record<string, unknown>;
   selected_offerings: string[];
   selected_aspect: string | null;
+  /** Multiple aspects; treated as OR (recommendations match any). */
+  selected_aspects?: string[];
   strategic_text: string;
   strategic_intents?: string[];
   regions?: string[];
@@ -227,12 +230,16 @@ type StrategyStatusForProgress = 'continuation' | 'expansion' | 'neutral' | 'mom
 function getProgressAdjustment(
   card: { id: string; recommendation: Record<string, unknown> },
   strategyStatus: StrategyStatusForProgress,
-  longTermEngineIds: Set<string>
+  longTermSource: Set<string> | Record<string, string>
 ): { adjustment: number; resurfaced: boolean } {
   let adjustment = 0;
   let resurfaced = false;
   const rec = card.recommendation ?? {};
-  const isLongTerm = longTermEngineIds.has(card.id);
+  const recId = typeof rec.id === 'string' ? rec.id.trim() : null;
+  const isLongTerm =
+    typeof longTermSource === 'object' && !(longTermSource instanceof Set)
+      ? !!(recId && longTermSource[recId] === 'LONG_TERM')
+      : longTermSource.has(card.id);
   const isContinuationOrExpansion =
     strategyStatus === 'continuation' || strategyStatus === 'expansion';
 
@@ -359,7 +366,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [focusedModules, setFocusedModules] = useState<FocusModule[]>([]);
   const [additionalDirection, setAdditionalDirection] = useState('');
   const [clusterInputs, setClusterInputs] = useState<ClusterInput[] | undefined>(undefined);
-  const [selectedAspect, setSelectedAspect] = useState<string | null>(null);
+  const [selectedAspects, setSelectedAspects] = useState<string[]>([]);
   const [selectedFacets, setSelectedFacets] = useState<string[]>([]);
   const [strategicText, setStrategicText] = useState('');
   /** Campaign focus: one primary, optional secondaries (hierarchical). */
@@ -394,6 +401,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const pulseBridgeConsumedRef = useRef(false);
   const regionInputRef = useRef<HTMLInputElement>(null);
   const themesSectionRef = useRef<HTMLDivElement>(null);
+  const firstCardRef = useRef<HTMLDivElement | null>(null);
   const prevSubmittingRef = useRef(false);
   const [regionDropdownOpen, setRegionDropdownOpen] = useState(false);
   const [strategicConfig, setStrategicConfig] = useState<{
@@ -405,9 +413,9 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [generatedEngineRecommendations, setGeneratedEngineRecommendations] = useState<
     Array<Record<string, unknown>>
   >([]);
-  const [archivedEngineIds, setArchivedEngineIds] = useState<Set<string>>(new Set());
   const [strategyStatusPayload, setStrategyStatusPayload] = useState<StrategyStatusPayload | null>(null);
-  const [longTermEngineIds, setLongTermEngineIds] = useState<Set<string>>(new Set());
+  /** Recommendation snapshot id -> state (ACTIVE | ARCHIVED | LONG_TERM). From API + optimistic updates. */
+  const [recommendationUserStateMap, setRecommendationUserStateMap] = useState<Record<string, string>>({});
   /** Recommendation snapshot IDs already used by this company to create a campaign (hide from list). */
   const [usedRecommendationIds, setUsedRecommendationIds] = useState<Set<string>>(new Set());
   /** Campaign created when user clicked "Generate Strategic Themes"; card is saved to this campaign when they click "Build Campaign Blueprint". */
@@ -432,6 +440,8 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   /** Used for confidence meter soft fade (0.85 → 1 when concentration changes). */
   const [meterReveal, setMeterReveal] = useState(false);
   const prevConcentrationRef = useRef<number | undefined>(undefined);
+  /** Intelligence source for campaign generation: hybrid (default), api, or llm. */
+  const [insightSource, setInsightSource] = useState<'hybrid' | 'api' | 'llm'>('hybrid');
   /** Strategy history for journey badges (continuation/expansion); only set when campaigns_count > 0. */
   const [strategyHistory, setStrategyHistory] = useState<{
     campaigns_count: number;
@@ -513,12 +523,12 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   }, [engineRecommendationSource]);
   const visibleEngineCards = useMemo(() => {
     return engineRecommendationCards.filter((c) => {
-      if (archivedEngineIds.has(c.id)) return false;
       const snapshotId = typeof c.recommendation?.id === 'string' ? c.recommendation.id.trim() : '';
+      if (snapshotId && recommendationUserStateMap[snapshotId] === 'ARCHIVED') return false;
       if (snapshotId && usedRecommendationIds.has(snapshotId)) return false;
       return true;
     });
-  }, [engineRecommendationCards, archivedEngineIds, usedRecommendationIds]);
+  }, [engineRecommendationCards, recommendationUserStateMap, usedRecommendationIds]);
 
   /** Cards with effective strategyStatus; sorted by mode (continue → continuation first, expand → expansion first, balanced → original order). */
   const visibleEngineCardsWithStatus = useMemo(() => {
@@ -530,7 +540,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
           ? card.recommendation.aspect
           : (typeof card.recommendation?.selected_aspect === 'string' && card.recommendation.selected_aspect.trim())
             ? card.recommendation.selected_aspect
-            : selectedAspect ?? '';
+            : selectedAspects[0] ?? '';
       if (!aspect) return 'neutral';
       const momentum = strategyHistory!.strategy_momentum;
       const rawContinuation = strategyHistory!.dominant_aspects.includes(aspect);
@@ -566,7 +576,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
       });
     }
     return withStatus;
-  }, [visibleEngineCards, strategyHistory, strategyGuidanceMode, selectedAspect]);
+  }, [visibleEngineCards, strategyHistory, strategyGuidanceMode, selectedAspects]);
 
   /** Ranked list: strategic score + progress adjustment, stable sort. Top 2 get isTopPriority; resurfaced get label. */
   const rankedEngineCardsWithStatus = useMemo(() => {
@@ -575,7 +585,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
       const { adjustment, resurfaced } = getProgressAdjustment(
         item.card,
         item.strategyStatus,
-        longTermEngineIds
+        recommendationUserStateMap
       );
       return {
         ...item,
@@ -595,7 +605,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
       isTopPriority: index < 2,
       resurfaced: item.resurfaced,
     }));
-  }, [visibleEngineCardsWithStatus, longTermEngineIds]);
+  }, [visibleEngineCardsWithStatus, recommendationUserStateMap]);
 
   /** List-level strategic flow + workspace signals. Narrative only; no backend. */
   const workspaceSummaryData = useMemo(() => {
@@ -791,7 +801,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
 
   useEffect(() => {
     setValidationError(null);
-  }, [contextMode, selectedAspect, selectedFacets, strategicText, primaryCampaignType, secondaryCampaignTypes]);
+  }, [contextMode, selectedAspects, selectedFacets, strategicText, primaryCampaignType, secondaryCampaignTypes]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || pulseBridgeConsumedRef.current) return;
@@ -849,14 +859,20 @@ Generate strategic campaign pillars to capture this demand.`;
     setStrategicText(template);
   }, [router.query?.cluster_payload, router.isReady]);
 
+  // After generation: scroll to top two cards (or results section when empty)
   useEffect(() => {
     const wasSubmitting = prevSubmittingRef.current;
     prevSubmittingRef.current = isSubmitting;
-    if (wasSubmitting && !isSubmitting && hasRun && visibleEngineCards.length > 0) {
-      requestAnimationFrame(() => {
-        themesSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    }
+    if (!wasSubmitting || isSubmitting || !hasRun) return;
+    requestAnimationFrame(() => {
+      if (visibleEngineCards.length > 0) {
+        // Hop to first card so top two are visible
+        firstCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else {
+        // Empty result: scroll to cards section so user sees the empty state
+        (cardsSectionRef.current ?? document.getElementById('recommendation-cards'))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
   }, [isSubmitting, hasRun, visibleEngineCards.length]);
 
   // When opening with #cards (e.g. from Content Architect hub), scroll to recommendation cards section
@@ -883,6 +899,18 @@ Generate strategic campaign pillars to capture this demand.`;
       .catch(() => setJobHistory([]))
       .finally(() => setHistoryLoading(false));
   }, [historyDrawerOpen, companyId, fetchWithAuth]);
+
+  useEffect(() => {
+    if (!companyId || !fetchWithAuth) {
+      setRecommendationUserStateMap({});
+      return;
+    }
+    fetchWithAuth(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`)
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((data) => (typeof data === 'object' && data !== null ? data : {}))
+      .then(setRecommendationUserStateMap)
+      .catch(() => setRecommendationUserStateMap({}));
+  }, [companyId, fetchWithAuth]);
 
   useEffect(() => {
     if (!companyId) {
@@ -1002,12 +1030,16 @@ Generate strategic campaign pillars to capture this demand.`;
   const aspects = strategicConfig?.strategic_aspects ?? [];
   const aspectOfferingsMap = strategicConfig?.aspect_offerings_map ?? strategicConfig?.offerings_by_aspect ?? {};
 
-  // Offerings shown only after aspect selection (offerings_by_aspect[selected_aspect]).
+  // Offerings from all selected aspects (OR: union of offerings).
   const offeringsForSelectedAspect = useMemo(() => {
-    if (!selectedAspect) return [];
-    const ids = aspectOfferingsMap[selectedAspect];
-    return Array.isArray(ids) ? ids : [];
-  }, [selectedAspect, aspectOfferingsMap]);
+    if (selectedAspects.length === 0) return [];
+    const seen = new Set<string>();
+    for (const aspect of selectedAspects) {
+      const ids = aspectOfferingsMap[aspect];
+      if (Array.isArray(ids)) ids.forEach((id) => seen.add(id));
+    }
+    return Array.from(seen);
+  }, [selectedAspects, aspectOfferingsMap]);
 
   const offeringFacetCards = useMemo(() => {
     return offeringsForSelectedAspect.map((id: string) => {
@@ -1016,14 +1048,17 @@ Generate strategic campaign pillars to capture this demand.`;
     });
   }, [offeringsForSelectedAspect]);
 
-  // When aspect changes, keep only selected facets that belong to the new aspect.
+  // When aspects change, keep only facets that belong to any selected aspect.
   useEffect(() => {
-    if (!selectedAspect || selectedFacets.length === 0) return;
-    const allowed = aspectOfferingsMap[selectedAspect];
-    if (!allowed || allowed.length === 0) return;
-    const next = selectedFacets.filter((id) => allowed.includes(id));
+    if (selectedAspects.length === 0 || selectedFacets.length === 0) return;
+    const allowed = new Set<string>();
+    for (const aspect of selectedAspects) {
+      const ids = aspectOfferingsMap[aspect];
+      if (Array.isArray(ids)) ids.forEach((id) => allowed.add(id));
+    }
+    const next = selectedFacets.filter((id) => allowed.has(id));
     if (next.length !== selectedFacets.length) setSelectedFacets(next);
-  }, [selectedAspect, aspectOfferingsMap]);
+  }, [selectedAspects, aspectOfferingsMap]);
 
   const buildStrategicPayload = async (): Promise<StrategicPayload> => {
     const profile = await fetchProfile();
@@ -1043,7 +1078,8 @@ Generate strategic campaign pillars to capture this demand.`;
       context_mode: contextMode,
       company_context: companyContext,
       selected_offerings: selectedFacets,
-      selected_aspect: selectedAspect,
+      selected_aspect: selectedAspects[0] ?? null,
+      selected_aspects: selectedAspects.length > 0 ? selectedAspects : undefined,
       strategic_text: strategicText,
       strategic_intents: campaignFocusLabels.length > 0 ? campaignFocusLabels : undefined,
       regions: regions.length > 0 ? regions : undefined,
@@ -1079,7 +1115,7 @@ Generate strategic campaign pillars to capture this demand.`;
 
   const isValid = (): boolean => {
     if (contextMode !== 'NONE') return !!companyId;
-    return !!(additionalDirection.trim() || selectedAspect || selectedFacets.length >= 1 || strategicText.trim() || (clusterInputs && clusterInputs.length > 0));
+    return !!(additionalDirection.trim() || selectedAspects.length >= 1 || selectedFacets.length >= 1 || strategicText.trim() || (clusterInputs && clusterInputs.length > 0));
   };
 
   const requiredExecutionFields = useMemo(() => {
@@ -1183,6 +1219,7 @@ Generate strategic campaign pillars to capture this demand.`;
           durationWeeks: durationFromExec,
           ...(regionList.length > 0 ? { regions: regionList } : {}),
           strategicPayload: payload,
+          insight_source: insightSource,
         }),
       });
       if (!recRes.ok) {
@@ -1291,7 +1328,7 @@ Generate strategic campaign pillars to capture this demand.`;
         return { type: 'warning', text: 'Please provide research direction when using No Company Context.' };
       const parts: React.ReactNode[] = [];
       if (additionalDirection.trim()) parts.push(<span key="dir">• Research direction: &quot;{additionalDirection.slice(0, 80)}{additionalDirection.length > 80 ? '…' : ''}&quot;</span>);
-      if (selectedAspect) parts.push(<span key="aspect">• Aspect: {selectedAspect}</span>);
+      if (selectedAspects.length > 0) parts.push(<span key="aspect">• Aspects (OR): {selectedAspects.join(', ')}</span>);
       if (selectedFacets.length > 0) parts.push(<span key="offerings">• Offerings: {selectedFacets.map((id) => id.split(':').slice(1).join(':') || id).join(', ')}</span>);
       if (campaignFocusLabels.length > 0) parts.push(<span key="focus">• Campaign focus: {campaignFocusLabels.join(', ')}</span>);
       if (strategicText.trim()) parts.push(<span key="strategic">• Strategic text: &quot;{strategicText.slice(0, 60)}…&quot;</span>);
@@ -1302,7 +1339,7 @@ Generate strategic campaign pillars to capture this demand.`;
     const list = selectedFacets.length ? selectedFacets.map((id) => id.split(':').slice(1).join(':') || id).slice(0, 5) : [];
     const lines: React.ReactNode[] = [<span key="ctx">Context: {contextMode}</span>];
     if (list.length) lines.push(<span key="offerings">• Offerings: {list.join(', ')}</span>);
-    if (selectedAspect) lines.push(<span key="aspect">• Aspect: {selectedAspect}</span>);
+    if (selectedAspects.length > 0) lines.push(<span key="aspect">• Aspects (OR): {selectedAspects.join(', ')}</span>);
     if (campaignFocusLabels.length > 0) lines.push(<span key="focus">• Campaign focus: {campaignFocusLabels.join(', ')}</span>);
     if (strategicText.trim()) lines.push(<span key="direction">• Direction: &quot;{strategicText.slice(0, 80)}…&quot;</span>);
     const regionList = regionInputToIsoCodes(regionInput);
@@ -1424,8 +1461,8 @@ Generate strategic campaign pillars to capture this demand.`;
                 <label className="block text-xs font-medium text-gray-600" title="Who is the primary audience for this campaign?">
                   Target Audience <span className="text-red-500">*</span>
                 </label>
-                <div className="flex flex-nowrap items-center gap-2" role="group">
-                {['Professionals', 'Entrepreneurs', 'Students', 'SMB', 'Parents'].map((v) => (
+                <div className="flex flex-wrap items-center gap-2" role="group">
+                {TARGET_AUDIENCE_CATEGORIES.map((v) => (
                   <button
                     key={v}
                     type="button"
@@ -1464,7 +1501,7 @@ Generate strategic campaign pillars to capture this demand.`;
                         style={{ top: professionalDropdownRect.top, left: professionalDropdownRect.left }}
                       >
                         <div className="flex flex-nowrap gap-x-4 gap-y-1 px-3 py-2">
-                          {['Managers', 'Job Seekers', 'Founders', 'Corporate'].map((opt) => (
+                          {PROFESSIONAL_SEGMENTS.map((opt) => (
                             <label
                               key={opt}
                               className="flex items-center gap-2 whitespace-nowrap text-sm text-gray-900 hover:bg-gray-50 cursor-pointer rounded px-1.5 py-1"
@@ -1514,6 +1551,7 @@ Generate strategic campaign pillars to capture this demand.`;
                         <input
                           type="date"
                           value={tentativeStartDate?.toISOString().slice(0, 10) ?? ''}
+                          min={new Date().toISOString().split('T')[0]}
                           onChange={(e) => {
                             const v = e.target.value;
                             setTentativeStartDate(v ? new Date(v) : undefined);
@@ -1630,11 +1668,11 @@ Generate strategic campaign pillars to capture this demand.`;
       </div>
       <StrategicAspectSelector
         aspects={aspects}
-        selectedAspect={selectedAspect}
-        onChange={setSelectedAspect}
+        selectedAspects={selectedAspects}
+        onAspectsChange={setSelectedAspects}
       />
       <OfferingFacetSelector
-        selectedAspect={selectedAspect}
+        selectedAspect={selectedAspects.length > 0 ? selectedAspects[0] : null}
         offerings={offeringFacetCards}
         selectedFacets={selectedFacets}
         onChange={setSelectedFacets}
@@ -1808,7 +1846,19 @@ Generate strategic campaign pillars to capture this demand.`;
           <div className="text-sm text-gray-700">{intentSummary.text}</div>
         )}
       </div>
-      <div>
+      <div className="space-y-3">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Intelligence Source</label>
+          <select
+            value={insightSource}
+            onChange={(e) => setInsightSource(e.target.value as 'hybrid' | 'api' | 'llm')}
+            className="w-full max-w-xs border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+          >
+            <option value="hybrid">Hybrid Intelligence</option>
+            <option value="api">API Intelligence</option>
+            <option value="llm">AI Strategic Engine</option>
+          </select>
+        </div>
         <button
           type="button"
           onClick={handleRunClick}
@@ -1894,8 +1944,20 @@ Generate strategic campaign pillars to capture this demand.`;
               </div>
             )}
           </div>
+          {hasRun && visibleEngineCards.length === 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-6 py-8 text-center">
+              <p className="text-sm font-medium text-amber-800">No strategic themes found.</p>
+              <p className="mt-2 text-sm text-amber-700">
+                Generation complete, but the engine returned no recommendations for this input. Try adjusting your company context, strategic direction, or execution configuration.
+              </p>
+            </div>
+          )}
           {visibleEngineCards.length > 0 && (
-            <div className="sticky top-0 z-10 bg-white/80 backdrop-blur-sm transition-all duration-200 ease-out space-y-4 -mx-0 px-0">
+            <>
+              <div className="rounded-lg border border-green-200 bg-green-50/80 px-4 py-3 text-sm text-green-800">
+                {visibleEngineCards.length} strategic theme{visibleEngineCards.length !== 1 ? 's' : ''} generated. Select a card below to build your campaign.
+              </div>
+              <div className="sticky top-0 z-10 bg-white/80 backdrop-blur-sm transition-all duration-200 ease-out space-y-4 -mx-0 px-0">
               {strategyDrift?.hasDrift && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-4 py-2.5 transition-all duration-200 ease-out">
                   <p className="text-xs text-amber-800">
@@ -2023,7 +2085,8 @@ Generate strategic campaign pillars to capture this demand.`;
                 </p>
               </div>
             </div>
-          )}
+          </>
+        )}
           {rankedEngineCardsWithStatus.length > 0 && (
             <>
               <StrategicWorkspacePanel
@@ -2059,7 +2122,7 @@ Generate strategic campaign pillars to capture this demand.`;
                         }
                       : undefined;
                   return (
-                  <div key={card.id} data-card-id={card.id} className="transition-all duration-200 ease-out">
+                  <div key={card.id} data-card-id={card.id} ref={cardIndex === 0 ? firstCardRef : undefined} className="transition-all duration-200 ease-out">
                     <RecommendationBlueprintCard
                     key={card.id}
                     recommendation={card.recommendation}
@@ -2178,63 +2241,12 @@ Generate strategic campaign pillars to capture this demand.`;
                           createdCampaignId = generatedCampaignId;
                           setGeneratedCampaignId(null);
                         } else {
-                          // Fallback: create a new campaign (e.g. if Generate didn't create one).
-                          const campaignId = uuidv4();
-                          const executionConfigPayload =
-                            targetAudience &&
-                            contentDepth &&
-                            frequencyPerWeek &&
-                            tentativeStartDate &&
-                            campaignGoal &&
-                            communicationStyle.length > 0
-                              ? {
-                                  target_audience: targetAudience,
-                                  professional_segment: professionalSegments[0] ?? null,
-                                  professional_segments: professionalSegments,
-                                  communication_style: communicationStyle,
-                                  content_depth: contentDepth,
-                                  frequency_per_week: frequencyPerWeek,
-                                  tentative_start: tentativeStartDate.toISOString(),
-                                  campaign_goal: campaignGoal,
-                                }
-                              : null;
-                          const response = await fetchWithAuth('/api/campaigns', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              id: campaignId,
-                              companyId,
-                              name: title,
-                              description,
-                              status: 'planning',
-                              current_stage: 'planning',
-                              build_mode: 'no_context',
-                              source_opportunity_id: sourceOpportunityId,
-                              recommendation_id: recId || null,
-                              target_regions: regionsFromCard.length > 0 ? regionsFromCard : undefined,
-                              context_payload:
-                                Object.keys(contextPayload).length > 0 ? contextPayload : undefined,
-                              source_strategic_theme: sourceStrategicTheme,
-                              execution_config: executionConfigPayload,
-                              planning_context: {
-                                context_mode: contextMode,
-                                focused_modules:
-                                  contextMode === 'FOCUSED' && focusedModules.length > 0
-                                    ? focusedModules
-                                    : undefined,
-                                additional_direction: additionalDirection.trim() || undefined,
-                              },
-                            }),
-                          });
-                          if (!response.ok) {
-                            const err = await response.json().catch(() => ({}));
-                            throw new Error(err?.error || 'Failed to create campaign');
-                          }
-                          const data = await response.json().catch(() => ({}));
-                          createdCampaignId =
-                            data?.campaign?.id && typeof data.campaign.id === 'string'
-                              ? data.campaign.id
-                              : campaignId;
+                          // No pre-created campaign; navigate to Campaign Planner (canonical creation entry)
+                          const recIdForPlanner = recId || (typeof card.id === 'string' ? card.id : '');
+                          const qs = new URLSearchParams({ companyId });
+                          if (recIdForPlanner) qs.set('recommendationId', recIdForPlanner);
+                          router.push(`/campaign-planner?${qs.toString()}`);
+                          return;
                         }
                         if (recId) {
                           setUsedRecommendationIds((prev) => new Set([...prev, recId]));
@@ -2332,7 +2344,7 @@ Generate strategic campaign pillars to capture this demand.`;
                       }
                       setFastLoadingCardId(card.id);
                       try {
-                        const BOLT_EXECUTE_TIMEOUT_MS = 30_000;
+                        const BOLT_EXECUTE_TIMEOUT_MS = 90_000;
                         const controller = new AbortController();
                         const timeoutId = setTimeout(() => controller.abort(), BOLT_EXECUTE_TIMEOUT_MS);
                         let execRes;
@@ -2372,8 +2384,18 @@ Generate strategic campaign pillars to capture this demand.`;
 
                         setBoltProgress({ stage: 'source-recommendation', status: 'started', progress_percentage: 0 });
 
+                        const POLL_PROGRESS_TIMEOUT_MS = 30_000; // 30s per poll to avoid stuck progress fetch
                         const pollProgress = async (): Promise<string | null> => {
-                          const progRes = await fetchWithAuth(`/api/bolt/progress?run_id=${encodeURIComponent(runId)}`);
+                          const progController = new AbortController();
+                          const progTimeoutId = setTimeout(() => progController.abort(), POLL_PROGRESS_TIMEOUT_MS);
+                          let progRes: Response;
+                          try {
+                            progRes = await fetchWithAuth(`/api/bolt/progress?run_id=${encodeURIComponent(runId)}`, {
+                              signal: progController.signal,
+                            });
+                          } finally {
+                            clearTimeout(progTimeoutId);
+                          }
                           if (!progRes.ok) return null;
                           const prog = await progRes.json().catch(() => ({}));
                           if (isMountedRef.current) {
@@ -2397,8 +2419,13 @@ Generate strategic campaign pillars to capture this demand.`;
                         };
 
                         const POLL_INTERVAL_MS = 2500;
+                        const POLL_MAX_MS = 5 * 60 * 1000; // 5 min max wait for worker
+                        const pollDeadline = Date.now() + POLL_MAX_MS;
                         let completedCampaignId: string | null = null;
                         while (!completedCampaignId && isMountedRef.current) {
+                          if (Date.now() > pollDeadline) {
+                            throw new Error('The request took too long. Please try again.');
+                          }
                           completedCampaignId = await pollProgress();
                           if (!completedCampaignId) await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
                         }
@@ -2422,11 +2449,11 @@ Generate strategic campaign pillars to capture this demand.`;
                           }
                         }
                       } catch (error) {
+                        let msg = error instanceof Error ? error.message : 'Failed to run BOLT (Fast Mode)';
+                        if (error instanceof Error && error.name === 'AbortError') {
+                          msg = 'The request took too long. Please try again.';
+                        }
                         if (isMountedRef.current) {
-                          let msg = error instanceof Error ? error.message : 'Failed to run BOLT (Fast Mode)';
-                          if (error instanceof Error && error.name === 'AbortError') {
-                            msg = 'Backend is taking too long to respond. Please ensure Redis and BOLT workers are running, then try again.';
-                          }
                           setBoltProgress({
                             stage: undefined,
                             status: 'failed',
@@ -2438,23 +2465,50 @@ Generate strategic campaign pillars to capture this demand.`;
                             setBoltProgress(null);
                           }, 4000);
                         }
-                        const msg = error instanceof Error ? error.message : 'Failed to run BOLT (Fast Mode)';
                         setCardBuildError((prev) => ({ ...prev, [card.id]: msg }));
                       }
                     }}
-                    onMarkLongTerm={() =>
-                      setLongTermEngineIds((prev) => {
-                        const next = new Set(prev);
-                        next.add(card.id);
-                        return next;
-                      })
+                    onMarkLongTerm={
+                      (typeof card.recommendation?.id === 'string' &&
+                        card.recommendation.id.trim() &&
+                        !card.recommendation.id.startsWith('engine-') &&
+                        fetchWithAuth)
+                        ? async () => {
+                            const recId = (card.recommendation?.id as string).trim();
+                            setRecommendationUserStateMap((prev) => ({ ...prev, [recId]: 'LONG_TERM' }));
+                            try {
+                              const res = await fetchWithAuth!(`/api/recommendations/${encodeURIComponent(recId)}/long-term`, { method: 'POST' });
+                              if (!res.ok) throw new Error('Failed to mark long-term');
+                            } catch (e) {
+                              setRecommendationUserStateMap((prev) => {
+                                const next = { ...prev };
+                                delete next[recId];
+                                return next;
+                              });
+                            }
+                          }
+                        : undefined
                     }
-                    onArchive={() =>
-                      setArchivedEngineIds((prev) => {
-                        const next = new Set(prev);
-                        next.add(card.id);
-                        return next;
-                      })
+                    onArchive={
+                      (typeof card.recommendation?.id === 'string' &&
+                        card.recommendation.id.trim() &&
+                        !card.recommendation.id.startsWith('engine-') &&
+                        fetchWithAuth)
+                        ? async () => {
+                            const recId = (card.recommendation?.id as string).trim();
+                            setRecommendationUserStateMap((prev) => ({ ...prev, [recId]: 'ARCHIVED' }));
+                            try {
+                              const res = await fetchWithAuth!(`/api/recommendations/${encodeURIComponent(recId)}/archive`, { method: 'POST' });
+                              if (!res.ok) throw new Error('Failed to archive');
+                            } catch (e) {
+                              setRecommendationUserStateMap((prev) => {
+                                const next = { ...prev };
+                                delete next[recId];
+                                return next;
+                              });
+                            }
+                          }
+                        : undefined
                     }
                   />
                   </div>
@@ -2467,9 +2521,9 @@ Generate strategic campaign pillars to capture this demand.`;
               No enriched recommendation cards available yet. Run the engine to load blueprint-ready cards.
             </div>
           )}
-          {longTermEngineIds.size > 0 && (
+          {Object.values(recommendationUserStateMap).filter((s) => s === 'LONG_TERM').length > 0 && (
             <div className="text-xs text-gray-500">
-              Marked long-term: {longTermEngineIds.size}
+              Marked long-term: {Object.values(recommendationUserStateMap).filter((s) => s === 'LONG_TERM').length}
             </div>
           )}
           <BOLTProgressModal open={fastLoadingCardId !== null} progress={boltProgress} />

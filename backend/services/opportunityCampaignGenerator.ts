@@ -5,6 +5,8 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { checkCampaignDuplicate } from './campaignDuplicateGuardService';
+import { emitIntelligenceEvent } from './intelligenceEventService';
 import type { OpportunityType } from './campaignOpportunityEngine';
 import type { CampaignBlueprint, CampaignBlueprintWeek } from '../types/CampaignBlueprint';
 
@@ -124,6 +126,12 @@ export async function generateCampaignFromOpportunity(
     throw new Error('Campaign opportunity not found');
   }
 
+  const topic = `${opportunity.opportunity_title} ${opportunity.opportunity_description ?? ''}`.trim();
+  const dup = await checkCampaignDuplicate(companyId, topic);
+  if (!dup.allowed) {
+    throw new Error(dup.warning ?? 'Similar campaign exists within 30 days');
+  }
+
   const campaignName = opportunity.opportunity_title;
   const campaignDescription = opportunity.opportunity_description ?? '';
   const now = new Date().toISOString();
@@ -206,6 +214,13 @@ export async function generateCampaignFromOpportunity(
     campaign_id: campaignId,
     momentum_score: opportunity.momentum_score ?? undefined,
   });
+
+  emitIntelligenceEvent(companyId, 'campaign_launched', {
+    campaign_id: campaignId,
+    campaign_name: campaignName,
+    source_opportunity_id: opportunityId,
+    momentum_score: opportunity.momentum_score ?? null,
+  }).catch((e) => console.warn('[opportunityCampaignGenerator] emit event failed:', e));
 
   return {
     campaign_id: campaignId,

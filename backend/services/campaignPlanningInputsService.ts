@@ -8,6 +8,7 @@ export type CampaignPlanningInputs = {
   action_expectation?: string | null;
   content_depth?: string | null;
   topic_continuity?: string | null;
+  campaign_direction?: string | null;
   available_content: unknown;
   weekly_capacity: unknown;
   exclusive_campaigns: unknown;
@@ -15,6 +16,8 @@ export type CampaignPlanningInputs = {
   platform_content_requests: unknown;
   planning_stage: unknown;
   is_completed: unknown;
+  /** Unique vs shared posting: true = one post can go to multiple platforms */
+  cross_platform_sharing_enabled?: boolean | null;
 };
 
 export async function getCampaignPlanningInputs(
@@ -58,14 +61,20 @@ export async function getCampaignPlanningInputs(
     return s ? s : null;
   };
 
+  const crossRaw = (snapshot as any)?.planning_inputs?.cross_platform_sharing_enabled;
+  const cross_platform_sharing_enabled =
+    crossRaw === true || crossRaw === 'true' ? true : crossRaw === false || crossRaw === 'false' ? false : null;
+
   return {
     recommendation_snapshot: snapshot,
     target_audience,
+    cross_platform_sharing_enabled,
     audience_professional_segment: pullPlanningInput('audience_professional_segment'),
     communication_style: pullPlanningInput('communication_style'),
     action_expectation: pullPlanningInput('action_expectation'),
     content_depth: pullPlanningInput('content_depth'),
     topic_continuity: pullPlanningInput('topic_continuity'),
+    campaign_direction: pullPlanningInput('campaign_direction'),
     available_content: (data as any).available_content ?? null,
     weekly_capacity: (data as any).weekly_capacity ?? null,
     exclusive_campaigns: (data as any).exclusive_campaigns ?? null,
@@ -86,6 +95,7 @@ export async function saveCampaignPlanningInputs(input: {
   action_expectation?: unknown;
   content_depth?: unknown;
   topic_continuity?: unknown;
+  campaign_direction?: unknown;
   available_content?: unknown;
   weekly_capacity?: unknown;
   exclusive_campaigns?: unknown;
@@ -93,6 +103,7 @@ export async function saveCampaignPlanningInputs(input: {
   selected_platforms?: unknown;
   planning_stage?: unknown;
   is_completed?: unknown;
+  cross_platform_sharing_enabled?: boolean | null;
 }): Promise<void> {
   if (!input.companyId || typeof input.companyId !== 'string') {
     throw new Error('companyId is required to save campaign_planning_inputs');
@@ -116,6 +127,8 @@ export async function saveCampaignPlanningInputs(input: {
   if (depth) (planning_inputs as any).content_depth = depth;
   const continuity = typeof input.topic_continuity === 'string' ? input.topic_continuity.trim() : '';
   if (continuity) (planning_inputs as any).topic_continuity = continuity;
+  const dir = typeof input.campaign_direction === 'string' ? input.campaign_direction.trim() : '';
+  if (dir) (planning_inputs as any).campaign_direction = dir;
   if (Object.keys(planning_inputs).length > 0) {
     (snapshotBase as any).planning_inputs = planning_inputs;
   }
@@ -132,6 +145,7 @@ export async function saveCampaignPlanningInputs(input: {
   if (input.selected_platforms !== undefined) payload.selected_platforms = input.selected_platforms;
   if (input.planning_stage !== undefined) payload.planning_stage = input.planning_stage;
   if (input.is_completed !== undefined) payload.is_completed = input.is_completed;
+  if (input.cross_platform_sharing_enabled !== undefined) (planning_inputs as any).cross_platform_sharing_enabled = input.cross_platform_sharing_enabled;
 
   // campaign_id is not guaranteed unique in all environments; append-only insert is deterministic
   // because readers always consume the latest row by updated_at.

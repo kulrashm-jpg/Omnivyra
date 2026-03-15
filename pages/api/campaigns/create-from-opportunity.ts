@@ -44,12 +44,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       blueprint: result.blueprint,
     });
   } catch (err: any) {
-    if (err?.message === 'Campaign opportunity not found') {
+    const msg = err?.message ?? '';
+    if (msg === 'Campaign opportunity not found') {
       return res.status(404).json({ error: 'Campaign opportunity not found' });
+    }
+    if (msg.includes('Similar campaign') || msg.includes('within 30 days')) {
+      return res.status(409).json({ error: msg, duplicate: true });
     }
     console.error('[create-from-opportunity]', err);
     return res.status(500).json({
-      error: err?.message ?? 'Failed to create campaign from opportunity',
+      error: msg || 'Failed to create campaign from opportunity',
     });
   }
 }

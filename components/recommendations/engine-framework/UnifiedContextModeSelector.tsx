@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 
-export type ContextMode = 'FULL' | 'FOCUSED' | 'NONE';
+export type ContextMode = 'FULL' | 'FOCUSED' | 'NONE' | 'TREND';
 export type FocusModule =
   | 'TARGET_CUSTOMER'
   | 'PROBLEM_DOMAIN'
@@ -37,7 +37,7 @@ function loadStored(): StoredSelection {
     if (!raw) return { mode: 'FULL', modules: [] };
     const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === 'object' && 'mode' in parsed) {
-      const mode = ['FULL', 'FOCUSED', 'NONE'].includes((parsed as { mode?: string }).mode as string)
+      const mode = ['FULL', 'FOCUSED', 'NONE', 'TREND'].includes((parsed as { mode?: string }).mode as string)
         ? ((parsed as { mode: ContextMode }).mode)
         : 'FULL';
       const modules = Array.isArray((parsed as { modules?: unknown }).modules)
@@ -71,6 +71,10 @@ export type UnifiedContextModeSelectorProps = {
   onAdditionalDirectionChange: (value: string) => void;
   /** When true, NONE mode requires additionalDirection to be non-empty for execution */
   requireDirectionWhenNone?: boolean;
+  /** When true, skip localStorage load/save (e.g. when parent owns state, e.g. Campaign Planner) */
+  skipStorageSync?: boolean;
+  /** When true, show Trend Campaign option (for Campaign Planner) */
+  showTrendOption?: boolean;
 };
 
 export default function UnifiedContextModeSelector({
@@ -81,21 +85,23 @@ export default function UnifiedContextModeSelector({
   onModulesChange,
   onAdditionalDirectionChange,
   requireDirectionWhenNone = true,
+  skipStorageSync = false,
+  showTrendOption = false,
 }: UnifiedContextModeSelectorProps) {
   const [restored, setRestored] = useState(false);
 
   useEffect(() => {
-    if (restored) return;
+    if (skipStorageSync || restored) return;
     const stored = loadStored();
     onModeChange(stored.mode);
     onModulesChange(stored.modules);
     setRestored(true);
-  }, [restored, onModeChange, onModulesChange]);
+  }, [skipStorageSync, restored, onModeChange, onModulesChange]);
 
   useEffect(() => {
-    if (!restored) return;
+    if (skipStorageSync || !restored) return;
     saveStored({ mode, modules });
-  }, [mode, modules, restored]);
+  }, [skipStorageSync, mode, modules, restored]);
 
   const toggleModule = (m: FocusModule) => {
     if (modules.includes(m)) {
@@ -140,6 +146,18 @@ export default function UnifiedContextModeSelector({
             />
             <span className="text-sm text-gray-700">No Company Context</span>
           </label>
+          {showTrendOption && (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="contextMode"
+                checked={mode === 'TREND'}
+                onChange={() => onModeChange('TREND')}
+                className="text-indigo-600"
+              />
+              <span className="text-sm text-gray-700">Trend Campaign</span>
+            </label>
+          )}
         </div>
       </div>
 

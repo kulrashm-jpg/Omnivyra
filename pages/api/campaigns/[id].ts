@@ -64,6 +64,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (req.method === 'DELETE') {
     try {
+      const { releaseThemeFromCampaign } = await import('../../../backend/services/companyThemeStateService');
+      await releaseThemeFromCampaign(id);
+
       // Delete campaign and all related data
       const { error } = await supabase
         .from('campaigns')

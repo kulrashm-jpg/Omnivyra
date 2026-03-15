@@ -12,3 +12,9 @@ if (fs.existsSync(envLocalPath)) {
 } else {
   dotenv.config();
 }
+
+// Allow execution engine writes during tests (guard in executionPlannerPersistence)
+process.env.ALLOW_EXECUTION_ENGINE_WRITE = '1';
+
+// Execution engine: allow persistence writes when tests call service methods
+process.env.ALLOW_EXECUTION_ENGINE_WRITE = '1';

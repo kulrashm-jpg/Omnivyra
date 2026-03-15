@@ -128,6 +128,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return acc;
       }, {});
 
+      const todayKey = new Date().toISOString().slice(0, 10);
+      const enabledApiIds = sources.map((s) => s.id);
+      const { data: configRows } = enabledApiIds.length
+        ? await supabase
+            .from('company_api_configs')
+            .select('api_source_id, daily_limit, signal_limit')
+            .eq('company_id', companyId)
+            .eq('enabled', true)
+            .in('api_source_id', enabledApiIds)
+        : { data: [] };
+      const limitsByApi = (configRows || []).reduce<Record<string, { daily_limit: number | null; signal_limit: number | null }>>(
+        (acc, row) => {
+          acc[row.api_source_id] = {
+            daily_limit: row.daily_limit ?? null,
+            signal_limit: row.signal_limit ?? null,
+          };
+          return acc;
+        },
+        {}
+      );
+
       const apis = sources.map((source) => {
         const rows = usageByApi[source.id] || [];
         const nonFeatureRows = rows.filter((row) => !isFeatureUsageRow(row.user_id));
@@ -198,9 +219,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           acc[key] = existing;
           return acc;
         }, {});
+
+        const todayRows = rows.filter((row) => String(row.usage_date) === todayKey);
+        const usage_today = {
+          request_count: todayRows.reduce((s, r) => s + (r.request_count ?? 0), 0),
+          signals_generated: todayRows.reduce((s, r) => s + (r.signals_generated ?? 0), 0),
+        };
+        const company_limits = limitsByApi[source.id] || null;
+
         return {
           ...source,
           user_access: accessMap[source.id] || null,
+          company_limits,
+          usage_today,
           usage_summary: {
             request_count: requestCount,
             success_count: successCount,
@@ -263,12 +294,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         console.warn('fetchGlobalPresets error', presetErr);
         globalPresets = [];
       }
+      const apisById = apis.reduce<Record<string, (typeof apis)[0]>>((acc, a) => {
+        acc[a.id] = a;
+        return acc;
+      }, {});
       const available = availableApis.map((api) => {
         const isGlobalPreset = api.is_preset === true && !api.company_id;
+        const enriched = apisById[api.id];
         return {
           ...api,
           is_global_preset: isGlobalPreset,
           isGlobalPreset,
+          ...(enriched && {
+            company_limits: enriched.company_limits,
+            usage_today: enriched.usage_today,
+            usage_summary: enriched.usage_summary,
+            usage_company: enriched.usage_company,
+            usage_daily: enriched.usage_daily,
+            usage_by_feature: enriched.usage_by_feature,
+            usage_by_user: enriched.usage_by_user,
+          }),
         };
       });
 

@@ -163,6 +163,11 @@ export function computeCampaignPlanningQAState(params: {
       case 'available_content':
         // Guard against date-like answers (e.g., 2026-08-15) being misclassified as content inventory.
         return parseYesNo(text) != null || (hasNumericQuantity(text) && hasContentArtifactHint(text));
+      case 'cross_platform_sharing':
+        return (
+          /^(shared|unique|same|different)/i.test(text) ||
+          /shared|unique|same content|different content|per platform/i.test(text)
+        );
       default:
         return text.length > 0;
     }
@@ -182,6 +187,8 @@ export function computeCampaignPlanningQAState(params: {
         return `I asked again because "${text}" did not clearly show weekly content capacity. Please (1) say whether creation is Manual, AI-assisted, or Full AI, and (2) include quantities and formats (e.g., 2 videos/week, 5 posts/week, 1 blog/week).`;
       case 'available_content':
         return `I asked again because "${text}" did not clearly indicate existing content. Please answer yes/no, or provide counts like 3 videos and 10 posts.`;
+      case 'cross_platform_sharing':
+        return `I asked again because "${text}" did not clearly indicate shared vs unique. Please answer "Shared" (same content across platforms) or "Unique" (different content per platform).`;
       default:
         return `I asked again because "${text}" did not answer the requested field clearly. Please provide a direct, specific answer.`;
     }
@@ -197,6 +204,14 @@ export function computeCampaignPlanningQAState(params: {
     if ((n.includes('which professionals') && n.includes('mainly speaking')) || n.includes('which group fits')) return 'audience_professional_segment';
     if (n.includes('how do you want your content to sound') || n.includes('how should your posts sound')) return 'communication_style';
     if ((n.includes('after reading your content') && n.includes('what should people do')) || n.includes('what do you want people to do after')) return 'action_expectation';
+    if (
+      n.includes('same content across all platforms') ||
+      (n.includes('shared') && n.includes('unique')) ||
+      n.includes('unique content for each platform') ||
+      (n.includes('shared') && n.includes('platform')) ||
+      (n.includes('unique') && n.includes('platform'))
+    )
+      return 'cross_platform_sharing';
     if (n.includes('short easy reads') || (n.includes('detailed insights') && n.includes('short')) || n.includes('short reads or longer') || n.includes('longer pieces')) return 'content_depth';
     if (n.includes('connected series') && n.includes('mostly independent')) return 'topic_continuity';
     if (n.includes('ongoing story') || n.includes('different topics each time')) return 'topic_continuity';
@@ -220,8 +235,8 @@ export function computeCampaignPlanningQAState(params: {
     ) {
       return 'content_capacity';
     }
-    if ((n.includes('how many') && n.includes('week')) || n.includes('campaign run') || n.includes('duration') || n.includes('how many weeks')) return 'campaign_duration';
-    if (n.includes('which platforms') || n.includes('platforms will you focus') || n.includes('where will you post')) return 'platforms';
+    if ((n.includes('how many') && n.includes('week')) || n.includes('campaign run') || n.includes('duration') || n.includes('how many weeks') || n.includes('duration of the campaign')) return 'campaign_duration';
+    if (n.includes('which platforms') || n.includes('platforms will you focus') || n.includes('where will you post') || n.includes('which social media platforms') || n.includes('choose from your configured')) return 'platforms';
     if (n.includes('platform-exclusive campaigns') || n.includes('only for one platform') || n.includes('anything only for one platform')) return 'exclusive_campaigns';
     if (n.includes('content types') && n.includes('count per week')) return 'platform_content_requests';
     if (n.includes('how many of each type per week')) return 'platform_content_requests';

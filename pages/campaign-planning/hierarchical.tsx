@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  TwelveWeekOverview, 
-  WeekDetailView, 
-  DayDetailView 
+import Link from 'next/link';
+import {
+  TwelveWeekOverview,
+  WeekDetailView,
+  DayDetailView
 } from '../../components/HierarchicalNavigation';
 
 type ViewType = 'overview' | 'week' | 'day';
@@ -127,12 +128,12 @@ export default function HierarchicalCampaignPlanning() {
         <div className="text-center">
           <h1 className="text-2xl font-bold text-gray-900 mb-4">Campaign Not Found</h1>
           <p className="text-gray-600 mb-6">Please select a campaign to view the hierarchical planning.</p>
-          <a 
+          <Link
             href="/campaign-planning"
             className="inline-flex items-center px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
           >
             Go to Campaign Planning
-          </a>
+          </Link>
         </div>
       </div>
     );

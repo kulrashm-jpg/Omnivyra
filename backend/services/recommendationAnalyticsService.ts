@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 
 type AnalyticsFilters = {
   fromDate?: string;
@@ -25,20 +26,6 @@ const average = (values: number[]) =>
 
 const normalizeDate = (value?: string) => (value ? new Date(value).toISOString() : null);
 
-const loadCompanyCampaignIds = async (companyId: string): Promise<string[]> => {
-  const { data, error } = await supabase
-    .from('campaign_versions')
-    .select('campaign_id')
-    .eq('company_id', companyId);
-  if (error) {
-    throw new Error('Failed to load company campaigns');
-  }
-  const unique = new Set(
-    (data || []).map((row: any) => String(row.campaign_id)).filter(Boolean)
-  );
-  return Array.from(unique);
-};
-
 export const getRecommendationAnalytics = async (
   filters: AnalyticsFilters = {}
 ): Promise<AnalyticsResult> => {
@@ -62,7 +49,7 @@ export const getRecommendationAnalytics = async (
   }
 
   if (filters.companyId && !filters.campaignId) {
-    const companyCampaignIds = await loadCompanyCampaignIds(filters.companyId);
+    const companyCampaignIds = await getCompanyCampaignIds(filters.companyId);
     if (companyCampaignIds.length > 0) {
       feedbackQuery = feedbackQuery.in('campaign_id', companyCampaignIds);
     } else {

@@ -85,7 +85,17 @@ export async function runGovernanceAudit(companyId: string): Promise<GovernanceA
     });
 
     if (insertError) {
-      console.error('GovernanceAuditService: failed to persist audit run', insertError);
+      const isTableMissing =
+        insertError.code === 'PGRST205' ||
+        (insertError.message?.toLowerCase().includes('could not find the table') ?? false);
+      if (isTableMissing && !(globalThis as any).__governance_audit_runs_migration_hint_shown) {
+        (globalThis as any).__governance_audit_runs_migration_hint_shown = true;
+        console.warn(
+          'GovernanceAuditService: governance_audit_runs table not found. Run database/governance_audit_runs.sql to create it.'
+        );
+      } else if (!isTableMissing) {
+        console.error('GovernanceAuditService: failed to persist audit run', insertError);
+      }
       return result;
     }
 

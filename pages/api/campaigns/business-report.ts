@@ -76,8 +76,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const playbookReferenceId = resolvePlaybookReferenceId(campaignVersion.campaign_snapshot);
     const playbookContext = await fetchPlaybookContext(companyId, playbookReferenceId);
+
+    let campaignOrigin: string | null = null;
+    const { data: campRow } = await supabase
+      .from('campaigns')
+      .select('origin_source')
+      .eq('id', campaignId)
+      .maybeSingle();
+    if (campRow?.origin_source) {
+      campaignOrigin = String(campRow.origin_source).trim() || null;
+    }
+
     return res.status(200).json({
       ...report,
+      campaign_origin: campaignOrigin ?? 'manual',
       // Playbook fields are for interpretation/reporting only.
       // Campaign KPIs are evaluated independently.
       // No downstream system should infer execution behavior from playbook data.

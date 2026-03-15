@@ -1,5 +1,16 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runCampaignAiPlan, CampaignAiMode } from '../../../../backend/services/campaignAiOrchestrator';
+import {
+  generatePlanPreview,
+  PlanningValidationError,
+  PlanningGenerationError,
+} from '../../../../backend/services/planPreviewService';
+import { extractPlannerCommands } from '../../../../backend/services/plannerCommandExtractor';
+import {
+  applyPlannerCommands,
+  PlannerCommandValidationError,
+  type PlannerCalendarPlan,
+} from '../../../../backend/services/plannerCommandInterpreter';
 import { saveAiCampaignPlan, saveDraftBlueprint, getLatestDraftPlan } from '../../../../backend/db/campaignPlanStore';
 import { validateAndModerateUserMessage } from '../../../../backend/chatGovernance';
 import { getCampaignPlanningInputs, saveCampaignPlanningInputs } from '../../../../backend/services/campaignPlanningInputsService';
@@ -24,6 +35,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       companyId,
       mode: bodyMode,
       message: bodyMessage,
+      calendar_plan: bodyCalendarPlan,
       durationWeeks,
       targetDay,
       platforms,
@@ -40,6 +52,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       prefilledPlanning: bodyPrefilledPlanning,
       conversationHistory: bodyConversationHistory,
       context: bodyContext,
+      idea_spine: bodyIdeaSpine,
+      strategy_context: bodyStrategyContext,
+      campaign_direction: bodyCampaignDirection,
+      platform_content_requests: bodyPlatformContentRequests,
+      campaign_type: bodyCampaignType,
     } = body;
 
     const conversationHistory = Array.isArray(bodyConversationHistory)
@@ -50,6 +67,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let mode = bodyMode;
     let message = typeof bodyMessage === 'string' ? bodyMessage : '';
+
+    if ((!message || message.length < 10) && bodyIdeaSpine && typeof bodyIdeaSpine === 'object') {
+      const spine = bodyIdeaSpine as Record<string, unknown>;
+      const parts = [spine.refined_title, spine.refined_description, spine.title, spine.description]
+        .filter((s) => typeof s === 'string' && String(s).trim())
+        .map((s) => String(s).trim());
+      if (parts.length > 0) {
+        message = parts.join('\n\n') || message;
+      }
+    }
 
     if (
       bodyContext === 'campaign-planning' &&
@@ -68,10 +95,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? bodyPrefilledPlanning
         : bodyCollectedPlanningContext;
 
-    if (!campaignId || typeof campaignId !== 'string') {
+    const previewMode = body.preview_mode === true;
+    const isPlannerCommand = mode === 'planner_command';
+
+    if (!previewMode && (!campaignId || typeof campaignId !== 'string')) {
       return res.status(400).json({ error: 'campaignId is required' });
     }
-    if (!mode || !MODES.includes(mode)) {
+    if (previewMode && !isPlannerCommand) {
+      const resolvedCompanyId = typeof companyId === 'string' ? companyId.trim() : '';
+      if (!resolvedCompanyId) {
+        return res.status(400).json({ error: 'companyId is required for plan preview' });
+      }
+      const spine = bodyIdeaSpine ?? undefined;
+      const spineObj = spine && typeof spine === 'object' && !Array.isArray(spine) ? (spine as Record<string, unknown>) : null;
+      const refinedTitle =
+        (typeof spineObj?.refined_title === 'string' ? spineObj.refined_title.trim() : '') ||
+        (typeof spineObj?.title === 'string' ? spineObj.title.trim() : '');
+      const refinedDesc =
+        (typeof spineObj?.refined_description === 'string' ? spineObj.refined_description.trim() : '') ||
+        (typeof spineObj?.description === 'string' ? spineObj.description.trim() : '') ||
+        refinedTitle; // Allow title as fallback for description (e.g. AI Chat, minimal Campaign Context)
+      if (!refinedTitle) {
+        return res.status(400).json({ error: 'idea_spine.refined_title or idea_spine.title is required for plan preview' });
+      }
+      if (!bodyStrategyContext || typeof bodyStrategyContext !== 'object' || Array.isArray(bodyStrategyContext)) {
+        return res.status(400).json({ error: 'strategy_context is required for plan preview' });
+      }
+      const strat = bodyStrategyContext as Record<string, unknown>;
+      const durationWeeks = Number(strat.duration_weeks);
+      const platforms = Array.isArray(strat.platforms) ? strat.platforms : [];
+      const postingFreq = strat.posting_frequency;
+      if (!Number.isFinite(durationWeeks) || durationWeeks <= 0) {
+        return res.status(400).json({ error: 'strategy_context.duration_weeks must be a number greater than 0' });
+      }
+      if (!platforms.length) {
+        return res.status(400).json({ error: 'strategy_context.platforms must be a non-empty array' });
+      }
+      if (postingFreq == null || typeof postingFreq !== 'object' || Array.isArray(postingFreq)) {
+        return res.status(400).json({ error: 'strategy_context.posting_frequency must be an object' });
+      }
+      const selectedAngle =
+        spineObj && typeof spineObj.selected_angle === 'string' ? spineObj.selected_angle : typeof bodyCampaignDirection === 'string' ? bodyCampaignDirection : null;
+      if (!selectedAngle || !selectedAngle.trim()) {
+        return res.status(400).json({ error: 'campaign_direction is required for plan preview' });
+      }
+      if (!message || typeof message !== 'string' || message.length < 10) {
+        message = refinedTitle + '\n\n' + refinedDesc;
+      }
+    }
+    if (!mode || (!MODES.includes(mode) && !isPlannerCommand)) {
       return res.status(400).json({ error: 'mode is required' });
     }
     if (!message || typeof message !== 'string') {
@@ -89,11 +161,114 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Multi-tenant: verify user has access to this campaign (company + campaign role). Align with RBAC used by list/other campaign APIs.
+    if (previewMode) {
+      const resolvedCompanyId = typeof companyId === 'string' ? companyId.trim() : '';
+      const spine = bodyIdeaSpine ?? undefined;
+      const spineObj = spine && typeof spine === 'object' && !Array.isArray(spine) ? (spine as Record<string, unknown>) : null;
+      const selectedAngle =
+        spineObj && typeof spineObj.selected_angle === 'string' ? spineObj.selected_angle : typeof bodyCampaignDirection === 'string' ? bodyCampaignDirection : null;
+
+      const access = await getUserCompanyRole(req, resolvedCompanyId);
+      const userId = access.userId;
+      let role = access.role;
+      if (userId && !role) {
+        const invited = await getCompanyRoleIncludingInvited(userId, resolvedCompanyId);
+        if (invited) role = invited;
+      }
+      if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
+      if (!role) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+
+      if (mode === 'planner_command') {
+        let calPlan = bodyCalendarPlan && typeof bodyCalendarPlan === 'object' && !Array.isArray(bodyCalendarPlan)
+          ? (bodyCalendarPlan as PlannerCalendarPlan)
+          : null;
+        if (!calPlan) {
+          return res.status(400).json({ error: 'calendar_plan is required for planner_command mode' });
+        }
+        if (!calPlan.activities?.length && calPlan.days?.length) {
+          const flattened = calPlan.days.flatMap((d) =>
+            (d.activities ?? []).map((a) => ({
+              ...a,
+              week_number: a.week_number ?? d.week_number,
+              day: a.day ?? d.day,
+            }))
+          );
+          calPlan = { ...calPlan, activities: flattened };
+        }
+        if (!calPlan.activities?.length) {
+          return res.status(400).json({ error: 'calendar_plan with activities is required for planner_command mode' });
+        }
+        try {
+          const commands = await extractPlannerCommands(message, calPlan, resolvedCompanyId);
+          const platform_content_requests =
+            body.platform_content_requests && typeof body.platform_content_requests === 'object' && !Array.isArray(body.platform_content_requests)
+              ? (body.platform_content_requests as Record<string, Record<string, number>>)
+              : null;
+          const updated = applyPlannerCommands(commands, calPlan, platform_content_requests ?? undefined);
+          return res.status(200).json({ plan: { calendar_plan: updated } });
+        } catch (cmdErr) {
+          if (cmdErr instanceof PlannerCommandValidationError) {
+            return res.status(400).json({ error: cmdErr.message });
+          }
+          const msg = cmdErr instanceof Error ? cmdErr.message : 'Planner command failed';
+          return res.status(500).json({ error: msg });
+        }
+      }
+
+      try {
+        const strat = bodyStrategyContext as Record<string, unknown>;
+        const strategyContext = {
+          duration_weeks: Number(strat.duration_weeks) || 12,
+          platforms: Array.isArray(strat.platforms) ? strat.platforms as string[] : ['linkedin'],
+          posting_frequency: (strat.posting_frequency && typeof strat.posting_frequency === 'object' && !Array.isArray(strat.posting_frequency))
+            ? (strat.posting_frequency as Record<string, number>)
+            : { linkedin: 3 },
+        };
+        const ideaSpine = {
+          refined_title: String(spineObj?.refined_title ?? spineObj?.title ?? ''),
+          refined_description: String(spineObj?.refined_description ?? spineObj?.description ?? ''),
+          selected_angle: spineObj?.selected_angle != null ? String(spineObj.selected_angle) : null,
+          title: spineObj?.title != null ? String(spineObj.title) : null,
+          description: spineObj?.description != null ? String(spineObj.description) : null,
+        };
+        const platform_content_requests =
+          body.platform_content_requests && typeof body.platform_content_requests === 'object' && !Array.isArray(body.platform_content_requests)
+            ? (body.platform_content_requests as Record<string, Record<string, number>>)
+            : undefined;
+        const campaign_type =
+          body.campaign_type === 'TEXT' || body.campaign_type === 'CREATOR' || body.campaign_type === 'HYBRID'
+            ? body.campaign_type
+            : undefined;
+        const previewResult = await generatePlanPreview({
+          companyId: resolvedCompanyId,
+          idea_spine: ideaSpine,
+          strategy_context: strategyContext,
+          campaign_direction: selectedAngle.trim(),
+          platform_content_requests: platform_content_requests ?? undefined,
+          campaign_type: campaign_type ?? undefined,
+        });
+        return res.status(200).json({
+          plan: previewResult.plan,
+          ...(previewResult.recommended_goal ? { recommended_goal: previewResult.recommended_goal } : {}),
+          ...(previewResult.recommended_audience?.length ? { recommended_audience: previewResult.recommended_audience } : {}),
+        });
+      } catch (previewErr) {
+        if (previewErr instanceof PlanningValidationError) {
+          return res.status(400).json({ error: previewErr.message });
+        }
+        if (previewErr instanceof PlanningGenerationError) {
+          return res.status(500).json({ error: previewErr.message });
+        }
+        const msg = previewErr instanceof Error ? previewErr.message : 'Plan preview failed';
+        return res.status(500).json({ error: msg });
+      }
+    }
+
+    const resolvedCampaignId = campaignId as string;
     const { data: versionForAccess } = await supabase
       .from('campaign_versions')
       .select('company_id')
-      .eq('campaign_id', campaignId)
+      .eq('campaign_id', resolvedCampaignId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -103,28 +278,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const resolvedCompanyId = String(versionForAccess.company_id);
-    let { role, userId } = await getUserCompanyRole(req, resolvedCompanyId);
-    if (!userId) {
-      return res.status(401).json({ error: 'UNAUTHORIZED' });
-    }
+    const [roleResult, planningInputs] = await Promise.all([
+      getUserCompanyRole(req, resolvedCompanyId),
+      getCampaignPlanningInputs(resolvedCampaignId),
+    ]);
+    let { userId, role } = roleResult;
+
+    if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
     if (!role) {
-      // Plan API: allow invited users with any company role (getUserCompanyRole only uses invited for ADMIN/COMPANY_ADMIN/SUPER_ADMIN)
       const invitedRole = await getCompanyRoleIncludingInvited(userId, resolvedCompanyId);
       if (invitedRole) role = invitedRole;
     }
-    if (!role) {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    }
+    if (!role) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
 
-    // Company override roles (e.g. COMPANY_ADMIN, SUPER_ADMIN, Content Architect) have full access; skip campaign-level check.
-    if (!isCompanyOverrideRole(role)) {
-      const campaignAuthResult = await resolveEffectiveCampaignRole(userId, campaignId, resolvedCompanyId);
+    if (!isCompanyOverrideRole(role!)) {
+      const campaignAuthResult = await resolveEffectiveCampaignRole(userId!, resolvedCampaignId, resolvedCompanyId);
       if (campaignAuthResult.error === 'CAMPAIGN_ROLE_REQUIRED') {
         return res.status(403).json({ error: 'CAMPAIGN_ROLE_REQUIRED' });
       }
     }
-
-    const planningInputs = await getCampaignPlanningInputs(campaignId);
     const deterministicPlanningContext: Record<string, unknown> = {};
     if (planningInputs) {
       if (typeof planningInputs.target_audience === 'string' && planningInputs.target_audience.trim()) {
@@ -159,9 +331,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? (collectedPlanningContext as Record<string, unknown>)
         : undefined;
 
+    const campaignDirectionFromTemp =
+      bodyIdeaSpine && typeof bodyIdeaSpine === 'object' && !Array.isArray(bodyIdeaSpine)
+        ? (bodyIdeaSpine as { selected_angle?: string | null }).selected_angle
+        : typeof bodyCampaignDirection === 'string'
+          ? bodyCampaignDirection
+          : null;
+    const campaignDirVal =
+      (typeof (existingCollectedPlanningContext as any)?.campaign_direction === 'string'
+        ? (existingCollectedPlanningContext as any).campaign_direction.trim()
+        : '') ||
+      (typeof campaignDirectionFromTemp === 'string' ? campaignDirectionFromTemp.trim() : '');
+
     let finalCollectedPlanningContext: Record<string, unknown> = {
       ...(existingCollectedPlanningContext ?? {}),
       ...deterministicPlanningContext,
+      ...(campaignDirVal ? { campaign_direction: campaignDirVal } : {}),
     };
 
     const normalizeForMatch = (s: string): string => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -263,7 +448,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const topicContinuity =
       (existingCollectedPlanningContext as any)?.topic_continuity ??
       extractLatestAnswer('topic_continuity');
-    const platformContentRequests = (existingCollectedPlanningContext as any)?.platform_content_requests;
+    let platformContentRequests = (existingCollectedPlanningContext as any)?.platform_content_requests;
+    // Normalize platform_content_requests: convert string values to numbers (prevents 500 when frontend sends "1"/"2")
+    if (platformContentRequests && typeof platformContentRequests === 'object' && !Array.isArray(platformContentRequests)) {
+      const normalized: Record<string, Record<string, number>> = {};
+      for (const [p, byType] of Object.entries(platformContentRequests as Record<string, Record<string, unknown>>)) {
+        if (!byType || typeof byType !== 'object' || Array.isArray(byType)) continue;
+        const out: Record<string, number> = {};
+        for (const [ct, v] of Object.entries(byType)) {
+          const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/\D/g, '').slice(0, 2));
+          if (Number.isFinite(n) && n >= 0 && n <= 99) out[ct] = Math.floor(n);
+        }
+        if (Object.keys(out).length > 0) normalized[p] = out;
+      }
+      platformContentRequests = Object.keys(normalized).length > 0 ? normalized : undefined;
+    }
     const exclusiveCampaigns = (existingCollectedPlanningContext as any)?.exclusive_campaigns;
 
     const selectedPlatforms = (() => {
@@ -291,6 +490,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })();
 
     // Merge extracted/conversation-derived context into finalCollectedPlanningContext so runCampaignAiPlan has full info for week plan (not superficial).
+    // campaign_direction from collectedPlanningContext or temporaryCampaignContext.idea_spine.selected_angle
     finalCollectedPlanningContext = {
       ...(existingCollectedPlanningContext ?? {}),
       ...(targetAudienceAnswer ? { target_audience: targetAudienceAnswer } : {}),
@@ -304,8 +504,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...(availableContent != null && String(availableContent).trim() !== '' ? { available_content: availableContent } : {}),
       ...(weeklyCapacity != null && String(weeklyCapacity).trim() !== '' ? { content_capacity: weeklyCapacity, weekly_capacity: weeklyCapacity } : {}),
       ...(selectedPlatforms.length > 0 ? { platforms: selectedPlatforms.join(', ') } : {}),
-      ...(platformContentRequests && typeof platformContentRequests === 'object' ? { platform_content_requests: platformContentRequests } : {}),
+      ...(platformContentRequests && typeof platformContentRequests === 'object'
+      ? {
+          platform_content_requests: (() => {
+            const raw = platformContentRequests as Record<string, Record<string, unknown>>;
+            const normalized: Record<string, Record<string, number>> = {};
+            for (const [p, byType] of Object.entries(raw)) {
+              if (!byType || typeof byType !== 'object') continue;
+              const out: Record<string, number> = {};
+              for (const [ct, val] of Object.entries(byType)) {
+                const n = typeof val === 'number' ? val : Number(String(val ?? '').replace(/\D/g, ''));
+                if (Number.isFinite(n) && n >= 0 && n <= 99) out[ct] = Math.floor(n);
+              }
+              if (Object.keys(out).length > 0) normalized[p] = out;
+            }
+            return Object.keys(normalized).length > 0 ? normalized : platformContentRequests;
+          })(),
+        }
+      : {}),
       ...(Array.isArray(exclusiveCampaigns) ? { exclusive_campaigns: exclusiveCampaigns } : {}),
+      ...(existingCollectedPlanningContext && typeof (existingCollectedPlanningContext as any).cross_platform_sharing !== 'undefined'
+        ? { cross_platform_sharing: (existingCollectedPlanningContext as any).cross_platform_sharing }
+        : {}),
     };
 
     const shouldPersistPlanningInputs =
@@ -327,7 +547,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : undefined;
       try {
         await saveCampaignPlanningInputs({
-          campaignId,
+          campaignId: resolvedCampaignId,
           companyId: resolvedCompanyId,
           recommendation_snapshot:
             (recommendationContext && typeof recommendationContext === 'object'
@@ -344,6 +564,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           exclusive_campaigns: exclusiveCampaigns,
           platform_content_requests: platformContentRequests,
           selected_platforms: selectedPlatforms.length > 0 ? selectedPlatforms : undefined,
+          cross_platform_sharing_enabled:
+            existingCollectedPlanningContext && typeof (existingCollectedPlanningContext as any).cross_platform_sharing === 'object'
+              ? ((existingCollectedPlanningContext as any).cross_platform_sharing?.enabled !== false)
+              : undefined,
           planning_stage: 'campaign_planning_chat',
           is_completed: false,
         });
@@ -358,12 +582,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const requestedWeeks = typeof durationWeeks === 'number' ? durationWeeks : null;
     const isRetryMessage = /^\s*continue\s*$/i.test(String(message).trim()) || /try again|retry/i.test(String(message));
     if (mode === 'generate_plan' && isRetryMessage && requestedWeeks != null) {
-      const existingDraft = await getLatestDraftPlan(campaignId);
+      const existingDraft = await getLatestDraftPlan(resolvedCampaignId);
       if (existingDraft?.weeks?.length === requestedWeeks) {
         console.log('[plan] Restore: returning existing draft plan (same duration) to avoid reprocessing.');
         return res.status(200).json({
           mode: 'generate_plan',
-          snapshot_hash: `restore-${campaignId}`,
+          snapshot_hash: `restore-${resolvedCampaignId}`,
           omnivyre_decision: { status: 'ok', recommendation: 'proceed' as const },
           plan: { weeks: existingDraft.weeks },
           collectedPlanningContext: finalCollectedPlanningContext,
@@ -379,11 +603,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? `${message}\n\nTone-only conversation history:\n${JSON.stringify(toneOnlyConversationHistory.slice(-20), null, 2)}`
         : message;
 
+    const effectiveDurationWeeks =
+      typeof durationWeeks === 'number'
+        ? durationWeeks
+        : bodyStrategyContext &&
+            typeof bodyStrategyContext === 'object' &&
+            typeof (bodyStrategyContext as Record<string, unknown>).duration_weeks === 'number'
+          ? (bodyStrategyContext as { duration_weeks: number }).duration_weeks
+          : 12;
+
     const result = await runCampaignAiPlan({
-      campaignId,
+      campaignId: resolvedCampaignId,
       mode: effectiveMode,
       message: messageForTone,
-      durationWeeks: typeof durationWeeks === 'number' ? durationWeeks : undefined,
+      durationWeeks: effectiveDurationWeeks,
       collectedPlanningContext: finalCollectedPlanningContext,
       targetDay: typeof targetDay === 'string' ? targetDay : undefined,
       platforms: Array.isArray(platforms) ? platforms : undefined,
@@ -445,7 +678,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const { data: campaignRow } = await supabase
           .from('campaigns')
           .select('user_id')
-          .eq('id', campaignId)
+          .eq('id', resolvedCampaignId)
           .maybeSingle();
         const userId = campaignRow?.user_id;
         if (userId) {
@@ -453,17 +686,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const endDate = new Date(startDate);
           endDate.setDate(endDate.getDate() + 12 * 7);
           const conflicts = await detectCampaignConflicts(
-            userId,
+            userId!,
             startDate,
             endDate,
-            campaignId
+            resolvedCampaignId
           );
           if (conflicts.length > 0) {
             const lines = conflicts.map(
               (c) => `• "${c.campaign_name}" (${c.start_date.toLocaleDateString()} – ${c.end_date.toLocaleDateString()}, ${c.overlap_days} day overlap)`
             );
             startDateConflictWarning = `⚠️ **Date conflict:** This start date overlaps with ${conflicts.length} existing campaign(s):\n\n${lines.join('\n')}\n\nConsider choosing a different start date or finishing the overlapping campaign(s) first.`;
-            const suggestion = await suggestAvailableDateRange(userId, 12 * 7, startDate);
+            const suggestion = await suggestAvailableDateRange(userId!, 12 * 7, startDate);
             if (suggestion) {
               startDateConflictWarning += `\n\nSuggested alternative: start **${suggestion.start_date.toLocaleDateString()}** (after current campaigns).`;
             }
@@ -477,7 +710,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (typeof saveAiCampaignPlan === 'function') {
       try {
         await saveAiCampaignPlan({
-          campaignId,
+          campaignId: resolvedCampaignId,
           snapshot_hash: result.snapshot_hash,
           mode: result.mode,
           response: result.raw_plan_text,
@@ -488,11 +721,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Best-effort: keep backend draft blueprint aligned with the exact structured weeks returned to the UI.
     if (result?.mode === 'generate_plan' && Array.isArray(result?.plan?.weeks) && result.plan.weeks.length > 0) {
       try {
-        const blueprint = fromStructuredPlan({ weeks: result.plan.weeks, campaign_id: campaignId });
-        await saveDraftBlueprint({ campaignId, blueprint });
+        const blueprint = fromStructuredPlan({ weeks: result.plan.weeks, campaign_id: resolvedCampaignId });
+        await saveDraftBlueprint({ campaignId: resolvedCampaignId, blueprint });
       } catch (err) {
         console.warn('[plan] Failed to persist draft blueprint (continuing):', (err as any)?.message ?? err);
       }

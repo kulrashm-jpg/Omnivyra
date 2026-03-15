@@ -1,13 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
+import { supabase } from '../../../../backend/db/supabaseClient';
 import { setToken, TokenObject } from '../../../../backend/auth/tokenStore';
-
-// Initialize Supabase client for database operations
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -15,13 +10,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error } = req.query;
+  const [_stateBaseEarly, returnToEarly] = String(state || '').split('|');
+  const errDest = (returnToEarly && returnToEarly.startsWith('/')) ? returnToEarly : '/social-platforms';
 
   if (error) {
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error as string)}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
-    return res.redirect('/creative-scheduler?error=No authorization code received');
+    return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
   try {
@@ -37,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       new URLSearchParams({
         code: code as string,
         grant_type: 'authorization_code',
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001'}/api/auth/twitter/callback`,
+        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/twitter/callback`,
         code_verifier: '', // Add if using PKCE
       }),
       {
@@ -62,12 +59,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const userProfile = { data: profileResponse.data.data };
 
-    // Get user_id from state or session
-    const userId = (state as string)?.split('_')[0] || process.env.DEFAULT_USER_ID || '';
-    
+    // Extract returnTo from state (format: "twitter_{ts}|/returnPath")
+    const [_stateBase, returnTo] = String(state || '').split('|');
+
+    // Get authenticated user from the request session
+    const { user: sessionUser } = await getSupabaseUserFromRequest(req);
+    const userId = sessionUser?.id || process.env.DEFAULT_USER_ID || '';
+
     if (!userId) {
       console.error('No user_id available - cannot save account');
-      return res.redirect(`/creative-scheduler?error=${encodeURIComponent('User session required')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
     }
 
     if (!userProfile.data?.id) {
@@ -140,11 +141,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log('✅ Twitter account saved successfully:', { accountId, accountName });
 
-    return res.redirect(`/creative-scheduler?connected=${platform}&account=${encodeURIComponent(accountName)}`);
+    const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
+    const sep = successDest.includes('?') ? '&' : '?';
+    return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('Twitter OAuth callback error:', error);
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error.message)}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
 

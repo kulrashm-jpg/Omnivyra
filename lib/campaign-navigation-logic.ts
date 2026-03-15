@@ -33,7 +33,7 @@ const CampaignListButtons = {
   // Primary action - Create new campaign
   createCampaign: {
     text: "Create New Campaign",
-    action: () => window.location.href = '/campaign-planning?mode=create',
+    action: () => window.location.href = '/campaign-planner?mode=direct',
     style: "primary-green"
   },
   
@@ -159,7 +159,7 @@ const Routes = {
   campaigns: '/campaigns',
   
   // Campaign management
-  createCampaign: '/campaign-planning?mode=create',
+  createCampaign: '/campaign-planner?mode=direct',
   editCampaign: (id) => `/campaign-details/${id}`,
   viewCampaign: (id) => `/campaign-details/${id}`,
   

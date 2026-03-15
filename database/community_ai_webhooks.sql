@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS community_ai_webhooks (
   created_at TIMESTAMP DEFAULT now()
 );
 
+-- Guard: PATCH handler updates updated_at
+ALTER TABLE community_ai_webhooks
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+
 CREATE INDEX IF NOT EXISTS idx_community_ai_webhooks_tenant_org
   ON community_ai_webhooks(tenant_id, organization_id);
 

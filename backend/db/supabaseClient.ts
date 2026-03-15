@@ -1,9 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
-import path from 'path';
 import dotenv from 'dotenv';
 
 // Load .env.local for server (helps during Next.js hot reload / env reload)
-dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+dotenv.config({ path: `${process.cwd()}/.env.local` });
 dotenv.config();
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;

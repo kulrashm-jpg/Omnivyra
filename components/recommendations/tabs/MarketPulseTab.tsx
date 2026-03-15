@@ -13,6 +13,7 @@ const CONTEXT_LABELS: Record<ContextMode, string> = {
   FULL: 'Full Company Context',
   FOCUSED: 'Focused Context',
   NONE: 'No Company Context',
+  TREND: 'Trend Campaign',
 };
 
 const NARRATIVE_PHASE_STYLES: Record<string, string> = {
@@ -30,6 +31,8 @@ type TopicWithDecay = {
   risk_level: string;
   priority_score: number;
   regions: string[];
+  primary_category?: string;
+  secondary_tags?: string[];
   age_days?: number;
   expired?: boolean;
   decay_multiplier?: number;
@@ -67,6 +70,7 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
   const [regionInput, setRegionInput] = useState('');
   const [archivedTopics, setArchivedTopics] = useState<Set<string>>(new Set());
   const [resultsViewMode, setResultsViewMode] = useState<'list' | 'charts'>('charts');
+  const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
 
   const { job: polledJob } = useEngineJobPolling<{
     status?: string;
@@ -177,6 +181,10 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
 
   const allTopics = consolidatedResult?.global_topics ?? [];
   const globalTopics = allTopics.filter((t) => !archivedTopics.has(t.topic));
+  const filteredSignals =
+    selectedCategory === 'ALL'
+      ? globalTopics
+      : globalTopics.filter((s) => s.primary_category === selectedCategory);
   const riskAlerts = consolidatedResult?.risk_alerts ?? [];
   const strategicSummary = consolidatedResult?.strategic_summary ?? '';
   const arbitrageOpportunities = consolidatedResult?.arbitrage_opportunities ?? [];
@@ -378,18 +386,36 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
             </div>
           )}
 
+          <div className="market-pulse-filter">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Filter by category</label>
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="w-full max-w-xs border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="ALL">All Signals</option>
+              <option value="MARKET_TREND">Market Trends</option>
+              <option value="COMPETITOR_INTELLIGENCE">Competitor Intelligence</option>
+              <option value="BUYING_INTENT">Buying Intent</option>
+              <option value="INFLUENCER_ACTIVITY">Influencer Activity</option>
+              <option value="SEASONAL_SIGNAL">Seasonal Signals</option>
+              <option value="REGIONAL_SIGNAL">Regional Signals</option>
+            </select>
+          </div>
+
           {resultsViewMode === 'charts' ? (
             (() => {
-              const visibleTopics = globalTopics.filter((t) => !archivedTopics.has(t.topic));
-              return visibleTopics.length === 0 ? (
+              return filteredSignals.length === 0 ? (
                 <div className="text-sm text-gray-500 py-8">
                   {globalTopics.length === 0
                     ? 'No market pulse topics captured.'
-                    : 'All topics have been archived.'}
+                    : selectedCategory === 'ALL'
+                      ? 'All topics have been archived.'
+                      : 'No signals in this category.'}
                 </div>
               ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {visibleTopics.map((t, i) => {
+              {filteredSignals.map((t, i) => {
                   const narrativePhase = (t.narrative_phase ?? '').toUpperCase();
                   const trendLabel =
                     ['EMERGING', 'ACCELERATING'].includes(narrativePhase)
@@ -491,7 +517,7 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
           ) : (
           <>
           <div className="space-y-0 rounded-lg border border-gray-200 overflow-hidden">
-            {globalTopics.map((t, i) => (
+            {filteredSignals.map((t, i) => (
               <div
                 key={`${t.topic}-${i}`}
                 className="flex items-start gap-3 py-3 px-3 border-b border-gray-100 last:border-0 hover:bg-gray-50"
@@ -567,8 +593,10 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
             ))}
           </div>
 
-          {globalTopics.length === 0 && (
-            <div className="text-sm text-gray-500 py-4">No market pulse topics captured.</div>
+          {filteredSignals.length === 0 && (
+            <div className="text-sm text-gray-500 py-4">
+              {selectedCategory === 'ALL' ? 'No market pulse topics captured.' : 'No signals in this category.'}
+            </div>
           )}
           </>
           )}

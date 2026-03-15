@@ -205,17 +205,7 @@ export const getUserRole = async (
   userId: string,
   companyId: string
 ): Promise<{ role: Role | null; error: string | null; membershipType?: 'EXTERNAL' | 'INTERNAL' }> => {
-  const { data: anyRoleRows, error: anyRoleError } = await supabase
-    .from('user_company_roles')
-    .select('role')
-    .eq('user_id', userId);
-  if (anyRoleError) {
-    return { role: null, error: null, membershipType: undefined };
-  }
-  if (!anyRoleRows || anyRoleRows.length === 0) {
-    return { role: null, error: null, membershipType: undefined };
-  }
-
+  // Query company-specific role first (happy path: 1 DB round-trip)
   const { data, error } = await supabase
     .from('user_company_roles')
     .select('role, status, membership_type')
@@ -226,28 +216,45 @@ export const getUserRole = async (
   if (error) {
     return { role: null, error: null, membershipType: undefined };
   }
-  if (!data || data.length === 0) {
-    if (anyRoleRows && anyRoleRows.length > 0) {
-      return { role: null, error: 'COMPANY_ACCESS_DENIED', membershipType: undefined };
+  if (data && data.length > 0) {
+    const row = data[0] as { role: string; status?: string; membership_type?: string | null };
+    const rawRole = typeof row.role === 'string' ? row.role.trim() : '';
+    const normalizedRole = normalizeRole(rawRole || row.role);
+    const membershipType =
+      (row.membership_type || '').trim().toUpperCase() === 'EXTERNAL' ? 'EXTERNAL' : 'INTERNAL';
+    return { role: normalizedRole, error: null, membershipType };
+  }
+
+  // No active role: check invited (admin fallback) before "any role" check
+  const { data: invitedData } = await supabase
+    .from('user_company_roles')
+    .select('role')
+    .eq('user_id', userId)
+    .eq('company_id', companyId)
+    .eq('status', 'invited')
+    .limit(1);
+  if (invitedData && invitedData.length > 0) {
+    const fallbackRole = normalizeRole((invitedData[0] as { role: string }).role);
+    if (
+      fallbackRole === Role.COMPANY_ADMIN ||
+      fallbackRole === Role.ADMIN ||
+      fallbackRole === Role.SUPER_ADMIN
+    ) {
+      return { role: fallbackRole, error: null, membershipType: 'INTERNAL' };
     }
-    return { role: null, error: null, membershipType: undefined };
   }
-  const row = data[0] as { role: string; status?: string; membership_type?: string | null };
-  const rawRole = typeof row.role === 'string' ? row.role.trim() : '';
-  const normalizedRole = normalizeRole(rawRole || row.role);
-  const membershipType =
-    (row.membership_type || '').trim().toUpperCase() === 'EXTERNAL' ? 'EXTERNAL' : 'INTERNAL';
-  if (process.env.NODE_ENV !== 'test') {
-    console.log('RBAC_CHECK', {
-      userId,
-      companyId,
-      rawRole: rawRole || row.role,
-      role: normalizedRole,
-      status: row.status || null,
-      membershipType,
-    });
+
+  // No role for company: check if user has any role (distinguish COMPANY_ACCESS_DENIED vs null)
+  const { data: anyRoleRows, error: anyRoleError } = await supabase
+    .from('user_company_roles')
+    .select('role')
+    .eq('user_id', userId)
+    .limit(1);
+  if (anyRoleError) return { role: null, error: null, membershipType: undefined };
+  if (anyRoleRows && anyRoleRows.length > 0) {
+    return { role: null, error: 'COMPANY_ACCESS_DENIED', membershipType: undefined };
   }
-  return { role: normalizedRole, error: null, membershipType };
+  return { role: null, error: null, membershipType: undefined };
 };
 
 /**
@@ -288,17 +295,7 @@ export const getUserCompanyRole = async (
   if (superAdmin) {
     return { role: Role.SUPER_ADMIN, userId: user.userId };
   }
-  let { role } = await getUserRole(user.userId, companyId);
-  if (!role) {
-    const fallbackRole = await getCompanyRoleIncludingInvited(user.userId, companyId);
-    if (
-      fallbackRole === Role.COMPANY_ADMIN ||
-      fallbackRole === Role.ADMIN ||
-      fallbackRole === Role.SUPER_ADMIN
-    ) {
-      role = fallbackRole;
-    }
-  }
+  const { role } = await getUserRole(user.userId, companyId);
   return { role, userId: user.userId };
 };
 
@@ -345,22 +342,25 @@ export const enforceRole = async (input: {
     return { userId: 'content_architect', role: Role.COMPANY_ADMIN };
   }
 
-  const superAdmin = await isSuperAdmin(user.userId);
-  if (superAdmin && input.allowedRoles.includes(Role.SUPER_ADMIN)) {
+  // Run role checks in parallel to reduce latency
+  const [superAdminResult, platformSuperAdminResult, userRoleResult] = await Promise.all([
+    isSuperAdmin(user.userId),
+    isPlatformSuperAdmin(user.userId),
+    getUserRole(user.userId, companyId),
+  ]);
+  // Super admins (both isSuperAdmin and isPlatformSuperAdmin) bypass all role restrictions.
+  // They are Omnivyra platform admins who control the whole app — they must be able to
+  // call any route regardless of which roles that route explicitly lists.
+  if (superAdminResult || platformSuperAdminResult) {
     return { userId: user.userId, role: Role.SUPER_ADMIN };
   }
 
-  let { role, error } = await getUserRole(user.userId, companyId);
+  const { role, error } = userRoleResult;
   if (error === 'COMPANY_ACCESS_DENIED') {
     input.res.status(403).json({ error: 'COMPANY_SCOPE_VIOLATION' });
     return null;
   }
-  if (!role && !error) {
-    const fallbackRole = await getCompanyRoleIncludingInvited(user.userId, companyId);
-    if (fallbackRole && input.allowedRoles.includes(fallbackRole)) {
-      role = fallbackRole;
-    }
-  }
+  // getUserRole now includes invited admin fallback internally; no extra getCompanyRoleIncludingInvited call
   if (error || !role) {
     input.res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
