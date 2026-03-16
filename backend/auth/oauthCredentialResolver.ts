@@ -14,10 +14,20 @@ const PLATFORM_ENV_MAP: Record<string, { id: string; secret: string }> = {
   linkedin: { id: 'LINKEDIN_CLIENT_ID', secret: 'LINKEDIN_CLIENT_SECRET' },
   youtube: { id: 'YOUTUBE_CLIENT_ID', secret: 'YOUTUBE_CLIENT_SECRET' },
   facebook: { id: 'FACEBOOK_CLIENT_ID', secret: 'FACEBOOK_CLIENT_SECRET' },
-  instagram: { id: 'INSTAGRAM_CLIENT_ID', secret: 'INSTAGRAM_CLIENT_SECRET' },
+  // meta and whatsapp use the same Facebook App credentials
+  meta:      { id: 'FACEBOOK_CLIENT_ID', secret: 'FACEBOOK_CLIENT_SECRET' },
+  whatsapp:  { id: 'FACEBOOK_CLIENT_ID', secret: 'FACEBOOK_CLIENT_SECRET' },
+  instagram: { id: 'FACEBOOK_CLIENT_ID', secret: 'FACEBOOK_CLIENT_SECRET' },
   twitter: { id: 'TWITTER_CLIENT_ID', secret: 'TWITTER_CLIENT_SECRET' },
   x: { id: 'TWITTER_CLIENT_ID', secret: 'TWITTER_CLIENT_SECRET' },
-  reddit: { id: 'REDDIT_CLIENT_ID', secret: 'REDDIT_CLIENT_SECRET' },
+  tiktok: { id: 'TIKTOK_CLIENT_ID', secret: 'TIKTOK_CLIENT_SECRET' },
+  pinterest: { id: 'PINTEREST_APP_ID', secret: 'PINTEREST_APP_SECRET' },
+  spotify:       { id: 'SPOTIFY_CLIENT_ID',       secret: 'SPOTIFY_CLIENT_SECRET' },
+  reddit:        { id: 'REDDIT_CLIENT_ID',         secret: 'REDDIT_CLIENT_SECRET' },
+  github:        { id: 'GITHUB_CLIENT_ID',         secret: 'GITHUB_CLIENT_SECRET' },
+  discord:       { id: 'DISCORD_CLIENT_ID',        secret: 'DISCORD_CLIENT_SECRET' },
+  medium:        { id: 'MEDIUM_CLIENT_ID',         secret: 'MEDIUM_CLIENT_SECRET' },
+  stackoverflow: { id: 'STACKOVERFLOW_CLIENT_ID',  secret: 'STACKOVERFLOW_CLIENT_SECRET' },
 };
 
 export type OAuthCredentials = {

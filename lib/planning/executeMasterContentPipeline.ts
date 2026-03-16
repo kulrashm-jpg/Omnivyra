@@ -158,11 +158,22 @@ export async function executeMasterContentPipeline({
   return { master_content, platform_variants };
 }
 
+export type ImprovementType = 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
+
 export type ExecuteVariantImprovementParams = {
   campaignId?: string;
   executionId: string;
   platform: string;
-  improvementType: 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
+  improvementType: ImprovementType;
+  variant: Record<string, unknown>;
+  dailyExecutionItem?: Record<string, unknown> | null;
+};
+
+export type ExecuteVariantImprovementAllParams = {
+  campaignId?: string;
+  executionId: string;
+  platform: string;
+  improvementTypes: ImprovementType[];
   variant: Record<string, unknown>;
   dailyExecutionItem?: Record<string, unknown> | null;
 };
@@ -182,6 +193,41 @@ export async function executeVariantImprovement(
     body: JSON.stringify({
       action: 'improve_variant',
       improvementType: payload.improvementType,
+      platform: payload.platform,
+      executionId: payload.executionId,
+      execution_id: payload.executionId,
+      variant: payload.variant,
+      dailyExecutionItem: payload.dailyExecutionItem ?? {},
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(String(err?.message || err?.error || 'Variant improvement failed'));
+  }
+  const data = await res.json().catch(() => ({}));
+  const improved_variant = data?.improved_variant && typeof data.improved_variant === 'object'
+    ? data.improved_variant
+    : payload.variant;
+  return { improved_variant };
+}
+
+/**
+ * Applies ALL suggestions in a single combined AI call so improvements are integrated
+ * holistically (not appended sequentially). ADD_DISCOVERABILITY is handled in the same
+ * request but written only to discoverability_meta, not the content body.
+ */
+export async function executeVariantImprovementAll(
+  payload: ExecuteVariantImprovementAllParams
+): Promise<{ improved_variant: Record<string, unknown> }> {
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[VariantImprovementAll]', { platform: payload.platform, actions: payload.improvementTypes });
+  }
+  const res = await apiFetch(CONTENT_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'improve_variant_all',
+      improvementTypes: payload.improvementTypes,
       platform: payload.platform,
       executionId: payload.executionId,
       execution_id: payload.executionId,

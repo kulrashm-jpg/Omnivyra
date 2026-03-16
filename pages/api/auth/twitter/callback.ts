@@ -1,8 +1,11 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import axios from 'axios';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { setToken, TokenObject } from '../../../../backend/auth/tokenStore';
+import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
+import { decodeOAuthState } from '../../../../backend/auth/oauthState';
+import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,7 +13,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error } = req.query;
-  const [_stateBaseEarly, returnToEarly] = String(state || '').split('|');
+  const { returnTo: returnToEarly } = decodeOAuthState(state as string);
   const errDest = (returnToEarly && returnToEarly.startsWith('/')) ? returnToEarly : '/social-platforms';
 
   if (error) {
@@ -23,10 +26,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const platform = 'twitter';
-    
+
+    const oauthCredentials = await getOAuthCredentialsForPlatform('twitter');
+    if (!oauthCredentials?.client_id || !oauthCredentials?.client_secret) {
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Twitter OAuth not configured — ask your Super Admin to add credentials.')}`);
+    }
+
     // Exchange code for access token (Twitter OAuth 2.0)
     const credentials = Buffer.from(
-      `${process.env.TWITTER_CLIENT_ID || process.env.X_CLIENT_ID || ''}:${process.env.TWITTER_CLIENT_SECRET || process.env.X_CLIENT_SECRET || ''}`
+      `${oauthCredentials.client_id}:${oauthCredentials.client_secret}`
     ).toString('base64');
 
     const tokenResponse = await axios.post(
@@ -34,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       new URLSearchParams({
         code: code as string,
         grant_type: 'authorization_code',
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/twitter/callback`,
+        redirect_uri: `${getBaseUrl(req)}/api/auth/twitter/callback`,
         code_verifier: '', // Add if using PKCE
       }),
       {
@@ -59,12 +67,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const userProfile = { data: profileResponse.data.data };
 
-    // Extract returnTo from state (format: "twitter_{ts}|/returnPath")
-    const [_stateBase, returnTo] = String(state || '').split('|');
+    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
 
-    // Get authenticated user from the request session
+    // Get authenticated user — prefer cookie session, fall back to userId encoded in state
     const { user: sessionUser } = await getSupabaseUserFromRequest(req);
-    const userId = sessionUser?.id || process.env.DEFAULT_USER_ID || '';
+    const userId = sessionUser?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
 
     if (!userId) {
       console.error('No user_id available - cannot save account');
@@ -86,6 +93,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       expires_at: expiresAt,
       token_type: 'Bearer',
     };
+    const encryptedCols = encryptTokenColumns(tokenObj);
 
     // Create or update social account
     const { data: existingAccount } = await supabase
@@ -117,6 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from('social_accounts')
         .insert({
           user_id: userId,
+          company_id: companyId || null,
           platform: 'twitter',
           platform_user_id: userProfile.data.id,
           account_name: accountName,
@@ -125,6 +134,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           permissions: tokenData.scope?.split(' ') || [],
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
+          access_token: encryptedCols.access_token,
+          refresh_token: encryptedCols.refresh_token,
         })
         .select('id')
         .single();

@@ -1,20 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { setToken, TokenObject } from '../../../../backend/auth/tokenStore';
+import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-
-function parseState(state: string | undefined): { companyId?: string; returnTo?: string } {
-  if (!state || typeof state !== 'string') return {};
-  const [stateBase, returnTo] = state.split('|');
-  const result: { companyId?: string; returnTo?: string } = {};
-  if (returnTo && returnTo.startsWith('/')) result.returnTo = returnTo;
-  if (stateBase.startsWith('c:')) {
-    const parts = stateBase.split(':');
-    if (parts.length >= 2) result.companyId = parts[1];
-  }
-  return result;
-}
+import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
+import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -22,12 +12,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error, error_description } = req.query;
-  const { returnTo: earlyReturnTo } = parseState(state as string);
+  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
   const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
 
   if (error) {
-    console.error('LinkedIn OAuth error:', error, error_description);
-    return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
+    const desc = error_description ? ` — ${error_description}` : '';
+    console.error('[LinkedIn callback] OAuth error from LinkedIn:', error, error_description);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(`LinkedIn error: ${error}${desc}`)}`);
   }
 
   if (!code) {
@@ -36,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const platform = 'linkedin';
-    const { companyId, returnTo } = parseState(state as string);
+    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
 
     const credentials = await getOAuthCredentialsForPlatform(platform);
     if (!credentials?.client_id || !credentials?.client_secret) {
@@ -53,46 +44,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         code: code as string,
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/linkedin/callback`,
+        redirect_uri: `${getBaseUrl(req)}/api/auth/linkedin/callback`,
       }),
     });
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
-      console.error('Token exchange failed:', tokenResponse.status, errorText);
-      throw new Error(`Token exchange failed: ${tokenResponse.statusText}`);
+      console.error('[LinkedIn callback] Token exchange failed:', tokenResponse.status, errorText);
+      throw new Error(`Token exchange failed (${tokenResponse.status}): ${errorText}`);
     }
 
     const tokenData = await tokenResponse.json();
-    console.log('Token received:', { access_token: !!tokenData.access_token, expires_in: tokenData.expires_in });
-    
-    // Get LinkedIn profile info
-    console.log('Fetching LinkedIn profile...');
-    const profileResponse = await fetch('https://api.linkedin.com/v2/people/~:(id,firstName,lastName,profilePicture(displayImage~:playableStreams))', {
-      headers: {
-        'Authorization': `Bearer ${tokenData.access_token}`,
-        'X-Restli-Protocol-Version': '2.0.0'
-      }
+    console.log('[LinkedIn callback] token received:', { access_token: !!tokenData.access_token, expires_in: tokenData.expires_in });
+
+    // Fetch profile — try /v2/userinfo (OIDC) first, fall back to /v2/me
+    let profile: Record<string, any> = {};
+    const userinfoRes = await fetch('https://api.linkedin.com/v2/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
-
-    if (!profileResponse.ok) {
-      const errorText = await profileResponse.text();
-      console.error('Profile fetch failed:', profileResponse.status, errorText);
-      throw new Error(`Profile fetch failed: ${profileResponse.statusText}`);
+    if (userinfoRes.ok) {
+      profile = await userinfoRes.json();
+      // OIDC shape: { sub, name, given_name, family_name, email, picture }
+    } else {
+      // Old API shape: { id, firstName: { localized: { en_US } }, lastName: ... }
+      const meRes = await fetch('https://api.linkedin.com/v2/me', {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+          'X-Restli-Protocol-Version': '2.0.0',
+        },
+      });
+      if (!meRes.ok) {
+        const errorText = await meRes.text();
+        console.error('[LinkedIn callback] Profile fetch failed:', meRes.status, errorText);
+        throw new Error(`Profile fetch failed: ${meRes.statusText}`);
+      }
+      const me = await meRes.json();
+      // Normalise to flat shape
+      profile = {
+        sub: me.id,
+        name: `${me.firstName?.localized?.en_US || ''} ${me.lastName?.localized?.en_US || ''}`.trim(),
+        given_name: me.firstName?.localized?.en_US || null,
+      };
     }
-
-    const profile = await profileResponse.json();
-    console.log('Profile received:', { id: profile.id, firstName: profile.firstName });
+    console.log('[LinkedIn callback] profile received:', { sub: profile.sub, name: profile.name });
 
     const { user } = await getSupabaseUserFromRequest(req);
-    const userId = user?.id || process.env.DEFAULT_USER_ID || '';
+    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
 
     if (!userId) {
       console.error('No user_id available - cannot save account');
       return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
     }
 
-    const accountName = `${profile.firstName?.localized?.en_US || 'LinkedIn'} ${profile.lastName?.localized?.en_US || 'User'}`;
+    const accountName = profile.name || `${profile.given_name || 'LinkedIn'} ${profile.family_name || 'User'}`;
     const expiresIn = tokenData.expires_in || 5184000; // Default 60 days
     const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
@@ -104,7 +108,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       token_type: tokenData.token_type || 'Bearer',
     };
 
-    // Create or update social account in database (G2.2: always set company_id from validated context)
+    // OIDC: user identifier is profile.sub
+    const platformUserId = profile.sub || profile.id;
+    if (!platformUserId) throw new Error('Could not get LinkedIn user ID from profile');
+
     const companyIdUuid = companyId && /^[0-9a-f-]{36}$/i.test(companyId) ? companyId : null;
     // Prefer tenant-scoped row; fall back to legacy (company_id null)
     let existingAccount: { id: string } | null = null;
@@ -115,7 +122,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq('user_id', userId)
         .eq('company_id', companyIdUuid)
         .eq('platform', 'linkedin')
-        .eq('platform_user_id', profile.id)
+        .eq('platform_user_id', platformUserId)
         .maybeSingle();
       if (tenantRow) existingAccount = tenantRow;
     }
@@ -126,7 +133,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq('user_id', userId)
         .is('company_id', null)
         .eq('platform', 'linkedin')
-        .eq('platform_user_id', profile.id)
+        .eq('platform_user_id', platformUserId)
         .maybeSingle();
       existingAccount = legacyRow;
     }
@@ -135,7 +142,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const updatePayload: Record<string, unknown> = {
       account_name: accountName,
-      username: profile.firstName?.localized?.en_US || null,
+      username: profile.given_name || null,
       is_active: true,
       permissions: tokenData.scope?.split(' ') || [],
       token_expires_at: expiresAt,
@@ -158,16 +165,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     } else {
       // Create new account
+      let encryptedCols: { access_token: string; refresh_token: string | null };
+      try {
+        encryptedCols = encryptTokenColumns(tokenObj);
+      } catch (encErr: any) {
+        console.error('[LinkedIn callback] encryptTokenColumns failed:', encErr.message);
+        throw new Error(`Token encryption failed: ${encErr.message}`);
+      }
+
       const insertPayload: Record<string, unknown> = {
         user_id: userId,
         platform: 'linkedin',
-        platform_user_id: profile.id,
+        platform_user_id: platformUserId,
         account_name: accountName,
-        username: profile.firstName?.localized?.en_US || null,
+        username: profile.given_name || null,
         is_active: true,
         permissions: tokenData.scope?.split(' ') || [],
         token_expires_at: expiresAt,
         last_sync_at: new Date().toISOString(),
+        access_token: encryptedCols.access_token,
+        refresh_token: encryptedCols.refresh_token,
       };
       if (companyIdUuid) insertPayload.company_id = companyIdUuid;
 
@@ -178,8 +195,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .single();
 
       if (insertError || !newAccount) {
-        console.error('Failed to create account:', insertError);
-        throw new Error('Failed to create account');
+        console.error('[LinkedIn callback] Failed to create account:', insertError);
+        throw new Error(`Failed to create account: ${insertError?.message || insertError?.code || 'unknown DB error'}`);
       }
 
       accountId = newAccount.id;

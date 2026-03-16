@@ -48,7 +48,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { data: accounts, error } = await supabase
       .from('social_accounts')
-      .select('platform, account_name, username, follower_count, last_sync_at, token_expires_at, is_active')
+      .select('id, platform, account_name, username, follower_count, last_sync_at, token_expires_at, is_active')
       .eq('user_id', userId)
       .eq('is_active', true)
       .order('created_at', { ascending: false });
@@ -58,6 +58,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const list = (accounts || []).map((row: any) => ({
+      id: row.id,
       platform: row.platform,
       account_name: row.account_name ?? null,
       username: row.username ?? null,

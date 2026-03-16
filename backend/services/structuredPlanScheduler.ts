@@ -357,7 +357,6 @@ function scheduleFromDailyPlans(
       content,
       scheduled_for: scheduledFor.toISOString(),
       status: 'scheduled',
-      timezone: 'UTC',
       repurpose_index: repurpose.index,
       repurpose_total: repurpose.total,
       created_at: new Date().toISOString(),
@@ -450,7 +449,6 @@ function scheduleFromExecutionJobs(
       content,
       scheduled_for: scheduledFor.toISOString(),
       status: 'scheduled',
-      timezone: 'UTC',
       repurpose_index: 1,
       repurpose_total: 1,
       created_at: new Date().toISOString(),
@@ -506,7 +504,6 @@ function scheduleFromAllocation(
         content: `${content}\n\n[KPI Focus: ${kpiFocus}]`,
         scheduled_for: scheduledFor.toISOString(),
         status: 'scheduled',
-        timezone: 'UTC',
         repurpose_index: 1,
         repurpose_total: 1,
         created_at: new Date().toISOString(),
@@ -559,7 +556,6 @@ function scheduleFromLegacy(
           content,
           scheduled_for: scheduledFor.toISOString(),
           status: 'scheduled',
-          timezone: 'UTC',
           repurpose_index: 1,
           repurpose_total: 1,
           created_at: new Date().toISOString(),
@@ -577,6 +573,8 @@ export type ScheduleStructuredPlanOptions = {
   generateContent?: boolean;
   /** Called when transitioning between schedule sub-stages (BOLT progress). */
   onProgress?: (stage: string) => void;
+  /** When true, skip (platform, date) combinations that are already scheduled for this campaign. */
+  skipExisting?: boolean;
 };
 
 export async function scheduleStructuredPlan(
@@ -587,6 +585,7 @@ export async function scheduleStructuredPlan(
   scheduled_count: number;
   skipped_count: number;
   skipped_platforms: string[];
+  already_scheduled_count?: number;
 }> {
   if (!plan?.weeks || !Array.isArray(plan.weeks) || plan.weeks.length === 0) {
     throw new Error('Structured plan is required');
@@ -722,18 +721,50 @@ export async function scheduleStructuredPlan(
       scheduled_count: 0,
       skipped_count: skippedPlatforms.length,
       skipped_platforms: skippedPlatforms,
+      already_scheduled_count: 0,
     };
   }
 
-  const { error: insertError } = await supabase.from('scheduled_posts').insert(scheduledPosts);
+  // Skip posts whose (platform, date) are already scheduled for this campaign
+  let postsToInsert = scheduledPosts;
+  let alreadyScheduledCount = 0;
+  if (options?.skipExisting) {
+    const { data: existingPosts } = await supabase
+      .from('scheduled_posts')
+      .select('platform, scheduled_for')
+      .eq('campaign_id', campaignId)
+      .in('status', ['scheduled', 'draft', 'publishing', 'published']);
+    if (existingPosts && existingPosts.length > 0) {
+      const existingKeys = new Set(
+        existingPosts.map((p: any) => `${String(p.platform).toLowerCase()}_${String(p.scheduled_for || '').slice(0, 10)}`)
+      );
+      postsToInsert = scheduledPosts.filter((p: any) => {
+        const key = `${String(p.platform).toLowerCase()}_${String(p.scheduled_for || '').slice(0, 10)}`;
+        return !existingKeys.has(key);
+      });
+      alreadyScheduledCount = scheduledPosts.length - postsToInsert.length;
+    }
+  }
+
+  if (postsToInsert.length === 0) {
+    return {
+      scheduled_count: 0,
+      skipped_count: skippedPlatforms.length,
+      skipped_platforms: skippedPlatforms,
+      already_scheduled_count: alreadyScheduledCount,
+    };
+  }
+
+  const { error: insertError } = await supabase.from('scheduled_posts').insert(postsToInsert);
   if (insertError) {
     throw new Error(`Failed to schedule posts: ${insertError.message}`);
   }
 
   return {
-    scheduled_count: scheduledPosts.length,
+    scheduled_count: postsToInsert.length,
     skipped_count: skippedPlatforms.length,
     skipped_platforms: skippedPlatforms,
+    already_scheduled_count: alreadyScheduledCount,
   };
 }
 
@@ -930,7 +961,6 @@ export async function createLegacyScheduledPost(input: {
     media_urls: Array.isArray(input.mediaUrls) ? input.mediaUrls : [],
     scheduled_for: scheduledFor.toISOString(),
     status: 'scheduled',
-    timezone: 'UTC',
     repurpose_index: 1,
     repurpose_total: 1,
     created_at: now,

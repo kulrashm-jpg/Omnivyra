@@ -6,7 +6,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { X, Send } from 'lucide-react';
-import MentionHighlight from './MentionHighlight';
+import ContentRenderer from '../ContentRenderer';
 
 export type CollaborationMessage = {
   id: string;
@@ -209,7 +209,7 @@ export default function FloatingChatPanel({
                   <div className="text-xs font-medium opacity-90">
                     {msg.created_by_name || 'User'} · {formatTime(msg.created_at)}
                   </div>
-                  <div className="text-sm mt-0.5"><MentionHighlight text={msg.message_text} /></div>
+                  <ContentRenderer content={msg.message_text} renderMode="comment" className="mt-0.5" textCls={msg.created_by === currentUserId ? '' : 'text-gray-900'} />
                 </div>
               </div>
               {(repliesByParent[msg.id] || []).map((reply) => (
@@ -222,7 +222,7 @@ export default function FloatingChatPanel({
                     <div className="text-xs font-medium opacity-90">
                       {reply.created_by_name || 'User'} · {formatTime(reply.created_at)}
                     </div>
-                    <div className="text-sm mt-0.5"><MentionHighlight text={reply.message_text} /></div>
+                    <ContentRenderer content={reply.message_text} renderMode="comment" className="mt-0.5" textCls={reply.created_by === currentUserId ? '' : 'text-gray-900'} />
                   </div>
                 </div>
               ))}

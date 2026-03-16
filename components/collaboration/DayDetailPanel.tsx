@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, Send } from 'lucide-react';
 import PlatformIcon from '../ui/PlatformIcon';
-import MentionHighlight from './MentionHighlight';
+import ContentRenderer from '../ContentRenderer';
 
 /** Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc. */
 function RepurposeDots({ index, total, contentType }: { index: number; total: number; contentType?: string }) {
@@ -167,7 +167,7 @@ export default function DayDetailPanel({
                         {isOwn ? 'You' : msg.created_by_name || 'User'} ·{' '}
                         {formatTime(msg.created_at)}
                       </p>
-                      <p className="text-sm mt-0.5"><MentionHighlight text={msg.message_text} /></p>
+                      <ContentRenderer content={msg.message_text} renderMode="comment" className="mt-0.5" />
                     </div>
                   </div>
                 );

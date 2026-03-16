@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 
 export type PlatformWorkItem = {
   platform: string;
@@ -46,9 +47,7 @@ export function useWorkQueue(
     });
 
     try {
-      const res = await fetch(`/api/engagement/work-queue?${params.toString()}`, {
-        credentials: 'include',
-      });
+      const res = await apiFetch(`/api/engagement/work-queue?${params.toString()}`);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(body.error || body.message || 'Failed to fetch work queue');

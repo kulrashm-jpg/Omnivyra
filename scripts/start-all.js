@@ -159,7 +159,7 @@ async function runAppOnly(children) {
   console.log('\n⚠️  Running Next.js only (no workers). BOLT and background jobs will not work.\n');
   console.log('   App: http://localhost:3000');
   console.log('   To enable workers: start Redis and run npm run dev:full\n');
-  const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev', '--webpack'], {
+  const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev'], {
     env: { ...process.env, ENABLE_AUTO_WORKERS: '0' },
   });
   children.push(nextProc);
@@ -258,7 +258,7 @@ async function main() {
   console.log('   App: http://localhost:3000');
   console.log('   Press Ctrl+C to stop all services\n');
 
-  const next = spawnProcess('next', process.execPath, [nextBin, 'dev', '--webpack'], {
+  const next = spawnProcess('next', process.execPath, [nextBin, 'dev'], {
     env: { ...process.env, ENABLE_AUTO_WORKERS: '0' },
   });
   children.push(next);

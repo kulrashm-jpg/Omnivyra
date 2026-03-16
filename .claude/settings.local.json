@@ -9,7 +9,15 @@
       "Bash(find:*)",
       "Bash(cd:*)",
       "Bash(curl:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(cat:*)",
+      "Bash(for file:*)",
+      "Bash(do echo:*)",
+      "Read(//c/virality/**)",
+      "Bash(done)",
+      "Bash(git add:*)",
+      "Bash(npx supabase-js:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -89,9 +89,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const tokenData = await tokenResponse.json();
+    if (!tokenData.access_token) {
+      return res.redirect(
+        `/community-ai/connectors?error=${encodeURIComponent('LinkedIn did not return an access token. Check your OAuth app scopes.')}`
+      );
+    }
+
     const expiresIn = Number(tokenData.expires_in || 0);
     const expiresAt =
       expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
+
+    // Verify token and get LinkedIn identity via OIDC userinfo endpoint
+    let linkedinSub: string | null = null;
+    let linkedinName: string | null = null;
+    const userinfoRes = await fetch('https://api.linkedin.com/v2/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    if (userinfoRes.ok) {
+      const userinfo = await userinfoRes.json();
+      linkedinSub = userinfo.sub || null;
+      linkedinName = userinfo.name || userinfo.given_name || null;
+    } else {
+      console.warn('[linkedin/connector/callback] userinfo fetch failed:', userinfoRes.status);
+    }
 
     await saveToken(tenantId, organizationId, 'linkedin', {
       access_token: tokenData.access_token,
@@ -101,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     // G5.5: Audit log
-    console.info('[connector_audit]', JSON.stringify({ user_id: access!.userId, company_id: organizationId, platform: 'linkedin', action: 'connect' }));
+    console.info('[connector_audit]', JSON.stringify({ user_id: access!.userId, company_id: organizationId, platform: 'linkedin', action: 'connect', linkedin_sub: linkedinSub, linkedin_name: linkedinName }));
 
     return res.redirect(
       `${redirectTo}?connected=linkedin&status=success`

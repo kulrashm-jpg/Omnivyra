@@ -1,8 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { setToken, TokenObject } from '../../../../backend/auth/tokenStore';
+import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
+import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,20 +12,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error } = req.query;
-
-  function parseState(s: string | undefined): { companyId?: string; returnTo?: string } {
-    if (!s || typeof s !== 'string') return {};
-    const [base, returnTo] = s.split('|');
-    const result: { companyId?: string; returnTo?: string } = {};
-    if (returnTo?.startsWith('/')) result.returnTo = returnTo;
-    if (base.startsWith('c:')) {
-      const parts = base.split(':');
-      if (parts.length >= 2) result.companyId = parts[1];
-    }
-    return result;
-  }
-
-  const { returnTo: earlyReturnTo } = parseState(state as string);
+  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
   const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
 
   if (error) {
@@ -36,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const platform = 'youtube';
-    const { companyId, returnTo } = parseState(state as string);
+    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
 
     const credentials = await getOAuthCredentialsForPlatform(platform);
     if (!credentials?.client_id || !credentials?.client_secret) {
@@ -53,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body: new URLSearchParams({
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/youtube/callback`,
+        redirect_uri: `${getBaseUrl(req)}/api/auth/youtube/callback`,
         grant_type: 'authorization_code',
         code: code as string,
       }),
@@ -84,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const { user } = await getSupabaseUserFromRequest(req);
-    const userId = user?.id || process.env.DEFAULT_USER_ID || '';
+    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
 
     if (!userId) {
       console.error('No user_id available - cannot save account');
@@ -102,6 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       expires_at: expiresAt,
       token_type: 'Bearer',
     };
+    const encryptedCols = encryptTokenColumns(tokenObj);
 
     // Create or update social account
     const { data: existingAccount } = await supabase
@@ -134,6 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from('social_accounts')
         .insert({
           user_id: userId,
+          company_id: companyId || null,
           platform: 'youtube',
           platform_user_id: channel.id,
           account_name: accountName,
@@ -143,6 +134,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           permissions: ['youtube', 'youtube.upload'],
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
+          access_token: encryptedCols.access_token,
+          refresh_token: encryptedCols.refresh_token,
         })
         .select('id')
         .single();

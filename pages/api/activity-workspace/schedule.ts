@@ -8,20 +8,28 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { resolveUserContext } from '@/backend/services/userContextService';
+import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  console.log('[schedule] method:', req.method, 'url:', req.url);
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method not allowed: ${req.method}` });
+  }
 
-  // Resolve current user — required for user_id field on scheduled_posts
+  // Resolve current user — always use the real Supabase JWT user ID
+  // (resolveUserContext can return 'content_architect' for platform-level sessions,
+  // which has no social_accounts and cannot schedule posts on behalf of a real user)
   let userId: string;
   try {
-    const ctx = await resolveUserContext(req);
-    userId = ctx.userId;
-    if (!userId || userId === 'anon') {
+    const { user, error } = await getSupabaseUserFromRequest(req);
+    if (error || !user?.id) {
+      console.warn('[schedule] unauthenticated request');
       return res.status(401).json({ error: 'Authentication required' });
     }
-  } catch {
+    userId = user.id;
+    console.log('[schedule] resolved userId:', userId);
+  } catch (authErr) {
+    console.error('[schedule] auth error:', authErr);
     return res.status(401).json({ error: 'Authentication required' });
   }
 
@@ -40,20 +48,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let campaignId: string = String(req.body?.campaignId || '').trim();
   let companyId: string = String(req.body?.companyId || '').trim();
 
+  console.log('[schedule] body:', { campaignId, platform, content: content?.slice?.(0,30), scheduledDate, executionId });
+
   if (!campaignId || !platform || !content || !scheduledDate) {
     return res.status(400).json({ error: 'campaignId, platform, content, and scheduledDate are required' });
   }
 
   // Resolve companyId from campaign_versions when the workspace payload didn't supply it
   if (!companyId) {
-    const { data: cv } = await supabase
+    const { data: cv, error: cvErr } = await supabase
       .from('campaign_versions')
       .select('company_id')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (cvErr) console.warn('[schedule] companyId lookup error:', cvErr);
     companyId = cv?.company_id || '';
+    console.log('[schedule] resolved companyId:', companyId);
   }
 
   const timeStr =
@@ -64,132 +76,158 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Invalid scheduledDate' });
   }
 
-  const platformNorm = String(platform).toLowerCase().trim();
+  // Normalise 'x' → 'twitter' for DB storage (chk_platform constraint only allows 'twitter')
+  const platformNorm = String(platform).toLowerCase().trim() === 'x' ? 'twitter' : String(platform).toLowerCase().trim();
   const executionIdStr = String(executionId || '').trim();
 
   // Try to resolve a connected social account for this platform.
   // Falls back to any active social account for the user when no platform-specific one exists.
-  // This ensures social_account_id is populated even before the DDL migration makes it nullable.
   let socialAccountId: string | null = null;
   try {
-    // 1. Platform-specific lookup
     const platformAlias = platformNorm === 'x' ? 'twitter' : platformNorm;
-    let accountQ = supabase
-      .from('social_accounts')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('is_active', true)
-      .in('platform', [platformNorm, platformAlias]);
-    if (companyId) {
-      accountQ = (accountQ as any).or(`company_id.eq.${companyId},company_id.is.null`);
-    }
-    const { data: acct } = await accountQ.limit(1).maybeSingle();
-    socialAccountId = acct?.id ?? null;
+    const isValidUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 
-    // 2. Fallback: any active social account for this user (satisfies NOT NULL until migration applied)
-    if (!socialAccountId) {
-      const { data: fallback } = await supabase
+    // 1a. Platform + company_id scoped lookup (only when companyId is a valid UUID)
+    if (!socialAccountId && companyId && isValidUuid(companyId)) {
+      const { data, error } = await supabase
         .from('social_accounts')
         .select('id')
         .eq('user_id', userId)
         .eq('is_active', true)
+        .eq('company_id', companyId)
+        .in('platform', [platformNorm, platformAlias])
         .limit(1)
         .maybeSingle();
-      socialAccountId = fallback?.id ?? null;
+      if (error) console.warn('[schedule] company-scoped account lookup error:', error.message);
+      socialAccountId = data?.id ?? null;
     }
-  } catch {
-    // Non-fatal
-  }
 
-  // If no real social account exists yet, upsert a planning placeholder so the NOT NULL
-  // constraint on scheduled_posts.social_account_id is satisfied without requiring a migration.
-  // Planning placeholders are marked is_active=false so they are ignored by publishing workers.
-  if (!socialAccountId) {
-    try {
-      const placeholderPlatformUserId = `planning_${userId}_${platformNorm}`;
-      const { data: existing } = await supabase
+    // 1b. Platform lookup without company scope
+    if (!socialAccountId) {
+      const { data, error } = await supabase
         .from('social_accounts')
         .select('id')
         .eq('user_id', userId)
-        .eq('platform', platformNorm)
-        .eq('platform_user_id', placeholderPlatformUserId)
+        .eq('is_active', true)
+        .in('platform', [platformNorm, platformAlias])
+        .limit(1)
         .maybeSingle();
-
-      if (existing?.id) {
-        socialAccountId = existing.id;
-      } else {
-        const { data: created } = await supabase
-          .from('social_accounts')
-          .insert({
-            user_id: userId,
-            platform: platformNorm,
-            platform_user_id: placeholderPlatformUserId,
-            account_name: `[Planning] ${platformNorm}`,
-            is_active: false,
-          })
-          .select('id')
-          .single();
-        socialAccountId = created?.id ?? null;
-      }
-    } catch {
-      // Ignore — if placeholder creation fails we'll hit the DB constraint below
+      if (error) console.warn('[schedule] platform account lookup error:', error.message);
+      socialAccountId = data?.id ?? null;
     }
+
+    console.log('[schedule] resolved socialAccountId:', socialAccountId);
+  } catch (err) {
+    console.warn('[schedule] social account resolution error:', err);
   }
 
-  if (!socialAccountId) {
-    return res.status(422).json({
-      error: 'Could not resolve a social account. Run: ALTER TABLE scheduled_posts ALTER COLUMN social_account_id DROP NOT NULL;',
-    });
-  }
+  // socialAccountId may be null — social_account_id is nullable (patch-scheduled-posts-social-account-optional.sql).
+  // Publishing workers check for a valid account before posting; UI shows a "Connect" warning badge.
+  console.log('[schedule] inserting row with socialAccountId:', socialAccountId, 'campaignId:', campaignId);
 
-  const row: Record<string, unknown> = {
+  // campaign_id in scheduled_posts is UUID — only include if it looks like a valid UUID
+  const isValidUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  const campaignIdUuid = isValidUuid(campaignId) ? campaignId : null;
+  if (!campaignIdUuid) console.warn('[schedule] campaignId is not a valid UUID, skipping campaign_id column:', campaignId);
+
+  // Base row — columns guaranteed to exist in the initial schema
+  const baseRow: Record<string, unknown> = {
     user_id: userId,
-    campaign_id: campaignId,
+    campaign_id: campaignIdUuid,
     platform: platformNorm,
-    content_type: String(contentType || 'post').toLowerCase().trim(),
+    content_type: (() => {
+      const ct = String(contentType || 'post').toLowerCase().trim();
+      // Normalise aliases to values accepted by chk_content_type constraint
+      if (ct === 'feed_post') return 'post';
+      if (ct === 'tweet') return 'tweet';
+      return ct;
+    })(),
     title: String(title || '').trim() || null,
     content: String(content).trim(),
     scheduled_for: scheduledFor.toISOString(),
     status: 'scheduled',
+    social_account_id: socialAccountId,
+  };
+
+  // Repurpose lineage columns — added by scheduled_posts_repurpose_lineage.sql migration.
+  // Only include them when the migration has been applied (detected by insert error on first attempt).
+  const repurposeExtras: Record<string, unknown> = {
     repurpose_parent_execution_id: executionIdStr || null,
     repurpose_index: Number.isFinite(Number(repurposeIndex)) ? Number(repurposeIndex) : 1,
     repurpose_total: Number.isFinite(Number(repurposeTotal)) ? Number(repurposeTotal) : 1,
-    social_account_id: socialAccountId,
+  };
+
+  const tryInsert = async (row: Record<string, unknown>) => {
+    return supabase.from('scheduled_posts').insert(row).select('id').single();
+  };
+
+  const tryUpdate = async (id: string, row: Record<string, unknown>) => {
+    return supabase
+      .from('scheduled_posts')
+      .update({ ...row, updated_at: new Date().toISOString() })
+      .eq('id', id);
   };
 
   try {
     let scheduledPostId: string | null = null;
+    const fullRow = { ...baseRow, ...repurposeExtras };
 
-    // Idempotent: update existing post if same execution_id + platform already exists
+    // Idempotent: update existing post if same execution_id + platform already exists.
+    // Only attempt the lookup when repurpose columns may exist.
     if (executionIdStr) {
-      const { data: existing } = await supabase
-        .from('scheduled_posts')
-        .select('id')
-        .eq('repurpose_parent_execution_id', executionIdStr)
-        .eq('platform', platformNorm)
-        .maybeSingle();
-
-      if (existing?.id) {
-        const { error: updateErr } = await supabase
+      try {
+        const { data: existing } = await supabase
           .from('scheduled_posts')
-          .update({ ...row, updated_at: new Date().toISOString() })
-          .eq('id', existing.id);
-        if (updateErr) {
-          console.error('[activity-workspace/schedule] update error:', updateErr);
-          return res.status(500).json({ error: updateErr.message });
+          .select('id')
+          .eq('repurpose_parent_execution_id', executionIdStr)
+          .eq('platform', platformNorm)
+          .maybeSingle();
+
+        if (existing?.id) {
+          const { error: updateErr } = await tryUpdate(existing.id, fullRow);
+          if (updateErr) {
+            // Retry without repurpose extras for: missing column (42703), type operator errors (42883)
+            const isSchemaErr = updateErr.message?.includes('column') || updateErr.code === '42703'
+              || updateErr.message?.includes('operator does not exist') || updateErr.code === '42883';
+            if (isSchemaErr) {
+              console.warn('[schedule] schema mismatch on update, retrying without repurpose extras:', updateErr.message);
+              const { error: retryErr } = await tryUpdate(existing.id, baseRow);
+              if (retryErr) {
+                console.error('[activity-workspace/schedule] update retry error:', retryErr);
+                return res.status(500).json({ error: retryErr.message });
+              }
+            } else {
+              console.error('[activity-workspace/schedule] update error:', updateErr);
+              return res.status(500).json({ error: updateErr.message });
+            }
+          }
+          scheduledPostId = existing.id;
         }
-        scheduledPostId = existing.id;
+      } catch (lookupErr: any) {
+        // repurpose_parent_execution_id column doesn't exist — skip idempotency check
+        console.warn('[schedule] repurpose lookup failed (column may not exist):', lookupErr?.message);
       }
     }
 
     if (!scheduledPostId) {
-      const { data: inserted, error: insertErr } = await supabase
-        .from('scheduled_posts')
-        .insert(row)
-        .select('id')
-        .single();
+      let { data: inserted, error: insertErr } = await tryInsert(fullRow);
+
+      // Retry without repurpose extras for: missing column (42703), type operator errors (42883)
+      if (insertErr && (insertErr.message?.includes('column') || insertErr.code === '42703'
+        || insertErr.message?.includes('operator does not exist') || insertErr.code === '42883')) {
+        console.warn('[schedule] schema mismatch on insert, retrying without repurpose extras:', insertErr.message);
+        const retry = await tryInsert(baseRow);
+        inserted = retry.data;
+        insertErr = retry.error;
+      }
+
       if (insertErr) {
-        console.error('[activity-workspace/schedule] insert error:', insertErr);
+        console.error('[activity-workspace/schedule] insert error:', {
+          code: insertErr.code,
+          message: insertErr.message,
+          details: (insertErr as any).details,
+          hint: (insertErr as any).hint,
+        });
         return res.status(500).json({ error: insertErr.message });
       }
       scheduledPostId = inserted?.id ?? null;

@@ -54,24 +54,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let lockId: string | null = null;
 
   try {
-    // FIX 1: Prevent double scheduling — check if scheduled_posts already exist
-    const { count: existingCount, error: countError } = await supabase
-      .from('scheduled_posts')
-      .select('id', { count: 'exact', head: true })
-      .eq('campaign_id', campaignId);
-
-    if (countError) {
-      console.error('[repurpose-and-schedule] Error checking scheduled posts:', countError);
-      return res.status(500).json({ success: false, error: 'Failed to check schedule status' });
-    }
-    if ((existingCount ?? 0) > 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Campaign already scheduled.',
-      });
-    }
-
-    // FIX 2: Acquire scheduler lock to prevent concurrent runs
+    // Acquire scheduler lock to prevent concurrent runs
     try {
       lockId = await acquireSchedulerLock(campaignId);
     } catch (lockErr) {
@@ -141,6 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const result = await scheduleStructuredPlan(plan, campaignId, {
       generateContent: true,
+      skipExisting: true,
     });
 
     // FIX 4: Return enhanced schedule summary
@@ -149,6 +133,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       success: true,
       scheduledPostsCreated: result.scheduled_count,
+      alreadyScheduled: result.already_scheduled_count ?? 0,
       skippedCreatorActivities,
       weeksScheduled: weekNumbers.length,
       platformsScheduled,

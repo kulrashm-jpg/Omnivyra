@@ -1,26 +1,18 @@
 /**
  * LinkedIn Adapter
- * 
- * Publishes posts to LinkedIn using the LinkedIn API v2.
- * 
- * API Documentation: https://docs.microsoft.com/en-us/linkedin/shared/integrations/people/share-api
- * 
- * Required OAuth Scopes:
- * - w_member_social (for posting)
- * 
- * To obtain API credentials:
- * 1. Create LinkedIn app at https://www.linkedin.com/developers/apps
- * 2. Request "Marketing Developer Platform" access (for posting)
- * 3. Configure redirect URI: {BASE_URL}/api/auth/linkedin/callback
- * 4. Get Client ID and Client Secret
- * 
- * Environment Variables:
- * - LINKEDIN_CLIENT_ID
- * - LINKEDIN_CLIENT_SECRET
- * - USE_MOCK_PLATFORMS=true (for testing without real credentials)
+ *
+ * Publishes posts using LinkedIn's Posts API (v202410).
+ * Reference: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api
+ *
+ * Required OAuth Scope: w_member_social
+ * Required LinkedIn App Product: "Share on LinkedIn"
+ *
+ * Setup:
+ *   1. https://www.linkedin.com/developers/apps → your app → Products tab
+ *   2. Add "Share on LinkedIn" product
+ *   3. Verify w_member_social scope is approved
  */
 
-import axios from 'axios';
 import { PublishResult } from './platformAdapter';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 
@@ -46,137 +38,170 @@ interface Token {
   token_type?: string;
 }
 
-/**
- * Publish post to LinkedIn
- */
+// LinkedIn versioned API — update quarterly (YYYYMM format)
+const LINKEDIN_API_VERSION = '202410';
+
 export async function publishToLinkedIn(
   post: ScheduledPost,
   account: SocialAccount,
   token: Token
 ): Promise<PublishResult> {
-  // Use mock mode if enabled (for testing)
   if (process.env.USE_MOCK_PLATFORMS === 'true') {
-    console.log('🧪 MOCK MODE: Simulating LinkedIn post');
+    console.log('[linkedin] MOCK MODE: simulating post');
     return {
       success: true,
       platform_post_id: `mock_linkedin_${Date.now()}`,
-      post_url: `https://www.linkedin.com/feed/update/${Date.now()}`,
+      post_url: `https://www.linkedin.com/feed/update/urn:li:share:${Date.now()}`,
       published_at: new Date(),
     };
   }
 
-  try {
-    // LinkedIn API endpoint for sharing
-    const apiUrl = 'https://api.linkedin.com/v2/ugcPosts';
-
-    // Format content automatically for LinkedIn platform
-    const formatted = formatContentForPlatform(post.content, 'linkedin', {
-      hashtags: post.hashtags,
-      mediaUrls: post.media_urls,
-    });
-
-    // Log warnings if content was modified
-    if (formatted.warnings.length > 0) {
-      console.warn('⚠️ Content formatting warnings:', formatted.warnings);
-    }
-
-    // Build LinkedIn UGC post payload
-    // LinkedIn requires specific structure for UGC posts
-    const payload = {
-      author: `urn:li:person:${account.platform_user_id}`,
-      lifecycleState: 'PUBLISHED',
-      specificContent: {
-        'com.linkedin.ugc.ShareContent': {
-          shareCommentary: {
-            text: formatted.text,
-          },
-          shareMediaCategory: post.media_urls && post.media_urls.length > 0
-            ? 'ARTICLE'
-            : 'NONE',
-        },
-      },
-      visibility: {
-        'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC',
-      },
-    };
-
-    // Add media if present
-    if (post.media_urls && post.media_urls.length > 0) {
-      // TODO: Upload media to LinkedIn first, get media URN
-      // For now, assume media already uploaded or use article URL
-      const shareContent = payload.specificContent['com.linkedin.ugc.ShareContent'] as any;
-      shareContent.media = post.media_urls.map(
-        (url, index) => ({
-          status: 'READY',
-          description: {
-            text: post.title || '',
-          },
-          media: url,
-          title: {
-            text: post.title || `Media ${index + 1}`,
-          },
-        })
-      );
-    }
-
-    // Make API call
-    const response = await axios.post(apiUrl, payload, {
-      headers: {
-        Authorization: `Bearer ${token.access_token}`,
-        'Content-Type': 'application/json',
-        'X-Restli-Protocol-Version': '2.0.0',
-      },
-    });
-
-    // Extract post ID from LinkedIn response
-    // Response format: { "id": "urn:li:ugcPost:123456789" }
-    const platformPostId = response.data.id;
-    const postIdPart = platformPostId.split(':').pop();
-    const postUrl = `https://www.linkedin.com/feed/update/${postIdPart}`;
-
-    console.log(`✅ LinkedIn post published: ${postUrl}`);
-
-    return {
-      success: true,
-      platform_post_id: platformPostId,
-      post_url: postUrl,
-      published_at: new Date(),
-    };
-  } catch (error: any) {
-    console.error('LinkedIn API error:', error.response?.data || error.message);
-
-    // Handle specific LinkedIn errors
-    if (error.response?.status === 401) {
-      return {
-        success: false,
-        error: {
-          code: 'LINKEDIN_UNAUTHORIZED',
-          message: 'Token expired or invalid. Please reconnect account.',
-          retryable: false, // Don't retry auth errors
-        },
-      };
-    }
-
-    if (error.response?.status === 429) {
-      return {
-        success: false,
-        error: {
-          code: 'LINKEDIN_RATE_LIMIT',
-          message: 'Rate limit exceeded. Please try again later.',
-          retryable: true,
-        },
-      };
-    }
-
+  if (!account.platform_user_id) {
     return {
       success: false,
       error: {
-        code: 'LINKEDIN_API_ERROR',
-        message: error.response?.data?.message || error.message,
+        code: 'LINKEDIN_NO_USER_ID',
+        message: 'LinkedIn account has no platform_user_id. Reconnect the account.',
+        retryable: false,
+      },
+    };
+  }
+
+  const formatted = formatContentForPlatform(post.content, 'linkedin', {
+    hashtags: post.hashtags,
+    mediaUrls: post.media_urls,
+  });
+
+  if (formatted.warnings.length > 0) {
+    console.warn('[linkedin] content formatting warnings:', formatted.warnings);
+  }
+
+  const authorUrn = `urn:li:person:${account.platform_user_id}`;
+
+  // LinkedIn Posts API payload (replaces deprecated /v2/ugcPosts)
+  const payload: Record<string, unknown> = {
+    author: authorUrn,
+    commentary: formatted.text,
+    visibility: 'PUBLIC',
+    distribution: {
+      feedDistribution: 'MAIN_FEED',
+      targetEntities: [],
+      thirdPartyDistributionChannels: [],
+    },
+    lifecycleState: 'PUBLISHED',
+    isReshareDisabledByAuthor: false,
+  };
+
+  console.log('[linkedin] publishing as author:', authorUrn, '| content length:', formatted.text.length);
+
+  try {
+    const response = await fetch('https://api.linkedin.com/rest/posts', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token.access_token}`,
+        'Content-Type': 'application/json',
+        'LinkedIn-Version': LINKEDIN_API_VERSION,
+        'X-Restli-Protocol-Version': '2.0.0',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const responseText = await response.text();
+    console.log('[linkedin] API response:', response.status, responseText.slice(0, 300));
+
+    if (!response.ok) {
+      let errorBody: any = {};
+      try { errorBody = JSON.parse(responseText); } catch { /* plain text */ }
+
+      const status = response.status;
+      const message = errorBody?.message || errorBody?.error || responseText || `HTTP ${status}`;
+
+      if (status === 401) {
+        return {
+          success: false,
+          error: {
+            code: 'LINKEDIN_UNAUTHORIZED',
+            message: `Token expired or invalid (401). Reconnect your LinkedIn account. Detail: ${message}`,
+            retryable: false,
+          },
+        };
+      }
+
+      if (status === 403) {
+        return {
+          success: false,
+          error: {
+            code: 'LINKEDIN_FORBIDDEN',
+            message: `Permission denied (403). Ensure "Share on LinkedIn" product is added to your LinkedIn App and w_member_social scope is approved. Detail: ${message}`,
+            retryable: false,
+          },
+        };
+      }
+
+      if (status === 422) {
+        return {
+          success: false,
+          error: {
+            code: 'LINKEDIN_VALIDATION',
+            message: `Invalid post data (422). Detail: ${message}`,
+            retryable: false,
+          },
+        };
+      }
+
+      if (status === 429) {
+        return {
+          success: false,
+          error: {
+            code: 'LINKEDIN_RATE_LIMIT',
+            message: 'LinkedIn rate limit hit. Will retry.',
+            retryable: true,
+          },
+        };
+      }
+
+      return {
+        success: false,
+        error: {
+          code: 'LINKEDIN_API_ERROR',
+          message: `LinkedIn API error (${status}): ${message}`,
+          retryable: status >= 500,
+        },
+      };
+    }
+
+    // Success: LinkedIn returns the post URN in the X-RestLi-Id header
+    const postUrn = response.headers.get('x-restli-id') || response.headers.get('X-RestLi-Id') || '';
+    // Fallback: try parsing body
+    let platformPostId = postUrn;
+    if (!platformPostId && responseText) {
+      try {
+        const body = JSON.parse(responseText);
+        platformPostId = body.id || body.urn || '';
+      } catch { /* ignore */ }
+    }
+
+    const postUrl = platformPostId
+      ? `https://www.linkedin.com/feed/update/${encodeURIComponent(platformPostId)}`
+      : `https://www.linkedin.com/in/${account.username || 'me'}/recent-activity/shares/`;
+
+    console.log('[linkedin] post published:', platformPostId, postUrl);
+
+    return {
+      success: true,
+      platform_post_id: platformPostId || `linkedin_${Date.now()}`,
+      post_url: postUrl,
+      published_at: new Date(),
+    };
+  } catch (err: any) {
+    console.error('[linkedin] network error:', err?.message);
+    return {
+      success: false,
+      error: {
+        code: 'LINKEDIN_NETWORK_ERROR',
+        message: err?.message || 'Network error calling LinkedIn API',
         retryable: true,
       },
     };
   }
 }
-
-

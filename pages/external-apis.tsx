@@ -126,6 +126,36 @@ function classifyApiError(
   return null;
 }
 
+const API_META: Record<string, { icon: string; color: string }> = {
+  // Trend
+  'YouTube Trends':                   { icon: '▶️',  color: 'border-red-200 bg-red-50' },
+  'YouTube Shorts Trends':            { icon: '▶️',  color: 'border-red-200 bg-red-50' },
+  'NewsAPI Headlines':                { icon: '📰',  color: 'border-blue-200 bg-blue-50' },
+  'NewsAPI Everything':               { icon: '📰',  color: 'border-blue-200 bg-blue-50' },
+  'SerpAPI Google Trends':            { icon: '🔍',  color: 'border-emerald-200 bg-emerald-50' },
+  'SerpAPI Google News':              { icon: '🔍',  color: 'border-emerald-200 bg-emerald-50' },
+  'GDELT Events':                     { icon: '🌍',  color: 'border-teal-200 bg-teal-50' },
+  'Google Trends (PyTrends Bridge)':  { icon: '📈',  color: 'border-green-200 bg-green-50' },
+  // Social
+  'X (Twitter) Recent Search':        { icon: '🐦',  color: 'border-sky-200 bg-sky-50' },
+  // Community
+  'Reddit Search':                    { icon: '🟠',  color: 'border-orange-200 bg-orange-50' },
+  'Hacker News Trends':               { icon: '🔶',  color: 'border-orange-200 bg-orange-50' },
+  'Stack Overflow Trends':            { icon: '📚',  color: 'border-amber-200 bg-amber-50' },
+  // Others — LLMs & image APIs
+  'OpenAI GPT':                       { icon: '🤖',  color: 'border-violet-200 bg-violet-50' },
+  'Anthropic Claude':                 { icon: '🧠',  color: 'border-purple-200 bg-purple-50' },
+  'Google Gemini':                    { icon: '✨',  color: 'border-blue-200 bg-blue-50' },
+  'Mistral AI':                       { icon: '🌊',  color: 'border-indigo-200 bg-indigo-50' },
+  'Groq':                             { icon: '⚡',  color: 'border-yellow-200 bg-yellow-50' },
+  'Cohere':                           { icon: '🔗',  color: 'border-teal-200 bg-teal-50' },
+  'HuggingFace':                      { icon: '🤗',  color: 'border-amber-200 bg-amber-50' },
+  'Replicate':                        { icon: '🔁',  color: 'border-gray-200 bg-gray-50' },
+  'Stability AI':                     { icon: '🎨',  color: 'border-rose-200 bg-rose-50' },
+  'DALL-E':                           { icon: '🖼️',  color: 'border-pink-200 bg-pink-50' },
+  'Midjourney':                       { icon: '🎭',  color: 'border-fuchsia-200 bg-fuchsia-50' },
+};
+
 type ExternalApiPreset = {
   id?: string;
   name: string;
@@ -212,7 +242,7 @@ export default function ExternalApisPage() {
   const [testGeo, setTestGeo] = useState('US');
   const [selectedTestScenario, setSelectedTestScenario] = useState<string | null>(null);
   const [isSavingPreset, setIsSavingPreset] = useState(false);
-  const [activeTab, setActiveTab] = useState<'global' | 'request-new' | 'queue' | 'usage'>('global');
+  const [activeTab, setActiveTab] = useState<'trend' | 'social' | 'community' | 'others' | 'request-new' | 'queue' | 'usage'>('trend');
   const [runtime, setRuntime] = useState<any>(null);
   const [apiTestResults, setApiTestResults] = useState<Record<string, any>>({});
   const [hiddenPresetIds, setHiddenPresetIds] = useState<Set<string>>(new Set());
@@ -229,7 +259,6 @@ export default function ExternalApisPage() {
   const [testAllSummary, setTestAllSummary] = useState<{ healthy: number; warning: number; failed: number } | null>(null);
   const [testConnectionLoadingId, setTestConnectionLoadingId] = useState<string | null>(null);
   const [expandedCardIds, setExpandedCardIds] = useState<Set<string>>(new Set());
-  const [actionsOpenId, setActionsOpenId] = useState<string | null>(null);
   const [requestForm, setRequestForm] = useState({
     name: '',
     base_url: '',
@@ -1159,6 +1188,41 @@ export default function ExternalApisPage() {
   );
   const previewUrl = buildPreviewUrl(form.base_url || '', previewQueryParams);
 
+  /** Classify an API source into one of three categories based on name + base URL patterns. */
+  const getApiSection = (api: ApiSource): 'trend' | 'social' | 'community' | 'others' => {
+    const name = (api.name || '').toLowerCase();
+    const url  = (api.base_url || '').toLowerCase();
+    // LLMs, image generation, AI/ML APIs → Others
+    if (url.includes('openai.com') || url.includes('anthropic.com') || url.includes('huggingface.co') ||
+        url.includes('replicate.com') || url.includes('stability.ai') || url.includes('together.ai') ||
+        url.includes('cohere.ai') || url.includes('groq.com') || url.includes('mistral.ai') ||
+        url.includes('perplexity.ai') || url.includes('fireworks.ai') ||
+        name.includes('openai') || name.includes('gpt') || name.includes('claude') ||
+        name.includes('llm') || name.includes('image gen') || name.includes('dall-e') ||
+        name.includes('stable diffusion') || name.includes('midjourney') || name.includes('gemini') ||
+        name.includes('cohere') || name.includes('mistral') || name.includes('groq')) return 'others';
+    // Social platform read APIs
+    if (url.includes('twitter.com') || url.includes('api.twitter.com') || name.includes('twitter') || name.includes('x (twitter)')) return 'social';
+    if (url.includes('linkedin.com') || name.includes('linkedin')) return 'social';
+    if (url.includes('instagram.com') || name.includes('instagram')) return 'social';
+    if (url.includes('graph.facebook.com') || url.includes('facebook.com') || name.includes('facebook')) return 'social';
+    if (url.includes('tiktok.com') || name.includes('tiktok')) return 'social';
+    if (url.includes('api.pinterest.com') || name.includes('pinterest')) return 'social';
+    // Community platform APIs
+    if (url.includes('reddit.com') || name.includes('reddit')) return 'community';
+    if (url.includes('algolia.com') || name.includes('hacker news')) return 'community';
+    if (url.includes('stackexchange.com') || url.includes('stackoverflow.com') || name.includes('stack overflow')) return 'community';
+    if (url.includes('github.com') || name.includes('github')) return 'community';
+    if (url.includes('discord.com') || name.includes('discord')) return 'community';
+    if (url.includes('dev.to') || name.includes('dev.to')) return 'community';
+    if (url.includes('medium.com') || name.includes('medium')) return 'community';
+    // Everything else: trend/news discovery
+    return 'trend';
+  };
+
+  const API_CATEGORY_TABS = ['trend', 'social', 'community', 'others'] as const;
+  const isApiCategoryTab = (API_CATEGORY_TABS as readonly string[]).includes(activeTab);
+
   if (isCompanyLoading) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -1207,6 +1271,16 @@ export default function ExternalApisPage() {
       <Header />
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="bg-white rounded-lg shadow p-6">
+          {isPlatformCatalogMode && (
+            <div className="mb-3">
+              <Link
+                href="/super-admin"
+                className="inline-flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+              >
+                ← Back to Super Admin
+              </Link>
+            </div>
+          )}
           <div className="flex items-center gap-3 mb-2">
             <h1 className="text-2xl font-bold text-gray-900">External API Sources</h1>
             {isPlatformCatalogMode && (
@@ -1278,32 +1352,41 @@ export default function ExternalApisPage() {
 
         <div className="bg-white rounded-lg shadow p-2 flex gap-2 text-sm flex-wrap">
           {[
-            { id: 'global', label: 'Global APIs' },
-            ...(!isPlatformAdminView ? [{ id: 'request-new', label: 'Request New APIs' }] : []),
-            { id: 'queue', label: 'Approval Queue' },
-            { id: 'usage', label: 'Usage Analytics' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as typeof activeTab)}
-              className={`px-4 py-2 rounded-lg ${
-                activeTab === tab.id
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-100 text-gray-700'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+            { id: 'trend',      label: 'Trend APIs',           group: 'api' },
+            { id: 'social',     label: 'Social Platform APIs', group: 'api' },
+            { id: 'community',  label: 'Community APIs',       group: 'api' },
+            { id: 'others',     label: 'Others',               group: 'api' },
+            ...(!isPlatformAdminView ? [{ id: 'request-new', label: 'Request New', group: 'mgmt' }] : []),
+            { id: 'queue',  label: 'Approval Queue',    group: 'mgmt' },
+            { id: 'usage',  label: 'Usage Analytics',   group: 'mgmt' },
+          ].map((tab, idx, arr) => {
+            const prevGroup = idx > 0 ? arr[idx - 1].group : tab.group;
+            const showDivider = idx > 0 && tab.group !== prevGroup;
+            return (
+              <React.Fragment key={tab.id}>
+                {showDivider && <span className="self-stretch w-px bg-gray-200 mx-1" />}
+                <button
+                  onClick={() => setActiveTab(tab.id as typeof activeTab)}
+                  className={`px-4 py-2 rounded-lg ${
+                    activeTab === tab.id
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              </React.Fragment>
+            );
+          })}
         </div>
 
-        {(activeTab === 'global' || activeTab === 'usage') && (
+        {(isApiCategoryTab || activeTab === 'usage') && (
           <div className="bg-white rounded-lg shadow p-3">
             <HealthBadgeLegend />
           </div>
         )}
 
-        {activeTab === 'global' && (
+        {isApiCategoryTab && (
           <div className="bg-white rounded-lg shadow p-6">
           <div className="flex flex-col gap-4 mb-4">
             <div>
@@ -1755,318 +1838,202 @@ export default function ExternalApisPage() {
         </div>
         )}
 
-        {activeTab === 'global' && (
-          <div className="bg-white rounded-lg shadow p-6">
-          {(() => {
-            const readyApis = apis.filter((api) => {
-              if (!api.is_active) return false;
-              if (isPlatformCatalogMode) return true; // Show all active APIs in platform catalog
-              return true;
-            });
+        {isApiCategoryTab && (() => {
+          const TAB_META: Record<string, { label: string; description: string }> = {
+            trend:     { label: 'Trend APIs',           description: 'News, search engines and trend discovery — YouTube, NewsAPI, SerpAPI, GDELT, Google Trends.' },
+            social:    { label: 'Social Platform APIs', description: 'Read-only social media data APIs for signal discovery. OAuth posting connections are managed in Social Platforms.' },
+            community: { label: 'Community APIs',       description: 'Developer & interest community signal sources — Reddit, Hacker News, Stack Overflow, GitHub.' },
+            others:    { label: 'Others',               description: 'LLM providers, image generation, and other AI/ML APIs used across the platform.' },
+          };
+          const tabMeta = TAB_META[activeTab as string];
+          const filteredApis = apis.filter((a) => getApiSection(a) === activeTab);
+
+          const renderApiRow = (api: ApiSource) => {
+            const testData = apiTestResults[api.id];
+            const missingEnv = authRequiresKey(api.auth_type) && !(api.api_key_env_name || api.api_key_name);
+            const isGlobalCatalog = isPlatformCatalogMode && !api.company_id;
+            const status = getHealthStatus(api, apiTestResults[api.id]);
+            const expanded = expandedCardIds.has(api.id);
+            const limits = api.company_limits;
+            const today = api.usage_today;
+            const dailyExceeded = limits?.daily_limit != null && (today?.request_count ?? 0) >= limits.daily_limit;
+            const signalExceeded = limits?.signal_limit != null && (today?.signals_generated ?? 0) >= limits.signal_limit;
+            const limitExceeded = dailyExceeded || signalExceeded;
+            const errorClass = classifyApiError(api.usage_summary?.last_error_code, api.usage_summary?.last_error_message);
+            const meta = API_META[api.name] || { icon: '🌐', color: '' };
+            const isTestingThis = testConnectionLoadingId === api.id;
+            const statusDotColor = status === 'healthy' ? 'bg-green-500' : status === 'warning' ? 'bg-amber-500' : 'bg-red-500';
+
             return (
-              <div className="mb-6">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-gray-900">
-                    Ready-to-Use APIs ({readyApis.length})
-                  </h2>
-                  <span className="text-xs text-gray-500">
-                    Active + visible to companies
-                  </span>
-                </div>
-                {readyApis.length === 0 ? (
-                  <div className="text-sm text-gray-500 mt-2 space-y-1">
-                    <p>No active APIs are currently visible to companies.</p>
-                    <p className="text-xs text-gray-400">
-                      If you expect APIs here, a platform admin may need to add global presets to the catalog first (Platform catalog mode).
-                    </p>
-                  </div>
-                ) : (
-                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {readyApis.map((api) => (
-                      <div key={`ready-${api.id}`} className="border rounded-lg p-3">
-                        <div className="font-medium text-gray-900">{api.name}</div>
-                        <div className="text-xs text-gray-500">
-                          {api.base_url}
-                        </div>
-                        <div className="mt-1 text-[11px] text-gray-600">
-                          {api.method || 'GET'} • {api.auth_type || 'none'}
-                        </div>
+              <div key={api.id} className="px-6 py-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xl shrink-0">{meta.icon}</span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-gray-900 text-sm">{api.name}</span>
+                        {api.is_active ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <span className={`w-1.5 h-1.5 rounded-full ${statusDotColor}`} /> Enabled
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">
+                            Disabled
+                          </span>
+                        )}
+                        {isPlatformCatalogMode && isPlatformAdminView && isGlobalCatalog && (
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${api.is_preset ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}>
+                            {api.is_preset ? 'Visible to companies' : 'Hidden'}
+                          </span>
+                        )}
+                        {errorClass === 'api_key' && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200" title={api.usage_summary?.last_error_message || ''}>API key issue</span>}
+                        {errorClass === 'quota' && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Quota exceeded</span>}
+                        {errorClass === 'rate_limit' && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Rate limited</span>}
+                        {limitExceeded && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">Limit exceeded</span>}
                       </div>
-                    ))}
+                      <div className="text-xs text-gray-400 mt-0.5 font-mono truncate">{api.base_url}</div>
+                      <div className="text-xs text-gray-400">{api.method || 'GET'} · {api.auth_type || 'none'}{api.api_key_env_name ? ` · env: ${api.api_key_env_name}` : ''}</div>
+                      {missingEnv && <div className="text-xs text-red-500 mt-0.5">⚠ Missing env var for auth</div>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                    {testData && (testData.tested_at || testData.response) && (
+                      testData.response?.ok
+                        ? <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700">✓ Live · OK</span>
+                        : <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title={`${testData.response?.status || ''} ${testData.response?.statusText || ''}`}>✗ Test failed</span>
+                    )}
+                    {showRunTestAndActions && (
+                      <button type="button" onClick={() => testConnectionApi(api.id)} disabled={isTestingThis} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 text-xs font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
+                        {isTestingThis ? '…' : '⚡'} {isTestingThis ? 'Testing…' : 'Test'}
+                      </button>
+                    )}
+                    {canManageExternalApis && (
+                      <button type="button" onClick={() => updateApi({ ...api, is_active: !api.is_active })} className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${api.is_active ? 'border-gray-200 bg-white text-gray-600 hover:bg-red-50 hover:text-red-600 hover:border-red-200' : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>
+                        {api.is_active ? 'Disable' : 'Enable'}
+                      </button>
+                    )}
+                    {isPlatformCatalogMode && isPlatformAdminView && !api.company_id && canManageExternalApis && (
+                      <button type="button" onClick={() => updateApi({ ...api, is_preset: !api.is_preset })} className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${api.is_preset ? 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100' : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'}`}>
+                        {api.is_preset ? 'Visible' : 'Show'}
+                      </button>
+                    )}
+                    {canManageExternalApis && (
+                      <button type="button" onClick={() => { setExpandedCardIds((prev) => { const next = new Set(prev); if (next.has(api.id)) { next.delete(api.id); setEditingId(null); setForm(emptyForm); } else { startEdit(api); next.add(api.id); } return next; }); }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 text-xs font-medium hover:bg-gray-50 transition-colors">
+                        {expanded ? 'Close' : 'Configure'}
+                      </button>
+                    )}
+                    {canManageExternalApis && (
+                      <button type="button" onClick={() => { if (confirm(`Delete ${api.name}?`)) deleteApi(api.id); }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-100 text-red-500 text-xs font-medium hover:bg-red-50 transition-colors">
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {(api.usage_summary || api.enabled_user_count != null) && (
+                  <div className="mt-1 ml-9 text-xs text-gray-400">
+                    {api.enabled_user_count != null && `${api.enabled_user_count} users · `}
+                    Failure rate: {formatPercent(api.usage_summary?.failure_rate)}
+                    {api.usage_summary?.last_error_message && <span className="text-red-400"> · Last error: {api.usage_summary.last_error_message}</span>}
+                  </div>
+                )}
+                {expanded && (
+                  <div className="mt-3 ml-9 pt-3 border-t border-gray-100 space-y-3 max-w-lg">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        API Key Env Var Name
+                        <span className="ml-1 font-normal text-gray-400">— set in .env, referenced by name only</span>
+                      </label>
+                      <input
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        placeholder={`e.g. ${api.api_key_env_name || 'YOUTUBE_API_KEY'}`}
+                        value={form.api_key_env_name || ''}
+                        onChange={(e) => setForm((p) => ({ ...p, api_key_env_name: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" id={`active-${api.id}`} checked={!!form.is_active} onChange={(e) => setForm((p) => ({ ...p, is_active: e.target.checked }))} className="rounded border-gray-300" />
+                      <label htmlFor={`active-${api.id}`} className="text-xs text-gray-700">Active (enabled for use)</label>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => { setExpandedCardIds((prev) => { const n = new Set(prev); n.delete(api.id); return n; }); setEditingId(null); setForm(emptyForm); }} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Cancel</button>
+                        <button type="button" onClick={saveApi} disabled={isSaving} className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">{isSaving ? 'Saving…' : 'Save'}</button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
             );
-          })()}
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-gray-200">
-            <div className="flex flex-wrap items-center gap-4 text-sm text-gray-700">
-              <span>
-                External Integrations Health: <strong className="text-green-600">{healthCounts.healthy} Healthy</strong>
-                {' | '}
-                <strong className="text-amber-600">{healthCounts.warning} Warning</strong>
-                {' | '}
-                <strong className="text-red-600">{healthCounts.failed} Failed</strong>
-              </span>
-              <span className="text-gray-500">
-                Last Auto Check: {lastHealthCheckAt
-                  ? (() => {
-                      const mins = Math.floor((Date.now() - lastHealthCheckAt.getTime()) / 60000);
-                      if (mins < 1) return 'just now';
-                      if (mins === 1) return '1 min ago';
-                      return `${mins} min ago`;
-                    })()
-                  : '—'}
-              </span>
-            </div>
-            {showRunTestAndActions && (
-              <button
-                type="button"
-                onClick={runAllTests}
-                disabled={testAllRunning || apis.length === 0}
-                className="px-3 py-1.5 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {testAllRunning ? 'Running tests…' : 'Run All Tests'}
-              </button>
-            )}
-          </div>
-          {testAllSummary && (
-            <div className="mb-4 p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-700">
-              Test summary: {testAllSummary.healthy} healthy, {testAllSummary.warning} warning, {testAllSummary.failed} failed.
-            </div>
-          )}
-          {healthCounts.failed > 0 && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm font-medium">
-              One or more external integrations failing. Campaign execution may be impacted.
-            </div>
-          )}
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Configured APIs</h2>
-          {isLoading ? (
-            <div className="text-sm text-gray-500">Loading...</div>
-          ) : (
-            <div className="space-y-4">
-              {apis.map((api) => {
-                const testData = apiTestResults[api.id];
-                const isRateLimited =
-                  runtime?.rate_limited_sources?.includes(api.name) ?? false;
-                const missingEnv = authRequiresKey(api.auth_type) &&
-                  !(api.api_key_env_name || api.api_key_name);
-                const isGlobalCatalog = isPlatformCatalogMode && !api.company_id;
-                const status = getHealthStatus(api, apiTestResults[api.id]);
-                const expanded = expandedCardIds.has(api.id);
-                const actionsOpen = actionsOpenId === api.id;
-                const statusDot = status === 'healthy' ? 'bg-green-500' : status === 'warning' ? 'bg-amber-500' : 'bg-red-500';
-                const limits = api.company_limits;
-                const today = api.usage_today;
-                const dailyExceeded = limits?.daily_limit != null && (today?.request_count ?? 0) >= limits.daily_limit;
-                const signalExceeded = limits?.signal_limit != null && (today?.signals_generated ?? 0) >= limits.signal_limit;
-                const limitExceeded = dailyExceeded || signalExceeded;
-                const errorClass = classifyApiError(api.usage_summary?.last_error_code, api.usage_summary?.last_error_message);
-                return (
-                <div key={api.id} className="border rounded-lg p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusDot}`} title={status} />
-                        <span className="font-semibold text-gray-900">{api.name}</span>
-                        <span className="text-[10px] uppercase tracking-wide bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
-                          {api.is_preset && !api.company_id ? 'GLOBAL (VIRALITY)' : 'Tenant-Provided'}
-                        </span>
-                        <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${api.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                          {api.is_active ? 'ENABLED' : 'Disabled'}
-                        </span>
-                        {api.is_preset && (
-                          <span className="text-[10px] uppercase tracking-wide bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">PRESET</span>
-                        )}
-                        {isPlatformCatalogMode && isPlatformAdminView && isGlobalCatalog && (
-                          <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${api.is_preset ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
-                            {api.is_preset ? 'VISIBLE' : 'Hidden'}
-                          </span>
-                        )}
-                        {(() => {
-                          const limits = api.company_limits;
-                          const today = api.usage_today;
-                          const dailyExceeded = limits?.daily_limit != null && (today?.request_count ?? 0) >= limits.daily_limit;
-                          const signalExceeded = limits?.signal_limit != null && (today?.signals_generated ?? 0) >= limits.signal_limit;
-                          const limitExceeded = dailyExceeded || signalExceeded;
-                          const errorClass = classifyApiError(api.usage_summary?.last_error_code, api.usage_summary?.last_error_message);
-                          return (
-                            <>
-                              {limitExceeded && (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700" title="Plan limit exceeded">
-                                  Limit exceeded
-                                </span>
-                              )}
-                              {errorClass === 'api_key' && (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700" title={api.usage_summary?.last_error_message || 'API key or auth issue'}>
-                                  API key issue
-                                </span>
-                              )}
-                              {errorClass === 'quota' && (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700" title={api.usage_summary?.last_error_message || 'Quota exceeded'}>
-                                  Quota exceeded
-                                </span>
-                              )}
-                              {errorClass === 'rate_limit' && (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700" title={api.usage_summary?.last_error_message || 'Rate limited'}>
-                                  Rate limited
-                                </span>
-                              )}
-                            </>
-                          );
-                        })()}
-                      </div>
-                      <div className="mt-1 flex items-center gap-3 flex-wrap">
-                        <label className="text-xs text-gray-600 flex items-center gap-1">
-                          <input
-                            type="checkbox"
-                            checked={api.is_active}
-                            disabled={!canManageExternalApis}
-                            onChange={(e) => updateApi({ ...api, is_active: e.target.checked })}
-                          />
-                          Enabled
-                        </label>
-                        {isPlatformCatalogMode && isPlatformAdminView && !api.company_id && (
-                          <label className="text-xs text-gray-600 flex items-center gap-1">
-                            <input
-                              type="checkbox"
-                              checked={api.is_preset ?? false}
-                              onChange={(e) => updateApi({ ...api, is_preset: e.target.checked })}
-                            />
-                            Visible to companies
-                          </label>
-                        )}
-                        <span className="text-xs text-gray-500">
-                          Failure rate: {formatPercent(api.usage_summary?.failure_rate)}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="relative shrink-0">
-                      {showRunTestAndActions && (
-                        <>
-                      <button
-                        type="button"
-                        onClick={() => setActionsOpenId(actionsOpen ? null : api.id)}
-                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50"
-                      >
-                        Actions ▼
+          };
+
+          return (
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">{tabMeta?.label ?? 'APIs'}</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">{tabMeta?.description}</p>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  {isPlatformAdminView && (
+                    <>
+                      <button type="button" onClick={addBlankApi} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 text-sm hover:bg-gray-50 transition-colors">
+                        + Add Blank
                       </button>
-                      {actionsOpen && (
-                        <>
-                          <div className="fixed inset-0 z-10" onClick={() => setActionsOpenId(null)} />
-                          <div className="absolute right-0 top-full mt-1 py-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
-                            {(
-                              <>
-                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { testConnectionApi(api.id); setActionsOpenId(null); }} disabled={testConnectionLoadingId === api.id}>
-                                  {testConnectionLoadingId === api.id ? 'Testing…' : 'Test Connection'}
-                                </button>
-                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { validateApi(api.id); setActionsOpenId(null); }}>
-                                  Validate Credentials
-                                </button>
-                                {TEST_SCENARIOS.map((s) => (
-                                  <button key={s.id} type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { testExistingApi(api.id, { category: s.category, geo: s.geo }); setActionsOpenId(null); }}>
-                                    Run Test ({s.label})
-                                  </button>
-                                ))}
-                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { setActiveTab('queue'); setActionsOpenId(null); }}>
-                                  View Logs
-                                </button>
-                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => { startEdit(api); setActionsOpenId(null); }}>
-                                  Edit
-                                </button>
-                                <button type="button" className="block w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50" onClick={() => { setActionsOpenId(null); if (confirm('Delete this API source?')) deleteApi(api.id); }}>
-                                  Delete
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </>
+                      <select className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm bg-white min-w-[160px]" value={selectedCatalogPreset} onChange={(e) => setSelectedCatalogPreset(e.target.value)}>
+                        <option value="">{isLoadingPresets ? 'Loading…' : 'Add from preset…'}</option>
+                        {presets.filter((p) => !p.id).map((p) => (
+                          <option key={p.name} value={p.name}>{p.name}</option>
+                        ))}
+                      </select>
+                      {selectedCatalogPreset && (
+                        <button type="button" onClick={() => { const p = presets.find((x) => x.name === selectedCatalogPreset); if (p) addPresetToCatalog(p); }} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 transition-colors">
+                          Add
+                        </button>
                       )}
                     </>
                   )}
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="mt-2 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
-                    onClick={() => setExpandedCardIds((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(api.id)) next.delete(api.id);
-                      else next.add(api.id);
-                      return next;
-                    })}
-                  >
-                    {expanded ? '▼' : '▶'} Advanced details
-                  </button>
-                  {expanded && (
-                    <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-600 space-y-1">
-                      <div><span className="text-gray-500">Endpoint:</span> {api.is_preset && !isPlatformAdminView ? 'Hidden' : api.base_url}</div>
-                      {(api.api_key_env_name || api.api_key_name) && api.auth_type !== 'none' && !(api.is_preset && !isPlatformAdminView) && (
-                        <div><span className="text-gray-500">ENV Key:</span> {api.api_key_env_name || api.api_key_name}</div>
-                      )}
-                      <div><span className="text-gray-500">Usage:</span> Enabled users {api.enabled_user_count ?? 0} • {api.purpose} • {api.method || 'GET'} • {api.auth_type || 'none'}</div>
-                      {(limits?.daily_limit != null || limits?.signal_limit != null) && (
-                        <div><span className="text-gray-500">Plan usage:</span> {limits?.daily_limit != null ? `Daily ${today?.request_count ?? 0}/${limits.daily_limit}` : ''}{limits?.daily_limit != null && limits?.signal_limit != null ? ' • ' : ''}{limits?.signal_limit != null ? `Signals ${today?.signals_generated ?? 0}/${limits.signal_limit}` : ''}</div>
-                      )}
-                      {(api.usage_summary?.last_error_message || api.usage_summary?.last_error_code) && (
-                        <div className="text-red-600"><span className="text-gray-500">Last error:</span> {api.usage_summary.last_error_code ? `[${api.usage_summary.last_error_code}] ` : ''}{api.usage_summary.last_error_message || '—'}</div>
-                      )}
-                      {api.is_preset && findPresetByName(api.name)?.description && (
-                        <div className="text-gray-500">{findPresetByName(api.name)?.description}</div>
-                      )}
-                    </div>
-                  )}
-
-                  {missingEnv && (
-                    <div className="text-xs text-red-600 mt-2">Missing required env var name for this API.</div>
-                  )}
-
-                  {testData && (testData.tested_at || testData.response) && (
-                    <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs">
-                      <div className="font-medium text-gray-800 mb-1">Last Test Result</div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-gray-600">
-                        <span>Result: <strong className={testData.response?.ok ? 'text-green-700' : 'text-red-700'}>{testData.response?.ok ? 'SUCCESS' : 'FAILED'}</strong></span>
-                        {typeof testData.latency_ms === 'number' && <span>Latency: {testData.latency_ms}ms</span>}
-                        {testData.tested_at && <span>Time: {new Date(testData.tested_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
-                      </div>
-                      {!testData.response?.ok && testData.response && (
-                        <div className="mt-1.5 font-mono text-[11px] text-red-700 bg-red-50 px-2 py-1 rounded border border-red-100">
-                          {testData.response.status} {testData.response.statusText}
-                          {(testData.response.body?.error?.message || testData.response.body?.error?.reason || testData.response.body?.message) && (
-                            <span> — {testData.response.body?.error?.message ?? testData.response.body?.error?.reason ?? testData.response.body?.message}</span>
-                          )}
-                        </div>
-                      )}
-                      <div className="text-[10px] text-gray-600 mt-1">
-                        Health: {testData.response?.ok ? 'OK' : 'Failed'} (Last check {testData.tested_at ? new Date(testData.tested_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'})
-                      </div>
-                      {testData.normalized_trends && testData.normalized_trends.length > 0 && (
-                        <div className="mt-2 space-y-1">
-                          {testData.normalized_trends.slice(0, 2).map((trend: any, index: number) => (
-                            <div key={`${api.id}-t-${index}`} className="text-gray-600">{trend.title}</div>
-                          ))}
-                        </div>
-                      )}
-                      {testData.missing && (
-                        <div className="text-red-600 mt-1">Missing env: {Array.isArray(testData.missing) ? testData.missing.join(', ') : String(testData.missing)}</div>
-                      )}
-                    </div>
+                  {showRunTestAndActions && (
+                    <button type="button" onClick={runAllTests} disabled={testAllRunning || filteredApis.length === 0} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors">
+                      {testAllRunning ? 'Running…' : '⚡ Test All'}
+                    </button>
                   )}
                 </div>
-              );
-            })}
-              {apis.length === 0 && (
-                <div className="text-sm text-gray-500 space-y-1">
-                  <p>No API sources configured.</p>
-                  <p className="text-xs text-gray-400">
-                    Select &quot;Select Global Presets&quot; to enable APIs for this company. If the list there is empty, a platform admin must add global presets to the catalog first.
-                  </p>
+              </div>
+              <div className="px-6 py-2.5 border-b border-gray-100 flex items-center justify-between text-xs text-gray-500 bg-gray-50/50">
+                <span>
+                  <strong className="text-green-600">{healthCounts.healthy} healthy</strong>
+                  {' · '}
+                  <strong className="text-amber-500">{healthCounts.warning} warning</strong>
+                  {' · '}
+                  <strong className="text-red-500">{healthCounts.failed} failed</strong>
+                </span>
+                <span>Last check: {lastHealthCheckAt ? (() => { const m = Math.floor((Date.now() - lastHealthCheckAt.getTime()) / 60000); return m < 1 ? 'just now' : `${m}m ago`; })() : '—'}</span>
+              </div>
+              {testAllSummary && (
+                <div className="px-6 py-2.5 border-b border-gray-100 text-sm text-gray-700 bg-blue-50">
+                  Test run complete — {testAllSummary.healthy} healthy · {testAllSummary.warning} warning · {testAllSummary.failed} failed
+                </div>
+              )}
+              {healthCounts.failed > 0 && (
+                <div className="px-6 py-2.5 border-b border-gray-100 text-sm text-red-700 bg-red-50">
+                  ⚠ {healthCounts.failed} integration{healthCounts.failed > 1 ? 's' : ''} failing — campaign execution may be impacted.
+                </div>
+              )}
+              {isLoading ? (
+                <div className="px-6 py-8 text-sm text-gray-400">Loading…</div>
+              ) : filteredApis.length === 0 ? (
+                <div className="px-6 py-8 text-sm text-gray-400">
+                  <p>No {tabMeta?.label ?? 'APIs'} configured yet.</p>
+                  {isPlatformAdminView && <p className="text-xs mt-1 text-gray-400">Use "Add from preset…" or "+ Add Blank" above to add APIs to this category.</p>}
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {filteredApis.map(renderApiRow)}
                 </div>
               )}
             </div>
-          )}
-        </div>
-        )}
+          );
+        })()}
 
         {activeTab === 'request-new' && (
           <div className="bg-white rounded-lg shadow p-6">

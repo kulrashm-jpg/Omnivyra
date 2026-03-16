@@ -31,7 +31,15 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
   facebook:  { label: 'Facebook',  authUrl: 'https://www.facebook.com/v18.0/dialog/oauth', tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token', scopes: ['pages_manage_posts','pages_read_engagement'] },
   tiktok:    { label: 'TikTok',   authUrl: 'https://www.tiktok.com/auth/authorize/', tokenUrl: 'https://open-api.tiktok.com/oauth/access_token/', scopes: ['user.info.basic','video.list'] },
   pinterest: { label: 'Pinterest', authUrl: 'https://www.pinterest.com/oauth/', tokenUrl: 'https://api.pinterest.com/v5/oauth/token', scopes: ['boards:read','pins:read','pins:write'] },
-  reddit:    { label: 'Reddit',   authUrl: 'https://www.reddit.com/api/v1/authorize', tokenUrl: 'https://www.reddit.com/api/v1/access_token', scopes: ['identity','submit','read'] },
+  reddit:        { label: 'Reddit',         authUrl: 'https://www.reddit.com/api/v1/authorize', tokenUrl: 'https://www.reddit.com/api/v1/access_token', scopes: ['identity','submit','read'] },
+  // Community platforms
+  github:        { label: 'GitHub',         authUrl: 'https://github.com/login/oauth/authorize', tokenUrl: 'https://github.com/login/oauth/access_token', scopes: ['read:user','repo'] },
+  hackernews:    { label: 'Hacker News',    authUrl: '', tokenUrl: '', scopes: [] },
+  discord:       { label: 'Discord',        authUrl: 'https://discord.com/api/oauth2/authorize', tokenUrl: 'https://discord.com/api/oauth2/token', scopes: ['identify','guilds'] },
+  devto:         { label: 'Dev.to',         authUrl: '', tokenUrl: '', scopes: [] },
+  medium:        { label: 'Medium',         authUrl: 'https://medium.com/m/oauth/authorize', tokenUrl: 'https://api.medium.com/v1/tokens', scopes: ['basicProfile','publishPost'] },
+  stackoverflow: { label: 'Stack Overflow', authUrl: 'https://stackoverflow.com/oauth', tokenUrl: 'https://stackoverflow.com/oauth/access_token', scopes: ['no_expiry'] },
+  quora:         { label: 'Quora',          authUrl: '', tokenUrl: '', scopes: [] },
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -46,13 +54,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const configMap: Record<string, any> = {};
     for (const row of configs || []) {
       let clientIdPreview = '';
+      let clientIdFull = '';
+      let clientSecretFull = '';
       try {
         const dec = row.oauth_client_id_encrypted ? decryptCredential(row.oauth_client_id_encrypted) : '';
+        clientIdFull = dec || '';
         clientIdPreview = dec ? dec.slice(0, 6) + '…' : '';
+      } catch { /* bad key */ }
+      try {
+        clientSecretFull = row.oauth_client_secret_encrypted ? decryptCredential(row.oauth_client_secret_encrypted) : '';
       } catch { /* bad key */ }
       configMap[row.platform] = {
         ...row,
         client_id_preview: clientIdPreview,
+        client_id: clientIdFull,
+        client_secret: clientSecretFull,
         has_client_id: !!row.oauth_client_id_encrypted,
         has_client_secret: !!row.oauth_client_secret_encrypted,
       };
@@ -66,7 +82,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       default_scopes: defaults.scopes,
       configured: !!configMap[key]?.has_client_id,
       enabled: configMap[key]?.enabled ?? false,
+      client_id: configMap[key]?.client_id ?? '',
       client_id_preview: configMap[key]?.client_id_preview ?? '',
+      client_secret: configMap[key]?.client_secret ?? '',
       has_client_secret: configMap[key]?.has_client_secret ?? false,
       updated_at: configMap[key]?.updated_at ?? null,
     }));

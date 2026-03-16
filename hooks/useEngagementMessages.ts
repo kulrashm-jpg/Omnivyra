@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 
 export type EngagementMessage = {
   id: string;
@@ -48,7 +49,7 @@ export function useEngagementMessages(
     });
 
     try {
-      const res = await fetch(`/api/engagement/messages?${params.toString()}`, { credentials: 'include' });
+      const res = await apiFetch(`/api/engagement/messages?${params.toString()}`);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(body.error || body.message || 'Failed to fetch messages');

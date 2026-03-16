@@ -53,7 +53,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'GET') {
     const { policy, error } = await fetchCurrentPolicy();
     if (error) {
-      return res.status(500).json({ error: 'FAILED_TO_LOAD_POLICY' });
+      // Table may not exist yet — return null policy rather than 500
+      console.warn('[community-ai-policy] DB error (table may not be migrated):', error?.message);
+      return res.status(200).json({ policy: null, updated_by_email: null });
     }
     const updatedByEmail = await resolveUpdatedByEmail(policy?.updated_by);
     return res.status(200).json({

@@ -1,12 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
-import { setToken, TokenObject } from '../../../../backend/auth/tokenStore';
-
-// Initialize Supabase client for database operations
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+import { supabase } from '../../../../backend/db/supabaseClient';
+import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
+import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
+import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,39 +12,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error, error_description } = req.query;
+  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
+  const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
 
   console.log('Pinterest callback received:', { code: !!code, state, error, error_description });
 
   if (error) {
     console.error('Pinterest OAuth error:', error, error_description);
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error as string)}&description=${encodeURIComponent(error_description as string || '')}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
     console.error('No authorization code received');
-    return res.redirect('/creative-scheduler?error=No authorization code received');
+    return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
   try {
     const platform = 'pinterest';
-    
+    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
+
+    const oauthCredentials = await getOAuthCredentialsForPlatform('pinterest');
+    if (!oauthCredentials?.client_id || !oauthCredentials?.client_secret) {
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Pinterest OAuth not configured — ask your Super Admin to add credentials.')}`);
+    }
+
     // Exchange code for access token
     console.log('Exchanging code for token...');
     const credentials = Buffer.from(
-      `${process.env.PINTEREST_APP_ID || ''}:${process.env.PINTEREST_APP_SECRET || ''}`
+      `${oauthCredentials.client_id}:${oauthCredentials.client_secret}`
     ).toString('base64');
 
     const tokenResponse = await fetch('https://api.pinterest.com/v5/oauth/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': `Basic ${credentials}`,
+        Authorization: `Basic ${credentials}`,
       },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         code: code as string,
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/pinterest/callback`,
-      })
+        redirect_uri: `${getBaseUrl(req)}/api/auth/pinterest/callback`,
+      }),
     });
 
     if (!tokenResponse.ok) {
@@ -57,13 +63,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const tokenData = await tokenResponse.json();
     console.log('Token received:', { access_token: !!tokenData.access_token, expires_in: tokenData.expires_in });
-    
+
     // Get Pinterest user info
     console.log('Fetching Pinterest user info...');
     const userResponse = await fetch('https://api.pinterest.com/v5/user_account', {
-      headers: {
-        'Authorization': `Bearer ${tokenData.access_token}`,
-      }
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
 
     if (!userResponse.ok) {
@@ -75,28 +79,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userInfo = await userResponse.json();
     console.log('User info received:', { username: userInfo.username, id: userInfo.id });
 
-    // Get user_id from state or session
-    const userId = (state as string)?.split('_')[0] || process.env.DEFAULT_USER_ID || '';
-    
+    const { user } = await getSupabaseUserFromRequest(req);
+    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
+
     if (!userId) {
       console.error('No user_id available - cannot save account');
-      return res.redirect(`/creative-scheduler?error=${encodeURIComponent('User session required')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
     }
 
     const accountName = userInfo.username || `Pinterest User ${userInfo.id?.substring(0, 8)}`;
-    const expiresIn = tokenData.expires_in || 2592000; // Default 30 days
+    const expiresIn = tokenData.expires_in || 2592000;
     const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-    // Prepare token object for encrypted storage
     const tokenObj: TokenObject = {
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token || undefined,
       expires_at: expiresAt,
       token_type: tokenData.token_type || 'Bearer',
     };
+    const encryptedCols = encryptTokenColumns(tokenObj);
 
-    // Create or update social account in database
-    const { data: existingAccount, error: fetchError } = await supabase
+    const { data: existingAccount } = await supabase
       .from('social_accounts')
       .select('id')
       .eq('user_id', userId)
@@ -107,7 +110,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let accountId: string;
 
     if (existingAccount) {
-      // Update existing account
       accountId = existingAccount.id;
       const { error: updateError } = await supabase
         .from('social_accounts')
@@ -128,11 +130,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         throw new Error('Failed to update account');
       }
     } else {
-      // Create new account
       const { data: newAccount, error: insertError } = await supabase
         .from('social_accounts')
         .insert({
           user_id: userId,
+          company_id: companyId || null,
           platform: 'pinterest',
           platform_user_id: userInfo.id,
           account_name: accountName,
@@ -142,6 +144,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           permissions: tokenData.scope?.split(' ') || ['boards:read', 'boards:write', 'pins:read', 'pins:write'],
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
+          access_token: encryptedCols.access_token,
+          refresh_token: encryptedCols.refresh_token,
         })
         .select('id')
         .single();
@@ -154,21 +158,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       accountId = newAccount.id;
     }
 
-    // Save encrypted tokens using tokenStore
     await setToken(accountId, tokenObj);
 
     console.log('✅ Pinterest account saved successfully:', { accountId, accountName });
 
-    // Redirect back to creative scheduler with success
-    return res.redirect(`/creative-scheduler?connected=pinterest&account=${encodeURIComponent(accountName)}&success=true&message=Pinterest account connected successfully!`);
+    const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
+    const sep = successDest.includes('?') ? '&' : '?';
+    return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('Pinterest OAuth callback error:', error);
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error.message)}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
-
-
-
-
-

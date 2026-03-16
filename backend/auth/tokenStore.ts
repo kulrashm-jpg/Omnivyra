@@ -146,8 +146,22 @@ export async function getToken(socialAccountId: string): Promise<TokenObject | n
 }
 
 /**
+ * Encrypt a TokenObject into DB-ready column values.
+ * Use this when inserting a new social_accounts row so access_token NOT NULL is satisfied.
+ */
+export function encryptTokenColumns(token: TokenObject): {
+  access_token: string;
+  refresh_token: string | null;
+} {
+  return {
+    access_token: encrypt(token.access_token),
+    refresh_token: token.refresh_token ? encrypt(token.refresh_token) : null,
+  };
+}
+
+/**
  * Store encrypted token for a social account
- * 
+ *
  * @param socialAccountId - UUID of social_account record
  * @param token - Token object to encrypt and store
  */

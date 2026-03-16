@@ -9,11 +9,14 @@ export type ExternalApiPreset = {
   api_key_env_name?: string | null;
   example_response_type: 'json';
   is_preset: true;
+  /** Groups presets in the UI: 'trend' = trend/news discovery, 'community' = community signal sources */
+  section?: 'trend' | 'community';
 };
 
 export const externalApiPresets: ExternalApiPreset[] = [
   {
     name: 'YouTube Trends',
+    section: 'trend',
     description: 'YouTube Data API search for trending videos.',
     base_url: 'https://www.googleapis.com/youtube/v3/search',
     method: 'GET',
@@ -36,6 +39,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'YouTube Shorts Trends',
+    section: 'trend',
     description: 'YouTube Data API search for trending Shorts.',
     base_url: 'https://www.googleapis.com/youtube/v3/search',
     method: 'GET',
@@ -59,6 +63,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'NewsAPI Headlines',
+    section: 'trend',
     description: 'NewsAPI top headlines for breaking topics.',
     base_url: 'https://newsapi.org/v2/top-headlines',
     method: 'GET',
@@ -78,6 +83,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'NewsAPI Everything',
+    section: 'trend',
     description: 'NewsAPI full-text search for broader trend coverage.',
     base_url: 'https://newsapi.org/v2/everything',
     method: 'GET',
@@ -98,6 +104,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'SerpAPI Google Trends',
+    section: 'trend',
     description: 'SerpAPI Google Trends engine results.',
     base_url: 'https://serpapi.com/search',
     method: 'GET',
@@ -117,6 +124,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'SerpAPI Google News',
+    section: 'trend',
     description: 'SerpAPI Google News engine results.',
     base_url: 'https://serpapi.com/search',
     method: 'GET',
@@ -137,6 +145,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'Reddit Search',
+    section: 'community',
     description: 'Reddit API search across subreddits.',
     base_url: 'https://oauth.reddit.com/search',
     method: 'GET',
@@ -156,6 +165,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'X (Twitter) Recent Search',
+    section: 'community',
     description: 'X API v2 recent search results.',
     base_url: 'https://api.twitter.com/2/tweets/search/recent',
     method: 'GET',
@@ -175,6 +185,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'GDELT Events',
+    section: 'trend',
     description: 'GDELT 2.1 events feed for global trend signals.',
     base_url: 'https://api.gdeltproject.org/api/v2/events/search',
     method: 'GET',
@@ -193,6 +204,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'Hacker News Trends',
+    section: 'community',
     description: 'Algolia Hacker News search for trending topics.',
     base_url: 'https://hn.algolia.com/api/v1/search',
     method: 'GET',
@@ -210,6 +222,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'Stack Overflow Trends',
+    section: 'community',
     description: 'Stack Exchange search for trending developer topics.',
     base_url: 'https://api.stackexchange.com/2.3/search/advanced',
     method: 'GET',
@@ -229,6 +242,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
   },
   {
     name: 'Google Trends (PyTrends Bridge)',
+    section: 'trend',
     description: 'Use a proxy service to expose Google Trends data.',
     base_url: 'https://trends-proxy.yourdomain.com/trends',
     method: 'GET',

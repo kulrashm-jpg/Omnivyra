@@ -7,7 +7,7 @@
     "dev:full": "node scripts/start-all.js",
     "dev:app": "node scripts/start-all.js --app-only",
     "prebuild": "node -e \"try{require('fs').rmSync('.next/lock',{recursive:true,force:true})}catch(e){}\"",
-    "build": "next build --webpack",
+    "build": "next build",
     "build:ci": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true})}catch(e){}\" && npm run build",
     "build:webpack": "next build --webpack",
     "start": "next start",

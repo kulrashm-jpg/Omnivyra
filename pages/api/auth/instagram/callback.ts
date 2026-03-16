@@ -1,12 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
-import { setToken, TokenObject } from '../../../../backend/auth/tokenStore';
-
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+import { supabase } from '../../../../backend/db/supabaseClient';
+import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
+import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
+import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,30 +12,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error } = req.query;
+  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
+  const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
 
   if (error) {
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error as string)}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
-    return res.redirect('/creative-scheduler?error=No authorization code received');
+    return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
   try {
     const platform = 'instagram';
-    
+    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
+
+    const oauthCredentials = await getOAuthCredentialsForPlatform('instagram');
+    if (!oauthCredentials?.client_id || !oauthCredentials?.client_secret) {
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Instagram OAuth not configured — ask your Super Admin to add credentials.')}`);
+    }
+
     // Exchange code for access token (Instagram uses Facebook Graph API)
     const tokenResponse = await fetch('https://graph.facebook.com/v18.0/oauth/access_token', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: process.env.INSTAGRAM_CLIENT_ID || '',
-        client_secret: process.env.INSTAGRAM_CLIENT_SECRET || '',
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/instagram/callback`,
+        client_id: oauthCredentials.client_id,
+        client_secret: oauthCredentials.client_secret,
+        redirect_uri: `${getBaseUrl(req)}/api/auth/instagram/callback`,
         code: code as string,
-      })
+      }),
     });
 
     if (!tokenResponse.ok) {
@@ -45,32 +49,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const tokenData = await tokenResponse.json();
-    
-    // Get Instagram account info (Instagram uses Facebook Graph API)
+
+    // Get Instagram account info via Facebook Graph API
     const profileResponse = await fetch(`https://graph.facebook.com/v18.0/me?fields=id,name&access_token=${tokenData.access_token}`);
     const profile = await profileResponse.json();
 
-    // Get user_id from state
-    const userId = (state as string)?.split('_')[0] || process.env.DEFAULT_USER_ID || '';
-    
+    const { user } = await getSupabaseUserFromRequest(req);
+    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
+
     if (!userId) {
       console.error('No user_id available - cannot save account');
-      return res.redirect(`/creative-scheduler?error=${encodeURIComponent('User session required')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
     }
 
     const accountName = profile.name || 'Instagram Account';
     const expiresIn = tokenData.expires_in || 5184000; // Default 60 days
     const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-    // Prepare token object
     const tokenObj: TokenObject = {
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token || undefined,
       expires_at: expiresAt,
       token_type: 'Bearer',
     };
+    const encryptedCols = encryptTokenColumns(tokenObj);
 
-    // Create or update social account
     const { data: existingAccount } = await supabase
       .from('social_accounts')
       .select('id')
@@ -99,6 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from('social_accounts')
         .insert({
           user_id: userId,
+          company_id: companyId || null,
           platform: 'instagram',
           platform_user_id: profile.id,
           account_name: accountName,
@@ -106,6 +110,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           permissions: tokenData.scope?.split(',') || [],
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
+          access_token: encryptedCols.access_token,
+          refresh_token: encryptedCols.refresh_token,
         })
         .select('id')
         .single();
@@ -117,34 +123,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       accountId = newAccount.id;
     }
 
-    // Save encrypted tokens
     await setToken(accountId, tokenObj);
 
     console.log('✅ Instagram account saved successfully:', { accountId, accountName });
 
-    return res.redirect(`/creative-scheduler?connected=${platform}&account=${encodeURIComponent(accountName)}`);
+    const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
+    const sep = successDest.includes('?') ? '&' : '?';
+    return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('Instagram OAuth callback error:', error);
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error.message)}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

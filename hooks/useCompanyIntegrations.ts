@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 
 const PLATFORM_LABELS: Record<string, string> = {
   linkedin: 'LinkedIn',
@@ -47,9 +48,7 @@ export function useCompanyIntegrations(organizationId: string): {
     });
 
     try {
-      const res = await fetch(`/api/engagement/integrations?${params.toString()}`, {
-        credentials: 'include',
-      });
+      const res = await apiFetch(`/api/engagement/integrations?${params.toString()}`);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(body.error || body.message || 'Failed to fetch integrations');

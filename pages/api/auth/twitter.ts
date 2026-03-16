@@ -1,4 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
+import { getBaseUrl } from '../../../backend/auth/getBaseUrl';
+import { encodeOAuthState } from '../../../backend/auth/oauthState';
+import { getOAuthCredentialsForPlatform } from '../../../backend/auth/oauthCredentialResolver';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -6,26 +9,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const platform = 'twitter';
+    const credentials = await getOAuthCredentialsForPlatform('twitter');
+    if (!credentials?.client_id) {
+      return res.status(400).json({ error: 'Twitter OAuth not configured — ask your Super Admin to add credentials.' });
+    }
+
+    const companyId = (req.query.companyId as string) || undefined;
+    const userId = (req.query.userId as string) || undefined;
     const returnTo = (req.query.returnTo as string) || '';
-    const stateBase = `twitter_${Date.now()}`;
-    const state = returnTo ? `${stateBase}|${returnTo}` : stateBase;
-    
-    // Twitter OAuth URL
+    const state = encodeOAuthState({ companyId, userId, returnTo });
+
     const params = new URLSearchParams({
       response_type: 'code',
-      client_id: process.env.TWITTER_CLIENT_ID || 'your_twitter_client_id',
-      redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/twitter/callback`,
+      client_id: credentials.client_id,
+      redirect_uri: `${getBaseUrl(req)}/api/auth/twitter/callback`,
       state,
       scope: 'tweet.read tweet.write users.read offline.access',
-      code_challenge: 'challenge', // PKCE for security
-      code_challenge_method: 'plain'
+      code_challenge: 'challenge',
+      code_challenge_method: 'plain',
     });
-    
-    const oauthUrl = `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
-    
-    // Redirect to Twitter OAuth
-    res.redirect(oauthUrl);
+
+    res.redirect(`https://twitter.com/i/oauth2/authorize?${params.toString()}`);
 
   } catch (error: any) {
     console.error('Twitter OAuth initiation error:', error);

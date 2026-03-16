@@ -111,6 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status,
         scheduled_for: row.scheduled_for || null,
         is_overdue: status === 'scheduled' && row.scheduled_for && row.scheduled_for < now,
+        content: String(row.content || '').trim() || null,
       };
     });
 

@@ -221,6 +221,18 @@ export default function CampaignCalendarPage() {
   const [executionFilter, setExecutionFilter] = useState<'all' | 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI'>('all');
   const [postPreview, setPostPreview] = useState<{ content: string; platform: string; contentType: string; title: string } | null>(null);
 
+  // Scheduled posts overlay — fetched from scheduled_posts via activity-events API
+  const [scheduledByDate, setScheduledByDate] = useState<Record<string, number>>({});
+  const [scheduledExecIds, setScheduledExecIds] = useState<Set<string>>(new Set());
+  const [scheduledPostIdByExecId, setScheduledPostIdByExecId] = useState<Record<string, string>>({});
+  const [totalScheduled, setTotalScheduled] = useState(0);
+
+  // Reschedule (move date) state
+  const [rescheduleTarget, setRescheduleTarget] = useState<{ executionId: string; scheduledPostId: string; currentDate: string } | null>(null);
+  const [rescheduleDate, setRescheduleDate] = useState('');
+  const [rescheduling, setRescheduling] = useState(false);
+  const [rescheduleError, setRescheduleError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!campaignId) return;
     let cancelled = false;
@@ -413,6 +425,56 @@ export default function CampaignCalendarPage() {
     setCurrentDate(d);
   }, [activities, plannerWeek, plannerDay]);
 
+  // Fetch actual scheduled_posts for this campaign (independent of plan blueprint)
+  useEffect(() => {
+    const companyId = typeof router.query.companyId === 'string' ? router.query.companyId : '';
+    if (!campaignId || !companyId) return;
+    // stageFilter=all bypasses date bounds — returns every scheduled_post for the campaign
+    fetch(
+      `/api/calendar/activity-events?companyId=${encodeURIComponent(companyId)}&campaignId=${encodeURIComponent(campaignId)}&stageFilter=all&start=2000-01-01&end=2100-12-31`
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((events: any[]) => {
+        const byDate: Record<string, number> = {};
+        const execIds = new Set<string>();
+        const postIdMap: Record<string, string> = {};
+        events.forEach((ev) => {
+          if (ev.date) byDate[ev.date] = (byDate[ev.date] || 0) + 1;
+          if (ev.execution_id) {
+            execIds.add(String(ev.execution_id));
+            if (ev.scheduled_post_id) postIdMap[String(ev.execution_id)] = String(ev.scheduled_post_id);
+          }
+        });
+        setScheduledByDate(byDate);
+        setScheduledExecIds(execIds);
+        setScheduledPostIdByExecId(postIdMap);
+        setTotalScheduled(events.length);
+      })
+      .catch(() => {});
+  }, [campaignId, router.query.companyId]);
+
+  // When scheduled posts load, jump to the first month that has scheduled posts
+  // if the current view month has no plan activities and no scheduled posts
+  useEffect(() => {
+    if (totalScheduled === 0) return;
+    const scheduledDates = Object.keys(scheduledByDate).sort();
+    if (scheduledDates.length === 0) return;
+    const firstScheduled = new Date(scheduledDates[0] + 'T00:00:00');
+    if (!Number.isFinite(firstScheduled.getTime())) return;
+    // Only auto-jump if the current month has nothing to show
+    const hasPlanInCurrentMonth = activities.some((a) => {
+      const d = new Date(a.date + 'T00:00:00');
+      return d.getMonth() === currentDate.getMonth() && d.getFullYear() === currentDate.getFullYear();
+    });
+    const hasScheduledInCurrentMonth = scheduledDates.some((d) => {
+      const dt = new Date(d + 'T00:00:00');
+      return dt.getMonth() === currentDate.getMonth() && dt.getFullYear() === currentDate.getFullYear();
+    });
+    if (!hasPlanInCurrentMonth && !hasScheduledInCurrentMonth) {
+      setCurrentDate(firstScheduled);
+    }
+  }, [totalScheduled]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   const sortedActivities = useMemo(() => {
     return [...activities].sort((a, b) => (`${a.date}T${a.time}`).localeCompare(`${b.date}T${b.time}`));
   }, [activities]);
@@ -563,6 +625,65 @@ export default function CampaignCalendarPage() {
     }
   };
 
+  const fetchScheduledPosts = useCallback(() => {
+    const companyId = typeof router.query.companyId === 'string' ? router.query.companyId : '';
+    if (!campaignId || !companyId) return;
+    fetch(
+      `/api/calendar/activity-events?companyId=${encodeURIComponent(companyId)}&campaignId=${encodeURIComponent(campaignId)}&stageFilter=all&start=2000-01-01&end=2100-12-31`
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((events: any[]) => {
+        const byDate: Record<string, number> = {};
+        const execIds = new Set<string>();
+        const postIdMap: Record<string, string> = {};
+        events.forEach((ev) => {
+          if (ev.date) byDate[ev.date] = (byDate[ev.date] || 0) + 1;
+          if (ev.execution_id) {
+            execIds.add(String(ev.execution_id));
+            if (ev.scheduled_post_id) postIdMap[String(ev.execution_id)] = String(ev.scheduled_post_id);
+          }
+        });
+        setScheduledByDate(byDate);
+        setScheduledExecIds(execIds);
+        setScheduledPostIdByExecId(postIdMap);
+        setTotalScheduled(events.length);
+      })
+      .catch(() => {});
+  }, [campaignId, router.query.companyId]);
+
+  const openReschedule = (activity: CalendarActivity) => {
+    const scheduledPostId = scheduledPostIdByExecId[String(activity.execution_id)];
+    if (!scheduledPostId) return;
+    setRescheduleTarget({ executionId: String(activity.execution_id), scheduledPostId, currentDate: activity.date });
+    setRescheduleDate(activity.date);
+    setRescheduleError(null);
+  };
+
+  const handleReschedule = async () => {
+    if (!rescheduleTarget || !rescheduleDate) return;
+    setRescheduling(true);
+    setRescheduleError(null);
+    try {
+      const companyId = typeof router.query.companyId === 'string' ? router.query.companyId : '';
+      const res = await fetch('/api/schedule/reschedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduled_post_id: rescheduleTarget.scheduledPostId, new_date: rescheduleDate, companyId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setRescheduleError(err?.error || 'Failed to reschedule');
+        return;
+      }
+      setRescheduleTarget(null);
+      fetchScheduledPosts();
+    } catch (err: any) {
+      setRescheduleError(err?.message || 'Failed to reschedule');
+    } finally {
+      setRescheduling(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -659,7 +780,22 @@ export default function CampaignCalendarPage() {
           <div className="mb-4 p-3 rounded border border-rose-200 bg-rose-50 text-rose-700 text-sm">{error}</div>
         )}
 
-        {dayKeys.length === 0 ? (
+        {/* Scheduled posts banner — shown when actual scheduled_posts exist for this campaign */}
+        {totalScheduled > 0 && (
+          <div className="mb-4 flex items-center gap-3 p-3 rounded-xl border border-emerald-200 bg-emerald-50">
+            <span className="text-emerald-600 text-lg">✓</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-emerald-800">
+                {totalScheduled} post{totalScheduled !== 1 ? 's' : ''} scheduled across {Object.keys(scheduledByDate).length} day{Object.keys(scheduledByDate).length !== 1 ? 's' : ''}
+              </p>
+              <p className="text-xs text-emerald-600 mt-0.5">
+                Days with a green badge below have real posts in the scheduling queue. Use the dashboard Calendar tab to see all months.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {dayKeys.length === 0 && Object.keys(scheduledByDate).length === 0 ? (
           <div className="bg-white border border-gray-200 rounded-xl p-6 text-sm text-gray-600 space-y-3">
             <p className="font-medium text-gray-800">No activities found for this month.</p>
             <p>
@@ -679,6 +815,16 @@ export default function CampaignCalendarPage() {
                 Go to Campaign Details →
               </button>
             )}
+          </div>
+        ) : dayKeys.length === 0 && totalScheduled > 0 ? (
+          <div className="bg-white border border-emerald-200 rounded-xl p-6 text-sm text-gray-600 space-y-2">
+            <p className="font-medium text-gray-800">No plan activities for this month — but posts are scheduled!</p>
+            <p className="text-emerald-700">
+              {totalScheduled} post{totalScheduled !== 1 ? 's' : ''} have been scheduled across {Object.keys(scheduledByDate).length} days. Use the ← → arrows to navigate to the months with your scheduled posts.
+            </p>
+            <p className="text-xs text-gray-500">
+              Earliest scheduled date: <strong>{Object.keys(scheduledByDate).sort()[0]}</strong>
+            </p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -710,7 +856,14 @@ export default function CampaignCalendarPage() {
                         year: 'numeric',
                       })}
                     </div>
-                    <span className="text-xs text-gray-500">{total} activities</span>
+                    <div className="flex items-center gap-2">
+                      {scheduledByDate[dateKey] > 0 && (
+                        <span className="text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                          ✓ {scheduledByDate[dateKey]} scheduled
+                        </span>
+                      )}
+                      <span className="text-xs text-gray-500">{total} activities</span>
+                    </div>
                   </div>
 
                   <div className="p-4 space-y-4">
@@ -782,6 +935,11 @@ export default function CampaignCalendarPage() {
                                         <span className={`text-[11px] px-2 py-1 rounded-full font-medium border ${getExecutionStatusBadgeClasses(activity.execution_status)}`}>
                                           [{activity.execution_status}]
                                         </span>
+                                        {scheduledExecIds.has(String(activity.execution_id)) && (
+                                          <span className="text-[11px] px-2 py-1 rounded-full font-medium border border-emerald-200 bg-emerald-50 text-emerald-700">
+                                            ✓ Scheduled
+                                          </span>
+                                        )}
                                         <span className="text-[11px] px-2 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-700 inline-flex items-center gap-1">
                                           <Clock className="h-3 w-3" />
                                           {activity.time}
@@ -825,7 +983,7 @@ export default function CampaignCalendarPage() {
                                     </div>
 
                                     {activity.platform !== 'team' && (
-                                      <div className="mt-3">
+                                      <div className="mt-3 flex flex-wrap items-center gap-2">
                                         <button
                                           onClick={() => openActivityDetail(activity)}
                                           className="inline-flex items-center gap-1 border border-indigo-200 bg-indigo-50 text-indigo-700 rounded px-3 py-1.5 text-xs hover:bg-indigo-100"
@@ -833,6 +991,45 @@ export default function CampaignCalendarPage() {
                                           <ExternalLink className="h-3 w-3" />
                                           Open Activity Detail
                                         </button>
+                                        {scheduledExecIds.has(String(activity.execution_id)) && (
+                                          <button
+                                            type="button"
+                                            onClick={() => openReschedule(activity)}
+                                            className="inline-flex items-center gap-1 border border-amber-200 bg-amber-50 text-amber-700 rounded px-3 py-1.5 text-xs hover:bg-amber-100"
+                                          >
+                                            <Calendar className="h-3 w-3" />
+                                            Move to Date
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+                                    {rescheduleTarget?.executionId === String(activity.execution_id) && (
+                                      <div className="mt-3 p-3 rounded-lg border border-amber-200 bg-amber-50 space-y-2">
+                                        <p className="text-xs font-medium text-amber-800">Move scheduled post to a new date</p>
+                                        <div className="flex items-center gap-2">
+                                          <input
+                                            type="date"
+                                            value={rescheduleDate}
+                                            onChange={(e) => setRescheduleDate(e.target.value)}
+                                            className="flex-1 px-2 py-1.5 text-xs border border-amber-300 rounded focus:outline-none focus:ring-2 focus:ring-amber-400 bg-white"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={handleReschedule}
+                                            disabled={!rescheduleDate || rescheduling}
+                                            className="px-3 py-1.5 text-xs rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                          >
+                                            {rescheduling ? 'Moving…' : 'Confirm'}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setRescheduleTarget(null)}
+                                            className="px-3 py-1.5 text-xs rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                        {rescheduleError && <p className="text-xs text-red-600">{rescheduleError}</p>}
                                       </div>
                                     )}
                                   </article>

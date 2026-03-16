@@ -1,12 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
-import { setToken, TokenObject } from '../../../../backend/auth/tokenStore';
-
-// Initialize Supabase client for database operations
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+import { supabase } from '../../../../backend/db/supabaseClient';
+import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
+import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
+import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,36 +12,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error, error_description } = req.query;
+  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
+  const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
 
   console.log('TikTok callback received:', { code: !!code, state, error, error_description });
 
   if (error) {
     console.error('TikTok OAuth error:', error, error_description);
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error as string)}&description=${encodeURIComponent(error_description as string || '')}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
     console.error('No authorization code received');
-    return res.redirect('/creative-scheduler?error=No authorization code received');
+    return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
   try {
     const platform = 'tiktok';
-    
+    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
+
+    const oauthCredentials = await getOAuthCredentialsForPlatform('tiktok');
+    if (!oauthCredentials?.client_id || !oauthCredentials?.client_secret) {
+      return res.redirect(`${errDest}?error=${encodeURIComponent('TikTok OAuth not configured — ask your Super Admin to add credentials.')}`);
+    }
+
     // Exchange code for access token
     console.log('Exchanging code for token...');
     const tokenResponse = await fetch('https://open.tiktokapis.com/v2/oauth/token/', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_key: process.env.TIKTOK_CLIENT_ID || '',
-        client_secret: process.env.TIKTOK_CLIENT_SECRET || '',
+        client_key: oauthCredentials.client_id,
+        client_secret: oauthCredentials.client_secret,
         grant_type: 'authorization_code',
         code: code as string,
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/tiktok/callback`,
-      })
+        redirect_uri: `${getBaseUrl(req)}/api/auth/tiktok/callback`,
+      }),
     });
 
     if (!tokenResponse.ok) {
@@ -54,18 +58,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const tokenData = await tokenResponse.json();
     console.log('Token received:', { access_token: !!tokenData.data?.access_token, expires_in: tokenData.data?.expires_in });
-    
+
     // Get TikTok user info
     console.log('Fetching TikTok user info...');
     const userResponse = await fetch('https://open.tiktokapis.com/v2/user/info/', {
       headers: {
-        'Authorization': `Bearer ${tokenData.data.access_token}`,
+        Authorization: `Bearer ${tokenData.data.access_token}`,
         'Content-Type': 'application/json',
       },
       method: 'POST',
-      body: JSON.stringify({
-        fields: ['open_id', 'union_id', 'avatar_url', 'display_name', 'username'],
-      }),
+      body: JSON.stringify({ fields: ['open_id', 'union_id', 'avatar_url', 'display_name', 'username'] }),
     });
 
     if (!userResponse.ok) {
@@ -78,28 +80,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userInfo = userData.data?.user || {};
     console.log('User info received:', { open_id: userInfo.open_id, username: userInfo.username });
 
-    // Get user_id from state or session
-    const userId = (state as string)?.split('_')[0] || process.env.DEFAULT_USER_ID || '';
-    
+    const { user } = await getSupabaseUserFromRequest(req);
+    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
+
     if (!userId) {
       console.error('No user_id available - cannot save account');
-      return res.redirect(`/creative-scheduler?error=${encodeURIComponent('User session required')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
     }
 
     const accountName = userInfo.display_name || userInfo.username || 'TikTok User';
-    const expiresIn = tokenData.data?.expires_in || 7200; // Default 2 hours
+    const expiresIn = tokenData.data?.expires_in || 7200;
     const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-    // Prepare token object for encrypted storage
     const tokenObj: TokenObject = {
       access_token: tokenData.data.access_token,
       refresh_token: tokenData.data.refresh_token || undefined,
       expires_at: expiresAt,
       token_type: tokenData.data.token_type || 'Bearer',
     };
+    const encryptedCols = encryptTokenColumns(tokenObj);
 
-    // Create or update social account in database
-    const { data: existingAccount, error: fetchError } = await supabase
+    const { data: existingAccount } = await supabase
       .from('social_accounts')
       .select('id')
       .eq('user_id', userId)
@@ -110,7 +111,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let accountId: string;
 
     if (existingAccount) {
-      // Update existing account
       accountId = existingAccount.id;
       const { error: updateError } = await supabase
         .from('social_accounts')
@@ -131,11 +131,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         throw new Error('Failed to update account');
       }
     } else {
-      // Create new account
       const { data: newAccount, error: insertError } = await supabase
         .from('social_accounts')
         .insert({
           user_id: userId,
+          company_id: companyId || null,
           platform: 'tiktok',
           platform_user_id: userInfo.open_id || userInfo.union_id,
           account_name: accountName,
@@ -145,6 +145,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           permissions: tokenData.data.scope?.split(',') || ['video.upload', 'user.info.basic'],
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
+          access_token: encryptedCols.access_token,
+          refresh_token: encryptedCols.refresh_token,
         })
         .select('id')
         .single();
@@ -157,21 +159,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       accountId = newAccount.id;
     }
 
-    // Save encrypted tokens using tokenStore
     await setToken(accountId, tokenObj);
 
     console.log('✅ TikTok account saved successfully:', { accountId, accountName });
 
-    // Redirect back to creative scheduler with success
-    return res.redirect(`/creative-scheduler?connected=tiktok&account=${encodeURIComponent(accountName)}&success=true&message=TikTok account connected successfully!`);
+    const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
+    const sep = successDest.includes('?') ? '&' : '?';
+    return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('TikTok OAuth callback error:', error);
-    return res.redirect(`/creative-scheduler?error=${encodeURIComponent(error.message)}`);
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
-
-
-
-
-

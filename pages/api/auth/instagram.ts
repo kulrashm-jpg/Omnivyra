@@ -1,4 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
+import { getBaseUrl } from '../../../backend/auth/getBaseUrl';
+import { encodeOAuthState } from '../../../backend/auth/oauthState';
+import { getOAuthCredentialsForPlatform } from '../../../backend/auth/oauthCredentialResolver';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -6,40 +9,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Check if we're in mock mode (no real client ID)
-    const clientId = process.env.INSTAGRAM_CLIENT_ID;
-    
-    if (!clientId || clientId === 'your_facebook_app_id') {
-      // Mock mode - simulate successful OAuth
-      const mockAccountData = {
-        id: 'instagram-mock',
-        platform: 'instagram',
-        accountName: 'Your Instagram Account',
-        accountId: 'mock_instagram_id',
-        accessToken: 'mock_access_token',
-        isActive: true,
-        permissions: ['instagram_basic', 'instagram_content_publish']
-      };
-      
-      // Redirect back with mock success
-      return res.redirect(`/creative-scheduler?connected=instagram&account=${encodeURIComponent(mockAccountData.accountName)}&mock=true`);
+    const credentials = await getOAuthCredentialsForPlatform('instagram');
+    if (!credentials?.client_id) {
+      return res.status(400).json({ error: 'Instagram OAuth not configured — ask your Super Admin to add credentials.' });
     }
 
-    // Real Instagram OAuth flow (via Facebook)
+    const companyId = (req.query.companyId as string) || undefined;
+    const userId = (req.query.userId as string) || undefined;
     const returnTo = (req.query.returnTo as string) || '';
-    const stateBase = `instagram_${Date.now()}`;
-    const state = returnTo ? `${stateBase}|${returnTo}` : stateBase;
-    
+    const state = encodeOAuthState({ companyId, userId, returnTo });
+
     const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/instagram/callback`,
+      client_id: credentials.client_id,
+      redirect_uri: `${getBaseUrl(req)}/api/auth/instagram/callback`,
       scope: 'instagram_basic instagram_content_publish pages_show_list',
       response_type: 'code',
-      state
+      state,
     });
-    
-    const oauthUrl = `https://www.facebook.com/v18.0/dialog/oauth?${params.toString()}`;
-    res.redirect(oauthUrl);
+
+    res.redirect(`https://www.facebook.com/v18.0/dialog/oauth?${params.toString()}`);
 
   } catch (error: any) {
     console.error('Instagram OAuth initiation error:', error);

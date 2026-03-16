@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
+import ContentRenderer, { CarouselContent, PLATFORM_HIGHLIGHT } from './ContentRenderer';
 import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical } from 'lucide-react';
 import PlatformIcon from './ui/PlatformIcon';
 import { getPlatformLabel } from '../utils/platformIcons';
@@ -58,6 +59,7 @@ type ActivityEvent = {
   type: 'activity';
   date: string;
   platform: string;
+  content?: string | null;
   title: string;
   repurpose_index: number;
   repurpose_total: number;
@@ -105,6 +107,7 @@ export default function DashboardPage() {
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<string>('all');
   const [calendarWeekFilter, setCalendarWeekFilter] = useState<string>('all');
   const [calendarActivityEvents, setCalendarActivityEvents] = useState<Record<string, ActivityEvent[]>>({});
+  const [postPreview, setPostPreview] = useState<ActivityEvent | null>(null);
   const [calendarActivityEventsLoading, setCalendarActivityEventsLoading] = useState(false);
   const [calendarStageFilter, setCalendarStageFilter] = useState<CalendarExecutionStage | null>(null);
   const [calendarStageEvents, setCalendarStageEvents] = useState<ActivityEvent[]>([]);
@@ -251,6 +254,7 @@ export default function DashboardPage() {
           status: ev.status,
           scheduled_for: ev.scheduled_for,
           is_overdue: ev.is_overdue,
+          content: ev.content || null,
         }));
         setCalendarStageEvents(all.filter((ev) => getEventStage(ev) === stage));
       })
@@ -508,11 +512,7 @@ export default function DashboardPage() {
 
   const handleActivityEventClick = (evt: ActivityEvent, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (evt.execution_id) {
-      router.push(`/activity-workspace?campaignId=${encodeURIComponent(evt.campaign_id)}&executionId=${encodeURIComponent(evt.execution_id)}`);
-    } else {
-      router.push(`/campaign-calendar/${encodeURIComponent(evt.campaign_id)}${evt.date ? `?date=${encodeURIComponent(evt.date)}` : ''}`);
-    }
+    setPostPreview(evt);
   };
 
   const selectedCalendarCampaign = campaigns.find((campaign) => campaign.id === calendarCampaignFilter) || null;
@@ -550,7 +550,7 @@ export default function DashboardPage() {
         list.forEach((ev: any) => {
           const d = ev.date || '';
           if (!d) return;
-          allItems.push({ type: 'activity', date: d, platform: ev.platform, title: ev.title, repurpose_index: 1, repurpose_total: 1, campaign_id: ev.campaign_id, content_type: ev.content_type || 'post', execution_id: ev.execution_id, scheduled_post_id: ev.scheduled_post_id, status: ev.status, scheduled_for: ev.scheduled_for, is_overdue: ev.is_overdue });
+          allItems.push({ type: 'activity', date: d, platform: ev.platform, title: ev.title, repurpose_index: 1, repurpose_total: 1, campaign_id: ev.campaign_id, content_type: ev.content_type || 'post', execution_id: ev.execution_id, scheduled_post_id: ev.scheduled_post_id, status: ev.status, scheduled_for: ev.scheduled_for, is_overdue: ev.is_overdue, content: ev.content || null });
         });
         // Recompute repurpose_index/total campaign-wide: group by title across ALL dates,
         // sort chronologically — total = how many times topic appears in campaign.
@@ -2595,10 +2595,297 @@ export default function DashboardPage() {
         />
         );
       })()}
+
+      {/* Post Preview Modal */}
+      {postPreview && (
+        <PostPreviewModal
+          event={postPreview}
+          onClose={() => setPostPreview(null)}
+          onOpenWorkspace={(evt) => {
+            setPostPreview(null);
+            if (evt.execution_id) {
+              router.push(`/activity-workspace?campaignId=${encodeURIComponent(evt.campaign_id)}&executionId=${encodeURIComponent(evt.execution_id)}`);
+            } else {
+              router.push(`/campaign-calendar/${encodeURIComponent(evt.campaign_id)}${evt.date ? `?date=${encodeURIComponent(evt.date)}` : ''}`);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
 
+
+// ─── Platform config ────────────────────────────────────────────────────────
+
+const PLATFORM_CONFIG: Record<string, {
+  headerBg: string;         // Tailwind classes for modal header bar
+  avatarBg: string;         // Avatar background
+  cardBg: string;           // Post card background
+  highlightCls: string;     // #hashtag/@mention colour
+  linkCls: string;          // Link colour
+  engagements: string[];    // Engagement action labels
+  charLimit?: number;       // Optional character limit hint
+  fontCls: string;          // Body font treatment
+}> = {
+  linkedin: {
+    headerBg: 'bg-[#0A66C2] text-white',
+    avatarBg: 'bg-[#0A66C2]',
+    cardBg: 'bg-white',
+    highlightCls: 'text-[#0A66C2] font-medium',
+    linkCls: 'text-[#0A66C2]',
+    engagements: ['👍 Like', '💬 Comment', '↩ Repost', '✉ Send'],
+    fontCls: 'font-sans',
+  },
+  x: {
+    headerBg: 'bg-black text-white',
+    avatarBg: 'bg-black',
+    cardBg: 'bg-white',
+    highlightCls: 'text-sky-500 font-medium',
+    linkCls: 'text-sky-500',
+    engagements: ['💬 Reply', '🔁 Repost', '❤ Like', '🔖 Bookmark'],
+    charLimit: 280,
+    fontCls: 'font-sans text-[15px]',
+  },
+  twitter: {
+    headerBg: 'bg-black text-white',
+    avatarBg: 'bg-black',
+    cardBg: 'bg-white',
+    highlightCls: 'text-sky-500 font-medium',
+    linkCls: 'text-sky-500',
+    engagements: ['💬 Reply', '🔁 Repost', '❤ Like', '🔖 Bookmark'],
+    charLimit: 280,
+    fontCls: 'font-sans text-[15px]',
+  },
+  instagram: {
+    headerBg: 'bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white',
+    avatarBg: 'bg-gradient-to-br from-purple-500 to-orange-400',
+    cardBg: 'bg-white',
+    highlightCls: 'text-blue-600 font-medium',
+    linkCls: 'text-blue-600',
+    engagements: ['❤ Like', '💬 Comment', '📤 Share', '🔖 Save'],
+    fontCls: 'font-sans',
+  },
+  facebook: {
+    headerBg: 'bg-[#1877F2] text-white',
+    avatarBg: 'bg-[#1877F2]',
+    cardBg: 'bg-white',
+    highlightCls: 'text-[#1877F2] font-medium',
+    linkCls: 'text-[#1877F2]',
+    engagements: ['👍 Like', '💬 Comment', '↩ Share'],
+    fontCls: 'font-sans',
+  },
+  youtube: {
+    headerBg: 'bg-[#FF0000] text-white',
+    avatarBg: 'bg-[#FF0000]',
+    cardBg: 'bg-[#F9F9F9]',
+    highlightCls: 'text-blue-600 font-medium',
+    linkCls: 'text-blue-600',
+    engagements: ['👍 Like', '👎 Dislike', '↩ Share', '💾 Save'],
+    fontCls: 'font-sans text-[13px]',
+  },
+  tiktok: {
+    headerBg: 'bg-black text-white',
+    avatarBg: 'bg-black',
+    cardBg: 'bg-black',
+    highlightCls: 'text-[#FE2C55] font-medium',
+    linkCls: 'text-[#FE2C55]',
+    engagements: ['❤ Like', '💬 Comment', '↩ Share'],
+    fontCls: 'font-sans text-white',
+  },
+  pinterest: {
+    headerBg: 'bg-[#E60023] text-white',
+    avatarBg: 'bg-[#E60023]',
+    cardBg: 'bg-white',
+    highlightCls: 'text-[#E60023] font-medium',
+    linkCls: 'text-[#E60023]',
+    engagements: ['❤ Save', '💬 Comment', '↩ Send'],
+    fontCls: 'font-sans',
+  },
+};
+
+const DEFAULT_PLATFORM_CONFIG: typeof PLATFORM_CONFIG[string] = {
+  headerBg: 'bg-indigo-600 text-white',
+  avatarBg: 'bg-indigo-600',
+  cardBg: 'bg-gray-50',
+  highlightCls: 'text-indigo-600 font-medium',
+  linkCls: 'text-indigo-600',
+  engagements: ['❤ Like', '💬 Comment', '↩ Share'],
+  fontCls: 'font-sans',
+};
+
+
+// ─── Post Preview Modal ──────────────────────────────────────────────────────
+
+function PostPreviewModal({
+  event,
+  onClose,
+  onOpenWorkspace,
+}: {
+  event: ActivityEvent;
+  onClose: () => void;
+  onOpenWorkspace: (evt: ActivityEvent) => void;
+}) {
+  const platform = (event.platform || '').toLowerCase().trim();
+  const contentType = (event.content_type || 'post').toLowerCase().replace(/[\s-]/g, '_');
+  const cfg = PLATFORM_CONFIG[platform] ?? DEFAULT_PLATFORM_CONFIG;
+
+  const content = event.content?.trim() || null;
+  const platformLabel = platform === 'x' ? 'X (Twitter)' : platform.charAt(0).toUpperCase() + platform.slice(1);
+  const scheduledDate = event.scheduled_for
+    ? new Date(event.scheduled_for).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
+    : event.date || '';
+
+  const isInstagram = platform === 'instagram';
+  const isTikTok = platform === 'tiktok';
+  const isYouTube = platform === 'youtube';
+  const isVisualMedia = ['reel', 'short', 'video', 'story', 'image'].includes(contentType);
+  const isLinkedInArticle = platform === 'linkedin' && contentType === 'article';
+  const cardBg = isLinkedInArticle ? 'bg-gray-50' : cfg.cardBg;
+  const showCharCount = cfg.charLimit != null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* ── Header bar ── */}
+        <div className={`flex items-center justify-between px-4 py-3 shrink-0 ${cfg.headerBg}`}>
+          <div className="flex items-center gap-2">
+            <PlatformIcon platform={platform} size={18} />
+            <span className="font-semibold text-sm">{platformLabel} Preview</span>
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/20 capitalize">
+              {event.content_type?.replace(/_/g, ' ') || 'post'}
+            </span>
+          </div>
+          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+        </div>
+
+        {/* ── Post card (scrollable) ── */}
+        <div className={`flex-1 overflow-y-auto ${cardBg}`}>
+          <div className="p-4">
+
+            {/* Profile row */}
+            <div className="flex items-center gap-3 mb-3">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0 ${cfg.avatarBg}`}>
+                <PlatformIcon platform={platform} size={20} />
+              </div>
+              <div className="min-w-0">
+                <p className={`text-sm font-semibold ${isTikTok ? 'text-white' : 'text-gray-900'}`}>Your Brand</p>
+                <p className={`text-xs ${isTikTok ? 'text-gray-400' : 'text-gray-500'}`}>
+                  {scheduledDate ? `Scheduled · ${scheduledDate}` : 'Scheduled post'}
+                </p>
+              </div>
+            </div>
+
+            {/* LinkedIn Article banner */}
+            {isLinkedInArticle && (
+              <div className="mb-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-lg px-3 py-2">
+                <p className="text-[11px] text-blue-600 font-medium uppercase tracking-wide mb-0.5">Article</p>
+                <p className="text-base font-bold text-gray-900 leading-snug">{event.title}</p>
+              </div>
+            )}
+
+            {/* Title (non-article) */}
+            {!isLinkedInArticle && (
+              <p className={`text-sm font-semibold mb-2 ${isTikTok ? 'text-white' : 'text-gray-900'}`}>{event.title}</p>
+            )}
+
+            {/* ── Content body — routed through ContentRenderer ── */}
+            <ContentRenderer
+              content={content ?? ''}
+              platform={platform}
+              contentType={contentType}
+              accentBg={cfg.avatarBg}
+              showCharCount={showCharCount}
+              emptyText="Content not yet generated — open in workspace to generate."
+              className={cfg.fontCls}
+            />
+
+            {/* Visual media placeholder (Instagram / TikTok / Reels / Stories) */}
+            {(isInstagram || isTikTok || isVisualMedia) && (
+              <div className={`mt-3 w-full rounded-xl flex items-center justify-center ${
+                isTikTok
+                  ? 'aspect-[9/16] max-h-48 bg-gray-900 border border-gray-700'
+                  : isInstagram && contentType === 'story'
+                    ? 'aspect-[9/16] max-h-48 bg-gradient-to-br from-purple-100 to-orange-100'
+                    : 'aspect-square max-h-40 bg-gradient-to-br from-purple-100 via-pink-100 to-orange-100'
+              }`}>
+                <div className="text-center opacity-50">
+                  <PlatformIcon platform={platform} size={28} />
+                  <p className={`text-xs mt-1 ${isTikTok ? 'text-gray-400' : 'text-gray-500'}`}>
+                    {contentType === 'reel' || contentType === 'short' ? 'Video / Reel'
+                      : contentType === 'story' ? 'Story'
+                      : contentType === 'video' ? 'Video'
+                      : 'Image / Media'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* YouTube thumbnail placeholder */}
+            {isYouTube && (
+              <div className="mt-3 w-full aspect-video bg-gray-800 rounded-xl flex items-center justify-center">
+                <div className="text-center opacity-50">
+                  <PlatformIcon platform="youtube" size={36} />
+                  <p className="text-xs text-gray-400 mt-1">Video Thumbnail</p>
+                </div>
+              </div>
+            )}
+
+            {/* ── Engagement row ── */}
+            <div className={`mt-4 pt-3 border-t flex items-center gap-4 text-xs ${
+              isTikTok ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-400'
+            }`}>
+              {cfg.engagements.map((label, i) => (
+                <span key={i} className="flex items-center gap-1 select-none">{label}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Footer ── */}
+        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-white shrink-0">
+          <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
+            {event.repurpose_total > 1 && (
+              <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                Repurpose {event.repurpose_index}/{event.repurpose_total}
+              </span>
+            )}
+            {event.status && (
+              <span className={`px-2 py-0.5 rounded-full capitalize ${
+                event.status === 'published' ? 'bg-emerald-100 text-emerald-700'
+                  : event.status === 'scheduled' ? 'bg-blue-100 text-blue-700'
+                  : 'bg-gray-100 text-gray-600'
+              }`}>
+                {event.status}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100"
+            >
+              Close
+            </button>
+            <button
+              onClick={() => onOpenWorkspace(event)}
+              className="px-4 py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1.5"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Open in Workspace
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Campaign Progress Component
 const CampaignProgress: React.FC<{ campaignId: string; companyId?: string | null }> = ({

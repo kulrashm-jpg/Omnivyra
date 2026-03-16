@@ -7,9 +7,17 @@ import { extractAccessToken } from '../../../../backend/services/supabaseAuthSer
 /**
  * Returns the OAuth callback URL for a Community AI connector.
  * Used by auth.ts and callback.ts for all platforms (facebook, twitter, reddit, instagram, linkedin).
+ *
+ * Priority: NEXT_PUBLIC_APP_URL → NEXT_PUBLIC_BASE_URL → http://localhost:3000
+ * All OAuth providers (especially Facebook) require HTTPS — set NEXT_PUBLIC_APP_URL to your
+ * tunnel URL (e.g. https://xyz.trycloudflare.com) in .env.local for local development.
  */
 export function getCommunityAiConnectorCallbackUrl(platform: string): string {
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
+  const baseUrl = (
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    'http://localhost:3000'
+  ).replace(/\/$/, '');
   return `${baseUrl}/api/community-ai/connectors/${platform}/callback`;
 }
 

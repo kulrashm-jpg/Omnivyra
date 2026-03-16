@@ -5,6 +5,7 @@
  */
 
 import React, { useRef, useEffect } from 'react';
+import ContentRenderer from '../ContentRenderer';
 import type { ActivityMessage, SenderRole } from './types';
 import { ROLE_ACCENT_CLASSES } from './types';
 
@@ -69,7 +70,7 @@ export default function ActivityMessageThread({ messages, className = '' }: Acti
               </span>
               <span className="text-xs text-gray-500 ml-auto">{formatTime(msg.created_at)}</span>
             </div>
-            <div className="mt-2 text-sm whitespace-pre-wrap break-words">{msg.message_text}</div>
+            <ContentRenderer content={msg.message_text} renderMode="comment" className="mt-2 break-words" />
             {msg.message_type === 'APPROVAL' && (
               <div className="mt-1 text-xs font-medium text-emerald-700">✔ Approval recorded</div>
             )}

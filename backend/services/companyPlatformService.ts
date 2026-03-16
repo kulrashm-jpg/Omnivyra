@@ -124,33 +124,36 @@ export async function getCompanyPlatformConfig(
 }
 
 /** Community AI connector platform keys (have OAuth flows). */
-const CONNECTOR_SUPPORTED = new Set(['linkedin', 'facebook', 'instagram', 'twitter', 'reddit', 'x']);
+const CONNECTOR_SUPPORTED = new Set(['linkedin', 'meta', 'facebook', 'instagram', 'whatsapp', 'twitter', 'reddit', 'x']);
 
 const CONNECTOR_DISPLAY_NAMES: Record<string, string> = {
-  linkedin: 'LinkedIn',
-  facebook: 'Facebook',
+  linkedin:  'LinkedIn',
+  meta:      'Meta (Facebook · Instagram · WhatsApp)',
+  facebook:  'Facebook',
   instagram: 'Instagram',
-  twitter: 'Twitter',
-  x: 'Twitter',
-  reddit: 'Reddit',
+  whatsapp:  'WhatsApp',
+  twitter:   'Twitter',
+  x:         'Twitter',
+  reddit:    'Reddit',
 };
 
 /** G6.2/G6.3: Platforms enabled globally via .env (no per-company config). */
 function getGloballyEnabledPlatforms(): { platform: string; displayName: string }[] {
   const env = process.env;
   const result: { platform: string; displayName: string }[] = [];
-  const checks: [string, string][] = [
-    ['LINKEDIN_CLIENT_ID', 'linkedin'],
-    ['FACEBOOK_CLIENT_ID', 'facebook'],
-    ['TWITTER_CLIENT_ID', 'twitter'],
-    ['INSTAGRAM_CLIENT_ID', 'instagram'],
-    ['REDDIT_CLIENT_ID', 'reddit'],
-  ];
-  for (const [key, platform] of checks) {
-    if (env[key] && env[key]!.trim()) {
-      const connectorKey = platform === 'x' ? 'twitter' : platform;
-      result.push({ platform: connectorKey, displayName: CONNECTOR_DISPLAY_NAMES[connectorKey] ?? connectorKey });
-    }
+
+  if (env['LINKEDIN_CLIENT_ID']?.trim()) {
+    result.push({ platform: 'linkedin', displayName: CONNECTOR_DISPLAY_NAMES.linkedin });
+  }
+  // Facebook App covers Facebook + Instagram + WhatsApp — show as one Meta entry
+  if (env['FACEBOOK_CLIENT_ID']?.trim()) {
+    result.push({ platform: 'meta', displayName: CONNECTOR_DISPLAY_NAMES.meta });
+  }
+  if (env['TWITTER_CLIENT_ID']?.trim()) {
+    result.push({ platform: 'twitter', displayName: CONNECTOR_DISPLAY_NAMES.twitter });
+  }
+  if (env['REDDIT_CLIENT_ID']?.trim()) {
+    result.push({ platform: 'reddit', displayName: CONNECTOR_DISPLAY_NAMES.reddit });
   }
   return result;
 }
@@ -222,7 +225,7 @@ export async function getCompanyConfiguredPlatformsForConnectors(
     console.warn('[companyPlatformService] platform-scoped getSocialPostingConfigs failed:', (err as Error)?.message);
   }
 
-  const order = ['linkedin', 'facebook', 'instagram', 'twitter', 'reddit'];
+  const order = ['linkedin', 'meta', 'twitter', 'reddit'];
   return result.sort((a, b) => {
     const ia = order.indexOf(a.platform);
     const ib = order.indexOf(b.platform);

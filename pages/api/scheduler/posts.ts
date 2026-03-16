@@ -1,39 +1,61 @@
 import { NextApiRequest, NextApiResponse } from 'next';
+import { supabase } from '@/backend/db/supabaseClient';
+
+const extractAccessToken = (req: NextApiRequest): string | null => {
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice('Bearer '.length).trim();
+    if (token) return token;
+  }
+  const directToken = req.cookies?.['sb-access-token'];
+  if (directToken) return directToken;
+  for (const [name, value] of Object.entries(req.cookies || {})) {
+    if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
+    try {
+      const parsed = JSON.parse(value as string);
+      if (parsed?.access_token) return String(parsed.access_token);
+    } catch { /* ignore */ }
+  }
+  return null;
+};
+
+async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
+  const token = extractAccessToken(req);
+  if (!token) {
+    res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
+    return null;
+  }
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user?.id) {
+    res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
+    return null;
+  }
+  return data.user.id;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const userId = await requireUserId(req, res);
+  if (!userId) return;
+
   try {
-    // Mock data for now - replace with actual Supabase when configured
-    const mockPosts = [
-      {
-        id: '1',
-        content: 'Excited to share our latest innovation in AI technology! 🚀',
-        platform: 'linkedin',
-        scheduled_for: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        status: 'scheduled',
-        account_name: 'John Doe',
-        error_message: null,
-        platform_post_id: null,
-      },
-      {
-        id: '2',
-        content: 'Just launched our new product! Check it out 👀 #innovation #tech',
-        platform: 'twitter',
-        scheduled_for: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-        status: 'scheduled',
-        account_name: '@johndoe',
-        error_message: null,
-        platform_post_id: null,
-      },
-    ];
+    const { data: posts, error } = await supabase
+      .from('scheduled_posts')
+      .select('id, platform, content, scheduled_for, status, error_message, platform_post_id')
+      .eq('user_id', userId)
+      .order('scheduled_for', { ascending: true });
 
-    res.status(200).json(mockPosts);
+    if (error) {
+      console.error('[scheduler/posts] query error:', error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
 
+    return res.status(200).json(posts || []);
   } catch (error: any) {
-    console.error('Error fetching scheduled posts:', error);
-    res.status(500).json({ error: error.message });
+    console.error('[scheduler/posts] error:', error);
+    return res.status(500).json({ success: false, error: error.message });
   }
 }

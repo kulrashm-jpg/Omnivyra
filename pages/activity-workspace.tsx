@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
-import { ArrowLeft, Bookmark, ChevronDown, ChevronUp, CheckCircle2, ExternalLink, Loader2, MessageSquare, Plus, Save, Send, Sparkles, Trash2, UserPlus, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Bookmark, ChevronDown, ChevronUp, CheckCircle2, ExternalLink, Loader2, MessageSquare, Plus, Save, Send, Sparkles, Trash2, UserPlus, X } from 'lucide-react';
 import { getAiLookingAheadMessage } from '@/lib/aiLookingAheadMessage';
 import { getAiStrategicConfidence } from '@/lib/aiStrategicConfidence';
 import { getViewMode } from '@/utils/getViewMode';
 import { VIEW_RULES } from '@/utils/viewVisibilityMatrix';
 import { inferExecutionMode } from '@/backend/services/executionModeInference';
-import { executeMasterContentPipeline, executeVariantImprovement } from '@/lib/planning/executeMasterContentPipeline';
+import { executeMasterContentPipeline, executeVariantImprovement, executeVariantImprovementAll } from '@/lib/planning/executeMasterContentPipeline';
 import CreatorContentPanel from '@/components/activity-workspace/CreatorContentPanel';
 import ActivityDiscussionTab from '@/components/activity-workspace/ActivityDiscussionTab';
 import { useCompanyContext } from '@/components/CompanyContext';
@@ -407,6 +407,8 @@ export default function ActivityWorkspacePage() {
   } | null>(null);
   const [showAddVariantForm, setShowAddVariantForm] = useState(false);
   const [addVariantContentType, setAddVariantContentType] = useState('');
+  // Platform connection status — keyed by platform key (e.g. 'linkedin'), true = connected
+  const [connectedPlatforms, setConnectedPlatforms] = useState<Set<string>>(new Set());
   const [addVariantPlatform, setAddVariantPlatform] = useState('');
   const [activityTab, setActivityTab] = useState<'content' | 'community_responses' | 'discussion'>('content');
   const [communitySignals, setCommunitySignals] = useState<Array<{
@@ -524,6 +526,26 @@ export default function ActivityWorkspacePage() {
       .finally(() => { if (!cancelled) setCommunitySignalsLoading(false); });
     return () => { cancelled = true; };
   }, [activityTab, payload?.campaignId, payload?.companyId, payload?.activityId, queryExecutionId]);
+
+  // Load which platforms this user has connected accounts for — used to warn before scheduling
+  useEffect(() => {
+    const companyId = String(payload?.companyId || '').trim();
+    if (!companyId) return;
+    let cancelled = false;
+    apiFetch(`/api/social-accounts/status?companyId=${encodeURIComponent(companyId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.accounts) return;
+        const connected = new Set<string>(
+          (data.accounts as Array<{ platform_key: string; connected: boolean }>)
+            .filter((a) => a.connected)
+            .map((a) => a.platform_key)
+        );
+        setConnectedPlatforms(connected);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [payload?.companyId]);
 
   useEffect(() => {
     const campaignId = payload?.campaignId ?? '';
@@ -1314,7 +1336,26 @@ export default function ActivityWorkspacePage() {
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
-        notify('error', String(err?.error || 'Failed to schedule post'));
+        const errMsg = String(err?.error || 'Failed to schedule post');
+        notify('error', errMsg);
+        // If no account found, refresh connection status so the warning badge appears
+        if (r.status === 422) {
+          const companyId = String(payload?.companyId || '').trim();
+          if (companyId) {
+            apiFetch(`/api/social-accounts/status?companyId=${encodeURIComponent(companyId)}`)
+              .then((sr) => (sr.ok ? sr.json() : null))
+              .then((data) => {
+                if (!data?.accounts) return;
+                const connected = new Set<string>(
+                  (data.accounts as Array<{ platform_key: string; connected: boolean }>)
+                    .filter((a) => a.connected)
+                    .map((a) => a.platform_key)
+                );
+                setConnectedPlatforms(connected);
+              })
+              .catch(() => {});
+          }
+        }
         return;
       }
       updateSchedule(schedule.id, { status: 'scheduled' });
@@ -2266,15 +2307,29 @@ export default function ActivityWorkspacePage() {
                                 </span>
                               ) : (
                                 /* Active — finalized but not yet scheduled, or re-finalized after edit */
-                                <button
-                                  type="button"
-                                  onClick={() => scheduleFinalizedContent(item)}
-                                  disabled={!!schedulingByScheduleId[item.id]}
-                                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                                >
-                                  <CheckCircle2 className="h-3.5 w-3.5" />
-                                  {schedulingByScheduleId[item.id] ? 'Scheduling…' : 'Schedule'}
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => scheduleFinalizedContent(item)}
+                                    disabled={!!schedulingByScheduleId[item.id]}
+                                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                                  >
+                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                    {schedulingByScheduleId[item.id] ? 'Scheduling…' : 'Schedule'}
+                                  </button>
+                                  {!connectedPlatforms.has(normalizeKey(item.platform)) && connectedPlatforms.size > 0 && (
+                                    <a
+                                      href="/social-platforms"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 rounded-lg bg-amber-50 border border-amber-300 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                                      title={`Connect your ${item.platform} account first`}
+                                    >
+                                      <AlertCircle className="h-3.5 w-3.5" />
+                                      Connect {item.platform}
+                                    </a>
+                                  )}
+                                </>
                               )
                             )}
                             <span className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 inline-flex items-center gap-1">
@@ -2420,15 +2475,18 @@ export default function ActivityWorkspacePage() {
                                           <div className="mt-1.5 flex items-center gap-2">
                                             <button
                                               type="button"
-                                              disabled={isImproving}
+                                              disabled={isImproving || showImproved}
                                               onClick={async () => {
                                                 setImprovingSuggestionKey(suggestionKey);
                                                 try {
-                                                  const { improved_variant } = await executeVariantImprovement({
+                                                  // Apply all suggestions together in one call so improvements
+                                                  // are integrated holistically rather than appended sequentially.
+                                                  const allActions = intelligence.strategist_suggestions.map((sg) => sg.action);
+                                                  const { improved_variant } = await executeVariantImprovementAll({
                                                     campaignId: payload?.campaignId ?? undefined,
                                                     executionId: String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? ''),
                                                     platform: item.platform,
-                                                    improvementType: s.action,
+                                                    improvementTypes: allActions,
                                                     variant: matchedVariant as Record<string, unknown>,
                                                     dailyExecutionItem: payload?.dailyExecutionItem ?? undefined,
                                                   });
@@ -2482,13 +2540,14 @@ export default function ActivityWorkspacePage() {
                                                   setImprovingSuggestionKey(null);
                                                 }
                                               }}
-                                              className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                                              className={`rounded border px-2 py-1 text-[11px] font-medium disabled:opacity-50 ${
+                                                showImproved
+                                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-700 cursor-default'
+                                                  : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                              }`}
                                             >
-                                              {isImproving ? 'Improving...' : 'Apply Suggestion'}
+                                              {isImproving ? 'Improving...' : showImproved ? '✔ Applied' : 'Apply Suggestion'}
                                             </button>
-                                            {showImproved && (
-                                              <span className="text-[11px] font-medium text-emerald-600">✔ Improved</span>
-                                            )}
                                           </div>
                                         </div>
                                       );
@@ -2507,42 +2566,39 @@ export default function ActivityWorkspacePage() {
                                     <div className="flex items-center gap-2">
                                       <button
                                         type="button"
-                                        disabled={!!isAutoImprovingByScheduleId[item.id]}
+                                        disabled={!!isAutoImprovingByScheduleId[item.id] || !!autoAppliedByScheduleId[item.id]}
                                         onClick={async () => {
                                           setIsAutoImprovingByScheduleId((prev) => ({ ...prev, [item.id]: true }));
-                                          let currentVariant = matchedVariant as Record<string, unknown>;
                                           const toApply = intelligence.strategist_suggestions.slice(0, 2);
                                           let variantsList = [...platformVariants];
                                           try {
-                                            for (const s of toApply) {
-                                              const { improved_variant } = await executeVariantImprovement({
-                                                campaignId: payload?.campaignId ?? undefined,
-                                                executionId: String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? ''),
-                                                platform: item.platform,
-                                                improvementType: s.action,
-                                                variant: currentVariant,
-                                                dailyExecutionItem: payload?.dailyExecutionItem ?? undefined,
-                                              });
-                                              currentVariant = improved_variant as Record<string, unknown>;
-                                              const idx = variantsList.findIndex(
-                                                (v) =>
-                                                  normalizeKey((v as any)?.platform) === normalizeKey(item.platform) &&
-                                                  normalizeKey((v as any)?.content_type) === normalizeKey(item.contentType)
-                                              );
-                                              if (idx >= 0) variantsList[idx] = currentVariant as any;
-                                              else variantsList.push({ ...currentVariant, platform: item.platform, content_type: item.contentType });
-                                              setPayload((prev) =>
-                                                prev
-                                                  ? {
-                                                      ...prev,
-                                                      dailyExecutionItem: {
-                                                        ...(prev.dailyExecutionItem || {}),
-                                                        platform_variants: [...variantsList],
-                                                      },
-                                                    }
-                                                  : prev
-                                              );
-                                            }
+                                            // Apply all improvements in one combined call for holistic rewrite
+                                            const { improved_variant } = await executeVariantImprovementAll({
+                                              campaignId: payload?.campaignId ?? undefined,
+                                              executionId: String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? ''),
+                                              platform: item.platform,
+                                              improvementTypes: toApply.map((s) => s.action),
+                                              variant: matchedVariant as Record<string, unknown>,
+                                              dailyExecutionItem: payload?.dailyExecutionItem ?? undefined,
+                                            });
+                                            const idx = variantsList.findIndex(
+                                              (v) =>
+                                                normalizeKey((v as any)?.platform) === normalizeKey(item.platform) &&
+                                                normalizeKey((v as any)?.content_type) === normalizeKey(item.contentType)
+                                            );
+                                            if (idx >= 0) variantsList[idx] = improved_variant as any;
+                                            else variantsList.push({ ...improved_variant, platform: item.platform, content_type: item.contentType });
+                                            setPayload((prev) =>
+                                              prev
+                                                ? {
+                                                    ...prev,
+                                                    dailyExecutionItem: {
+                                                      ...(prev.dailyExecutionItem || {}),
+                                                      platform_variants: [...variantsList],
+                                                    },
+                                                  }
+                                                : prev
+                                            );
                                             if (process.env.NODE_ENV === 'development') {
                                               console.log('[AutoStrategist]', { platform: item.platform, applied: toApply.map((s) => s.action) });
                                             }

@@ -1,5 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getOAuthCredentialsForPlatform } from '../../../backend/auth/oauthCredentialResolver';
+import { getBaseUrl } from '../../../backend/auth/getBaseUrl';
+import { encodeOAuthState } from '../../../backend/auth/oauthState';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -8,6 +10,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const companyId = (req.query.companyId as string) || undefined;
+    const userId = (req.query.userId as string) || undefined;
     const returnTo = (req.query.returnTo as string) || '';
     const platform = 'linkedin';
 
@@ -23,15 +26,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
-    const stateBase = companyId ? `c:${companyId}:linkedin:${Date.now()}` : `linkedin_${Date.now()}`;
-    const state = returnTo ? `${stateBase}|${returnTo}` : stateBase;
+    const state = encodeOAuthState({ companyId, userId, returnTo });
+
+    const redirectUri = `${getBaseUrl(req)}/api/auth/linkedin/callback`;
+    console.log('[LinkedIn OAuth] ── credentials source:', credentials?.source);
+    console.log('[LinkedIn OAuth] ── client_id:', clientId);
+    console.log('[LinkedIn OAuth] ── redirect_uri:', redirectUri);
 
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
-      redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/auth/linkedin/callback`,
+      redirect_uri: redirectUri,
       state,
-      scope: 'r_liteprofile r_emailaddress w_member_social',
+      scope: 'openid profile email w_member_social',
     });
 
     const oauthUrl = `https://www.linkedin.com/oauth/v2/authorization?${params.toString()}`;

@@ -7,7 +7,7 @@ import {
 import { generateCampaignPlan } from '@/backend/services/aiGateway';
 import { refineLanguageOutput } from '@/backend/services/languageRefinementService';
 
-type WorkspaceAction = 'generate_master' | 'generate_variants' | 'refine_variant' | 'improve_variant';
+type WorkspaceAction = 'generate_master' | 'generate_variants' | 'refine_variant' | 'improve_variant' | 'improve_variant_all';
 type ImprovementType = 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -28,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const dailyExecutionItemRaw = asObject((req.body as any)?.dailyExecutionItem) || {};
     const extra_instruction = typeof (req.body as any)?.extra_instruction === 'string' ? String((req.body as any).extra_instruction).trim() || undefined : undefined;
 
-    if (!action || !['generate_master', 'generate_variants', 'refine_variant', 'improve_variant'].includes(action)) {
+    if (!action || !['generate_master', 'generate_variants', 'refine_variant', 'improve_variant', 'improve_variant_all'].includes(action)) {
       return res.status(400).json({ error: 'Invalid action' });
     }
 
@@ -137,6 +137,110 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const improved_variant = {
         ...variant,
         generated_content: revised,
+      };
+      return res.status(200).json({ success: true, improved_variant });
+    }
+
+    if (action === 'improve_variant_all') {
+      const rawTypes = Array.isArray((req.body as any)?.improvementTypes)
+        ? (req.body as any).improvementTypes
+        : [];
+      const improvementTypes = rawTypes.filter((t: unknown) =>
+        ['IMPROVE_CTA', 'IMPROVE_HOOK', 'ADD_DISCOVERABILITY'].includes(String(t))
+      ) as ImprovementType[];
+      const variantRaw = asObject((req.body as any)?.variant);
+      const platform = String((req.body as any)?.platform || (variantRaw as any)?.platform || '').trim().toLowerCase();
+      if (!variantRaw || !platform || improvementTypes.length === 0) {
+        return res.status(400).json({ error: 'improve_variant_all requires improvementTypes, platform, and variant' });
+      }
+      const variant = { ...variantRaw } as any;
+      const currentContent = String(variant?.generated_content || variant?.content || '').trim();
+      if (!currentContent) {
+        return res.status(400).json({ error: 'Variant has no content to improve' });
+      }
+      const contentType = String(variant?.content_type || 'post').trim().toLowerCase();
+
+      // ADD_DISCOVERABILITY is independent — generate hashtags separately
+      let discoverabilityMeta: Record<string, unknown> | undefined;
+      if (improvementTypes.includes('ADD_DISCOVERABILITY')) {
+        discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
+      }
+
+      // Content-modifying improvements applied together in one AI call
+      const contentImprovements = improvementTypes.filter((t) => t !== 'ADD_DISCOVERABILITY');
+      let revisedContent = currentContent;
+
+      if (contentImprovements.length > 0) {
+        const lines = currentContent.split('\n');
+        const firstLine = lines[0] ?? '';
+        const restLines = lines.slice(1).join('\n');
+        const lastSentenceIdx = currentContent.search(/[.!?][^.!?]*$/);
+        const beforeLastSentence = lastSentenceIdx > 0 ? currentContent.slice(0, lastSentenceIdx + 1).trimEnd() : '';
+        const lastSentence = lastSentenceIdx > 0 ? currentContent.slice(lastSentenceIdx + 1).trim() : currentContent.trim();
+
+        const improvementInstructions = contentImprovements.map((t) => {
+          if (t === 'IMPROVE_HOOK') return '1. IMPROVE_HOOK: Rewrite the FIRST LINE to be punchier and under 100 characters — replace in place, do not append.';
+          if (t === 'IMPROVE_CTA') return `${contentImprovements.length > 1 ? '2' : '1'}. IMPROVE_CTA: Rewrite the LAST SENTENCE (or last 1-2 sentences) with a stronger, more specific call-to-action — replace in place, do not append a new line.`;
+          return '';
+        }).filter(Boolean).join('\n');
+
+        const systemPrompt = [
+          'You are a social content editor. Apply ALL of the following improvements to the content simultaneously:',
+          improvementInstructions,
+          '',
+          'STRICT RULES:',
+          '1. Output the COMPLETE revised content with every improvement applied in the correct position.',
+          '2. Do NOT append any new lines at the end — every change must replace the relevant part in-place.',
+          '3. Do NOT touch any part of the content that is not being improved.',
+          '4. Return plain text only — no labels, no commentary.',
+        ].join('\n');
+
+        const userPromptParts = [
+          `Platform: ${platform} | Type: ${contentType}`,
+          '',
+        ];
+        if (contentImprovements.includes('IMPROVE_HOOK')) {
+          userPromptParts.push('## FIRST LINE (rewrite this — IMPROVE_HOOK):');
+          userPromptParts.push(firstLine);
+          userPromptParts.push('');
+          userPromptParts.push('## REST OF CONTENT (keep exactly as-is, except last sentence if IMPROVE_CTA applies):');
+          userPromptParts.push(restLines);
+        } else {
+          userPromptParts.push('## CONTENT BEFORE LAST SENTENCE (keep exactly as-is):');
+          userPromptParts.push(beforeLastSentence || currentContent);
+        }
+        if (contentImprovements.includes('IMPROVE_CTA')) {
+          userPromptParts.push('');
+          userPromptParts.push('## LAST SENTENCE (replace with a stronger CTA — IMPROVE_CTA):');
+          userPromptParts.push(lastSentence || '(no ending sentence found — add a CTA at the end)');
+        }
+        userPromptParts.push('', 'Output the complete revised content now:');
+
+        const aiResult = await generateCampaignPlan({
+          companyId: null,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          temperature: 0.2,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPromptParts.join('\n') },
+          ],
+        });
+        let revised = String(aiResult?.output || '').trim();
+        if (!revised) {
+          return res.status(500).json({ error: 'Improvement returned empty output' });
+        }
+        const refinedImprove = await refineLanguageOutput({
+          content: revised,
+          card_type: 'platform_variant',
+          platform,
+        });
+        revisedContent = (refinedImprove.refined as string) || revised;
+      }
+
+      const improved_variant = {
+        ...variant,
+        generated_content: revisedContent,
+        ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
       };
       return res.status(200).json({ success: true, improved_variant });
     }

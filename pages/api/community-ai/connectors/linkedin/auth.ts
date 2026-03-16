@@ -45,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     response_type: 'code',
     client_id: clientId,
     redirect_uri: redirectUri,
-    scope: 'r_liteprofile r_emailaddress w_member_social',
+    scope: 'openid profile email w_member_social',
     state,
   });
 

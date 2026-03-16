@@ -251,9 +251,15 @@ export default function CampaignDailyPlanPage() {
         setNotice({ type: 'error', message: msg });
         return;
       }
-      const count = data?.scheduled ?? data?.count ?? data?.rowsScheduled ?? data?.scheduledCount ?? null;
+      const count = data?.scheduledPostsCreated ?? data?.scheduled ?? data?.count ?? data?.rowsScheduled ?? data?.scheduledCount ?? null;
+      const alreadyDone = data?.alreadyScheduled ?? 0;
       if (count != null) setScheduledPostCount(Number(count));
-      setNotice({ type: 'success', message: `Campaign scheduled successfully${count != null ? ` — ${count} posts queued` : ''}.` });
+      const msg = count === 0 && alreadyDone > 0
+        ? `All ${alreadyDone} activities are already scheduled.`
+        : count != null
+          ? `${count} new post${count !== 1 ? 's' : ''} scheduled${alreadyDone > 0 ? ` (${alreadyDone} already scheduled, skipped)` : ''}.`
+          : 'Campaign scheduled successfully.';
+      setNotice({ type: 'success', message: msg });
       setCampaignScheduled(true);
       setShowScheduleConfirm(false);
       await loadDataRef.current?.();

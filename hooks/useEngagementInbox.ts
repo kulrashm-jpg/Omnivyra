@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 
 export type InboxThread = {
   thread_id: string;
@@ -68,7 +69,7 @@ export function useEngagementInbox(
     if (filters.priority) params.set('priority', filters.priority);
 
     try {
-      const res = await fetch(`/api/engagement/inbox?${params.toString()}`, { credentials: 'include' });
+      const res = await apiFetch(`/api/engagement/inbox?${params.toString()}`);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(body.error || body.message || 'Engagement API failure');

@@ -7,6 +7,7 @@ import { Dropdown } from "../components/ui/dropdown";
 import { Calendar, Clock, Send, AlertCircle, CheckCircle, Plus, Settings, Sparkles, Eye, EyeOff, Zap, TrendingUp, Users, BarChart3, Image, Video, FileText, Hash, Globe, Smartphone, Monitor, Wand2 } from "lucide-react";
 import PreviewCard from "../components/PreviewCard";
 import { PLATFORM_CONFIGS, getPlatformConfig } from "../lib/platforms";
+import { supabase } from "../utils/supabaseClient";
 
 interface ScheduledPost {
   id: string;
@@ -103,11 +104,19 @@ export default function SchedulerPage() {
     }
   }, [router.query]);
 
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
   const loadScheduledPosts = async () => {
     try {
-      const response = await fetch('/api/scheduler/posts');
+      const headers = await getAuthHeaders();
+      const response = await fetch('/api/scheduler/posts', { headers });
+      if (!response.ok) return;
       const data = await response.json();
-      setScheduledPosts(data);
+      setScheduledPosts(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error loading scheduled posts:', error);
     }
@@ -115,9 +124,11 @@ export default function SchedulerPage() {
 
   const loadConnectedAccounts = async () => {
     try {
-      const response = await fetch('/api/accounts');
+      const headers = await getAuthHeaders();
+      const response = await fetch('/api/accounts', { headers });
+      if (!response.ok) return;
       const data = await response.json();
-      setConnectedAccounts(data);
+      setConnectedAccounts(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error loading connected accounts:', error);
     }
@@ -148,6 +159,8 @@ export default function SchedulerPage() {
     try {
       const scheduledFor = new Date(`${formData.scheduledDate}T${formData.scheduledTime}`);
       
+      const authHeaders = await getAuthHeaders();
+
       // Schedule for each selected platform
       const promises = formData.platforms.map(async (platform) => {
         const account = connectedAccounts.find(a => a.platform === platform && a.is_active);
@@ -155,7 +168,7 @@ export default function SchedulerPage() {
 
         const response = await fetch('/api/scheduler/schedule', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
           body: JSON.stringify({
             title: formData.title,
             content: formData.body,
@@ -164,7 +177,6 @@ export default function SchedulerPage() {
             scheduledFor: scheduledFor.toISOString(),
             platform: platform,
             accountId: account.id,
-            userId: 'test-user-id',
           }),
         });
 
