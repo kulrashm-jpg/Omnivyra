@@ -51,10 +51,11 @@ interface CheckResult {
 
 const CACHE_KEY = 'social_platform_checks';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const ARCHIVED_COMMUNITY_KEY = 'archived_community_platforms';
-const HIDDEN_SOCIAL_KEY  = 'hidden_social_platforms';
-const HIDDEN_TREND_KEY   = 'hidden_trend_apis';
-const HIDDEN_IMAGE_KEY   = 'hidden_image_apis';
+const ARCHIVED_COMMUNITY_KEY     = 'archived_community_platforms';
+const HIDDEN_SOCIAL_KEY          = 'hidden_social_platforms';
+const HIDDEN_TREND_KEY           = 'hidden_trend_apis';
+const HIDDEN_IMAGE_KEY           = 'hidden_image_apis';
+const HIDDEN_COMMUNITY_API_KEY   = 'hidden_community_apis';
 
 const PLATFORM_META: Record<string, { icon: string; color: string }> = {
   linkedin:      { icon: '🔵', color: 'border-blue-200 bg-blue-50' },
@@ -129,10 +130,12 @@ export default function SocialPlatformsPage() {
   const [hiddenSocial, setHiddenSocial] = useState<Set<string>>(new Set());
   const [hiddenTrend, setHiddenTrend] = useState<Set<string>>(new Set());
   const [hiddenImage, setHiddenImage] = useState<Set<string>>(new Set());
+  const [hiddenCommunityApi, setHiddenCommunityApi] = useState<Set<string>>(new Set());
   const [showHiddenSocial, setShowHiddenSocial] = useState(false);
   const [showHiddenCommunity, setShowHiddenCommunity] = useState(false);
   const [showHiddenTrend, setShowHiddenTrend] = useState(false);
   const [showHiddenImage, setShowHiddenImage] = useState(false);
+  const [showHiddenCommunityApi, setShowHiddenCommunityApi] = useState(false);
   const [activeTab, setActiveTab] = useState<'social' | 'trend' | 'community' | 'image'>('social');
   const [catalogApis, setCatalogApis] = useState<any[]>([]);
   const [loadingCatalogApis, setLoadingCatalogApis] = useState(false);
@@ -203,6 +206,7 @@ export default function SocialPlatformsPage() {
     setHiddenSocial(load(HIDDEN_SOCIAL_KEY));
     setHiddenTrend(load(HIDDEN_TREND_KEY));
     setHiddenImage(load(HIDDEN_IMAGE_KEY));
+    setHiddenCommunityApi(load(HIDDEN_COMMUNITY_API_KEY));
   }, []);
 
   const makeHideHandlers = (storageKey: string, setter: React.Dispatch<React.SetStateAction<Set<string>>>) => ({
@@ -210,10 +214,11 @@ export default function SocialPlatformsPage() {
     unhide: (id: string) => setter((prev) => { const next = new Set(prev); next.delete(id); try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /**/ } return next; }),
   });
 
-  const socialHiders   = makeHideHandlers(HIDDEN_SOCIAL_KEY, setHiddenSocial);
-  const communityHiders = makeHideHandlers(ARCHIVED_COMMUNITY_KEY, setArchivedCommunity);
-  const trendHiders    = makeHideHandlers(HIDDEN_TREND_KEY, setHiddenTrend);
-  const imageHiders    = makeHideHandlers(HIDDEN_IMAGE_KEY, setHiddenImage);
+  const socialHiders        = makeHideHandlers(HIDDEN_SOCIAL_KEY, setHiddenSocial);
+  const communityHiders     = makeHideHandlers(ARCHIVED_COMMUNITY_KEY, setArchivedCommunity);
+  const communityApiHiders  = makeHideHandlers(HIDDEN_COMMUNITY_API_KEY, setHiddenCommunityApi);
+  const trendHiders         = makeHideHandlers(HIDDEN_TREND_KEY, setHiddenTrend);
+  const imageHiders         = makeHideHandlers(HIDDEN_IMAGE_KEY, setHiddenImage);
 
   // Keep old names for backward compat with community card render
   const archiveCommunity = communityHiders.hide;
@@ -597,12 +602,10 @@ export default function SocialPlatformsPage() {
 
   // All users see all platforms. oauth_configured controls whether Connect is available.
   const visibleSocial = socialPlatforms;
-  const activeCommunity = communityPlatforms.filter((p) => !archivedCommunity.has(p.platform_key));
-  const archivedCommunityList = communityPlatforms.filter((p) => archivedCommunity.has(p.platform_key));
-
   // Catalog API tab data — only active APIs visible to company admin
-  const trendApis   = catalogApis.filter((a) => a.is_active && getCatalogApiCategory(a) === 'trend');
-  const imageApis   = catalogApis.filter((a) => a.is_active && getCatalogApiCategory(a) === 'image');
+  const trendApis        = catalogApis.filter((a) => a.is_active && getCatalogApiCategory(a) === 'trend');
+  const imageApis        = catalogApis.filter((a) => a.is_active && getCatalogApiCategory(a) === 'image');
+  const communityApiList = catalogApis.filter((a) => a.is_active && getCatalogApiCategory(a) === 'community');
 
   // Social: split by connected / available / hidden
   const connectedSocial   = visibleSocial.filter((p) => p.connected);
@@ -610,9 +613,7 @@ export default function SocialPlatformsPage() {
   const availableSocial   = visibleSocial.filter((p) => !p.connected && (!hiddenSocial.has(p.platform_key) || p.oauth_configured));
   const hiddenSocialList  = visibleSocial.filter((p) => !p.connected && hiddenSocial.has(p.platform_key) && !p.oauth_configured);
 
-  // Community: split by connected / available / hidden (uses existing archivedCommunity)
-  const connectedCommunity  = activeCommunity.filter((p) => p.connected);
-  const availableCommunity  = activeCommunity.filter((p) => !p.connected);
+  // Community OAuth — kept for backward compat with renderCommunityCard (archived restore)
 
   // Trend/Image: selection state from company_api_configs
   const isSelected = (api: any) => companyConfigs.some((c) => c.api_source_id === api.id && c.enabled);
@@ -623,9 +624,19 @@ export default function SocialPlatformsPage() {
   const hiddenTrendList     = trendApis.filter((a) => !isSelected(a) && hiddenTrend.has(a.name));
 
   // Image: same pattern
-  const selectedImageApis   = imageApis.filter((a) => isSelected(a));
-  const visibleImageApis    = imageApis.filter((a) => !isSelected(a) && !hiddenImage.has(a.name));
-  const hiddenImageList     = imageApis.filter((a) => !isSelected(a) && hiddenImage.has(a.name));
+  const selectedImageApis     = imageApis.filter((a) => isSelected(a));
+  const visibleImageApis      = imageApis.filter((a) => !isSelected(a) && !hiddenImage.has(a.name));
+  const hiddenImageList       = imageApis.filter((a) => !isSelected(a) && hiddenImage.has(a.name));
+
+  // Community catalog APIs: same selection pattern
+  const selectedCommunityApis = communityApiList.filter((a) => isSelected(a));
+  const visibleCommunityApis  = communityApiList.filter((a) => !isSelected(a) && !hiddenCommunityApi.has(a.name));
+  const hiddenCommunityApiList = communityApiList.filter((a) => !isSelected(a) && hiddenCommunityApi.has(a.name));
+
+  // Community OAuth platforms: only those actually connected or that have a connect path
+  const connectableCommunity  = communityPlatforms.filter((p) => p.oauth_configured && p.auth_path);
+  const connectedCommunityOAuth = communityPlatforms.filter((p) => p.connected);
+  const archivedCommunityList = communityPlatforms.filter((p) => archivedCommunity.has(p.platform_key));
 
   type TabId = 'social' | 'trend' | 'community' | 'image';
   const ALL_TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
@@ -805,26 +816,71 @@ export default function SocialPlatformsPage() {
               {/* ── Community tab ── */}
               {activeTab === 'community' && (
                 <div className="space-y-6">
-                  {connectedCommunity.length > 0 && (
+                  {/* Connected OAuth accounts (In Use) */}
+                  {connectedCommunityOAuth.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-3">Connected Accounts</p>
+                      <div className="space-y-3">{connectedCommunityOAuth.map((p) => renderCommunityCard(p, false))}</div>
+                    </div>
+                  )}
+
+                  {/* Catalog API Sources — In Use */}
+                  {selectedCommunityApis.length > 0 && (
                     <div>
                       <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-3">In Use</p>
-                      <div className="space-y-3">{connectedCommunity.map((p) => renderCommunityCard(p, false))}</div>
+                      <div className="space-y-3">
+                        {selectedCommunityApis.map((a) => renderCatalogApiCard(a, 'selected'))}
+                      </div>
                     </div>
                   )}
-                  {availableCommunity.length > 0 && (
+
+                  {/* OAuth platforms with a connect flow (rare, future) */}
+                  {connectableCommunity.filter((p) => !p.connected).length > 0 && (
                     <div>
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Available — choose which to connect</p>
-                      <div className="space-y-3">{availableCommunity.map((p) => renderCommunityCard(p, false))}</div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Available — connect account</p>
+                      <div className="space-y-3">
+                        {connectableCommunity.filter((p) => !p.connected).map((p) => renderCommunityCard(p, false))}
+                      </div>
                     </div>
                   )}
-                  {connectedCommunity.length === 0 && availableCommunity.length === 0 && archivedCommunityList.length === 0 && (
-                    <p className="text-sm text-gray-400">No community platforms configured yet.</p>
+
+                  {/* Catalog API Sources — Available to select */}
+                  {visibleCommunityApis.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Available — choose which to use</p>
+                      <div className="space-y-3">
+                        {visibleCommunityApis.map((a) => renderCatalogApiCard(a, 'available', () => communityApiHiders.hide(a.name)))}
+                      </div>
+                    </div>
                   )}
+
+                  {/* Empty state */}
+                  {connectedCommunityOAuth.length === 0 && selectedCommunityApis.length === 0 && visibleCommunityApis.length === 0 && hiddenCommunityApiList.length === 0 && archivedCommunityList.length === 0 && (
+                    <p className="text-sm text-gray-400">No community APIs active. Ask your Super Admin to configure them.</p>
+                  )}
+
+                  {/* Hidden catalog APIs */}
+                  {hiddenCommunityApiList.length > 0 && (
+                    <div>
+                      <button onClick={() => setShowHiddenCommunityApi((v) => !v)} className="flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors">
+                        <Archive className="h-4 w-4" />
+                        <span className="font-medium">Hidden ({hiddenCommunityApiList.length})</span>
+                        {showHiddenCommunityApi ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      </button>
+                      {showHiddenCommunityApi && (
+                        <div className="mt-3 space-y-3">
+                          {hiddenCommunityApiList.map((a) => renderCatalogApiCard(a, 'hidden', undefined, () => communityApiHiders.unhide(a.name)))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Archived OAuth community cards (restore) */}
                   {archivedCommunityList.length > 0 && (
                     <div>
                       <button onClick={() => setShowHiddenCommunity((v) => !v)} className="flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors">
                         <Archive className="h-4 w-4" />
-                        <span className="font-medium">Hidden ({archivedCommunityList.length})</span>
+                        <span className="font-medium">Archived accounts ({archivedCommunityList.length})</span>
                         {showHiddenCommunity ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                       </button>
                       {showHiddenCommunity && (
