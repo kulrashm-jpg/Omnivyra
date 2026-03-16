@@ -243,7 +243,8 @@ export default function SuperAdminPanel() {
           setOauthForm((prev) => {
             const next = { ...prev };
             for (const p of apiPlatforms) {
-              next[p.platform_key] = { client_id: p.client_id || '', client_secret: p.client_secret || '', enabled: p.enabled ?? false };
+              // Default to enabled=true for platforms that already have credentials saved
+              next[p.platform_key] = { client_id: p.client_id || '', client_secret: p.client_secret || '', enabled: p.configured ? (p.enabled ?? true) : true };
             }
             return next;
           });

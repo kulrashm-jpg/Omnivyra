@@ -36,7 +36,6 @@ export async function getPlatformOAuthConfig(
     .from('platform_oauth_configs')
     .select('platform, oauth_client_id_encrypted, oauth_client_secret_encrypted, oauth_authorize_url, oauth_token_url, oauth_scopes, enabled')
     .eq('platform', dbPlatform)
-    .eq('enabled', true)
     .maybeSingle();
 
   if (error || !data) return null;
