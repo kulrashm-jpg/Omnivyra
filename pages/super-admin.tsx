@@ -25,6 +25,8 @@ import {
   ChevronDown,
   ChevronUp,
   EyeOff,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 interface DeletionAudit {
@@ -176,6 +178,9 @@ export default function SuperAdminPanel() {
   const [savingOauth, setSavingOauth] = useState<string | null>(null);
   const [oauthSaveMsg, setOauthSaveMsg] = useState<{ platform: string; type: 'success' | 'error'; text: string } | null>(null);
   const [showSecretFor, setShowSecretFor] = useState<string | null>(null);
+  const [copiedRedirectFor, setCopiedRedirectFor] = useState<string | null>(null);
+  const [checkingPlatform, setCheckingPlatform] = useState<string | null>(null);
+  const [platformCheckResults, setPlatformCheckResults] = useState<Record<string, { credentials_ok: boolean; token_ok: boolean | null; token_detail: string | null; checked_at: string } | null>>({});
   const [pricingPlans, setPricingPlans] = useState<Array<{ id: string; plan_key: string; name: string; description?: string | null; monthly_price?: number | null }>>([]);
   const [plansLimits, setPlansLimits] = useState<Record<string, Record<string, number | null>>>({});
   const [plansDraftLimits, setPlansDraftLimits] = useState<Record<string, Record<string, string>>>({});
@@ -183,6 +188,14 @@ export default function SuperAdminPanel() {
   const [plansSaveError, setPlansSaveError] = useState<string | null>(null);
   const [plansSaveSuccess, setPlansSaveSuccess] = useState<string | null>(null);
   const [externalApisHealth, setExternalApisHealth] = useState<{ healthy: number; warning: number; failed: number; status: string } | null>(null);
+  const [apiSubTab, setApiSubTab] = useState<'social' | 'trend' | 'community' | 'llm' | 'image' | 'others'>('social');
+  const [catalogApis, setCatalogApis] = useState<any[]>([]);
+  const [loadingCatalogApis, setLoadingCatalogApis] = useState(false);
+  const [expandedApiId, setExpandedApiId] = useState<string | null>(null);
+  const [apiEnvForm, setApiEnvForm] = useState<Record<string, any>>({ api_key_env_name: '', is_active: true });
+  const [savingApiEnv, setSavingApiEnv] = useState(false);
+  const [checkingApiId, setCheckingApiId] = useState<string | null>(null);
+  const [apiCheckResults, setApiCheckResults] = useState<Record<string, { ok: boolean; detail: string; checked_at: string }>>({});
   const [showCreateCompanyModal, setShowCreateCompanyModal] = useState(false);
   const [showCreateCompanyAdminModal, setShowCreateCompanyAdminModal] = useState(false);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
@@ -230,7 +243,7 @@ export default function SuperAdminPanel() {
           setOauthForm((prev) => {
             const next = { ...prev };
             for (const p of apiPlatforms) {
-              next[p.platform_key] = { client_id: '', client_secret: '', enabled: p.enabled ?? false };
+              next[p.platform_key] = { client_id: p.client_id || '', client_secret: p.client_secret || '', enabled: p.enabled ?? false };
             }
             return next;
           });
@@ -238,6 +251,21 @@ export default function SuperAdminPanel() {
       }
     } catch (e) { console.error('Failed to load platform OAuth configs', e); }
     finally { setLoadingSocialPlatforms(false); }
+  };
+
+  const checkPlatformConfig = async (platformKey: string) => {
+    setCheckingPlatform(platformKey);
+    try {
+      const r = await fetchWithAuth(`/api/social-accounts/verify-config?platform=${platformKey}`);
+      if (r.ok) {
+        const data = await r.json();
+        setPlatformCheckResults((prev) => ({ ...prev, [platformKey]: data }));
+      }
+    } catch (e) {
+      console.error('Check failed', e);
+    } finally {
+      setCheckingPlatform(null);
+    }
   };
 
   const saveOauthConfig = async (platformKey: string) => {
@@ -273,9 +301,86 @@ export default function SuperAdminPanel() {
     loadSuperAdminData();
   }, []);
 
+  const loadCatalogApis = async () => {
+    setLoadingCatalogApis(true);
+    try {
+      const r = await fetchWithAuth('/api/external-apis?scope=platform');
+      if (r.ok) { const d = await r.json(); setCatalogApis(d.apis || []); }
+    } catch (e) { console.error('loadCatalogApis', e); }
+    finally { setLoadingCatalogApis(false); }
+  };
+
+  const addApiToCatalog = async (known: { name: string; env_var: string | null; base_url: string; auth_type: string }) => {
+    try {
+      const r = await fetchWithAuth('/api/external-apis?scope=platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: known.name, base_url: known.base_url, auth_type: known.auth_type, api_key_env_name: known.env_var, is_active: true, is_preset: true, purpose: 'trends' }),
+      });
+      if (r.ok) await loadCatalogApis();
+    } catch (e) { console.error('addApiToCatalog', e); }
+  };
+
+  // Add to catalog + immediately open the configure form — no separate "+ Add" step
+  const addAndExpand = async (known: { key: string; name: string; env_var: string | null; base_url: string; auth_type: string }) => {
+    setCheckingApiId(known.key);
+    try {
+      const r = await fetchWithAuth('/api/external-apis?scope=platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: known.name, base_url: known.base_url, auth_type: known.auth_type, api_key_env_name: known.env_var, is_active: true, is_preset: true, purpose: 'trends' }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        const newEntry = d.api || d;
+        setCatalogApis((prev) => [...prev, newEntry]);
+        setExpandedApiId(known.key);
+        setApiEnvForm({ api_key_env_name: known.env_var || '', is_active: true, base_url: known.base_url, daily_quota: '', _client_id_env: '', _client_secret_env: '', _config: {} });
+      }
+    } catch (e) { console.error('addAndExpand', e); }
+    finally { setCheckingApiId(null); }
+  };
+
+  const saveApiEnvConfig = async (catalogEntry: any) => {
+    setSavingApiEnv(true);
+    try {
+      // Embed _config (model/temperature/etc.) into query_params JSONB
+      const { _config: _existingConfig, ...restQP } = catalogEntry.query_params || {};
+      const newConfig = apiEnvForm._config;
+      const mergedQP = { ...restQP, ...(newConfig && Object.keys(newConfig).length > 0 ? { _config: newConfig } : {}) };
+
+      // Community OAuth2 creds (Reddit etc.) live in headers JSONB under _client_id_env / _client_secret_env
+      const mergedHeaders: Record<string, any> = { ...(catalogEntry.headers || {}) };
+      if (apiEnvForm._client_id_env != null)     mergedHeaders._client_id_env     = apiEnvForm._client_id_env;
+      if (apiEnvForm._client_secret_env != null)  mergedHeaders._client_secret_env  = apiEnvForm._client_secret_env;
+
+      const r = await fetchWithAuth(`/api/external-apis/${catalogEntry.id}?scope=platform`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:              catalogEntry.name,
+          base_url:          apiEnvForm.base_url ?? catalogEntry.base_url,
+          platform_type:     catalogEntry.platform_type ?? 'social',
+          method:            catalogEntry.method ?? 'GET',
+          auth_type:         catalogEntry.auth_type ?? 'none',
+          api_key_name:      catalogEntry.api_key_name ?? null,
+          api_key_env_name:  apiEnvForm.api_key_env_name ?? catalogEntry.api_key_env_name ?? null,
+          headers:           mergedHeaders,
+          query_params:      mergedQP,
+          is_active:         apiEnvForm.is_active,
+          is_preset:         catalogEntry.is_preset ?? true,
+          rate_limit_per_min: apiEnvForm.daily_quota != null ? Number(apiEnvForm.daily_quota) : (catalogEntry.rate_limit_per_min ?? 60),
+        }),
+      });
+      if (r.ok) { setExpandedApiId(null); await loadCatalogApis(); }
+    } catch (e) { console.error('saveApiEnvConfig', e); }
+    finally { setSavingApiEnv(false); }
+  };
+
   useEffect(() => {
-    if (activeTab === 'social-platforms' && socialPlatforms.length === 0 && !loadingSocialPlatforms) {
-      loadSocialPlatforms();
+    if (activeTab === 'social-platforms') {
+      if (socialPlatforms.length === 0 && !loadingSocialPlatforms) loadSocialPlatforms();
+      if (catalogApis.length === 0 && !loadingCatalogApis) loadCatalogApis();
     }
   }, [activeTab]);
 
@@ -930,24 +1035,16 @@ export default function SuperAdminPanel() {
             { id: 'rbac', label: 'RBAC', icon: Key },
             { id: 'community-ai', label: 'Community-AI', icon: Activity },
             { id: 'audit', label: 'Audit Logs', icon: Eye },
-            { id: 'social-platforms', label: 'Social Platforms', icon: Globe },
+            { id: 'social-platforms', label: 'APIs', icon: Globe },
             { id: 'blog', label: 'Blog', icon: FileText },
-            ...(canShowExternalApisTab
-              ? [{ id: 'external-apis', label: 'External API Control', icon: Key }]
-              : [])
           ].map((tab) => {
             const Icon = tab.icon;
-            const isExternalApiControl = tab.id === 'external-apis';
             const isBlog = tab.id === 'blog';
             const isConsumption = tab.id === 'consumption';
             return (
               <button
                 key={tab.id}
                 onClick={() => {
-                  if (isExternalApiControl) {
-                    router.push('/external-apis?mode=platform');
-                    return;
-                  }
                   if (isBlog) {
                     router.push('/admin/blog');
                     return;
@@ -1036,9 +1133,9 @@ export default function SuperAdminPanel() {
             </div>
 
             {canShowExternalApisTab && (
-              <Link
-                href="/external-apis?mode=platform"
-                className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors no-underline ${
+              <button
+                onClick={() => setActiveTab('social-platforms')}
+                className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
                   externalApisHealth?.status === 'healthy'
                     ? 'bg-green-50 border-green-200 text-green-800 hover:bg-green-100'
                     : externalApisHealth != null
@@ -1049,8 +1146,8 @@ export default function SuperAdminPanel() {
                 <Key className="h-4 w-4" />
                 {externalApisHealth != null
                   ? `External APIs: ${externalApisHealth.status === 'healthy' ? 'HEALTHY' : 'ATTENTION REQUIRED'}`
-                  : 'External API Control — Configure & Approval Queue'}
-              </Link>
+                  : 'API Configuration'}
+              </button>
             )}
 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200">
@@ -1925,13 +2022,361 @@ export default function SuperAdminPanel() {
           </div>
         )}
 
-        {activeTab === 'social-platforms' && (
+        {activeTab === 'social-platforms' && (() => {
+          const KNOWN_APIS: Record<string, Array<{ key: string; name: string; icon: string; env_var: string | null; auth_type: string; base_url: string; description: string }>> = {
+            trend: [
+              { key: 'youtube',          name: 'YouTube Data API',        icon: '▶️',  env_var: 'YOUTUBE_API_KEY',   auth_type: 'query',  base_url: 'https://www.googleapis.com/youtube/v3/search',      description: 'Trending videos and Shorts' },
+              { key: 'newsapi',          name: 'NewsAPI',                 icon: '📰',  env_var: 'NEWS_API_KEY',      auth_type: 'query',  base_url: 'https://newsapi.org/v2/top-headlines',             description: 'Top headlines + full-text search' },
+              { key: 'serpapi',          name: 'SerpAPI',                 icon: '🔍',  env_var: 'SERPAPI_KEY',       auth_type: 'query',  base_url: 'https://serpapi.com/search',                       description: 'Google Trends + Google News results' },
+              { key: 'searchapi',        name: 'SearchAPI',               icon: '🔎',  env_var: 'SEARCHAPI_KEY',     auth_type: 'query',  base_url: 'https://www.searchapi.io/api/v1/search',           description: 'Real-time Google search results' },
+              { key: 'gdelt',            name: 'GDELT Events',            icon: '🌍',  env_var: null,                auth_type: 'none',   base_url: 'https://api.gdeltproject.org/api/v2/events/search', description: 'Global event data — no key needed' },
+              { key: 'pytrends',         name: 'Google Trends (Proxy)',   icon: '📈',  env_var: null,                auth_type: 'none',   base_url: 'https://trends-proxy.yourdomain.com/trends',       description: 'Requires a self-hosted PyTrends bridge' },
+            ],
+            community: [
+              { key: 'reddit',           name: 'Reddit Search',           icon: '🟠',  env_var: 'REDDIT_BEARER_TOKEN', auth_type: 'bearer', base_url: 'https://oauth.reddit.com/search',              description: 'Search across subreddits' },
+              { key: 'hackernews',       name: 'Hacker News',             icon: '🔶',  env_var: null,                auth_type: 'none',   base_url: 'https://hn.algolia.com/api/v1/search',             description: 'Algolia HN search — no key needed' },
+              { key: 'stackoverflow',    name: 'Stack Overflow',          icon: '📚',  env_var: null,                auth_type: 'none',   base_url: 'https://api.stackexchange.com/2.3/search/advanced','description': 'Developer Q&A trends — no key needed' },
+              { key: 'github',           name: 'GitHub',                  icon: '🐙',  env_var: 'GITHUB_TOKEN',      auth_type: 'bearer', base_url: 'https://api.github.com',                          description: 'Trending repos and topics' },
+              { key: 'discord',          name: 'Discord',                 icon: '💬',  env_var: 'DISCORD_BOT_TOKEN', auth_type: 'bearer', base_url: 'https://discord.com/api/v10',                     description: 'Community server signals' },
+            ],
+            llm: [
+              { key: 'openai',           name: 'OpenAI (GPT-4o)',         icon: '🤖',  env_var: 'OPENAI_API_KEY',    auth_type: 'bearer', base_url: 'https://api.openai.com/v1',                        description: 'GPT-4o, GPT-4, GPT-3.5 models' },
+              { key: 'anthropic',        name: 'Anthropic Claude',        icon: '🧠',  env_var: 'ANTHROPIC_API_KEY', auth_type: 'api_key',base_url: 'https://api.anthropic.com/v1',                     description: 'Claude 3.5 Sonnet, Opus, Haiku' },
+              { key: 'gemini',           name: 'Google Gemini',           icon: '✨',  env_var: 'GOOGLE_GEMINI_API_KEY', auth_type: 'query', base_url: 'https://generativelanguage.googleapis.com/v1', description: 'Gemini 1.5 Pro / Flash' },
+              { key: 'groq',             name: 'Groq',                    icon: '⚡',  env_var: 'GROQ_API_KEY',      auth_type: 'bearer', base_url: 'https://api.groq.com/openai/v1',                   description: 'Ultra-fast inference — Llama, Mixtral' },
+              { key: 'mistral',          name: 'Mistral AI',              icon: '🌊',  env_var: 'MISTRAL_API_KEY',   auth_type: 'bearer', base_url: 'https://api.mistral.ai/v1',                        description: 'Mistral Large, Mixtral models' },
+              { key: 'cohere',           name: 'Cohere',                  icon: '🔗',  env_var: 'COHERE_API_KEY',    auth_type: 'bearer', base_url: 'https://api.cohere.ai/v1',                         description: 'Command R+ for RAG and generation' },
+            ],
+            image: [
+              { key: 'dalle',            name: 'DALL-E (OpenAI)',         icon: '🖼️',  env_var: 'OPENAI_API_KEY',    auth_type: 'bearer', base_url: 'https://api.openai.com/v1/images/generations',     description: 'DALL-E 3 image generation' },
+              { key: 'stability',        name: 'Stability AI',            icon: '🎨',  env_var: 'STABILITY_API_KEY', auth_type: 'bearer', base_url: 'https://api.stability.ai/v1',                      description: 'Stable Diffusion XL, SD3' },
+              { key: 'replicate',        name: 'Replicate',               icon: '🔁',  env_var: 'REPLICATE_API_TOKEN', auth_type: 'bearer', base_url: 'https://api.replicate.com/v1',                  description: 'Flux, SDXL and any open model' },
+              { key: 'fal',              name: 'fal.ai',                  icon: '⚡',  env_var: 'FAL_API_KEY',       auth_type: 'bearer', base_url: 'https://fal.run',                                  description: 'Fast Flux and image models' },
+              { key: 'unsplash',         name: 'Unsplash',                icon: '📷',  env_var: 'UNSPLASH_ACCESS_KEY', auth_type: 'query', base_url: 'https://api.unsplash.com',                       description: 'High-quality free stock photos' },
+              { key: 'pixabay',          name: 'Pixabay',                 icon: '🌄',  env_var: 'PIXABAY_API_KEY',   auth_type: 'query',  base_url: 'https://pixabay.com/api',                          description: 'Free stock images, videos and music' },
+              { key: 'pexels',           name: 'Pexels',                  icon: '🖼️',  env_var: 'PEXELS_API_KEY',    auth_type: 'bearer', base_url: 'https://api.pexels.com/v1',                        description: 'Free stock photos and videos' },
+            ],
+            others: [
+              { key: 'serper',           name: 'Serper (Google Search)',  icon: '🔎',  env_var: 'SERPER_API_KEY',    auth_type: 'api_key',base_url: 'https://google.serper.dev/search',                 description: 'Google Search JSON API' },
+              { key: 'browserless',      name: 'Browserless',             icon: '🌐',  env_var: 'BROWSERLESS_API_KEY', auth_type: 'api_key', base_url: 'https://chrome.browserless.io',              description: 'Headless Chrome for web scraping' },
+              { key: 'apify',            name: 'Apify',                   icon: '🕷️',  env_var: 'APIFY_API_TOKEN',   auth_type: 'bearer', base_url: 'https://api.apify.com/v2',                         description: 'Web scraping and automation actors' },
+              { key: 'perplexity',       name: 'Perplexity AI',           icon: '🧩',  env_var: 'PERPLEXITY_API_KEY', auth_type: 'bearer', base_url: 'https://api.perplexity.ai',                    description: 'AI-powered search and answers' },
+            ],
+          };
+
+          const renderApiCategorySection = (categoryKey: 'trend' | 'community' | 'llm' | 'image' | 'others') => {
+            const knownList = KNOWN_APIS[categoryKey] || [];
+            return (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+                <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">
+                      {{ trend: 'Trend APIs', community: 'Community APIs', llm: 'LLM APIs', image: 'Image APIs', others: 'Other APIs' }[categoryKey]}
+                    </h3>
+                    <p className="text-sm text-gray-500 mt-0.5">
+                      {{ trend: 'Configure API keys for news, search and trend discovery sources.', community: 'Configure API keys for developer and interest community sources.', llm: 'Configure API keys for large language model providers used across the platform.', image: 'Configure API keys for image generation providers.', others: 'Other API integrations — search, scraping, and AI tools.' }[categoryKey]}
+                    </p>
+                  </div>
+                  <button onClick={loadCatalogApis} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500" title="Refresh">
+                    <RefreshCw className={`h-4 w-4 ${loadingCatalogApis ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {knownList.map((known) => {
+                    const catalogEntry = catalogApis.find((a: any) => a.name === known.name);
+                    const isInCatalog = !!catalogEntry;
+                    const isEnabled = catalogEntry?.is_active ?? false;
+                    const configuredEnvVar = catalogEntry?.api_key_env_name || known.env_var;
+                    const isExpanded = expandedApiId === known.key;
+                    const checkResult = apiCheckResults[known.key];
+                    // Health: prefer real-time check result, fall back to stored health record
+                    const lastTestStatus = checkResult?.ok !== undefined
+                      ? (checkResult.ok ? 'ok' : 'error')
+                      : (catalogEntry?.health?.last_test_status ?? null);
+                    const everTested = checkResult?.checked_at || catalogEntry?.health?.last_test_at;
+                    return (
+                      <div key={known.key} className="px-6 py-4">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="text-xl shrink-0">{known.icon}</span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium text-gray-900 text-sm">{known.name}</span>
+                                {isInCatalog ? (() => {
+                                  if (!isEnabled) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">Disabled</span>;
+                                  if (lastTestStatus === 'ok') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"><CheckCircle className="h-3 w-3" /> Active</span>;
+                                  if (lastTestStatus === 'error') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200"><XCircle className="h-3 w-3" /> Error</span>;
+                                  // active but never tested
+                                  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Configured — not tested</span>;
+                                })() : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200"><XCircle className="h-3 w-3" /> Not added</span>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-400 mt-0.5">{known.description}</div>
+                              {isInCatalog && configuredEnvVar && (
+                                <div className="text-xs text-gray-400 mt-0.5 font-mono">env: {configuredEnvVar}</div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {/* Check result pill — shown inline next to buttons, like social platforms */}
+                            {checkResult && (
+                              checkResult.ok
+                                ? <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700"><CheckCircle className="h-3 w-3" /> Live · OK</span>
+                                : <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title={checkResult.detail}><XCircle className="h-3 w-3" /> Check failed</span>
+                            )}
+                            {isInCatalog && (
+                              <button
+                                onClick={async () => {
+                                  setCheckingApiId(known.key);
+                                  try {
+                                    const r = await fetchWithAuth(`/api/external-apis/${catalogEntry.id}/test?scope=platform`, { method: 'POST' });
+                                    const d = await r.json().catch(() => ({}));
+                                    setApiCheckResults((prev) => ({ ...prev, [known.key]: { ok: r.ok, detail: d.detail || (r.ok ? 'Connection OK' : 'Check failed'), checked_at: new Date().toISOString() } }));
+                                  } catch { setApiCheckResults((prev) => ({ ...prev, [known.key]: { ok: false, detail: 'Request failed', checked_at: new Date().toISOString() } })); }
+                                  finally { setCheckingApiId(null); }
+                                }}
+                                disabled={checkingApiId === known.key}
+                                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-gray-600 text-xs font-medium hover:bg-gray-100 transition-colors disabled:opacity-50"
+                              >
+                                <RefreshCw className={`h-3.5 w-3.5 ${checkingApiId === known.key ? 'animate-spin' : ''}`} />
+                                {checkingApiId === known.key ? 'Checking…' : 'Check'}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                if (isInCatalog) {
+                                  setExpandedApiId(isExpanded ? null : known.key);
+                                  if (!isExpanded) {
+                                    const existingConfig = catalogEntry?.query_params?._config || {};
+                                    setApiEnvForm({
+                                      api_key_env_name:    configuredEnvVar || '',
+                                      is_active:           isEnabled,
+                                      base_url:            catalogEntry?.base_url || known.base_url,
+                                      daily_quota:         catalogEntry?.rate_limit_per_min ?? '',
+                                      _client_id_env:      catalogEntry?.headers?._client_id_env || '',
+                                      _client_secret_env:  catalogEntry?.headers?._client_secret_env || '',
+                                      _config:             existingConfig,
+                                    });
+                                  }
+                                } else {
+                                  addAndExpand(known);
+                                }
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors shrink-0"
+                            >
+                              {isExpanded
+                                ? <><ChevronUp className="h-3.5 w-3.5" /> Close</>
+                                : <><ChevronDown className="h-3.5 w-3.5" /> {(isInCatalog && configuredEnvVar) ? 'Update' : 'Configure'}</>}
+                            </button>
+                          </div>
+                        </div>
+                        {isExpanded && isInCatalog && (
+                          <div className="mt-4 bg-gray-50 rounded-lg border border-gray-200 p-4 space-y-3">
+
+                            {/* ── Trend APIs ── */}
+                            {categoryKey === 'trend' && (<>
+                              {known.auth_type !== 'none' && (
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">API Key Env Var <span className="font-normal text-gray-400">— variable name set in .env</span></label>
+                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={known.env_var || 'TREND_API_KEY'} value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                                </div>
+                              )}
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700 mb-1">Daily Call Quota <span className="font-normal text-gray-400">— max requests per day (0 = unlimited)</span></label>
+                                <input type="number" min={0} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="1000" value={apiEnvForm.daily_quota ?? ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, daily_quota: e.target.value === '' ? '' : Number(e.target.value) }))} />
+                              </div>
+                            </>)}
+
+                            {/* ── Community APIs ── */}
+                            {categoryKey === 'community' && (<>
+                              {known.key === 'reddit' && (<>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">Client ID Env Var <span className="font-normal text-gray-400">— Reddit OAuth2 App client_id</span></label>
+                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="REDDIT_CLIENT_ID" value={apiEnvForm._client_id_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _client_id_env: e.target.value }))} />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">Client Secret Env Var <span className="font-normal text-gray-400">— Reddit OAuth2 App client_secret</span></label>
+                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="REDDIT_CLIENT_SECRET" value={apiEnvForm._client_secret_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _client_secret_env: e.target.value }))} />
+                                </div>
+                              </>)}
+                              {(known.key === 'github' || known.key === 'discord') && (
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">{known.key === 'github' ? 'Personal Access Token Env Var' : 'Bot Token Env Var'} <span className="font-normal text-gray-400">— variable name in .env</span></label>
+                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={known.env_var || 'API_TOKEN'} value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                                </div>
+                              )}
+                              {known.auth_type === 'none' && (
+                                <div className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">No API key required — this service is publicly accessible.</div>
+                              )}
+                            </>)}
+
+                            {/* ── LLM APIs ── */}
+                            {categoryKey === 'llm' && (() => {
+                              const LLM_MODELS: Record<string, string[]> = {
+                                openai:    ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'],
+                                anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+                                gemini:    ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+                                groq:      ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+                                mistral:   ['mistral-large-latest', 'open-mixtral-8x22b', 'mistral-medium'],
+                                cohere:    ['command-r-plus', 'command-r', 'command'],
+                              };
+                              const models = LLM_MODELS[known.key] || [];
+                              return (<>
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">API Key Env Var <span className="font-normal text-gray-400">— variable name in .env</span></label>
+                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={known.env_var || 'LLM_API_KEY'} value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                                </div>
+                                {models.length > 0 && (
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Default Model</label>
+                                    <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" value={apiEnvForm._config?.default_model || models[0]} onChange={(e) => setApiEnvForm((p) => ({ ...p, _config: { ...(p._config || {}), default_model: e.target.value } }))}>
+                                      {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                                    </select>
+                                  </div>
+                                )}
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Max Tokens</label>
+                                    <input type="number" min={1} max={200000} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="2048" value={apiEnvForm._config?.max_tokens ?? ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _config: { ...(p._config || {}), max_tokens: e.target.value === '' ? undefined : Number(e.target.value) } }))} />
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Temperature <span className="font-normal text-gray-400">(0–2)</span></label>
+                                    <input type="number" min={0} max={2} step={0.1} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="0.7" value={apiEnvForm._config?.temperature ?? ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _config: { ...(p._config || {}), temperature: e.target.value === '' ? undefined : Number(e.target.value) } }))} />
+                                  </div>
+                                </div>
+                                {known.key === 'openai' && (
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Organization ID Env Var <span className="font-normal text-gray-400">— optional, for org-scoped billing</span></label>
+                                    <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="OPENAI_ORG_ID" value={apiEnvForm._config?.org_id_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _config: { ...(p._config || {}), org_id_env: e.target.value } }))} />
+                                  </div>
+                                )}
+                              </>);
+                            })()}
+
+                            {/* ── Image APIs ── */}
+                            {categoryKey === 'image' && (() => {
+                              const IMAGE_MODELS: Record<string, string[]> = {
+                                dalle:     ['dall-e-3', 'dall-e-2'],
+                                stability: ['stable-image-core', 'stable-diffusion-xl-1024-v1-0', 'sd3'],
+                                replicate: [],
+                                fal:       ['fal-ai/flux/schnell', 'fal-ai/flux/dev', 'fal-ai/stable-diffusion-xl'],
+                              };
+                              const IMAGE_SIZES = ['1024x1024', '1792x1024', '1024x1792', '512x512', '256x256'];
+                              const models = IMAGE_MODELS[known.key] || [];
+                              return (<>
+                                {known.key === 'unsplash' ? (<>
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Access Key Env Var <span className="font-normal text-gray-400">— Unsplash OAuth2 Access Key (Client ID)</span></label>
+                                    <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="UNSPLASH_ACCESS_KEY" value={apiEnvForm._client_id_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _client_id_env: e.target.value }))} />
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Secret Key Env Var <span className="font-normal text-gray-400">— Unsplash OAuth2 Secret Key</span></label>
+                                    <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="UNSPLASH_SECRET_KEY" value={apiEnvForm._client_secret_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _client_secret_env: e.target.value }))} />
+                                  </div>
+                                </>) : (
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">API Key Env Var <span className="font-normal text-gray-400">— variable name in .env</span></label>
+                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={known.env_var || 'IMAGE_API_KEY'} value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                                </div>
+                                )}
+                                {/* Model / size — not applicable to stock photo APIs */}
+                                {!['unsplash', 'pixabay', 'pexels'].includes(known.key) && (<>
+                                  {models.length > 0 ? (
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Default Model</label>
+                                      <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" value={apiEnvForm._config?.default_model || models[0]} onChange={(e) => setApiEnvForm((p) => ({ ...p, _config: { ...(p._config || {}), default_model: e.target.value } }))}>
+                                        {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                                      </select>
+                                    </div>
+                                  ) : (
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Default Model / Version</label>
+                                      <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. stable-diffusion-xl-base-1.0" value={apiEnvForm._config?.default_model || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _config: { ...(p._config || {}), default_model: e.target.value } }))} />
+                                    </div>
+                                  )}
+                                  <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Default Size</label>
+                                      <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" value={apiEnvForm._config?.default_size || '1024x1024'} onChange={(e) => setApiEnvForm((p) => ({ ...p, _config: { ...(p._config || {}), default_size: e.target.value } }))}>
+                                        {IMAGE_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
+                                      </select>
+                                    </div>
+                                    {known.key === 'dalle' && (
+                                      <div>
+                                        <label className="block text-xs font-medium text-gray-700 mb-1">Quality</label>
+                                        <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" value={apiEnvForm._config?.quality || 'standard'} onChange={(e) => setApiEnvForm((p) => ({ ...p, _config: { ...(p._config || {}), quality: e.target.value } }))}>
+                                          <option value="standard">Standard</option>
+                                          <option value="hd">HD</option>
+                                        </select>
+                                      </div>
+                                    )}
+                                  </div>
+                                </>)}
+                              </>);
+                            })()}
+
+                            {/* ── Others ── */}
+                            {categoryKey === 'others' && (<>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700 mb-1">API Key Env Var <span className="font-normal text-gray-400">— variable name in .env</span></label>
+                                <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={known.env_var || 'API_KEY'} value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700 mb-1">Base URL <span className="font-normal text-gray-400">— override endpoint if needed</span></label>
+                                <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={known.base_url} value={apiEnvForm.base_url || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, base_url: e.target.value }))} />
+                              </div>
+                            </>)}
+
+                            {/* Active toggle — always shown */}
+                            <div className="flex items-center gap-2">
+                              <input type="checkbox" id={`active-${known.key}`} checked={!!apiEnvForm.is_active} onChange={(e) => setApiEnvForm((p) => ({ ...p, is_active: e.target.checked }))} className="rounded border-gray-300" />
+                              <label htmlFor={`active-${known.key}`} className="text-xs text-gray-700">Active (available for use across the platform)</label>
+                            </div>
+
+                            <div className="flex gap-2 pt-1">
+                              <button onClick={() => setExpandedApiId(null)} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Cancel</button>
+                              <button onClick={() => saveApiEnvConfig(catalogEntry)} disabled={savingApiEnv} className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">{savingApiEnv ? 'Saving…' : 'Save'}</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          };
+
+          return (
           <div className="space-y-4">
+            {/* Sub-tab bar */}
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 px-4 py-3 flex gap-1 flex-wrap">
+              {([
+                { id: 'social',    label: 'Social Platform APIs' },
+                { id: 'trend',     label: 'Trend APIs' },
+                { id: 'community', label: 'Community APIs' },
+                { id: 'llm',       label: 'LLM APIs' },
+                { id: 'image',     label: 'Image APIs' },
+                { id: 'others',    label: 'Others' },
+              ] as const).map((sub) => (
+                <button
+                  key={sub.id}
+                  onClick={() => setApiSubTab(sub.id)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${apiSubTab === sub.id ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Social Platform APIs — existing OAuth section unchanged */}
+            {apiSubTab === 'social' && (
             <div className="bg-white rounded-lg shadow-sm border border-gray-200">
               <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900">Platform OAuth Credentials</h3>
-                  <p className="text-sm text-gray-500 mt-0.5">Configure Client ID &amp; Secret for each platform. Company admins use these credentials to connect their social accounts.</p>
+                  <h3 className="text-lg font-semibold text-gray-900">Social Platform OAuth Credentials</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">Configure Client ID &amp; Secret for each platform. Company admins use these to connect their accounts.</p>
                 </div>
                 <button onClick={loadSocialPlatforms} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500" title="Refresh">
                   <RefreshCw className={`h-4 w-4 ${loadingSocialPlatforms ? 'animate-spin' : ''}`} />
@@ -1965,16 +2410,94 @@ export default function SuperAdminPanel() {
                           )}
                         </div>
                       </div>
-                      <button
-                        onClick={() => setExpandedPlatform(expandedPlatform === p.platform_key ? null : p.platform_key)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors shrink-0"
-                      >
-                        {expandedPlatform === p.platform_key ? <><ChevronUp className="h-3.5 w-3.5" /> Close</> : <><ChevronDown className="h-3.5 w-3.5" /> {p.configured ? 'Update' : 'Configure'}</>}
-                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {(() => {
+                          const cr = platformCheckResults[p.platform_key];
+                          if (!cr) return null;
+                          if (!cr.credentials_ok) return (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title="No credentials configured">
+                              <XCircle className="h-3 w-3" /> No credentials
+                            </span>
+                          );
+                          if (cr.token_ok === false) return (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title={cr.token_detail ?? ''}>
+                              <XCircle className="h-3 w-3" /> Live check failed
+                            </span>
+                          );
+                          if (cr.token_ok === true) return (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700" title={cr.token_detail ?? ''}>
+                              <CheckCircle className="h-3 w-3" /> Live · OK
+                            </span>
+                          );
+                          // credentials_ok but no connected account to test
+                          return (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-amber-50 border border-amber-200 text-amber-700" title={cr.token_detail ?? 'Connect an account to test live'}>
+                              <AlertCircle className="h-3 w-3" /> Creds only
+                            </span>
+                          );
+                        })()}
+                        <button
+                          onClick={() => checkPlatformConfig(p.platform_key)}
+                          disabled={checkingPlatform === p.platform_key}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-gray-600 text-xs font-medium hover:bg-gray-100 transition-colors disabled:opacity-50"
+                          title="Verify credentials and token"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${checkingPlatform === p.platform_key ? 'animate-spin' : ''}`} />
+                          {checkingPlatform === p.platform_key ? 'Checking…' : 'Check'}
+                        </button>
+                        <button
+                          onClick={() => setExpandedPlatform(expandedPlatform === p.platform_key ? null : p.platform_key)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors shrink-0"
+                        >
+                          {expandedPlatform === p.platform_key ? <><ChevronUp className="h-3.5 w-3.5" /> Close</> : <><ChevronDown className="h-3.5 w-3.5" /> {p.configured ? 'Update' : 'Configure'}</>}
+                        </button>
+                      </div>
                     </div>
 
                     {expandedPlatform === p.platform_key && (
                       <div className="mt-4 bg-gray-50 rounded-lg border border-gray-200 p-4 space-y-3">
+                        {/* Redirect URI — must be registered in the platform's developer console */}
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            Redirect URI <span className="text-gray-400 font-normal">(register this exact URL in the platform developer console)</span>
+                          </label>
+                          {(() => {
+                            const base = (process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
+                            const uri = `${base}/api/auth/${p.platform_key}/callback`;
+                            return (
+                              <div className="flex items-center gap-2">
+                                <input
+                                  readOnly
+                                  value={uri}
+                                  className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white text-gray-600 font-mono cursor-text select-all"
+                                  onFocus={(e) => e.target.select()}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(uri).then(() => {
+                                      setCopiedRedirectFor(p.platform_key);
+                                      setTimeout(() => setCopiedRedirectFor(null), 2000);
+                                    });
+                                  }}
+                                  className="shrink-0 inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-gray-300 bg-white text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+                                  title="Copy redirect URI"
+                                >
+                                  {copiedRedirectFor === p.platform_key ? (
+                                    <><Check className="h-3.5 w-3.5 text-emerald-600" /> Copied</>
+                                  ) : (
+                                    <><Copy className="h-3.5 w-3.5" /> Copy</>
+                                  )}
+                                </button>
+                              </div>
+                            );
+                          })()}
+                          {!process.env.NEXT_PUBLIC_APP_URL && (
+                            <p className="mt-1 text-xs text-amber-600">
+                              Tip: set <code className="font-mono bg-amber-50 px-1 rounded">NEXT_PUBLIC_APP_URL</code> in your .env to lock this URL across environments.
+                            </p>
+                          )}
+                        </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
                             <label className="block text-xs font-medium text-gray-700 mb-1">Client ID *</label>
@@ -1993,7 +2516,7 @@ export default function SuperAdminPanel() {
                                 type={showSecretFor === p.platform_key ? 'text' : 'password'}
                                 value={oauthForm[p.platform_key]?.client_secret || ''}
                                 onChange={(e) => setOauthForm((prev) => ({ ...prev, [p.platform_key]: { ...prev[p.platform_key], client_secret: e.target.value } }))}
-                                placeholder={p.has_client_secret ? 'Enter to replace…' : 'Paste Client Secret…'}
+                                placeholder="Paste Client Secret…"
                                 className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
                               />
                               <button
@@ -2041,8 +2564,13 @@ export default function SuperAdminPanel() {
                 ))}
               </div>
             </div>
+            )}
+
+            {/* Other API category sub-tabs */}
+            {apiSubTab !== 'social' && renderApiCategorySection(apiSubTab)}
           </div>
-        )}
+          );
+        })()}
 
         {activeTab === 'audit' && (
           <div className="bg-white rounded-lg shadow-sm border border-gray-200">

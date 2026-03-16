@@ -133,6 +133,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const canManageExternalApis =
       access.role === 'SUPER_ADMIN' || (await hasPermission(access.role, 'MANAGE_EXTERNAL_APIS'));
     const skipCache = req.query?.skipCache === '1' || req.query?.skipCache === 'true';
+    // catalog=1: return all active global preset APIs (company_id=null) for the selection UI
+    const catalogMode = req.query?.catalog === '1' || req.query?.catalog === 'true';
     try {
       const apis = platformScopeRequested && !companyId
         ? (await supabase
@@ -140,7 +142,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             .select('*')
             .order('company_id', { ascending: true, nullsFirst: true })
             .order('created_at', { ascending: true })).data || []
-        : await getPlatformConfigs(companyId, { skipCache });
+        : catalogMode
+          ? (await supabase
+              .from('external_api_sources')
+              .select('*')
+              .is('company_id', null)
+              .eq('is_active', true)
+              .order('created_at', { ascending: true })).data || []
+          : await getPlatformConfigs(companyId, { skipCache });
       const since = new Date();
       since.setDate(since.getDate() - 13);
       const sinceDate = since.toISOString().slice(0, 10);

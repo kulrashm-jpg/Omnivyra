@@ -126,12 +126,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let existingRecord: any = null;
     let resolvedPlatformType = platform_type;
     if (!resolvedPlatformType || !auth_type || !api_key_name || !api_key_env_name || !method) {
-      const { data: existing } = await supabase
-        .from('external_api_sources')
-        .select('*')
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .single();
+      let existingQuery = supabase.from('external_api_sources').select('*').eq('id', id);
+      if (!platformScopeRequested && companyId) existingQuery = existingQuery.eq('company_id', companyId);
+      const { data: existing } = await existingQuery.single();
       existingRecord = existing;
       resolvedPlatformType = resolvedPlatformType ?? existing?.platform_type ?? 'social';
     }
