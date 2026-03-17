@@ -694,8 +694,8 @@ export default function CampaignCalendarPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <div className="max-w-6xl mx-auto px-4 py-6">
-        <div className="flex items-center justify-between mb-5">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
+        <div className="flex flex-col gap-3 mb-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => {
@@ -712,11 +712,11 @@ export default function CampaignCalendarPage() {
               <ArrowLeft className="h-4 w-4" />
             </button>
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">Campaign Calendar</h1>
+              <h1 className="text-lg sm:text-xl font-semibold text-gray-900">Campaign Calendar</h1>
               <p className="text-sm text-gray-600">{campaignName}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {campaignId && (
               <button
                 onClick={() => {
@@ -847,7 +847,7 @@ export default function CampaignCalendarPage() {
                     })}
                   </div>
 
-                  <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                  <div className="px-4 py-3 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
                     <div className="text-sm font-semibold text-gray-900">
                       {new Date(`${dateKey}T00:00:00`).toLocaleDateString('en-US', {
                         weekday: 'long',
@@ -921,16 +921,17 @@ export default function CampaignCalendarPage() {
                                         <span className="block mt-0.5 text-[10px] text-gray-500">Template unlocks AI generation</span>
                                       </>
                                     )}
-                                    <div className="flex items-start justify-between gap-3 mt-1.5">
+                                    <div className="flex flex-col gap-1.5 mt-1.5 sm:flex-row sm:items-start sm:justify-between">
                                       <h4 className="text-base font-semibold text-gray-900">
                                         {activity.title}
                                       </h4>
+                                      <div className="flex flex-wrap items-center gap-2">
                                       <RepurposeDots
                                         index={activity.repurpose_index ?? 1}
                                         total={activity.repurpose_total ?? 1}
                                         contentType={activity.content_type}
                                       />
-                                      <div className="flex items-center gap-2">
+                                      <div className="flex flex-wrap items-center gap-2">
                                         <span className="text-xs leading-none" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (modeLabel ?? undefined)}>{execDot}</span>
                                         <span className={`text-[11px] px-2 py-1 rounded-full font-medium border ${getExecutionStatusBadgeClasses(activity.execution_status)}`}>
                                           [{activity.execution_status}]
@@ -944,6 +945,7 @@ export default function CampaignCalendarPage() {
                                           <Clock className="h-3 w-3" />
                                           {activity.time}
                                         </span>
+                                      </div>
                                       </div>
                                     </div>
                                     {creatorPreview && (

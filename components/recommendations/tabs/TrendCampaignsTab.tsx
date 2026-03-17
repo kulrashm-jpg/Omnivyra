@@ -2264,7 +2264,9 @@ Generate strategic campaign pillars to capture this demand.`;
                     }}
                     onBuildCampaignFast={async (options) => {
                       if (fastLoadingCardId === card.id) return;
-                      const outcomeView: BoltOutcomeView = options?.outcomeView ?? 'campaign_schedule';
+                      const outcomeView: BoltOutcomeView = options?.outcomeView ?? 'schedule';
+                      const campaignMode = options?.campaignMode ?? 'text_based';
+                      const contentFormats = options?.contentFormats ?? ['post'];
                       if (!companyId) {
                         setValidationError('Select a company first.');
                         return;
@@ -2336,6 +2338,8 @@ Generate strategic campaign pillars to capture this demand.`;
                               campaign_duration: durationWeeks,
                               tentative_start: tentativeStartDate.toISOString().split('T')[0],
                               campaign_goal: campaignGoal,
+                              campaign_mode: campaignMode,
+                              content_formats: contentFormats,
                             }
                           : null;
                       if (!executionConfigPayload) {
@@ -2439,9 +2443,9 @@ Generate strategic campaign pillars to capture this demand.`;
                           if (outcomeView === 'week_plan') {
                             router.push(`${base}?mode=fast&${qs.toString()}`);
                           } else if (outcomeView === 'daily_plan') {
-                            router.push(`/campaign-daily-plan/${completedCampaignId}?${qs.toString()}`);
-                          } else if (outcomeView === 'repurpose') {
-                            router.push(`/activity-workspace?campaignId=${encodeURIComponent(completedCampaignId)}&companyId=${encodeURIComponent(companyId)}`);
+                            // Show week 1's daily breakdown on the campaign details page
+                            qs.set('plannerWeek', '1');
+                            router.push(`${base}?${qs.toString()}`);
                           } else if (outcomeView === 'schedule') {
                             router.push(`/campaign-calendar/${completedCampaignId}?${qs.toString()}`);
                           } else {

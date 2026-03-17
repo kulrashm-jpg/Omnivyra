@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { Dropdown } from "../components/ui/dropdown";
 import { Calendar, Clock, Send, AlertCircle, CheckCircle, Plus, Settings, Sparkles, Eye, EyeOff, Zap, TrendingUp, Users, BarChart3, Image, Video, FileText, Hash, Globe, Smartphone, Monitor, Wand2 } from "lucide-react";
 import PreviewCard from "../components/PreviewCard";
+import ContentRenderer from "../components/ContentRenderer";
 import { PLATFORM_CONFIGS, getPlatformConfig } from "../lib/platforms";
 import { supabase } from "../utils/supabaseClient";
 
@@ -43,6 +44,7 @@ export default function SchedulerPage() {
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   
   // Form state
   const [formData, setFormData] = useState<PostFormData>({
@@ -237,127 +239,116 @@ export default function SchedulerPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
-      {/* Enhanced Background Pattern */}
-      <div className="absolute inset-0 opacity-40">
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-100/20 to-purple-100/20"></div>
-        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-transparent via-blue-50/10 to-purple-50/10"></div>
-        <div className="absolute top-20 left-20 w-32 h-32 bg-blue-200/10 rounded-full blur-xl animate-pulse"></div>
-        <div className="absolute bottom-20 right-20 w-40 h-40 bg-purple-200/10 rounded-full blur-xl animate-pulse delay-1000"></div>
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-60 h-60 bg-indigo-200/5 rounded-full blur-2xl animate-pulse delay-500"></div>
-      </div>
-      
-      <div className="relative flex min-h-screen">
+    <div className="min-h-screen bg-gray-50">
+      <div className="flex min-h-screen">
         {notice && (
           <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-10 max-w-md w-full mx-4">
             <div className={`rounded-lg border px-3 py-2 text-sm shadow ${notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`} role="status" aria-live="polite">{notice.message}</div>
           </div>
         )}
+        {/* Mobile sidebar overlay */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 z-20 bg-black/40 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
         {/* Modern Sidebar */}
-        <aside className="w-72 bg-white/80 backdrop-blur-xl border-r border-white/20 shadow-xl">
-          <div className="p-6">
-            <div className="flex items-center gap-3 mb-8">
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
-                <Calendar className="h-6 w-6 text-white" />
+        <aside className={`fixed md:static z-30 inset-y-0 left-0 w-64 bg-white border-r border-gray-200 shadow-sm transform transition-transform duration-200 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
+          <div className="p-5">
+            <div className="flex items-center gap-3 mb-7">
+              <div className="w-9 h-9 bg-indigo-600 rounded-lg flex items-center justify-center">
+                <Calendar className="h-5 w-5 text-white" />
               </div>
               <div>
-                <h2 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                  Virality Engine
-                </h2>
+                <h2 className="text-base font-bold text-gray-900">Virality Engine</h2>
                 <p className="text-xs text-gray-500">Content Scheduler</p>
               </div>
             </div>
-            
-            <nav className="space-y-2">
-              <Link href="/" className="group flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/60 text-gray-700 hover:text-gray-900 transition-all duration-200">
-                <div className="p-2 rounded-lg bg-gray-100 group-hover:bg-white">
-                  <Sparkles className="h-4 w-4" />
-                </div>
-                <span className="font-medium">Dashboard</span>
+
+            <nav className="space-y-1">
+              <Link href="/" className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors">
+                <Sparkles className="h-4 w-4" />
+                <span className="text-sm font-medium">Dashboard</span>
               </Link>
-              <Link href="/scheduler" className="group flex items-center gap-3 px-4 py-3 rounded-xl bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/25">
-                <div className="p-2 rounded-lg bg-white/20">
-                  <Calendar className="h-4 w-4" />
-                </div>
-                <span className="font-medium">Scheduler</span>
+              <Link href="/scheduler" className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-indigo-50 text-indigo-700">
+                <Calendar className="h-4 w-4" />
+                <span className="text-sm font-semibold">Scheduler</span>
               </Link>
-              <Link href="/engagement" className="group flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/60 text-gray-700 hover:text-gray-900 transition-all duration-200">
-                <div className="p-2 rounded-lg bg-gray-100 group-hover:bg-white">
-                  <Users className="h-4 w-4" />
-                </div>
-                <span className="font-medium">Engagement</span>
+              <Link href="/engagement" className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors">
+                <Users className="h-4 w-4" />
+                <span className="text-sm font-medium">Engagement</span>
               </Link>
-              <Link href="/analytics" className="group flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/60 text-gray-700 hover:text-gray-900 transition-all duration-200">
-                <div className="p-2 rounded-lg bg-gray-100 group-hover:bg-white">
-                  <BarChart3 className="h-4 w-4" />
-                </div>
-                <span className="font-medium">Analytics</span>
+              <Link href="/analytics" className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors">
+                <BarChart3 className="h-4 w-4" />
+                <span className="text-sm font-medium">Analytics</span>
               </Link>
             </nav>
           </div>
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 p-8 space-y-8">
-          {/* Enhanced Header */}
-          <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
-                <Calendar className="h-6 w-6 text-white" />
+        <main className="flex-1 p-4 sm:p-7 space-y-6 min-w-0">
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-3">
+              {/* Hamburger — mobile only */}
+              <button
+                className="md:hidden p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
+                onClick={() => setSidebarOpen(true)}
+                aria-label="Open sidebar"
+              >
+                <svg className="h-5 w-5 text-gray-600" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+              </button>
+              <div>
+                <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Content Scheduler</h1>
+                <p className="text-sm text-gray-500 mt-1">Plan, customize, and schedule posts across platforms</p>
               </div>
-              <h1 className="text-4xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">
-                Content Scheduler
-              </h1>
             </div>
-            <p className="text-gray-600 text-lg">Plan, customize, and schedule posts across platforms</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button 
-              onClick={() => router.push('/creative-scheduler')}
-              className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white border-0 shadow-lg shadow-purple-500/25"
-            >
-              <Wand2 className="h-4 w-4 mr-2" />
-              Get Inspiration
-            </Button>
-            <Button 
-              variant="outline" 
-              onClick={() => setShowPreview(!showPreview)}
-              className="bg-white/80 backdrop-blur-sm border-white/20 hover:bg-white/90"
-            >
-              {showPreview ? <EyeOff className="h-4 w-4 mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
-              {showPreview ? 'Hide Preview' : 'Show Preview'}
-            </Button>
-            <Button variant="outline" className="bg-white/80 backdrop-blur-sm border-white/20 hover:bg-white/90">
-              <Settings className="h-4 w-4 mr-2" />
-              Settings
-            </Button>
-          </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={() => router.push('/creative-scheduler')}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white border-0 w-full sm:w-auto"
+              >
+                <Wand2 className="h-4 w-4 mr-2" />
+                Get Inspiration
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setShowPreview(!showPreview)}
+                className="bg-white border-gray-300 hover:bg-gray-50 w-full sm:w-auto"
+              >
+                {showPreview ? <EyeOff className="h-4 w-4 mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
+                {showPreview ? 'Hide Preview' : 'Show Preview'}
+              </Button>
+              <Button variant="outline" className="bg-white border-gray-300 hover:bg-gray-50 w-full sm:w-auto">
+                <Settings className="h-4 w-4 mr-2" />
+                Settings
+              </Button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-8">
           
           {/* Enhanced Schedule New Post Form */}
           <div className="lg:col-span-2">
-            <Card className="bg-white/80 backdrop-blur-sm border-white/20 shadow-xl">
-              <CardHeader className="pb-6">
-                <CardTitle className="flex items-center gap-3 text-2xl">
-                  <div className="p-3 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl text-white shadow-lg">
-                    <Plus className="h-6 w-6" />
+            <Card className="bg-white border border-gray-200 shadow-sm">
+              <CardHeader className="pb-4 px-4 sm:px-6">
+                <CardTitle className="flex items-center gap-2 text-lg font-semibold text-gray-900">
+                  <div className="p-2 bg-indigo-50 rounded-lg">
+                    <Plus className="h-5 w-5 text-indigo-600" />
                   </div>
                   Schedule New Post
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="px-4 sm:px-6">
                 <form onSubmit={handleSchedulePost} className="space-y-6">
                   
                   {/* Title */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-3">
                       <div className="flex items-center gap-2">
-                        <div className="p-1 bg-gradient-to-r from-purple-500 to-pink-600 rounded-lg">
-                          <FileText className="h-3 w-3 text-white" />
-                        </div>
+                        <FileText className="h-4 w-4 text-gray-400" />
                         Title (Optional)
                       </div>
                     </label>
@@ -365,7 +356,7 @@ export default function SchedulerPage() {
                       type="text"
                       value={formData.title}
                       onChange={(e) => handleInputChange('title', e.target.value)}
-                      className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white/80 backdrop-blur-sm transition-all duration-200"
+                      className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white transition-colors"
                       placeholder="Enter post title..."
                     />
                   </div>
@@ -374,16 +365,14 @@ export default function SchedulerPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-3">
                       <div className="flex items-center gap-2">
-                        <div className="p-1 bg-gradient-to-r from-orange-500 to-red-600 rounded-lg">
-                          <FileText className="h-3 w-3 text-white" />
-                        </div>
+                        <FileText className="h-4 w-4 text-gray-400" />
                         Content *
                       </div>
                     </label>
                     <textarea
                       value={formData.body}
                       onChange={(e) => handleInputChange('body', e.target.value)}
-                      className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white/80 backdrop-blur-sm transition-all duration-200"
+                      className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white transition-colors"
                       rows={6}
                       placeholder="What would you like to share?"
                       required
@@ -397,9 +386,7 @@ export default function SchedulerPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-3">
                       <div className="flex items-center gap-2">
-                        <div className="p-1 bg-gradient-to-r from-teal-500 to-green-600 rounded-lg">
-                          <Hash className="h-3 w-3 text-white" />
-                        </div>
+                        <Hash className="h-4 w-4 text-gray-400" />
                         Hashtags
                       </div>
                     </label>
@@ -407,7 +394,7 @@ export default function SchedulerPage() {
                       type="text"
                       value={formData.hashtags}
                       onChange={(e) => handleInputChange('hashtags', e.target.value)}
-                      className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white/80 backdrop-blur-sm transition-all duration-200"
+                      className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white transition-colors"
                       placeholder="#hashtag1 #hashtag2 #hashtag3"
                     />
                   </div>
@@ -416,9 +403,7 @@ export default function SchedulerPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-3">
                       <div className="flex items-center gap-2">
-                        <div className="p-1 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg">
-                          <Hash className="h-3 w-3 text-white" />
-                        </div>
+                        <Hash className="h-4 w-4 text-gray-400" />
                         Media Type
                       </div>
                     </label>
@@ -435,9 +420,7 @@ export default function SchedulerPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-3">
                       <div className="flex items-center gap-2">
-                        <div className="p-1 bg-gradient-to-r from-green-500 to-emerald-600 rounded-lg">
-                          <Globe className="h-3 w-3 text-white" />
-                        </div>
+                        <Globe className="h-4 w-4 text-gray-400" />
                         Platforms *
                       </div>
                     </label>
@@ -455,11 +438,11 @@ export default function SchedulerPage() {
                         return (
                           <label 
                             key={platform.key} 
-                            className={`group relative flex items-center space-x-3 p-4 border-2 rounded-xl transition-all duration-200 cursor-pointer ${
-                              isSelected 
-                                ? `border-blue-500 bg-gradient-to-r ${platformColors[platform.key as keyof typeof platformColors] || 'from-gray-500 to-gray-700'} text-white shadow-lg` 
-                                : account 
-                                  ? 'border-gray-200 hover:border-blue-300 hover:bg-white/60' 
+                            className={`group relative flex items-center space-x-3 p-4 border-2 rounded-xl transition-colors cursor-pointer ${
+                              isSelected
+                                ? 'border-indigo-500 bg-indigo-50 text-indigo-900'
+                                : account
+                                  ? 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50'
                                   : 'border-gray-200 bg-gray-50 opacity-50 cursor-not-allowed'
                             }`}
                           >
@@ -470,13 +453,13 @@ export default function SchedulerPage() {
                               disabled={!account}
                               className="sr-only"
                             />
-                            <div className={`flex items-center justify-center w-5 h-5 rounded border-2 transition-all duration-200 ${
-                              isSelected 
-                                ? 'border-white bg-white' 
-                                : 'border-gray-300 group-hover:border-blue-400'
+                            <div className={`flex items-center justify-center w-5 h-5 rounded border-2 transition-colors ${
+                              isSelected
+                                ? 'border-indigo-500 bg-indigo-500'
+                                : 'border-gray-300 group-hover:border-indigo-400'
                             }`}>
                               {isSelected && (
-                                <CheckCircle className="h-3 w-3 text-blue-600" />
+                                <CheckCircle className="h-3 w-3 text-white" />
                               )}
                             </div>
                             <div className="flex-1">
@@ -495,8 +478,8 @@ export default function SchedulerPage() {
                             </div>
                             {account && (
                               <div className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                isSelected 
-                                  ? 'bg-white/20 text-white' 
+                                isSelected
+                                  ? 'bg-indigo-100 text-indigo-700'
                                   : 'bg-green-100 text-green-600'
                               }`}>
                                 ✓
@@ -513,9 +496,7 @@ export default function SchedulerPage() {
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-3">
                         <div className="flex items-center gap-2">
-                          <div className="p-1 bg-gradient-to-r from-indigo-500 to-blue-600 rounded-lg">
-                            <Calendar className="h-3 w-3 text-white" />
-                          </div>
+                          <Calendar className="h-4 w-4 text-gray-400" />
                           Date *
                         </div>
                       </label>
@@ -523,7 +504,7 @@ export default function SchedulerPage() {
                         type="date"
                         value={formData.scheduledDate}
                         onChange={(e) => handleInputChange('scheduledDate', e.target.value)}
-                        className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white/80 backdrop-blur-sm transition-all duration-200"
+                        className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white transition-colors"
                         min={new Date().toISOString().split('T')[0]}
                         required
                       />
@@ -531,9 +512,7 @@ export default function SchedulerPage() {
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-3">
                         <div className="flex items-center gap-2">
-                          <div className="p-1 bg-gradient-to-r from-cyan-500 to-blue-600 rounded-lg">
-                            <Clock className="h-3 w-3 text-white" />
-                          </div>
+                          <Clock className="h-4 w-4 text-gray-400" />
                           Time *
                         </div>
                       </label>
@@ -541,7 +520,7 @@ export default function SchedulerPage() {
                         type="time"
                         value={formData.scheduledTime}
                         onChange={(e) => handleInputChange('scheduledTime', e.target.value)}
-                        className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white/80 backdrop-blur-sm transition-all duration-200"
+                        className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white transition-colors"
                         required
                       />
                     </div>
@@ -550,7 +529,7 @@ export default function SchedulerPage() {
                   <Button
                     type="submit"
                     disabled={isLoading}
-                    className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 shadow-lg shadow-blue-500/25 text-lg py-4"
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3"
                   >
                     {isLoading ? (
                       <>
@@ -572,11 +551,9 @@ export default function SchedulerPage() {
           {/* Enhanced Preview Panel */}
           {showPreview && (
             <div className="space-y-6">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg flex items-center justify-center">
-                  <Eye className="h-5 w-5 text-white" />
-                </div>
-                <h3 className="text-xl font-bold text-gray-800">Platform Previews</h3>
+              <div className="flex items-center gap-2">
+                <Eye className="h-5 w-5 text-indigo-600" />
+                <h3 className="text-lg font-semibold text-gray-900">Platform Previews</h3>
               </div>
               {formData.platforms.map(platformKey => {
                 const config = getPlatformConfig(platformKey);
@@ -600,17 +577,17 @@ export default function SchedulerPage() {
           )}
           </div>
 
-          {/* Enhanced Scheduled Posts */}
-          <Card className="bg-white/80 backdrop-blur-sm border-white/20 shadow-xl">
-          <CardHeader className="pb-6">
-            <CardTitle className="flex items-center gap-3 text-2xl">
-              <div className="p-3 bg-gradient-to-br from-purple-500 to-pink-600 rounded-xl text-white shadow-lg">
-                <Clock className="h-6 w-6" />
+          {/* Scheduled Posts */}
+          <Card className="bg-white border border-gray-200 shadow-sm">
+          <CardHeader className="pb-4 px-4 sm:px-6">
+            <CardTitle className="flex items-center gap-2 text-lg font-semibold text-gray-900">
+              <div className="p-2 bg-indigo-50 rounded-lg">
+                <Clock className="h-5 w-5 text-indigo-600" />
               </div>
               Scheduled Posts
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-4 sm:px-6">
             {scheduledPosts.length === 0 ? (
               <div className="text-center py-12">
                 <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -622,10 +599,10 @@ export default function SchedulerPage() {
             ) : (
               <div className="space-y-4">
                 {scheduledPosts.map(post => (
-                  <div key={post.id} className="border border-gray-200 rounded-xl p-6 bg-white/60 backdrop-blur-sm hover:shadow-lg transition-all duration-200">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-3">
+                  <div key={post.id} className="border border-gray-200 rounded-xl p-4 sm:p-5 bg-white hover:bg-gray-50 transition-colors">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-3">
                           {getStatusIcon(post.status)}
                           <span className={`px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(post.status)}`}>
                             {post.status.toUpperCase()}
@@ -635,7 +612,13 @@ export default function SchedulerPage() {
                           </span>
                         </div>
                         
-                        <p className="text-gray-900 mb-3 leading-relaxed">{post.content}</p>
+                        <div className="mb-3">
+                          <ContentRenderer
+                            content={post.content}
+                            platform={post.platform}
+                            renderMode="social"
+                          />
+                        </div>
                         
                         <div className="text-sm text-gray-500 mb-2">
                           Scheduled for: {new Date(post.scheduled_for).toLocaleString()}

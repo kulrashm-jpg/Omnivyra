@@ -156,7 +156,7 @@ export default function DiscoveredUsersPage() {
       )}
 
       <SectionCard title="Filters" subtitle="Refine the discovered users list.">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <select
             className="border rounded-lg px-3 py-2 text-sm"
             value={filters.platform}
@@ -223,11 +223,11 @@ export default function DiscoveredUsersPage() {
               <tr>
                 <th className="px-3 py-2">platform</th>
                 <th className="px-3 py-2">username / profile</th>
-                <th className="px-3 py-2">classification</th>
-                <th className="px-3 py-2">discovered via</th>
-                <th className="px-3 py-2">source</th>
+                <th className="px-3 py-2 hidden sm:table-cell">classification</th>
+                <th className="px-3 py-2 hidden md:table-cell">discovered via</th>
+                <th className="px-3 py-2 hidden lg:table-cell">source</th>
                 <th className="px-3 py-2">eligible</th>
-                <th className="px-3 py-2">last seen</th>
+                <th className="px-3 py-2 hidden sm:table-cell">last seen</th>
                 <th className="px-3 py-2">actions</th>
               </tr>
             </thead>
@@ -248,7 +248,7 @@ export default function DiscoveredUsersPage() {
                       </a>
                     </div>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 hidden sm:table-cell">
                     {canEdit ? (
                       <select
                         className="border rounded px-2 py-1 text-xs"
@@ -268,8 +268,8 @@ export default function DiscoveredUsersPage() {
                       <span>{user.classification || 'unknown'}</span>
                     )}
                   </td>
-                  <td className="px-3 py-2">{user.discovered_via.toUpperCase()}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 hidden md:table-cell">{user.discovered_via.toUpperCase()}</td>
+                  <td className="px-3 py-2 hidden lg:table-cell">
                     <div className="flex flex-col">
                       <span>{user.discovery_source || 'unknown'}</span>
                       {user.source_url && (
@@ -285,7 +285,7 @@ export default function DiscoveredUsersPage() {
                     </div>
                   </td>
                   <td className="px-3 py-2">{user.eligible_for_engagement ? 'Yes' : 'No'}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 hidden sm:table-cell">
                     {user.last_seen_at ? new Date(user.last_seen_at).toLocaleString() : '—'}
                   </td>
                   <td className="px-3 py-2">

@@ -446,15 +446,55 @@ export function applyAlgorithmicFormatting(
   platform: string
 ): { content: string; meta: NonNullable<PlatformVariantPayload['algorithmic_formatting_meta']> } {
   const rules = getAlgorithmicFormattingRules(platform);
+  const metaBase = { platform: nonEmpty(platform).toLowerCase() || 'unknown', formatting_applied: true as const };
+
+  // If the AI already produced structured content (has newlines), trust and preserve it.
+  // Only apply CTA ordering and basic line normalization.
+  const hasStructure = adaptedContent.includes('\n');
+  if (hasStructure) {
+    // Collapse 3+ blank lines to 2; trim each line
+    let structured = adaptedContent
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    // For X/Twitter: ensure each sentence is on its own line
+    if (rules.preferSentencePerLine) {
+      const paragraphs = structured.split(/\n{2,}/);
+      const lines: string[] = [];
+      for (const para of paragraphs) {
+        const paraLines = para.split('\n').map((l) => l.trim()).filter(Boolean);
+        for (const line of paraLines) {
+          const sents = splitIntoSentences(line);
+          lines.push(...sents);
+        }
+        lines.push('');
+      }
+      structured = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    // Enforce CTA at end if required
+    if (rules.enforceCtaAtEnd) {
+      const paras = structured.split(/\n{2,}/);
+      if (paras.length > 1) {
+        const ctaIdx = paras.findIndex(isLikelyCtaSentence);
+        if (ctaIdx >= 0 && ctaIdx !== paras.length - 1) {
+          const [cta] = paras.splice(ctaIdx, 1);
+          paras.push(cta);
+          structured = paras.join('\n\n');
+        }
+      }
+    }
+
+    return { content: structured, meta: metaBase };
+  }
+
+  // Flat content — fall back to sentence-splitting and grouping
   const sentences = splitIntoSentences(adaptedContent);
   if (sentences.length <= 1) {
-    return {
-      content: nonEmpty(adaptedContent),
-      meta: {
-        platform: nonEmpty(platform).toLowerCase() || 'unknown',
-        formatting_applied: true,
-      },
-    };
+    return { content: nonEmpty(adaptedContent), meta: metaBase };
   }
 
   let ordered = [...sentences];
@@ -478,13 +518,7 @@ export function applyAlgorithmicFormatting(
     formatted = chunks.join('\n\n');
   }
 
-  return {
-    content: formatted.trim(),
-    meta: {
-      platform: nonEmpty(platform).toLowerCase() || 'unknown',
-      formatting_applied: true,
-    },
-  };
+  return { content: formatted.trim(), meta: metaBase };
 }
 
 function compactQueryPhrase(value: string, fallback: string, maxWords: number): string {
@@ -1790,8 +1824,19 @@ export async function generatePlatformVariantFromMaster(
       messages: [
         {
           role: 'system',
-          content:
-            'Rewrite the given MASTER CONTENT for the specified platform and content type. Keep meaning aligned to master content, do not mention other platforms, and output plain text only.',
+          content: [
+            'Rewrite the given MASTER CONTENT for the specified platform and content type.',
+            'Keep meaning aligned to master content. Do not mention other platforms.',
+            '',
+            'FORMATTING RULES — apply based on the platform:',
+            '- linkedin / facebook: Start with a single bold hook line (**Hook here**). Then short paragraphs of 1-2 sentences each, separated by a blank line. Emphasise key phrases with **bold**. End with a CTA line.',
+            '- x / twitter: Each distinct thought on its own line. Separate groups of thoughts with a blank line. Max 280 characters total.',
+            '- instagram: Short punchy paragraphs separated by blank lines. Hashtags on a separate line at the very end after a blank line.',
+            '- youtube: Keyword-rich first sentence. Structured paragraphs separated by blank lines.',
+            '- Default: Short readable paragraphs (2-3 sentences), each separated by a blank line.',
+            '',
+            'OUTPUT FORMAT: Plain text with blank lines between paragraphs. No markdown headers (no #). No bullet dashes (use • only if natural). Preserve line breaks.',
+          ].join('\n'),
         },
         {
           role: 'user',

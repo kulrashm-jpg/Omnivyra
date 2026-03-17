@@ -192,6 +192,97 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       targetExecId
     );
 
+    // Collect ALL platforms for this topic across ALL weeks
+    const topicKey = title.toLowerCase().trim();
+    type RawScheduleEntry = {
+      executionId: string;
+      weekNumber: number;
+      day: string;
+      platform: string;
+      contentType: string;
+    };
+    const allTopicEntries: RawScheduleEntry[] = [];
+    for (const week of blueprint.weeks) {
+      const wNum = Number((week as any).week_number ?? (week as any).week ?? 0) || 0;
+      const wItems: any[] =
+        Array.isArray((week as any).daily_execution_items)
+          ? (week as any).daily_execution_items
+          : Array.isArray((week as any).execution_items)
+            ? (week as any).execution_items
+            : [];
+      for (const wItem of wItems) {
+        const itemTitle = nonEmpty(
+          wItem?.title ?? wItem?.topic ?? wItem?.writer_content_brief?.topicTitle ?? ''
+        ).toLowerCase();
+        if (itemTitle === topicKey || itemTitle.includes(topicKey) || topicKey.includes(itemTitle)) {
+          const eid = nonEmpty(wItem?.execution_id ?? wItem?.id ?? '');
+          if (!eid) continue;
+          allTopicEntries.push({
+            executionId: eid,
+            weekNumber: wNum,
+            day: nonEmpty(wItem?.day ?? ''),
+            platform: nonEmpty(wItem?.platform ?? 'linkedin'),
+            contentType: nonEmpty(wItem?.content_type ?? 'post'),
+          });
+        }
+      }
+    }
+
+    // Load scheduled_posts for all collected execution IDs
+    const allExecIds = allTopicEntries.map((e) => e.executionId);
+    let scheduledPostsMap: Record<string, { scheduled_for: string | null; status: string | null; content: string | null }> = {};
+    if (allExecIds.length > 0) {
+      const { data: scheduledPosts } = await supabase
+        .from('scheduled_posts')
+        .select('execution_id, scheduled_for, status, content')
+        .in('execution_id', allExecIds)
+        .eq('campaign_id', campaignId);
+      if (Array.isArray(scheduledPosts)) {
+        for (const sp of scheduledPosts) {
+          if (sp.execution_id) {
+            scheduledPostsMap[sp.execution_id as string] = {
+              scheduled_for: sp.scheduled_for ?? null,
+              status: sp.status ?? null,
+              content: sp.content ?? null,
+            };
+          }
+        }
+      }
+    }
+
+    // Build schedules array — deduplicate by executionId+platform
+    const seenScheduleKeys = new Set<string>();
+    const schedules = allTopicEntries
+      .filter((entry) => {
+        const key = `${entry.executionId}::${entry.platform}`;
+        if (seenScheduleKeys.has(key)) return false;
+        seenScheduleKeys.add(key);
+        return true;
+      })
+      .map((entry, idx) => {
+        const sp = scheduledPostsMap[entry.executionId];
+        return {
+          id: `schedule-${entry.executionId}-${entry.platform}`,
+          executionId: entry.executionId,
+          weekNumber: entry.weekNumber,
+          day: entry.day,
+          platform: entry.platform,
+          contentType: entry.contentType,
+          scheduledFor: sp?.scheduled_for ?? null,
+          status: sp?.status ?? (entry.executionId === targetExecId ? 'draft' : 'pending'),
+          content: sp?.content ?? null,
+          isPrimary: entry.executionId === targetExecId,
+          sortOrder: idx,
+        };
+      })
+      .sort((a, b) => {
+        // Primary execution first, then by week number, then by day
+        if (a.isPrimary && !b.isPrimary) return -1;
+        if (!a.isPrimary && b.isPrimary) return 1;
+        if (a.weekNumber !== b.weekNumber) return a.weekNumber - b.weekNumber;
+        return a.day.localeCompare(b.day);
+      });
+
     const payload = {
       campaignId,
       weekNumber: found.weekNumber,
@@ -209,7 +300,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...(creator_asset != null && typeof creator_asset === 'object' ? { creator_asset } : {}),
         ...(content_status != null ? { content_status } : {}),
       },
-      schedules: [],
+      schedules,
       ...(master_content_id != null ? { master_content_id } : {}),
       ...(creator_card != null && typeof creator_card === 'object' ? { creator_card } : {}),
       ...(distribution_strategy != null ? { distribution_strategy } : {}),

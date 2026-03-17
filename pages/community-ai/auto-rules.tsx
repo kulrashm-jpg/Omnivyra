@@ -186,9 +186,9 @@ export default function CommunityAiAutoRules() {
             />
           </div>
         </div>
-        <div className="mt-3 flex items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
-            className="px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
+            className="w-full sm:w-auto px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
             onClick={handleCreateRule}
             disabled={!ruleName.trim()}
           >

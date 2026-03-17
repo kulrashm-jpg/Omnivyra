@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Badge } from "./ui/badge";
 import { Image as ImageIcon, PlaySquare } from "lucide-react";
 import { PlatformConfig } from "../lib/platforms";
+import ContentRenderer from "./ContentRenderer";
 
 type PlatformKey = string;
 
@@ -33,7 +34,13 @@ export default function PreviewCard({ cfg, post }: { cfg: PlatformConfig; post: 
       <CardContent>
         <div className="rounded-xl border p-4 space-y-2 bg-gray-50">
           {post.title && <p className="font-semibold">{post.title}</p>}
-          {post.body && <p className="text-sm whitespace-pre-wrap">{post.body}</p>}
+          {post.body && (
+            <ContentRenderer
+              content={post.body}
+              platform={post.platform}
+              renderMode="social"
+            />
+          )}
           {post.hashtags && (
             <div className="flex flex-wrap gap-1 mt-2">
               {post.hashtags

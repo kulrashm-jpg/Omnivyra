@@ -1388,7 +1388,7 @@ export default function CampaignDetails() {
       planning: 'bg-blue-100 text-blue-800',
       twelve_week_plan: 'bg-indigo-100 text-indigo-800',
       daily_plan: 'bg-amber-100 text-amber-800',
-      charting: 'bg-teal-100 text-teal-800',
+      charting: 'bg-green-100 text-green-800', // legacy
       schedule: 'bg-green-100 text-green-800',
     };
     return m[stage] ?? 'bg-gray-100 text-gray-800';
@@ -1535,7 +1535,7 @@ export default function CampaignDetails() {
 
   if (isCompanyLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center p-6">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           <AIGenerationProgress
             isActive={true}
@@ -1549,13 +1549,13 @@ export default function CampaignDetails() {
 
   if (!effectiveCompanyId) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-4" />
           <p className="text-gray-600">Select a company to view campaign details.</p>
           <button
             onClick={() => router.push('/campaigns')}
-            className="mt-4 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
+            className="mt-4 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
           >
             Back to Campaigns
           </button>
@@ -1566,7 +1566,7 @@ export default function CampaignDetails() {
 
   if (isLoading && !campaign) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center p-6">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           <AIGenerationProgress
             isActive={true}
@@ -1580,13 +1580,13 @@ export default function CampaignDetails() {
 
   if (!campaign) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-4" />
           <p className="text-gray-600">Campaign not found</p>
-          <button 
+          <button
             onClick={() => router.push('/campaigns')}
-            className="mt-4 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
+            className="mt-4 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
           >
             Back to Campaigns
           </button>
@@ -1742,7 +1742,7 @@ export default function CampaignDetails() {
   // AI-first flow: keep users in chat instead of manual pre-planning screen.
   if (false && needsPrePlanning) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
+      <div className="min-h-screen bg-gray-50">
         <div className="max-w-3xl mx-auto px-6 py-12">
           <button
             onClick={() => router.back()}
@@ -2403,19 +2403,19 @@ export default function CampaignDetails() {
 
   const durationWeeks = (campaign?.duration_weeks ?? weeklyPlans.length) || 12;
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
+    <div className="min-h-screen bg-gray-50">
       <Head>
         <title>{campaign?.name ? `${durationWeeks}-Week Campaign Plan – ${campaign.name}` : 'Campaign Plan'}</title>
       </Head>
       {router.query.fromRecommendation && recommendationId && (
         <div className="bg-indigo-50 border-b border-indigo-100">
-          <div className="max-w-7xl mx-auto px-6 py-3 text-sm text-indigo-800">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 text-sm text-indigo-800">
             Created from Recommendation {recommendationId}
           </div>
         </div>
       )}
       {notice && (
-        <div className="max-w-7xl mx-auto px-6 mt-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-4">
           <div
             className={`rounded-lg border px-3 py-2 text-sm ${
               notice.type === 'success'
@@ -2432,17 +2432,17 @@ export default function CampaignDetails() {
         </div>
       )}
       {/* Header — compact nav, title, status, actions */}
-      <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between gap-4 mb-3">
+      <div className="bg-white border-b border-gray-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
             <button
               onClick={() => router.push('/campaigns')}
-              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
+              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors self-start"
             >
               <ArrowLeft className="w-4 h-4" />
               Back to Campaigns
             </button>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => router.push(`/campaign-health/${campaign.id}`)}
                 className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded-lg hover:bg-slate-800 transition-colors flex items-center gap-1.5"
@@ -2468,7 +2468,7 @@ export default function CampaignDetails() {
               )}
               <button
                 onClick={() => setShowAIChat(true)}
-                className="px-3 py-1.5 text-sm bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg hover:from-purple-700 hover:to-pink-700 transition-colors flex items-center gap-1.5"
+                className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1.5"
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 AI Assistant
@@ -2476,7 +2476,7 @@ export default function CampaignDetails() {
             </div>
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 leading-tight max-w-4xl" title={campaign.name}>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900 leading-tight max-w-4xl" title={campaign.name}>
               {(() => {
                 const words = (campaign.name || '').trim().split(/\s+/).filter(Boolean);
                 return words.length > 8 ? words.slice(0, 8).join(' ') + '…' : campaign.name;
@@ -2552,18 +2552,24 @@ export default function CampaignDetails() {
                   {executionMomentum.state === 'WEAK' ? ' ⚠' : ''}
                 </span>
               )}
-              {executionDrift?.state && (
+              {executionDrift?.state && executionDrift.state !== 'NONE' && (
                 <span
+                  title={
+                    executionDrift.state === 'MAJOR'
+                      ? 'Campaign execution has significantly diverged from the plan. See Execution Intelligence below for how to fix.'
+                      : executionDrift.state === 'MINOR'
+                        ? 'Minor drift detected. Review upcoming weeks to stay aligned with the campaign plan.'
+                        : undefined
+                  }
                   className={
                     executionDrift.state === 'MAJOR'
-                      ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800'
+                      ? 'cursor-help px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800'
                       : executionDrift.state === 'MINOR'
-                        ? 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800'
+                        ? 'cursor-help px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800'
                         : 'px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700'
                   }
                 >
-                  Drift: {executionDrift.state}
-                  {(executionDrift.state === 'MAJOR' || executionDrift.state === 'MINOR') ? ' ⚠' : ''}
+                  {executionDrift.state === 'MAJOR' ? '⚠ Drift: Major — needs attention' : executionDrift.state === 'MINOR' ? '⚠ Drift: Minor' : `Drift: ${executionDrift.state}`}
                 </span>
               )}
             </div>
@@ -2623,22 +2629,50 @@ export default function CampaignDetails() {
                     </span>
                   )}
                   {executionDrift?.state === 'MAJOR' && (
-                    <span className="text-red-700">Execution diverging from campaign plan.</span>
+                    <span className="text-red-700">Campaign execution has drifted significantly from the plan.</span>
+                  )}
+                  {executionDrift?.state === 'MINOR' && (
+                    <span className="text-amber-700">Small drift detected — review upcoming weeks to stay on track.</span>
                   )}
                   {executionDrift?.warnings && executionDrift.warnings.length > 0 && (
                     <span className="text-amber-700">{executionDrift.warnings[0]}</span>
                   )}
+                  {executionDrift?.driftScore != null && (
+                    <span>Drift score: {Math.round(executionDrift.driftScore * 100)}%</span>
+                  )}
                 </div>
-                {executionDrift?.recoverySuggestions && executionDrift.recoverySuggestions.length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-gray-200">
-                    <div className="font-medium text-gray-700 mb-1">Drift recovery:</div>
-                    <ul className="list-disc list-inside space-y-0.5 text-gray-600">
-                      {executionDrift.recoverySuggestions.map((s, i) => (
-                        <li key={i}>{s}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                {(executionDrift?.state === 'MAJOR' || executionDrift?.state === 'MINOR') && (() => {
+                  const suggestions: string[] = executionDrift?.recoverySuggestions && executionDrift.recoverySuggestions.length > 0
+                    ? executionDrift.recoverySuggestions
+                    : (() => {
+                        const s = executionDrift?.signals ?? {};
+                        const tips: string[] = [];
+                        if ((s.schedule ?? 0) > 0.3) tips.push('Reschedule overdue posts — align posting dates with the original campaign calendar');
+                        if ((s.topic ?? 0) > 0.3) tips.push('Realign content topics — upcoming posts should follow the planned topic progression from the blueprint');
+                        if ((s.format ?? 0) > 0.3) tips.push('Adjust content formats — restore the planned mix of posts, articles, and other formats');
+                        if (tips.length === 0) {
+                          if (executionDrift?.state === 'MAJOR') {
+                            tips.push('Use "Optimize Week" to auto-correct the plan for affected weeks');
+                            tips.push('Review the weekly blueprint and update topic assignments for upcoming posts');
+                            tips.push('Check for cancelled or skipped posts that have left gaps in the schedule');
+                          } else {
+                            tips.push('Use "Optimize Week" to auto-correct minor misalignments');
+                            tips.push('Review the next 1–2 weeks and confirm topics match the campaign blueprint');
+                          }
+                        }
+                        return tips;
+                      })();
+                  return (
+                    <div className="mt-2 pt-2 border-t border-gray-200">
+                      <div className="font-medium text-gray-700 mb-1">How to fix drift:</div>
+                      <ul className="list-disc list-inside space-y-0.5 text-gray-600">
+                        {suggestions.map((s, i) => (
+                          <li key={i}>{s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })()}
                 {executionMomentumRecovery?.suggestions && executionMomentumRecovery.suggestions.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-gray-200">
                     <div className="font-medium text-gray-700 mb-1">Suggested improvements:</div>
@@ -2655,8 +2689,8 @@ export default function CampaignDetails() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <div className="flex items-center gap-3 mb-6">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-6">
           <button
             onClick={() => setActiveTab('overview')}
             className={`px-4 py-2 rounded-lg text-sm font-medium ${
@@ -2689,7 +2723,7 @@ export default function CampaignDetails() {
           </button>
         </div>
         {router.query.fromRecommendation && recommendationId && (
-          <div className="bg-white rounded-xl p-6 shadow-sm border mb-8">
+          <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border mb-8">
             <h2 className="text-xl font-semibold mb-4">Recommendation Summary</h2>
             {recommendationSummary ? (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-gray-700">
@@ -2755,7 +2789,7 @@ export default function CampaignDetails() {
             )}
             {/* Stage 11: Generate blueprint when duration set and blueprint invalidated */}
             {(campaign as Campaign & { blueprint_status?: string | null }).blueprint_status === 'INVALIDATED' && !blueprintImmutable && !blueprintFrozen && !governanceLocked && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 mb-8">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 sm:p-6 mb-8">
                 <h2 className="text-xl font-semibold text-amber-900 mb-2">Blueprint required</h2>
                 {blueprintRegenerateFailedMsg && (
                   <div className="mb-4 p-3 bg-amber-100 border border-amber-300 rounded-lg flex items-center justify-between gap-2">
@@ -2836,7 +2870,7 @@ export default function CampaignDetails() {
             )}
 
             {/* Content Blueprint — your created plan; weekly content in weeks below */}
-            <div className="bg-white rounded-xl p-6 shadow-sm border mb-8" id="content-blueprint">
+            <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border mb-8" id="content-blueprint">
               <h2 className="text-xl font-semibold mb-1">Content Blueprint</h2>
               <p className="text-sm text-gray-500 mb-4">
                 Your submitted plan; weekly content is listed in the weeks below.
@@ -2893,7 +2927,7 @@ export default function CampaignDetails() {
                   )}
                 </div>
               )}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="text-center">
                   <div className="text-2xl font-bold text-purple-600 mb-1">{durationWeeks}</div>
                   <div className="text-sm text-gray-600">Total Weeks</div>
@@ -2920,7 +2954,7 @@ export default function CampaignDetails() {
             </div>
 
             {/* Weekly Content — blueprint per week, placed in weeks below */}
-            <div className="bg-white rounded-xl p-6 shadow-sm border mb-8" id="weekly-content">
+            <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border mb-8" id="weekly-content">
               {(() => {
                 const hasStartDate = !!(campaign as { start_date?: string }).start_date;
                 const hasDuration = !!(campaign as { duration_weeks?: number }).duration_weeks;
@@ -2956,7 +2990,7 @@ export default function CampaignDetails() {
                     type="button"
                     onClick={enhanceAllWeeksWithAI}
                     disabled={!campaign?.start_date || !(campaign as any).duration_weeks || isEnhancingAllWeeks}
-                    className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     title={!campaign?.start_date || !(campaign as any).duration_weeks
                       ? "Set campaign start date and duration in pre-planning first."
                       : "AI generates daily activities for all weeks from the weekly plan, then opens the daily planner."}
@@ -3188,7 +3222,7 @@ export default function CampaignDetails() {
                         className="p-4 cursor-pointer hover:bg-gray-50 transition-colors"
                         onClick={() => toggleWeekExpansion(weekNumber)}
                       >
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-center gap-4">
                             <div className={`p-2 rounded-lg bg-gradient-to-r ${getPhaseColor(weekPlan?.phase || 'Foundation')}`}>
                               <Calendar className="h-5 w-5 text-white" />
@@ -3213,7 +3247,7 @@ export default function CampaignDetails() {
                             </div>
                           </div>
                           
-                          <div className="flex items-center gap-4">
+                          <div className="flex flex-wrap items-center gap-3">
                             <div className="text-right">
                               <div className="text-sm font-medium text-gray-900">
                                 {weekPlan?.completionPercentage || 0}% Complete
@@ -3233,7 +3267,7 @@ export default function CampaignDetails() {
                               }}
                               disabled={isGeneratingWeek === weekNumber || !campaign?.start_date || !(campaign as any).duration_weeks}
                               title="Enhance this week's content plan with AI — generates topics, content briefs and execution slots"
-                              className="px-3 py-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-sm rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all flex items-center gap-1 disabled:opacity-50"
+                              className="px-3 py-1 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1 disabled:opacity-50"
                             >
                               {isGeneratingWeek === weekNumber ? (
                                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -3530,7 +3564,8 @@ export default function CampaignDetails() {
                             </div>
                             <p className="text-xs text-gray-500 mb-2">Distribution controls how the weekly plan is turned into the daily plan. Applied when you Regenerate or first generate. Drag items between days to reorder. Save & freeze to lock the plan for the next stage.</p>
                             {weekDailyPlans.length > 0 ? (
-                              <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+                              <div className="overflow-x-auto">
+                              <div className="grid grid-cols-7 gap-2 min-w-[480px]">
                                 {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(day => {
                                   const dayItems = (editedWeekDailyPlans[weekNumber] ?? weekDailyPlans).filter(d => d.dayOfWeek === day);
                                   const hasPlans = dayItems.length > 0;
@@ -3591,6 +3626,7 @@ export default function CampaignDetails() {
                                   );
                                 })}
                               </div>
+                              </div>
                             ) : (
                               <div className="text-center py-4 text-gray-500">
                                 <Calendar className="h-8 w-8 mx-auto mb-2 text-gray-400" />
@@ -3605,7 +3641,7 @@ export default function CampaignDetails() {
                                   title={!campaign?.start_date || !(campaign as any).duration_weeks
                                     ? 'Set campaign start date and duration in Pre-planning first'
                                     : 'Generate daily plans for this week'}
-                                  className="mt-2 px-3 py-1 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                  className="mt-2 px-3 py-1 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                   Generate Daily Plans
                                 </button>
@@ -3621,7 +3657,7 @@ export default function CampaignDetails() {
             </div>
 
             {/* Virality Review — readiness check (assets, platforms, engagement); fix blocking issues before scheduling */}
-            <div className="bg-white rounded-xl p-6 shadow-sm border mb-8">
+            <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border mb-8">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-xl font-semibold">Virality Review</h2>
                 <button
@@ -3783,7 +3819,7 @@ export default function CampaignDetails() {
                 <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
               </div>
             ) : !governanceStatus ? (
-              <div className="bg-white rounded-xl p-6 shadow-sm border">
+              <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border">
                 <p className="text-sm text-gray-500">Unable to load governance data. Try again later.</p>
               </div>
             ) : (
@@ -3881,7 +3917,7 @@ export default function CampaignDetails() {
                   ((governanceStatus.latestGovernanceEvent?.eventType === 'PRE_PLANNING_EVALUATED' ||
                     governanceStatus.latestGovernanceEvent?.eventType === 'DURATION_NEGOTIATED') &&
                     governanceStatus.latestGovernanceEvent?.eventStatus === 'NEGOTIATE') && (
-                  <div className="bg-white rounded-xl p-6 shadow-sm border">
+                  <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border">
                     <h3 className="text-lg font-semibold text-gray-900 mb-3">Refine your duration</h3>
                     <p className="text-sm text-gray-600 mb-3">
                       Try a different duration (e.g. &quot;14 weeks&quot;, &quot;extend&quot;, &quot;reduce&quot;) and re-evaluate.
@@ -3970,7 +4006,7 @@ export default function CampaignDetails() {
         )}
 
         {activeTab === 'performance' && (
-          <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border">
             <h2 className="text-xl font-semibold mb-4">Performance</h2>
             {performanceSummary ? (
               <div className="space-y-6 text-sm text-gray-700">

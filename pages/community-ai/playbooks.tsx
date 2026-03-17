@@ -108,10 +108,10 @@ export default function CommunityAiPlaybooks() {
       )}
 
       <SectionCard title="Playbooks" subtitle="Manage engagement playbooks and automation rules.">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <div className="text-sm text-gray-600">{isLoading ? 'Loading...' : ''}</div>
           <button
-            className="px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
+            className="w-full sm:w-auto px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
             onClick={handleCreate}
           >
             New Playbook

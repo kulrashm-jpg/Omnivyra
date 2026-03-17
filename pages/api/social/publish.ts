@@ -4,6 +4,7 @@ import { isSuperAdmin } from '../../../backend/services/rbacService';
 import { getScheduledPost } from '../../../backend/db/queries';
 import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
 import { publishNow } from '../../../backend/services/publishNowService';
+import { supabase } from '../../../backend/db/supabaseClient';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -13,11 +14,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
   if (authError || !user) {
     return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const superAdmin = await isSuperAdmin(user.id);
-  if (!superAdmin) {
-    return res.status(403).json({ error: 'Forbidden' });
   }
 
   const { post_id, dry_run } = req.body || {};
@@ -30,14 +26,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!post) {
       return res.status(404).json({ error: 'Scheduled post not found' });
     }
-    if (!post.campaign_id) {
-      return res.status(400).json({ error: 'Scheduled post missing campaign_id' });
+
+    // Allow: post owner OR super-admin
+    const superAdmin = await isSuperAdmin(user.id);
+    if (!superAdmin && post.user_id !== user.id) {
+      return res.status(403).json({ error: 'Forbidden: you do not own this post' });
+    }
+
+    // Resolve social_account_id — fall back to user's connected account for this platform
+    let socialAccountId: string | null = post.social_account_id || null;
+    if (!socialAccountId) {
+      const platformNorm = post.platform === 'x' ? 'twitter' : post.platform;
+      const { data: acct } = await supabase
+        .from('social_accounts')
+        .select('id')
+        .eq('user_id', post.user_id)
+        .eq('is_active', true)
+        .in('platform', [post.platform, platformNorm])
+        .limit(1)
+        .maybeSingle();
+      socialAccountId = acct?.id ?? null;
+    }
+
+    if (!socialAccountId) {
+      return res.status(422).json({
+        error: `No connected ${post.platform} account found. Please connect your account in Settings → Social Accounts.`,
+      });
+    }
+
+    // Patch the post row with the resolved account so publishNow and future jobs use it
+    if (!post.social_account_id) {
+      await supabase
+        .from('scheduled_posts')
+        .update({ social_account_id: socialAccountId })
+        .eq('id', post.id);
     }
 
     if (dry_run) {
       return res.status(200).json({
         status: 'DRY_RUN',
         platform: post.platform,
+        social_account_id: socialAccountId,
         payload_preview: {
           platform: post.platform,
           content: post.content?.slice(0, 200),
@@ -49,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const result = await publishNow({
       scheduled_post_id: post.id,
-      social_account_id: post.social_account_id,
+      social_account_id: socialAccountId,
       user_id: post.user_id,
     });
 
@@ -64,20 +93,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       status: result.status,
       platform: post.platform,
       external_post_id: result.external_post_id,
+      post_url: result.post_url,
       message: result.message,
       timestamp: result.timestamp,
     });
   } catch (error: any) {
-    console.error('Error publishing scheduled post:', error);
+    console.error('[publish] error:', error);
     try {
       await updatePostPublishStatus({
         post_id,
         status: 'FAILED',
-        last_error: 'Publish failed',
+        last_error: error?.message || 'Publish failed',
       });
-    } catch (updateError) {
-      console.error('Failed to update scheduled post status after error');
-    }
-    return res.status(500).json({ error: 'Failed to publish scheduled post' });
+    } catch (_) {}
+    return res.status(500).json({ error: error?.message || 'Failed to publish scheduled post' });
   }
 }

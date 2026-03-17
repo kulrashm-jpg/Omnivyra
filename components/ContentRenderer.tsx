@@ -182,10 +182,10 @@ function normalizeForSocial(
   // Strip inline markdown markers on platforms that don't render them
   if (!ctx.supportsInlineBold) {
     text = text
-      .replace(/\*\*(.+?)\*\*/gs, '$1')
-      .replace(/\*(.+?)\*/gs, '$1')
-      .replace(/__(.+?)__/gs, '$1')
-      .replace(/_(.+?)_/gs, '$1');
+      .replace(/\*\*([\s\S]+?)\*\*/g, '$1')
+      .replace(/\*([\s\S]+?)\*/g, '$1')
+      .replace(/__([\s\S]+?)__/g, '$1')
+      .replace(/_([\s\S]+?)_/g, '$1');
   }
 
   // Separate trailing hashtag block for Instagram / TikTok
@@ -664,6 +664,29 @@ export function CompactContent({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// HTML content renderer (for content edited via RichTextEditor)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** True when content was produced by TipTap (contains HTML tags). */
+function isHtmlContent(content: string): boolean {
+  return /^<[a-z][\s\S]*>/i.test(content.trim()) || /<\/p>|<\/li>|<\/h[1-6]>|<br\s*\/?>/.test(content);
+}
+
+/**
+ * Renders HTML content produced by RichTextEditor inside a scoped prose wrapper.
+ * Uses dangerouslySetInnerHTML — content comes from the user's own editor, not external input.
+ */
+function HtmlContent({ content, linkCls }: { content: string; linkCls: string }) {
+  return (
+    <div
+      className="html-content-renderer prose prose-sm max-w-none text-gray-800"
+      // eslint-disable-next-line react/no-danger
+      dangerouslySetInnerHTML={{ __html: content }}
+    />
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -694,13 +717,20 @@ export default function ContentRenderer({
     return <p className={`text-sm italic text-gray-400 ${className}`}>{emptyText}</p>;
   }
 
+  // HTML content (from RichTextEditor) renders directly — no markdown parsing needed
+  const htmlMode = mode !== 'compact' && mode !== 'carousel' && mode !== 'youtube' && isHtmlContent(content);
+
   return (
     <div className={className}>
       {mode === 'compact' && (
         <CompactContent content={content} maxLength={maxLength} />
       )}
 
-      {mode === 'rich' && (
+      {htmlMode && (
+        <HtmlContent content={content} linkCls={linkCls} />
+      )}
+
+      {!htmlMode && mode === 'rich' && (
         <RichContent content={content} linkCls={linkCls} />
       )}
 
@@ -712,15 +742,15 @@ export default function ContentRenderer({
         <YouTubeContent content={content} />
       )}
 
-      {mode === 'comment' && (
+      {!htmlMode && mode === 'comment' && (
         <CommentContent content={content} textCls={textCls ?? 'text-gray-700'} />
       )}
 
-      {mode === 'ai-message' && (
+      {!htmlMode && mode === 'ai-message' && (
         <FormattedAIMessage message={content} className={textCls} />
       )}
 
-      {(mode === 'social' || mode === 'auto') && (
+      {!htmlMode && (mode === 'social' || mode === 'auto') && (
         <SocialContent
           content={content}
           platform={pl}

@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/communityAiCapabilities';
-import { enforceActionRole, requireTenantScope } from './utils';
+import { requireTenantScope } from './utils';
 
 type EngagementGoals = {
   likes?: number;
@@ -46,14 +45,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const scope = await requireTenantScope(req, res);
   if (!scope) return;
 
-  const roleGate = await enforceActionRole({
-    req,
-    res,
-    companyId: scope.organizationId,
-    allowedRoles: [...COMMUNITY_AI_CAPABILITIES.VIEW_ACTIONS],
-  });
-  if (!roleGate) return;
-
   const platform = typeof req.query?.platform === 'string' ? req.query.platform : null;
 
   let query = supabase
@@ -69,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { data: analyticsRows, error } = await query;
   if (error) {
-    return res.status(500).json({ error: 'FAILED_TO_LOAD_CONTENT_KPIS' });
+    return res.status(200).json({ tenant_id: scope.tenantId, organization_id: scope.organizationId, by_platform: [], by_content_type: [] });
   }
 
   const rows = analyticsRows || [];

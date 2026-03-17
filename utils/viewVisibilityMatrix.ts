@@ -29,6 +29,11 @@ export const VIEW_RULES: Record<
     showCreatorBrief: true,
     showSystemFields: true,
   },
+  CONTENT_ARCHITECT: {
+    showCMOLayer: true,
+    showCreatorBrief: true,
+    showSystemFields: true,
+  },
   SYSTEM: {
     showCMOLayer: true,
     showCreatorBrief: true,

@@ -175,12 +175,12 @@ export function categorizeError(
     };
   }
 
-  // Default unknown error
+  // Default unknown error — surface the raw message so callers can show it
   return {
     code: 'UNKNOWN_ERROR',
     category: 'unknown',
     message: errorMessage,
-    user_message: 'An unexpected error occurred. Please try again.',
+    user_message: errorMessage || 'An unexpected error occurred. Please try again.',
     retryable: true,
     recovery_suggestions: [
       'Try again in a few minutes',

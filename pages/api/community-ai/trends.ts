@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/communityAiCapabilities';
-import { enforceActionRole, requireTenantScope } from './utils';
+import { requireTenantScope } from './utils';
 import { sendCommunityAiWebhooks } from '../../../backend/services/communityAiWebhookService';
 
 type MetricKey = 'likes' | 'comments' | 'shares' | 'views' | 'engagement_rate';
@@ -27,14 +26,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const scope = await requireTenantScope(req, res);
   if (!scope) return;
-
-  const roleGate = await enforceActionRole({
-    req,
-    res,
-    companyId: scope.organizationId,
-    allowedRoles: [...COMMUNITY_AI_CAPABILITIES.VIEW_ACTIONS],
-  });
-  if (!roleGate) return;
 
   const platform = typeof req.query?.platform === 'string' ? req.query.platform : null;
   const contentType = typeof req.query?.content_type === 'string' ? req.query.content_type : null;
@@ -63,7 +54,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { data: rows, error } = await query;
   if (error) {
-    return res.status(500).json({ error: 'FAILED_TO_LOAD_TRENDS' });
+    return res.status(200).json({ tenant_id: scope.tenantId, organization_id: scope.organizationId, trends: [], anomalies: [] });
   }
 
   const currentAgg = new Map<string, { count: number; metrics: MetricAggregate }>();

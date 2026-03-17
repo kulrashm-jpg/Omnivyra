@@ -249,8 +249,8 @@ function CampaignPlannerInner({
     : null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-purple-50 flex flex-col">
-      <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 shadow-sm flex-shrink-0">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
         <div className="max-w-full mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
             <button

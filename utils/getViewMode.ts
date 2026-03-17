@@ -8,6 +8,7 @@ export type ViewMode =
   | 'CREATOR'
   | 'CMO'
   | 'CONTENT_MANAGER'
+  | 'CONTENT_ARCHITECT'
   | 'SYSTEM';
 
 export function getViewMode(role?: string): ViewMode {
@@ -18,6 +19,8 @@ export function getViewMode(role?: string): ViewMode {
       return 'CMO';
     case 'CONTENT_MANAGER':
       return 'CONTENT_MANAGER';
+    case 'CONTENT_ARCHITECT':
+      return 'CONTENT_ARCHITECT';
     case 'SYSTEM':
       return 'SYSTEM';
     default:

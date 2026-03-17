@@ -1,19 +1,17 @@
 /**
  * Campaign workflow stages in execution order.
- * planning → twelve_week_plan → daily_plan → charting → schedule
+ * planning → twelve_week_plan → daily_plan → schedule
  */
 export type CampaignStage =
   | 'planning'
   | 'twelve_week_plan'
   | 'daily_plan'
-  | 'charting'   // social media alignment
   | 'schedule';
 
 export const CAMPAIGN_STAGES: readonly CampaignStage[] = [
   'planning',
   'twelve_week_plan',
   'daily_plan',
-  'charting',
   'schedule',
 ] as const;
 
@@ -21,7 +19,6 @@ export const STAGE_LABELS: Record<CampaignStage, string> = {
   planning: 'Planning',
   twelve_week_plan: 'Week Plan', // Base label; use getStageLabelWithDuration for "# Week Plan"
   daily_plan: 'Daily Plan',
-  charting: 'Charting (Social Media Alignment)',
   schedule: 'Schedule',
 };
 
@@ -30,7 +27,6 @@ export const STAGE_GRADIENT: Record<CampaignStage, string> = {
   planning: 'from-blue-500 to-cyan-600',
   twelve_week_plan: 'from-indigo-500 to-purple-600',
   daily_plan: 'from-amber-500 to-orange-600',
-  charting: 'from-teal-500 to-emerald-600',
   schedule: 'from-green-500 to-emerald-600',
 };
 
@@ -39,6 +35,8 @@ export function getStageGradient(stage: string): string {
 }
 
 export function getStageLabel(stage: string): string {
+  // Map legacy 'charting' stage to 'schedule' silently
+  if (stage === 'charting') return STAGE_LABELS.schedule;
   const known = STAGE_LABELS[stage as CampaignStage];
   if (known) return known;
   const s = String(stage || '').trim();

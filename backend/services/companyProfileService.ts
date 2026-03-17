@@ -107,6 +107,8 @@ export type CompanyProfile = {
     offerings_by_aspect?: Record<string, string[]>;
     strategic_objectives?: string[];
   } | null;
+  /** User-configured content types per social platform: { linkedin: ['post', 'article'], ... }. Empty = use system defaults. */
+  platform_content_type_prefs?: Record<string, string[]> | null;
 }
 
 /** Profile fields COMPANY_ADMIN is allowed to see (same set for all companies when company admin views). */

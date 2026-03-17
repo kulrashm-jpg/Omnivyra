@@ -318,8 +318,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         messages: [
           {
             role: 'system',
-            content:
-              'You are a senior social content editor. Apply user refinement instructions while preserving factual meaning and platform fit. Return only refined content plain text.',
+            content: 'You are a senior social content editor. Apply user refinement instructions while preserving factual meaning and platform fit. Preserve all paragraph line breaks and blank lines between paragraphs. Return only refined content — no labels, no commentary.',
           },
           {
             role: 'user',

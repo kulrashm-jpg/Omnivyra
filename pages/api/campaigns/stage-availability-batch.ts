@@ -64,16 +64,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           contentReadyDailyPlansCount = readyCount ?? 0;
         } catch { /* ignore */ }
 
-        let hasCharting = false;
         let scheduledPostsCount = 0;
         let publishedPostsCount = 0;
-        try {
-          const { count: p } = await supabase
-            .from('platform_execution_plans')
-            .select('id', { count: 'exact', head: true })
-            .eq('campaign_id', campaignId);
-          hasCharting = (p ?? 0) > 0;
-        } catch { /* ignore */ }
         try {
           const { count: s } = await supabase
             .from('scheduled_posts')
@@ -94,7 +86,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             detailedWeekPlans: hasDetailedWeekPlans,
             aiEnrichedWeeks: hasAiEnrichedWeeks,
             dailyPlans: hasDailyPlans,
-            charting: hasCharting,
             schedule: scheduledPostsCount > 0,
           },
           counts: {

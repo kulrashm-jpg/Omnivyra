@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, Users, Settings2, ArrowRight } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
@@ -132,7 +132,8 @@ type WebhookItem = {
 
 export default function CommunityAiHome() {
   const router = useRouter();
-  const { selectedCompanyId } = useCompanyContext();
+  const { selectedCompanyId, userRole } = useCompanyContext();
+  const isAdmin = ['SUPER_ADMIN', 'COMPANY_ADMIN'].includes((userRole || '').toString().toUpperCase());
   const tenantId = selectedCompanyId || '';
 
   const [profile] = useState<BrandProfile>({
@@ -596,7 +597,7 @@ export default function CommunityAiHome() {
   }, [dashboard]);
 
   return (
-    <CommunityAiLayout title="Community AI Command Center" context={context}>
+    <CommunityAiLayout title="Engagement Center" context={context}>
       {errorMessage && (
         <div className="bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg p-3">
           {errorMessage}
@@ -627,7 +628,7 @@ export default function CommunityAiHome() {
       </SectionCard>
 
       <SectionCard title="Monitoring & KPI Overview">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div className="text-sm text-gray-600">Operational KPIs</div>
           <div className="flex gap-2">
             <button
@@ -644,7 +645,7 @@ export default function CommunityAiHome() {
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 text-sm">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
           <div className="border rounded-lg p-4">
             <div className="text-xs text-gray-500">Action Overview</div>
             <div className="text-lg font-semibold text-gray-900">
@@ -700,7 +701,7 @@ export default function CommunityAiHome() {
       </SectionCard>
 
       <SectionCard title="Notifications & Alerts">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div className="text-sm text-gray-600">
             Unread: {notifications?.length ?? 0}
           </div>
@@ -990,12 +991,12 @@ export default function CommunityAiHome() {
           )}
           <div className="space-y-2">
             {webhooks.map((hook) => (
-              <div key={hook.id} className="border rounded-lg p-3 flex items-center justify-between">
-                <div>
+              <div key={hook.id} className="border rounded-lg p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div className="min-w-0">
                   <div className="text-xs text-gray-500">{hook.event_type}</div>
-                  <div className="text-sm text-gray-800">{hook.webhook_url}</div>
+                  <div className="text-sm text-gray-800 truncate">{hook.webhook_url}</div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <button
                     className="text-xs text-indigo-600"
                     disabled={!canManageWebhooks || webhookLoading}
@@ -1053,7 +1054,7 @@ export default function CommunityAiHome() {
       </SectionCard>
 
       <SectionCard title="Needs Attention Now">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
           <div className="border rounded-lg p-4">
             <div className="text-xs text-gray-500">Underperforming posts</div>
             <div className="text-lg font-semibold text-gray-900">
@@ -1133,7 +1134,7 @@ export default function CommunityAiHome() {
       </SectionCard>
 
       <SectionCard title="Action Queue Summary">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+        <div className="grid grid-cols-3 gap-3 text-sm">
           <div className="border rounded-lg p-4">
             <div className="text-xs text-gray-500">Pending</div>
             <div className="text-lg font-semibold text-gray-900">
@@ -1152,6 +1153,39 @@ export default function CommunityAiHome() {
               {dashboard?.action_summary?.completed ?? 0}
             </div>
           </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Tools & Settings" subtitle="Manage discovered users, automation rules, and platform connections.">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <button
+            onClick={() => router.push('/community-ai/discovered-users')}
+            className="flex items-center gap-3 p-4 rounded-lg border border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 transition-colors text-left"
+          >
+            <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-indigo-100 flex items-center justify-center">
+              <Users className="h-5 w-5 text-indigo-600" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-gray-900">Discovered Users</div>
+              <div className="text-xs text-gray-500">View & manage found accounts</div>
+            </div>
+            <ArrowRight className="h-4 w-4 text-gray-400 ml-auto flex-shrink-0" />
+          </button>
+          {isAdmin && (
+            <button
+              onClick={() => router.push('/community-ai/auto-rules')}
+              className="flex items-center gap-3 p-4 rounded-lg border border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 transition-colors text-left"
+            >
+              <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-violet-100 flex items-center justify-center">
+                <Settings2 className="h-5 w-5 text-violet-600" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-gray-900">Auto-Rules</div>
+                <div className="text-xs text-gray-500">Configure automation rules</div>
+              </div>
+              <ArrowRight className="h-4 w-4 text-gray-400 ml-auto flex-shrink-0" />
+            </button>
+          )}
         </div>
       </SectionCard>
     </CommunityAiLayout>

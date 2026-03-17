@@ -6144,7 +6144,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className={`text-white p-4 flex items-center justify-between ${isFullscreen ? 'rounded-none' : 'rounded-t-2xl'} ${isRecsChat ? 'bg-gradient-to-r from-emerald-500 to-teal-600' : 'bg-gradient-to-r from-indigo-500 to-purple-600'}`}>
+        <div className={`text-white p-4 flex items-center justify-between ${isFullscreen ? 'rounded-none' : 'rounded-t-2xl'} ${isRecsChat ? 'bg-emerald-600' : 'bg-indigo-600'}`}>
           <div>
             <h3 className="text-lg font-semibold">Campaign AI Assistant</h3>
             <p className={`text-sm ${isRecsChat ? 'text-emerald-100' : 'text-indigo-100'}`}>{displayTopic}</p>
@@ -6227,7 +6227,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                         onClick={() => handleProviderChange(provider.id as AIProvider)}
                         className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
                           selectedProvider === provider.id
-                            ? `bg-gradient-to-r ${provider.color} text-white shadow-lg`
+                            ? 'bg-indigo-600 text-white shadow-sm'
                             : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
                         }`}
                       >
@@ -6837,7 +6837,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               <div key={message.id} className={`flex w-full ${message.type === 'user' ? 'justify-end' : 'justify-start'} px-1 sm:px-2`}>
                 <div className={`px-4 py-3 rounded-lg min-w-0 ${
                   message.type === 'user' 
-                    ? (isRecsChat ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white max-w-[90%]' : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white max-w-[90%]')
+                    ? (isRecsChat ? 'bg-emerald-600 text-white max-w-[90%]' : 'bg-indigo-600 text-white max-w-[90%]')
                     : 'bg-gray-100 text-gray-900 w-full'
                 }`}>
                   {message.type === 'ai' &&
@@ -6848,7 +6848,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                       <button
                         onClick={() => setShowScheduleConfirm(true)}
                         disabled={isBusy || !campaignId || governanceLocked}
-                        className={`w-full flex items-center justify-center gap-2 px-3 py-2 text-white rounded-lg transition-all duration-200 text-sm font-medium disabled:opacity-50 ${isRecsChat ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700' : 'bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700'}`}
+                        className={`w-full flex items-center justify-center gap-2 px-3 py-2 text-white rounded-lg transition-colors text-sm font-medium disabled:opacity-50 ${isRecsChat ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
                       >
                         <Calendar className="h-4 w-4" />
                         Schedule this plan
@@ -7029,7 +7029,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               setReviewWeekNumber(weekNumber);
             }}
           >
-            <div className="bg-gradient-to-r from-purple-500 to-violet-600 text-white p-3 flex items-center justify-between shrink-0">
+            <div className="bg-indigo-600 text-white p-3 flex items-center justify-between shrink-0">
               <h3 className="text-lg font-bold">Review & Refine Plan</h3>
               <p className="text-purple-100 text-sm hidden sm:inline">Make changes through chat on the right, then Submit. To replace text: click Edit, select the portion to change, then type the new words.</p>
               <button onClick={() => setShowPlanOverview(false)} className="p-2 hover:bg-white/20 rounded-lg">
@@ -7317,7 +7317,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                         </button>
                       )}
                       <button onClick={() => { setShowPlanOverview(false); saveAIContentForPlan(serializeStructuredPlanToText(structuredPlan), structuredPlan); }} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg text-sm font-medium">Save for Later</button>
-                      <button onClick={() => commitPlan()} className="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg font-medium">Submit This Plan</button>
+                      <button onClick={() => commitPlan()} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors">Submit This Plan</button>
                     </div>
                   </div>
                 </div>
@@ -7329,7 +7329,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         {showPlanPreview && !showPlanOverview && (
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] mx-4 flex flex-col">
-              <div className="bg-gradient-to-r from-purple-500 to-violet-600 text-white p-4 rounded-t-2xl flex items-center justify-between">
+              <div className="bg-indigo-600 text-white p-4 rounded-t-2xl flex items-center justify-between">
                 <div>
                   <h3 className="text-xl font-bold">Content Plan Preview</h3>
                   <p className="text-purple-100 text-sm">Review your campaign plan before committing</p>
@@ -7364,7 +7364,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                         setShowPlanPreview(false);
                         commitPlan(selectedPlan);
                       }}
-                      className="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:from-blue-600 hover:to-indigo-700 transition-all duration-200 font-medium"
+                      className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors font-medium"
                     >
                       Submit This Plan
                     </button>
@@ -7373,7 +7373,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                         setShowPlanPreview(false);
                         saveAIContentForPlan(selectedPlan);
                       }}
-                      className="px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all duration-200 font-medium"
+                      className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors font-medium"
                     >
                       Save for Later
                     </button>
@@ -8315,7 +8315,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             <button
               onClick={() => sendMessage()}
               disabled={!newMessage.trim() || isBusy}
-              className={`p-3 disabled:opacity-50 text-white rounded-lg transition-all duration-200 ${isRecsChat ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700' : 'bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700'}`}
+              className={`p-3 disabled:opacity-50 text-white rounded-lg transition-colors ${isRecsChat ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
             >
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </button>

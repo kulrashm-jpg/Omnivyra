@@ -38,8 +38,9 @@ interface Token {
   token_type?: string;
 }
 
-// LinkedIn versioned API — update quarterly (YYYYMM format)
-const LINKEDIN_API_VERSION = '202410';
+// LinkedIn versioned API — update quarterly (YYYYMM format).
+// LinkedIn deprecates versions after ~12 months. Current active window from March 2026: 202504+
+const LINKEDIN_API_VERSION = '202507';
 
 export async function publishToLinkedIn(
   post: ScheduledPost,
@@ -133,6 +134,17 @@ export async function publishToLinkedIn(
           error: {
             code: 'LINKEDIN_FORBIDDEN',
             message: `Permission denied (403). Ensure "Share on LinkedIn" product is added to your LinkedIn App and w_member_social scope is approved. Detail: ${message}`,
+            retryable: false,
+          },
+        };
+      }
+
+      if (status === 426) {
+        return {
+          success: false,
+          error: {
+            code: 'LINKEDIN_VERSION_EXPIRED',
+            message: `LinkedIn API version ${LINKEDIN_API_VERSION} is no longer active. Update LINKEDIN_API_VERSION in linkedinAdapter.ts to a version released within the last 12 months. Detail: ${message}`,
             retryable: false,
           },
         };

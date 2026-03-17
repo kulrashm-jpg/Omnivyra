@@ -79,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       planJson: plan,
     });
 
-    // Advance to charting (social media alignment) when building platform plan
+    // Advance to schedule stage when building platform plan
     if (campaignId) {
       const { data: camp } = await supabase
         .from('campaigns')
@@ -87,12 +87,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq('id', campaignId)
         .single();
       const stage = (camp as { current_stage?: string })?.current_stage;
-      if (stage && stage !== 'schedule' && stage !== 'charting') {
+      if (stage && stage !== 'schedule') {
         await supabase
           .from('campaigns')
-          .update({ current_stage: 'charting', updated_at: new Date().toISOString() })
+          .update({ current_stage: 'schedule', updated_at: new Date().toISOString() })
           .eq('id', campaignId);
-        void syncCampaignVersionStage(campaignId, 'charting', companyId).catch(() => {});
+        void syncCampaignVersionStage(campaignId, 'schedule', companyId).catch(() => {});
       }
     }
 

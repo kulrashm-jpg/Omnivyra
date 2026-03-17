@@ -3,8 +3,15 @@ import { ChevronDown } from 'lucide-react';
 
 export type StrategyStatus = 'continuation' | 'expansion' | 'neutral' | 'momentum_expand';
 
-/** Where to show the outcome after BOLT. Default = campaign_schedule (auto-schedule as per campaign date). */
+/** Where BOLT stops. 'schedule' = full run including scheduled posts on calendar. 'campaign_schedule' kept for backward compat (same as 'schedule'). */
 export type BoltOutcomeView = 'week_plan' | 'daily_plan' | 'repurpose' | 'schedule' | 'campaign_schedule';
+
+/** Text-based: AI writes all content. Creator-dependent: human creates content, BOLT plans only. */
+export type BoltCampaignMode = 'text_based' | 'creator_dependent';
+
+export type BoltContentFormat =
+  | 'post' | 'blog' | 'short_story' | 'article' | 'newsletter'
+  | 'video' | 'carousel' | 'reel' | 'podcast' | 'infographic';
 
 /** BOLT creates campaigns of 4 weeks or less. */
 const BOLT_DURATION_OPTIONS = [
@@ -14,13 +21,35 @@ const BOLT_DURATION_OPTIONS = [
   { value: 4, label: '4 weeks' },
 ] as const;
 
-const BOLT_OUTCOME_OPTIONS: { value: BoltOutcomeView; label: string }[] = [
-  { value: 'week_plan', label: 'Week Plan' },
-  { value: 'daily_plan', label: 'Daily Plan' },
-  { value: 'repurpose', label: 'Repurpose' },
-  { value: 'schedule', label: 'Schedule' },
-  { value: 'campaign_schedule', label: 'Schedule as per campaign date' },
-];
+const BOLT_CONTENT_FORMATS: Record<BoltCampaignMode, { value: BoltContentFormat; label: string }[]> = {
+  text_based: [
+    { value: 'post', label: 'Post' },
+    { value: 'blog', label: 'Blog' },
+    { value: 'short_story', label: 'Short Story' },
+    { value: 'article', label: 'Article' },
+    { value: 'newsletter', label: 'Newsletter' },
+  ],
+  creator_dependent: [
+    { value: 'video', label: 'Video' },
+    { value: 'carousel', label: 'Carousel' },
+    { value: 'reel', label: 'Reel' },
+    { value: 'podcast', label: 'Podcast' },
+    { value: 'infographic', label: 'Infographic' },
+  ],
+};
+
+/** Creator-dependent campaigns stop at Daily Plan — content creation requires a human. */
+const BOLT_OUTCOME_OPTIONS_BY_MODE: Record<BoltCampaignMode, { value: BoltOutcomeView; label: string; hint?: string }[]> = {
+  text_based: [
+    { value: 'week_plan', label: 'Week Plan' },
+    { value: 'daily_plan', label: 'Daily Plan' },
+    { value: 'schedule', label: 'Schedule', hint: 'Posts added to calendar' },
+  ],
+  creator_dependent: [
+    { value: 'week_plan', label: 'Week Plan' },
+    { value: 'daily_plan', label: 'Daily Plan', hint: 'Max for creator content' },
+  ],
+};
 
 /** Role-based view: FULL = all sections (Content Architect, Super Admin); MINIMAL = decision-focused (company users). */
 export type RecommendationCardViewMode = 'FULL' | 'MINIMAL';
@@ -35,8 +64,13 @@ export function isFullRecommendationView(role: string | null): boolean {
 type RecommendationBlueprintCardProps = {
   recommendation: Record<string, unknown>;
   onBuildCampaignBlueprint?: () => Promise<void> | void;
-  /** Receives outcomeView and durationWeeks (1–4). campaign_schedule = none checked (auto-schedule per campaign date). */
-  onBuildCampaignFast?: (options?: { outcomeView?: BoltOutcomeView; durationWeeks?: number }) => Promise<void> | void;
+  /** Receives outcomeView, durationWeeks, campaignMode and contentFormats from BOLT options. */
+  onBuildCampaignFast?: (options?: {
+    outcomeView?: BoltOutcomeView;
+    durationWeeks?: number;
+    campaignMode?: BoltCampaignMode;
+    contentFormats?: BoltContentFormat[];
+  }) => Promise<void> | void;
   /** When true, BOLT is in progress for this card (show loading, disable button). */
   fastLoading?: boolean;
   onMarkLongTerm?: () => Promise<void> | void;
@@ -411,9 +445,28 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
   const [minimized, setMinimized] = useState(true);
   const [busy, setBusy] = useState(false);
   const [boltMenuOpen, setBoltMenuOpen] = useState(false);
-  const [boltOutcomeView, setBoltOutcomeView] = useState<BoltOutcomeView>('campaign_schedule');
+  const [boltOutcomeView, setBoltOutcomeView] = useState<BoltOutcomeView>('schedule');
   const [boltDurationWeeks, setBoltDurationWeeks] = useState<number>(4);
+  const [boltCampaignMode, setBoltCampaignMode] = useState<BoltCampaignMode>('text_based');
+  const [boltContentFormats, setBoltContentFormats] = useState<BoltContentFormat[]>(['post']);
   const boltMenuRef = useRef<HTMLDivElement>(null);
+
+  // When switching to creator_dependent, cap outcome at daily_plan; reset formats to first option
+  const handleBoltModeChange = (mode: BoltCampaignMode) => {
+    setBoltCampaignMode(mode);
+    setBoltContentFormats([BOLT_CONTENT_FORMATS[mode][0].value]);
+    if (mode === 'creator_dependent' && boltOutcomeView === 'schedule') {
+      setBoltOutcomeView('daily_plan');
+    }
+  };
+
+  const toggleContentFormat = (fmt: BoltContentFormat) => {
+    setBoltContentFormats((prev) =>
+      prev.includes(fmt)
+        ? prev.length > 1 ? prev.filter((f) => f !== fmt) : prev  // keep at least one
+        : [...prev, fmt]
+    );
+  };
 
   useEffect(() => {
     if (!boltMenuOpen) return;
@@ -782,33 +835,65 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
                 <ChevronDown className={`h-4 w-4 transition ${boltMenuOpen ? 'rotate-180' : ''}`} />
               </button>
               {boltMenuOpen && (
-                <div className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-lg border border-gray-200 bg-white shadow-lg py-2">
-                  <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    Campaign duration (1–4 weeks)
+                <div className="absolute left-0 top-full mt-1 z-50 min-w-[260px] rounded-xl border border-gray-200 bg-white shadow-xl py-2">
+                  {/* Campaign Mode */}
+                  <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Campaign Mode</div>
+                  <div className="flex gap-2 px-3 pb-2">
+                    {(['text_based', 'creator_dependent'] as BoltCampaignMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => handleBoltModeChange(mode)}
+                        className={`flex-1 py-1.5 text-xs font-medium rounded-md border transition ${
+                          boltCampaignMode === mode
+                            ? 'bg-amber-500 text-white border-amber-500'
+                            : 'bg-white text-gray-600 border-gray-300 hover:border-amber-400'
+                        }`}
+                      >
+                        {mode === 'text_based' ? 'Text Based' : 'Creator'}
+                      </button>
+                    ))}
                   </div>
-                  {BOLT_DURATION_OPTIONS.map((opt) => (
-                    <label
-                      key={opt.value}
-                      className="flex items-center gap-2 px-3 py-2 hover:bg-amber-50 cursor-pointer"
-                    >
-                      <input
-                        type="radio"
-                        name="boltDuration"
-                        checked={boltDurationWeeks === opt.value}
-                        onChange={() => setBoltDurationWeeks(opt.value)}
-                        className="rounded-full border-amber-400 text-amber-600 focus:ring-amber-500"
-                      />
-                      <span className="text-sm text-gray-700">{opt.label}</span>
-                    </label>
-                  ))}
-                  <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100 mt-1 pt-2">
-                    Where to see the outcome
+                  {/* Content Format */}
+                  <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Content Format</div>
+                  <div className="flex flex-wrap gap-1.5 px-3 py-2">
+                    {BOLT_CONTENT_FORMATS[boltCampaignMode].map((fmt) => (
+                      <button
+                        key={fmt.value}
+                        type="button"
+                        onClick={() => toggleContentFormat(fmt.value)}
+                        className={`px-2 py-1 text-xs rounded-full border transition ${
+                          boltContentFormats.includes(fmt.value)
+                            ? 'bg-amber-100 text-amber-800 border-amber-400'
+                            : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'
+                        }`}
+                      >
+                        {fmt.label}
+                      </button>
+                    ))}
                   </div>
-                  {BOLT_OUTCOME_OPTIONS.map((opt) => (
-                    <label
-                      key={opt.value}
-                      className="flex items-center gap-2 px-3 py-2 hover:bg-amber-50 cursor-pointer"
-                    >
+                  {/* Duration */}
+                  <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Campaign Duration</div>
+                  <div className="flex gap-1.5 px-3 py-2">
+                    {BOLT_DURATION_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setBoltDurationWeeks(opt.value)}
+                        className={`flex-1 py-1 text-xs font-medium rounded-md border transition ${
+                          boltDurationWeeks === opt.value
+                            ? 'bg-amber-500 text-white border-amber-500'
+                            : 'bg-white text-gray-600 border-gray-300 hover:border-amber-400'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Stop At */}
+                  <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Stop At</div>
+                  {BOLT_OUTCOME_OPTIONS_BY_MODE[boltCampaignMode].map((opt) => (
+                    <label key={opt.value} className="flex items-center gap-2 px-3 py-1.5 hover:bg-amber-50 cursor-pointer">
                       <input
                         type="radio"
                         name="boltOutcome"
@@ -817,13 +902,15 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
                         className="rounded-full border-amber-400 text-amber-600 focus:ring-amber-500"
                       />
                       <span className="text-sm text-gray-700">{opt.label}</span>
+                      {opt.hint && <span className="text-xs text-gray-400 ml-auto">{opt.hint}</span>}
                     </label>
                   ))}
+                  {/* Run */}
                   <div className="border-t border-gray-100 mt-2 pt-2 px-2">
                     <button
                       type="button"
                       onClick={() => {
-                        run(() => onBuildCampaignFast?.({ outcomeView: boltOutcomeView, durationWeeks: boltDurationWeeks }));
+                        run(() => onBuildCampaignFast?.({ outcomeView: boltOutcomeView, durationWeeks: boltDurationWeeks, campaignMode: boltCampaignMode, contentFormats: boltContentFormats }));
                         setBoltMenuOpen(false);
                       }}
                       disabled={busy || fastLoading || !onBuildCampaignFast}
@@ -1061,33 +1148,65 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
               <ChevronDown className={`h-4 w-4 transition ${boltMenuOpen ? 'rotate-180' : ''}`} />
             </button>
             {boltMenuOpen && (
-              <div className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-lg border border-gray-200 bg-white shadow-lg py-2">
-                <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  Campaign duration (1–4 weeks)
+              <div className="absolute left-0 top-full mt-1 z-50 min-w-[260px] rounded-xl border border-gray-200 bg-white shadow-xl py-2">
+                {/* Campaign Mode */}
+                <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Campaign Mode</div>
+                <div className="flex gap-2 px-3 pb-2">
+                  {(['text_based', 'creator_dependent'] as BoltCampaignMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => handleBoltModeChange(mode)}
+                      className={`flex-1 py-1.5 text-xs font-medium rounded-md border transition ${
+                        boltCampaignMode === mode
+                          ? 'bg-amber-500 text-white border-amber-500'
+                          : 'bg-white text-gray-600 border-gray-300 hover:border-amber-400'
+                      }`}
+                    >
+                      {mode === 'text_based' ? 'Text Based' : 'Creator'}
+                    </button>
+                  ))}
                 </div>
-                {BOLT_DURATION_OPTIONS.map((opt) => (
-                  <label
-                    key={opt.value}
-                    className="flex items-center gap-2 px-3 py-2 hover:bg-amber-50 cursor-pointer"
-                  >
-                    <input
-                      type="radio"
-                      name="boltDurationAlt"
-                      checked={boltDurationWeeks === opt.value}
-                      onChange={() => setBoltDurationWeeks(opt.value)}
-                      className="rounded-full border-amber-400 text-amber-600 focus:ring-amber-500"
-                    />
-                    <span className="text-sm text-gray-700">{opt.label}</span>
-                  </label>
-                ))}
-                <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100 mt-1 pt-2">
-                  Where to see the outcome
+                {/* Content Format */}
+                <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Content Format</div>
+                <div className="flex flex-wrap gap-1.5 px-3 py-2">
+                  {BOLT_CONTENT_FORMATS[boltCampaignMode].map((fmt) => (
+                    <button
+                      key={fmt.value}
+                      type="button"
+                      onClick={() => toggleContentFormat(fmt.value)}
+                      className={`px-2 py-1 text-xs rounded-full border transition ${
+                        boltContentFormats.includes(fmt.value)
+                          ? 'bg-amber-100 text-amber-800 border-amber-400'
+                          : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'
+                      }`}
+                    >
+                      {fmt.label}
+                    </button>
+                  ))}
                 </div>
-                {BOLT_OUTCOME_OPTIONS.map((opt) => (
-                  <label
-                    key={opt.value}
-                    className="flex items-center gap-2 px-3 py-2 hover:bg-amber-50 cursor-pointer"
-                  >
+                {/* Duration */}
+                <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Campaign Duration</div>
+                <div className="flex gap-1.5 px-3 py-2">
+                  {BOLT_DURATION_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setBoltDurationWeeks(opt.value)}
+                      className={`flex-1 py-1 text-xs font-medium rounded-md border transition ${
+                        boltDurationWeeks === opt.value
+                          ? 'bg-amber-500 text-white border-amber-500'
+                          : 'bg-white text-gray-600 border-gray-300 hover:border-amber-400'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                {/* Stop At */}
+                <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Stop At</div>
+                {BOLT_OUTCOME_OPTIONS_BY_MODE[boltCampaignMode].map((opt) => (
+                  <label key={opt.value} className="flex items-center gap-2 px-3 py-1.5 hover:bg-amber-50 cursor-pointer">
                     <input
                       type="radio"
                       name="boltOutcomeAlt"
@@ -1096,13 +1215,15 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
                       className="rounded-full border-amber-400 text-amber-600 focus:ring-amber-500"
                     />
                     <span className="text-sm text-gray-700">{opt.label}</span>
+                    {opt.hint && <span className="text-xs text-gray-400 ml-auto">{opt.hint}</span>}
                   </label>
                 ))}
+                {/* Run */}
                 <div className="border-t border-gray-100 mt-2 pt-2 px-2">
                   <button
                     type="button"
                     onClick={() => {
-                      run(() => onBuildCampaignFast?.({ outcomeView: boltOutcomeView, durationWeeks: boltDurationWeeks }));
+                      run(() => onBuildCampaignFast?.({ outcomeView: boltOutcomeView, durationWeeks: boltDurationWeeks, campaignMode: boltCampaignMode, contentFormats: boltContentFormats }));
                       setBoltMenuOpen(false);
                     }}
                     disabled={busy || fastLoading || !onBuildCampaignFast}

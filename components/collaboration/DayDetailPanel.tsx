@@ -1,13 +1,11 @@
 /**
  * DayDetailPanel — Side panel when clicking a calendar day.
- * Sections: Activities, Messages.
- * Replaces inline day-detail block; opens as slide-over.
+ * Sections: Activities, Team Chat (single row opens FloatingChatPanel).
  */
 
-import React, { useEffect, useState } from 'react';
-import { X, Send } from 'lucide-react';
+import React from 'react';
+import { X, MessageSquare, ChevronRight } from 'lucide-react';
 import PlatformIcon from '../ui/PlatformIcon';
-import ContentRenderer from '../ContentRenderer';
 
 /** Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc. */
 function RepurposeDots({ index, total, contentType }: { index: number; total: number; contentType?: string }) {
@@ -22,7 +20,6 @@ function RepurposeDots({ index, total, contentType }: { index: number; total: nu
     </span>
   );
 }
-import type { CollaborationMessage } from './FloatingChatPanel';
 
 export type DayActivity = {
   execution_id?: string;
@@ -41,51 +38,30 @@ export type DayDetailPanelProps = {
   dateKey: string;
   dateLabel: string;
   activities: DayActivity[];
-  messages: CollaborationMessage[];
-  loadingMessages?: boolean;
+  /** Total message count for the day */
+  messageCount?: number;
+  /** Unread message count for the day */
+  unreadCount?: number;
   currentUserId: string;
   campaignId: string;
   onClose: () => void;
-  onSendMessage: (text: string) => Promise<void>;
+  /** Opens the FloatingChatPanel for this day */
+  onOpenChat: () => void;
   onActivityClick?: (activity: DayActivity) => void;
 };
-
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '';
-  }
-}
 
 export default function DayDetailPanel({
   dateKey,
   dateLabel,
   activities,
-  messages,
-  loadingMessages = false,
+  messageCount = 0,
+  unreadCount = 0,
   currentUserId,
   campaignId,
   onClose,
-  onSendMessage,
+  onOpenChat,
   onActivityClick,
 }: DayDetailPanelProps) {
-  const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
-
-  const handleSend = async () => {
-    const text = input.trim();
-    if (!text || sending) return;
-    setSending(true);
-    try {
-      await onSendMessage(text);
-      setInput('');
-    } finally {
-      setSending(false);
-    }
-  };
-
   return (
     <div className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col z-[9998]">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
@@ -142,62 +118,33 @@ export default function DayDetailPanel({
           )}
         </section>
 
-        {/* Messages */}
+        {/* Team Chat — single row, opens FloatingChatPanel */}
         <section>
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">Messages</h3>
-          {loadingMessages ? (
-            <p className="text-sm text-gray-500">Loading messages...</p>
-          ) : messages.length === 0 ? (
-            <p className="text-sm text-gray-500">No messages yet.</p>
-          ) : (
-            <div className="space-y-2">
-              {messages.map((msg) => {
-                const isOwn = msg.created_by === currentUserId;
-                return (
-                  <div
-                    key={msg.id}
-                    className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[85%] rounded-lg px-3 py-2 ${
-                        isOwn ? 'bg-indigo-500 text-white' : 'bg-gray-200 text-gray-900'
-                      }`}
-                    >
-                      <p className="text-xs font-medium opacity-90">
-                        {isOwn ? 'You' : msg.created_by_name || 'User'} ·{' '}
-                        {formatTime(msg.created_at)}
-                      </p>
-                      <ContentRenderer content={msg.message_text} renderMode="comment" className="mt-0.5" />
-                    </div>
-                  </div>
-                );
-              })}
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">Team Chat</h3>
+          <button
+            type="button"
+            onClick={onOpenChat}
+            className="w-full flex items-center gap-3 p-3 rounded-xl border border-indigo-100 bg-indigo-50 hover:bg-indigo-100 transition-colors cursor-pointer text-left"
+          >
+            <div className="shrink-0 p-2 rounded-lg bg-indigo-500">
+              <MessageSquare className="w-4 h-4 text-white" />
             </div>
-          )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-indigo-900">
+                {messageCount > 0 ? `${messageCount} message${messageCount !== 1 ? 's' : ''}` : 'Start team conversation'}
+              </p>
+              {unreadCount > 0 && (
+                <p className="text-xs text-indigo-600">{unreadCount} unread</p>
+              )}
+            </div>
+            {unreadCount > 0 && (
+              <span className="shrink-0 min-w-[22px] h-[22px] flex items-center justify-center rounded-full bg-indigo-500 text-white text-[11px] font-bold px-1">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+            <ChevronRight className="w-4 h-4 text-indigo-400 shrink-0" />
+          </button>
         </section>
-      </div>
-
-      {/* Add message */}
-      <div className="p-4 border-t border-gray-200 bg-white flex gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) =>
-            e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())
-          }
-          placeholder="Write message..."
-          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          disabled={sending}
-        />
-        <button
-          type="button"
-          onClick={handleSend}
-          disabled={!input.trim() || sending}
-          className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
-        >
-          Send
-        </button>
       </div>
     </div>
   );

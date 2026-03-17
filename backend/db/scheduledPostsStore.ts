@@ -32,8 +32,11 @@ export async function updatePostPublishStatus(input: {
   external_post_id?: string;
   last_error?: string;
 }): Promise<void> {
+  // Normalise to lowercase — DB chk_status constraint requires lowercase values
+  const dbStatus = input.status.toLowerCase();
+
   const payload: Record<string, any> = {
-    status: input.status,
+    status: dbStatus,
     updated_at: new Date().toISOString(),
   };
 
@@ -43,7 +46,7 @@ export async function updatePostPublishStatus(input: {
   if (input.last_error) {
     payload.error_message = input.last_error;
   }
-  if (input.status === 'PUBLISHED') {
+  if (dbStatus === 'published') {
     payload.published_at = new Date().toISOString();
   }
 

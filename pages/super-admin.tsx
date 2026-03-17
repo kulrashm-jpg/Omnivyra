@@ -1034,7 +1034,7 @@ export default function SuperAdminPanel() {
             { id: 'plans', label: 'Pricing & Plans', icon: DollarSign },
             { id: 'consumption', label: 'Consumption', icon: Coins },
             { id: 'rbac', label: 'RBAC', icon: Key },
-            { id: 'community-ai', label: 'Community-AI', icon: Activity },
+            { id: 'community-ai', label: 'Engagement', icon: Activity },
             { id: 'audit', label: 'Audit Logs', icon: Eye },
             { id: 'social-platforms', label: 'APIs', icon: Globe },
             { id: 'blog', label: 'Blog', icon: FileText },
@@ -1891,11 +1891,11 @@ export default function SuperAdminPanel() {
                   <span>⚠️</span>
                   <div>
                     <p className="font-semibold text-yellow-800">
-                      Community-AI Execution Paused
+                      Engagement Center Execution Paused
                     </p>
                     <p className="text-sm text-yellow-700">
-                      Community-AI execution is currently paused at the platform level.
-                      All tenants and all Community-AI actions (manual, scheduled, and automated) are affected.
+                      Engagement Center execution is currently paused at the platform level.
+                      All tenants and all Engagement Center actions (manual, scheduled, and automated) are affected.
                     </p>
                   </div>
                 </div>
@@ -1906,17 +1906,17 @@ export default function SuperAdminPanel() {
               <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
                 <h3 className="text-lg font-semibold text-gray-900">Global Platform Policy</h3>
                 <p className="text-sm text-gray-600 mt-1">
-                  This policy applies to ALL tenants and ALL Community-AI actions.
+                  This policy applies to ALL tenants and ALL Engagement Center actions.
                 </p>
               </div>
               <div className="p-6 space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-gray-900">Enable Community-AI Execution</p>
+                    <p className="text-sm font-medium text-gray-900">Enable Engagement Center Execution</p>
                     <p className="text-xs text-gray-500">Global kill switch for all executions</p>
                   </div>
                   <button
-                    onClick={() => openPolicyConfirm('execution_enabled', 'Enable Community-AI Execution')}
+                    onClick={() => openPolicyConfirm('execution_enabled', 'Enable Engagement Center Execution')}
                     disabled={isSavingPolicy}
                     className={`px-4 py-2 rounded-lg text-sm font-medium ${
                       (communityPolicy?.execution_enabled ?? defaultPolicy.execution_enabled)
@@ -1975,7 +1975,7 @@ export default function SuperAdminPanel() {
 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200">
               <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
-                <h3 className="text-lg font-semibold text-gray-900">Community-AI (Platform-level)</h3>
+                <h3 className="text-lg font-semibold text-gray-900">Engagement Center (Platform-level)</h3>
               </div>
               <div className="p-6 grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -2755,7 +2755,7 @@ export default function SuperAdminPanel() {
             <div className="p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-2">Confirm Global Policy Change</h3>
               <p className="text-sm text-gray-600 mb-4">
-                This will affect ALL tenants and ALL Community-AI actions.
+                This will affect ALL tenants and ALL Engagement Center actions.
               </p>
               <div className="text-sm text-gray-700 mb-6">
                 Toggle: <span className="font-medium">{pendingPolicyLabel}</span>

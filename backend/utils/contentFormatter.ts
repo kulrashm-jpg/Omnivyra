@@ -162,6 +162,35 @@ export function formatContentForPlatform(
   let mentions = options.mentions || [];
   let links = options.links || [];
 
+  // If content is HTML (from RichTextEditor), convert to plain text preserving structure
+  if (/^<[a-z][\s\S]*>/i.test(text) || /<\/p>|<\/li>|<br\s*\/?>/.test(text)) {
+    text = text
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+      .replace(/<p[^>]*>/gi, '').replace(/<\/p>/gi, '')
+      .replace(/<\/li>/gi, '\n').replace(/<li[^>]*>/gi, '• ')
+      .replace(/<\/ul>|<\/ol>/gi, '\n')
+      .replace(/<ul[^>]*>|<ol[^>]*>/gi, '')
+      .replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, '$1\n')
+      .replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
+      .replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
+      .replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
+      .replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&nbsp;/g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  // Strip markdown bold/italic markers — social platforms render these as literal characters
+  // ContentRenderer handles the visual rendering; the wire content must be clean text
+  text = text
+    .replace(/\*\*([^*\n]+?)\*\*/g, '$1')
+    .replace(/\*([^*\n]+?)\*/g, '$1')
+    .replace(/__([^_\n]+?)__/g, '$1')
+    .replace(/_([^_\n]+?)_/g, '$1');
+
   // Extract hashtags and mentions from content if not provided
   if (!options.hashtags) {
     hashtags = extractHashtags(text);

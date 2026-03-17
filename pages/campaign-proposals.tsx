@@ -152,13 +152,13 @@ export default function CampaignProposalsPage() {
     <div className="min-h-screen bg-slate-50">
       <Header />
       <main className="max-w-5xl mx-auto px-4 py-8">
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-start justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-semibold text-slate-900 flex items-center gap-2">
-              <Sparkles className="w-7 h-7 text-indigo-500" />
+            <h1 className="text-xl sm:text-2xl font-semibold text-slate-900 flex items-center gap-2">
+              <Sparkles className="w-6 h-6 sm:w-7 sm:h-7 text-indigo-500 shrink-0" />
               Campaign Proposals
             </h1>
-            <p className="text-slate-600 mt-1">
+            <p className="text-slate-600 mt-1 text-sm sm:text-base">
               Auto-generated campaign plans from high-confidence opportunities
             </p>
           </div>
@@ -177,7 +177,7 @@ export default function CampaignProposalsPage() {
           </div>
         )}
 
-        <div className="flex gap-2 mb-6">
+        <div className="flex flex-wrap gap-2 mb-6">
           {['draft', 'accepted', 'rejected', 'all'].map((s) => (
             <button
               key={s}
@@ -220,10 +220,10 @@ export default function CampaignProposalsPage() {
                 key={p.id}
                 className="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow overflow-hidden"
               >
-                <div className="p-5 flex items-start justify-between gap-4">
+                <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold text-slate-900 truncate">{p.proposal_title}</h3>
-                    <div className="flex flex-wrap items-center gap-3 mt-2 text-sm text-slate-500">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-2 text-sm text-slate-500">
                       <span
                         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium ${strengthColor(
                           p.proposal_strength
@@ -239,7 +239,7 @@ export default function CampaignProposalsPage() {
                       <span className="text-slate-400">Opp: {p.opportunity_id.slice(0, 8)}…</span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <button
                       onClick={() => fetchDetail(p.id)}
                       className="px-3 py-1.5 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg"
@@ -330,24 +330,24 @@ export default function CampaignProposalsPage() {
                   </div>
                 )}
               </dl>
-              <div className="mt-6 flex gap-3">
+              <div className="mt-6 flex flex-wrap gap-3">
                 <button
                   onClick={() => handleConvert(detailProposalId)}
                   disabled={!!convertingId}
-                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-50"
+                  className="flex-1 sm:flex-none px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-50 text-center"
                 >
                   Convert to Campaign
                 </button>
                 <button
                   onClick={() => handleReject(detailProposalId)}
                   disabled={!!rejectingId}
-                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg"
+                  className="flex-1 sm:flex-none px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg text-center"
                 >
                   Reject
                 </button>
                 <button
                   onClick={() => setDetailProposalId(null)}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800"
+                  className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 text-center"
                 >
                   Close
                 </button>

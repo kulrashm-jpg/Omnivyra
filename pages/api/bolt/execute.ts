@@ -10,6 +10,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getBoltQueue } from '../../../backend/queue/boltQueue';
 import { getUserFriendlyMessage } from '../../../backend/utils/userFriendlyErrors';
+import { executeBoltPipeline } from '../../../backend/services/boltPipelineService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -90,17 +91,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const runId = (run as { id: string }).id;
 
-    try {
-      const queue = getBoltQueue();
-      await queue.add('bolt-execution', { run_id: runId }, { jobId: runId });
-    } catch (queueErr) {
-      console.error('[bolt/execute] Enqueue failed:', queueErr);
-      const userMsg = await getUserFriendlyMessage(queueErr, 'campaign');
-      await supabase
-        .from('bolt_execution_runs')
-        .update({ status: 'failed', error_message: userMsg })
-        .eq('id', runId);
-      return res.status(500).json({ error: userMsg });
+    const workersEnabled =
+      process.env.ENABLE_AUTO_WORKERS === '1' || process.env.ENABLE_AUTO_WORKERS === 'true';
+
+    let queuedViaBullMQ = false;
+    if (workersEnabled) {
+      try {
+        const queue = getBoltQueue();
+        await queue.add('bolt-execution', { run_id: runId }, { jobId: runId });
+        queuedViaBullMQ = true;
+      } catch (queueErr) {
+        console.warn('[bolt/execute] BullMQ enqueue failed, falling back to direct execution:', (queueErr as Error)?.message);
+      }
+    }
+
+    if (!queuedViaBullMQ) {
+      // No workers running (ENABLE_AUTO_WORKERS not set or Redis unavailable) — run the pipeline
+      // directly in the background. The 'running' guard in executeBoltPipeline prevents double
+      // execution if a BullMQ worker picks it up later.
+      console.log(`[bolt/execute] Running pipeline directly for run ${runId}`);
+      void executeBoltPipeline(runId).catch(async (err) => {
+        console.error('[bolt/execute] Direct pipeline failed:', err?.message);
+      });
     }
 
     return res.status(202).json({

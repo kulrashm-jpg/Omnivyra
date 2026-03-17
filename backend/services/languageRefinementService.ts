@@ -89,9 +89,11 @@ function effectiveToneForPipeline(tone: CampaignTone, cardType: string): Campaig
 // ─── 1. normalizeText ──────────────────────────────────────────────────────
 function normalizeText(text: string): string {
   if (!text || typeof text !== 'string') return text;
+  // Preserve line structure — only normalize horizontal whitespace within each line
   return text
-    .replace(/\s+/g, ' ')
-    .replace(/\u00a0/g, ' ')
+    .split('\n')
+    .map((line) => line.replace(/[ \t\u00a0]+/g, ' ').trim())
+    .join('\n')
     .trim();
 }
 
@@ -143,7 +145,12 @@ function removeFillerPhrases(text: string): string {
   for (const pattern of FILLER_PATTERNS) {
     result = result.replace(pattern, ' ');
   }
-  return result.replace(/\s+/g, ' ').trim();
+  // Normalize spaces within lines but preserve paragraph line breaks
+  return result
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .trim();
 }
 
 // ─── 3. Tone transformation functions ───────────────────────────────────────
@@ -247,7 +254,13 @@ function cardTypeFormatting(text: string, cardType: string): string {
       return text.replace(/\n{3,}/g, '\n\n').trim();
     case 'platform_variant':
     case 'repurpose_card':
-      return text.replace(/\s{2,}/g, ' ').trim();
+      // Preserve paragraph structure; only normalize horizontal whitespace within lines
+      return text
+        .split('\n')
+        .map((line) => line.replace(/[ \t]{2,}/g, ' ').trim())
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
     default:
       return text.trim();
   }
@@ -292,7 +305,7 @@ function runRefinementPipeline(
   result = cardTypeFormatting(result, opts.cardType);
   result = punctuationNormalization(result, opts.cardType);
 
-  return result.replace(/\s+/g, ' ').trim() || text;
+  return result.trim() || text;
 }
 
 function refineSingleString(

@@ -4412,7 +4412,9 @@ export async function runCampaignAiPlan(
       ctx = await tryFullPipeline();
     } catch (err) {
       console.warn('Campaign AI full pipeline failed, using lightweight path:', err);
-      if (isConversational) {
+      // Use lightweight context for conversational flows and BOLT (which has collectedPlanningContext
+      // with all required data — the full snapshot pipeline is not needed for fresh BOLT campaigns).
+      if (isConversational || input.bolt_run_id) {
         ctx = createLightweightContext(input.campaignId, companyContext, campaignIntentSummary, forcedContextBlock, strategyDNA);
       } else {
         throw err;

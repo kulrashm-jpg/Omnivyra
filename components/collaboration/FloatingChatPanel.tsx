@@ -62,7 +62,14 @@ export default function FloatingChatPanel({
   defaultWidth = DEFAULT_WIDTH,
   defaultHeight = DEFAULT_HEIGHT,
 }: FloatingChatPanelProps) {
-  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [pos, setPos] = useState<{ x: number; y: number }>(() => {
+    if (typeof window === 'undefined') return { x: 0, y: 0 };
+    const margin = 24;
+    return {
+      x: Math.max(0, window.innerWidth - defaultWidth - margin),
+      y: Math.max(0, window.innerHeight - defaultHeight - margin),
+    };
+  });
   const [size, setSize] = useState({ w: defaultWidth, h: defaultHeight });
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -77,15 +84,6 @@ export default function FloatingChatPanel({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Position bottom-right on first render
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const margin = 24;
-    setPos({
-      x: Math.max(0, window.innerWidth - defaultWidth - margin),
-      y: Math.max(0, window.innerHeight - defaultHeight - margin),
-    });
-  }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('button, input, textarea')) return;

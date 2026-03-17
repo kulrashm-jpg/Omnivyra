@@ -465,14 +465,14 @@ export default function CommunityAiForecast() {
             </>
           )}
           <button
-            className="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600"
+            className="w-full sm:w-auto px-3 py-1 text-xs rounded border border-gray-300 text-gray-600"
             onClick={handleOpenInsights}
             disabled={insightsLoading}
           >
             {insightsLoading ? 'Loading…' : 'Why this forecast?'}
           </button>
           <button
-            className="ml-auto px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
+            className="w-full sm:w-auto sm:ml-auto px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
             onClick={handleExportCsv}
             disabled={rows.length === 0 || isLoading || isExporting}
           >
@@ -535,7 +535,7 @@ export default function CommunityAiForecast() {
       </SectionCard>
 
       <SectionCard title="What-If Simulation">
-        <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500 mb-3">
           <div>Scenario controls</div>
           {simulationKey && simulationStatus[simulationKey] && (
             <div>
@@ -633,7 +633,7 @@ export default function CommunityAiForecast() {
                 </button>
               )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs">
               {(['text', 'image', 'video', 'banner', 'threads'] as const).map((key) => (
                 <div key={key} className="flex flex-col gap-1">
                   <span className="text-gray-500">{key}</span>
@@ -656,16 +656,16 @@ export default function CommunityAiForecast() {
             </div>
           </div>
         </div>
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           <button
-            className="px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
+            className="w-full sm:w-auto px-3 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
             onClick={handleRunSimulation}
             disabled={simulationLoading || mixInvalid}
           >
             {simulationLoading ? 'Running…' : 'Run Simulation'}
           </button>
           <button
-            className="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600"
+            className="w-full sm:w-auto px-3 py-1 text-xs rounded border border-gray-300 text-gray-600"
             onClick={handleResetSimulation}
             disabled={simulationLoading}
           >
@@ -676,6 +676,7 @@ export default function CommunityAiForecast() {
         {simulationResult && (
           <div className="mt-4">
             <div className="text-xs text-gray-500 mb-2">Simulation Results</div>
+            <div className="overflow-x-auto">
             <table className="min-w-full text-sm text-left text-gray-700">
               <thead className="text-xs uppercase text-gray-500 border-b">
                 <tr>
@@ -731,15 +732,16 @@ export default function CommunityAiForecast() {
                 })()}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </SectionCard>
       {showInsights && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+          <div className="bg-white rounded-xl p-4 sm:p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-xl font-semibold">Forecast Insights</h3>
+                <h3 className="text-lg sm:text-xl font-semibold">Forecast Insights</h3>
                 {insightsKey && insightsStatus[insightsKey] && (
                   <div className="text-xs text-gray-500 mt-1">
                     {insightsStatus[insightsKey] === 'loading' ? '🔄 Generating insights…' : '🟢 Insights cached'}

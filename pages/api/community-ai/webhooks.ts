@@ -5,20 +5,13 @@ import {
   hasCommunityAiCapability,
 } from '../../../backend/services/rbac/communityAiCapabilities';
 import { enforceActionRole, requireTenantScope } from './utils';
+import { getUserCompanyRole } from '../../../backend/services/rbacService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const scope = await requireTenantScope(req, res);
   if (!scope) return;
 
   if (req.method === 'GET') {
-    const roleGate = await enforceActionRole({
-      req,
-      res,
-      companyId: scope.organizationId,
-      allowedRoles: [...COMMUNITY_AI_CAPABILITIES.VIEW_ACTIONS],
-    });
-    if (!roleGate) return;
-
     if (process.env.NODE_ENV !== 'production') {
       res.setHeader('X-Debug-Webhook-Query', 'true');
     }
@@ -41,10 +34,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    const { role } = await getUserCompanyRole(req, scope.organizationId);
     return res.status(200).json({
       tenant_id: scope.tenantId,
       organization_id: scope.organizationId,
-      can_manage: hasCommunityAiCapability(roleGate.role, 'MANAGE_CONNECTORS'),
+      can_manage: hasCommunityAiCapability(role, 'MANAGE_CONNECTORS'),
       webhooks: data || [],
     });
   }

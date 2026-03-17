@@ -111,18 +111,23 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     scheduledPost.platform,
     result.error || { message: 'Unknown error' }
   );
-  await updateScheduledPostOnFailure(scheduled_post_id, platformError.user_message);
+  // Use the raw message (actual error) so callers can surface it; fall back to user_message
+  const errorDetail = platformError.message && platformError.message !== 'Unknown error'
+    ? platformError.message
+    : platformError.user_message;
+
+  await updateScheduledPostOnFailure(scheduled_post_id, errorDetail);
   await supabase
     .from('scheduled_posts')
     .update({
       error_code: platformError.code,
-      error_message: platformError.user_message,
+      error_message: errorDetail,
     })
     .eq('id', scheduled_post_id);
 
   return {
     status: 'FAILED',
-    message: platformError.user_message,
+    message: errorDetail,
     timestamp,
   };
 }

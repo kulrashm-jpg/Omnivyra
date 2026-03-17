@@ -46,9 +46,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       userRole = role ?? null;
     } else {
       // No company scope — check if platform super admin
-      const { data: sa } = await supabase
-        .from('super_admins').select('id').eq('user_id', userId).limit(1).maybeSingle().catch(() => ({ data: null, error: null }));
-      if (sa) userRole = 'SUPER_ADMIN';
+      try {
+        const { data: sa } = await supabase
+          .from('super_admins').select('id').eq('user_id', userId).limit(1).maybeSingle();
+        if (sa) userRole = 'SUPER_ADMIN';
+      } catch (_) {}
     }
   }
 

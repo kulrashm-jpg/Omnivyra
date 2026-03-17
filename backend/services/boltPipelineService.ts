@@ -281,7 +281,7 @@ async function runSourceRecommendation(
   return campaignId;
 }
 
-async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload): Promise<{ plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> }> {
+async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[]): Promise<{ plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> }> {
   const snapshot = payload.sourceStrategicTheme as Record<string, unknown>;
   const basePayload = (snapshot?.context_payload && typeof snapshot.context_payload === 'object')
     ? { ...snapshot.context_payload }
@@ -318,10 +318,42 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
         ? execConfig.frequency_per_week
         : 5;
 
-  const rawPlatformRequests = (execConfig.platform_content_requests ?? [
-    { platform: 'linkedin', content_type: 'post', count_per_week: Math.max(1, Math.floor(parsedFreq * 0.6)) },
-    { platform: 'instagram', content_type: 'post', count_per_week: Math.max(1, Math.floor(parsedFreq * 0.4)) },
-  ]) as Array<{ platform?: string; content_type?: string; count_per_week?: number }>;
+  // Build default platform requests from the company's configured platforms (eligiblePlatforms).
+  // Fall back to LinkedIn only if none are configured.
+  // Use user-configured content type prefs per platform when available.
+  const configuredPlatforms = eligiblePlatforms && eligiblePlatforms.length > 0
+    ? eligiblePlatforms
+    : ['linkedin'];
+
+  let platformContentPrefs: Record<string, string[]> = {};
+  try {
+    const { data } = await supabase
+      .from('company_profiles')
+      .select('platform_content_type_prefs')
+      .eq('company_id', companyId)
+      .maybeSingle();
+    if (data?.platform_content_type_prefs && typeof data.platform_content_type_prefs === 'object') {
+      platformContentPrefs = data.platform_content_type_prefs as Record<string, string[]>;
+    }
+  } catch { /* non-fatal — fall back to 'post' */ }
+
+  const getPrimaryContentType = (platform: string): string => {
+    const canonical = platform.toLowerCase().replace(/^twitter$/i, 'x');
+    const prefs = platformContentPrefs[canonical] ?? platformContentPrefs[platform.toLowerCase()];
+    if (Array.isArray(prefs) && prefs.length > 0) {
+      // Pick the first text-compatible content type (skip video/reel for BOLT)
+      const textSafe = prefs.find((t) => !['video', 'reel', 'short'].includes(t.toLowerCase()));
+      return textSafe ?? prefs[0];
+    }
+    return 'post';
+  };
+
+  const defaultPlatformRequests = configuredPlatforms.map((p, idx) => ({
+    platform: p,
+    content_type: getPrimaryContentType(p),
+    count_per_week: Math.max(1, idx === 0 ? Math.ceil(parsedFreq * 0.6) : Math.floor(parsedFreq * 0.4 / Math.max(1, configuredPlatforms.length - 1))),
+  }));
+  const rawPlatformRequests = (execConfig.platform_content_requests ?? defaultPlatformRequests) as Array<{ platform?: string; content_type?: string; count_per_week?: number }>;
   const boltPlatformRequests = rawPlatformRequests
     .filter((r) => r && r.platform && !['youtube', 'tiktok'].includes(String(r.platform).toLowerCase()))
     .map((r) => ({
@@ -347,13 +379,8 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     content_capacity: execConfig.content_capacity ?? execConfig.weekly_capacity ?? { post: Math.max(1, parsedFreq) },
     action_expectation: execConfig.action_expectation ?? (themeTitle ? `Learn about ${String(themeTitle).slice(0, 80)}` : 'Learn and engage'),
     topic_continuity: execConfig.topic_continuity ?? 'One ongoing story',
-    platforms: execConfig.platforms ?? 'LinkedIn, Instagram',
-    platform_content_requests: boltPlatformRequests.length > 0
-      ? boltPlatformRequests
-      : [
-          { platform: 'linkedin', content_type: 'post', count_per_week: Math.max(1, Math.floor(parsedFreq * 0.6)) },
-          { platform: 'instagram', content_type: 'post', count_per_week: Math.max(1, Math.floor(parsedFreq * 0.4)) },
-        ],
+    platforms: execConfig.platforms ?? configuredPlatforms.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(', '),
+    platform_content_requests: boltPlatformRequests.length > 0 ? boltPlatformRequests : defaultPlatformRequests,
     exclusive_campaigns: execConfig.exclusive_campaigns ?? 'No',
     key_messages: execConfig.key_messages ?? themeTitle ?? (typeof snapshot?.theme_or_description === 'string' ? snapshot.theme_or_description : 'Core value and expertise'),
     campaign_duration: durationWeeks,
@@ -369,7 +396,9 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
           campaignId,
           mode: 'generate_plan',
           message: planMessage,
-          conversationHistory: [{ type: 'user', message: planMessage }],
+          // No conversationHistory — BOLT is not conversational. Passing history triggers
+          // the gather-phase Q&A loop which ignores collectedPlanningContext and returns
+          // a conversational prompt instead of a plan.
           recommendationContext,
           collectedPlanningContext,
           bolt_run_id: runId,
@@ -434,9 +463,12 @@ async function runCommitPlan(
     String((existing as { start_date: string }).start_date).trim()
   );
 
+  // Keep campaign in 'draft' during BOLT execution. The pipeline sets it to 'active' on success.
+  // Previously used 'active' here which caused the dashboard to show "scheduled" even when the
+  // pipeline had not yet completed (or failed shortly after).
   const updates: Record<string, unknown> = {
-    status: 'active',
-    current_stage: 'schedule',
+    status: 'draft',
+    current_stage: 'blueprint_committed',
     blueprint_status: 'ACTIVE',
     duration_weeks: durationWeeks,
     updated_at: new Date().toISOString(),
@@ -632,13 +664,22 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
   }
 
   const status = (run as { status?: string }).status;
-  if (status === 'failed' || status === 'completed') {
+  if (status === 'failed' || status === 'completed' || status === 'running') {
+    // 'running' guard prevents double execution when both direct call and BullMQ worker fire
     return;
   }
 
+  // Atomically claim the run — prevents a BullMQ worker from starting it again
+  await updateRun(runId, { status: 'running' });
+
   const payload = run.payload as BoltPayload;
   const { companyId, outcomeView } = payload;
-  const shouldSchedule = outcomeView === 'campaign_schedule';
+  const campaignMode = (payload.executionConfig as Record<string, unknown>)?.campaign_mode as string | undefined;
+  const isCreatorDependent = campaignMode === 'creator_dependent';
+
+  // Creator-dependent campaigns stop at daily_plan — a human creator must produce the content.
+  // 'schedule' and 'campaign_schedule' both trigger scheduled_posts creation (text-based only).
+  const shouldSchedule = !isCreatorDependent && (outcomeView === 'schedule' || outcomeView === 'campaign_schedule');
   const isWeekPlanOnly = outcomeView === 'week_plan';
 
   const missing = validateExecutionConfig(payload.executionConfig);
@@ -663,7 +704,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
   }
 
   const totalStages = isWeekPlanOnly
-    ? 2
+    ? 3  // source-recommendation, ai/plan, commit-plan
     : shouldSchedule
       ? STAGES.length
       : STAGES.length - 1;
@@ -687,7 +728,8 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
     for (let i = 0; i < STAGES.length; i++) {
       const stage = STAGES[i];
       if (stage === 'schedule-structured-plan' && !shouldSchedule) continue;
-      if (isWeekPlanOnly && stage === 'commit-plan') break;
+      // week_plan commits the plan to DB then stops — generate-weekly-structure and beyond are skipped
+      if (isWeekPlanOnly && stage === 'generate-weekly-structure') break;
 
       if (campaignId) {
         try {
@@ -719,12 +761,14 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
 
       const isGenerateWeekly = stage === 'generate-weekly-structure';
       const stageStart = Date.now();
+      // Always update current_stage so the progress bar reflects the real-time stage.
+      // generate-weekly-structure also needs this so the UI doesn't get stuck on the previous stage.
+      await updateRun(runId, {
+        current_stage: stage,
+        status: 'running',
+        progress_percentage: getProgress(i),
+      });
       if (!isGenerateWeekly) {
-        await updateRun(runId, {
-          current_stage: stage,
-          status: 'running',
-          progress_percentage: getProgress(i),
-        });
         await logEvent(runId, stage, 'started', {
           campaign_id: campaignId ?? undefined,
         });
@@ -742,7 +786,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
             duration_ms: Date.now() - stageStart,
           });
         } else if (stage === 'ai/plan' && campaignId) {
-          const aiResult = await runAiPlan(runId, campaignId, companyId, payload);
+          const aiResult = await runAiPlan(runId, campaignId, companyId, payload, eligiblePlatforms);
           plan = aiResult.plan;
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
@@ -874,6 +918,13 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
       aiMetrics.cache_hit_ratio = cacheMetrics.cache_hit_ratio;
     } catch (metricsErr) {
       console.warn('[bolt] AI metrics aggregation failed:', (metricsErr as Error)?.message);
+    }
+    // Mark campaign active now that the pipeline completed successfully
+    if (campaignId) {
+      await supabase
+        .from('campaigns')
+        .update({ status: 'active', current_stage: 'schedule', updated_at: new Date().toISOString() })
+        .eq('id', campaignId);
     }
     await updateRun(runId, {
       status: 'completed',

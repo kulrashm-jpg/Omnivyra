@@ -172,9 +172,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let scheduledPostId: string | null = null;
     const fullRow = { ...baseRow, ...repurposeExtras };
 
-    // Idempotent: update existing post if same execution_id + platform already exists.
-    // Only attempt the lookup when repurpose columns may exist.
-    if (executionIdStr) {
+    // --- Deduplication strategy 1: campaign_id + platform + title ---
+    // This catches re-scheduling the same topic on the same platform (columns always exist).
+    const titleNorm = String(title || '').trim();
+    if (campaignIdUuid && titleNorm) {
+      try {
+        const { data: existing } = await supabase
+          .from('scheduled_posts')
+          .select('id')
+          .eq('campaign_id', campaignIdUuid)
+          .eq('platform', platformNorm)
+          .eq('title', titleNorm)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (existing?.id) {
+          console.log('[schedule] dedup match (campaign+platform+title), updating:', existing.id);
+          const { error: updateErr } = await tryUpdate(existing.id, fullRow);
+          if (updateErr) {
+            const isSchemaErr = updateErr.message?.includes('column') || updateErr.code === '42703'
+              || updateErr.message?.includes('operator does not exist') || updateErr.code === '42883';
+            if (isSchemaErr) {
+              console.warn('[schedule] schema mismatch on update, retrying without repurpose extras:', updateErr.message);
+              const { error: retryErr } = await tryUpdate(existing.id, baseRow);
+              if (retryErr) {
+                console.error('[activity-workspace/schedule] update retry error:', retryErr);
+                return res.status(500).json({ error: retryErr.message });
+              }
+            } else {
+              console.error('[activity-workspace/schedule] update error:', updateErr);
+              return res.status(500).json({ error: updateErr.message });
+            }
+          }
+          scheduledPostId = existing.id;
+        }
+      } catch (lookupErr: any) {
+        console.warn('[schedule] campaign+platform+title lookup failed:', lookupErr?.message);
+      }
+    }
+
+    // --- Deduplication strategy 2: repurpose_parent_execution_id + platform (legacy fallback) ---
+    if (!scheduledPostId && executionIdStr) {
       try {
         const { data: existing } = await supabase
           .from('scheduled_posts')
@@ -184,6 +223,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .maybeSingle();
 
         if (existing?.id) {
+          console.log('[schedule] dedup match (repurpose_id+platform), updating:', existing.id);
           const { error: updateErr } = await tryUpdate(existing.id, fullRow);
           if (updateErr) {
             // Retry without repurpose extras for: missing column (42703), type operator errors (42883)

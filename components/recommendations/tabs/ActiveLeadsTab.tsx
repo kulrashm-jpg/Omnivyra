@@ -356,7 +356,7 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
                           <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
                         </span>
                       ) : (
-                        <span title="Not connected — connect in Community AI to use this platform" aria-hidden>
+                        <span title="Not connected — connect in Engagement Center to use this platform" aria-hidden>
                           <XCircle className="h-4 w-4 text-red-500 shrink-0" />
                         </span>
                       )

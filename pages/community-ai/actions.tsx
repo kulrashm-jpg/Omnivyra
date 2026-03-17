@@ -908,10 +908,10 @@ export default function CommunityAiActions() {
       </SectionCard>
       {manualAction && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 max-w-2xl w-full mx-4">
+          <div className="bg-white rounded-xl p-4 sm:p-6 max-w-2xl w-full mx-4">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-xl font-semibold">Execute Manually</h3>
+                <h3 className="text-lg sm:text-xl font-semibold">Execute Manually</h3>
                 <div className="text-xs text-gray-500">{manualAction.action_id}</div>
               </div>
               <button className="text-sm text-gray-500" onClick={closeManualExecute}>
@@ -948,16 +948,16 @@ export default function CommunityAiActions() {
               )}
               {manualError && <div className="text-sm text-red-600">{manualError}</div>}
             </div>
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="mt-4 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
               <button
-                className="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600"
+                className="w-full sm:w-auto px-3 py-1 text-xs rounded border border-gray-300 text-gray-600"
                 onClick={closeManualExecute}
                 disabled={manualSending}
               >
                 Cancel
               </button>
               <button
-                className="px-3 py-1 text-xs rounded border border-emerald-500 text-emerald-600"
+                className="w-full sm:w-auto px-3 py-1 text-xs rounded border border-emerald-500 text-emerald-600"
                 onClick={handleManualExecute}
                 disabled={!manualCanSend}
               >
@@ -969,10 +969,10 @@ export default function CommunityAiActions() {
       )}
       {platformViewAction && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 max-w-5xl w-full mx-4">
+          <div className="bg-white rounded-xl p-4 sm:p-6 max-w-5xl w-full mx-4">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-xl font-semibold">Platform View</h3>
+                <h3 className="text-lg sm:text-xl font-semibold">Platform View</h3>
                 <div className="text-xs text-gray-500">{platformViewAction.action_id}</div>
               </div>
               <button className="text-sm text-gray-500" onClick={closePlatformView}>
@@ -1024,16 +1024,16 @@ export default function CommunityAiActions() {
                 <div className="text-sm text-red-600">{platformReplyError}</div>
               )}
             </div>
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="mt-4 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
               <button
-                className="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600"
+                className="w-full sm:w-auto px-3 py-1 text-xs rounded border border-gray-300 text-gray-600"
                 onClick={closePlatformView}
                 disabled={platformReplySending}
               >
                 Cancel
               </button>
               <button
-                className="px-3 py-1 text-xs rounded border border-emerald-500 text-emerald-600"
+                className="w-full sm:w-auto px-3 py-1 text-xs rounded border border-emerald-500 text-emerald-600"
                 onClick={handlePlatformReplyLog}
                 disabled={!platformCanLog || !platformUrl}
               >
@@ -1045,10 +1045,10 @@ export default function CommunityAiActions() {
       )}
       {historyActionId && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 max-w-2xl w-full mx-4">
+          <div className="bg-white rounded-xl p-4 sm:p-6 max-w-2xl w-full mx-4">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-xl font-semibold">Action History</h3>
+                <h3 className="text-lg sm:text-xl font-semibold">Action History</h3>
                 <div className="text-xs text-gray-500">{historyActionId}</div>
               </div>
               <button

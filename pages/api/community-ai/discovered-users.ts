@@ -21,14 +21,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!scope) return;
 
   if (req.method === 'GET') {
-    const roleGate = await enforceActionRole({
-      req,
-      res,
-      companyId: scope.organizationId,
-      allowedRoles: [...COMMUNITY_AI_CAPABILITIES.VIEW_DISCOVERED_USERS],
-    });
-    if (!roleGate) return;
-
+    // Any authenticated company member can view discovered users (same as Community AI dashboard)
     const { platform, classification, discovered_via } = req.query;
     const eligible = parseBoolean(req.query.eligible_for_engagement);
     const limit = Math.min(Math.max(parseNumber(req.query.limit, 25), 1), 200);

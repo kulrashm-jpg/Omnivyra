@@ -83,31 +83,46 @@ function RepurposeDots({ index, total }: { index: number; total: number }) {
   );
 }
 
-/** Mini activity row for the 7-day strip card */
+/** Mini activity row for the 7-day strip card — draggable when planId is set */
 function DayStripActivityPreview({
   activity,
   repurposeIndex,
   repurposeTotal,
   onClick,
+  onDragStart,
+  onDragEnd,
+  isDragging,
 }: {
   activity: GridActivity;
   repurposeIndex: number;
   repurposeTotal: number;
   onClick: () => void;
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragEnd?: () => void;
+  isDragging?: boolean;
 }) {
+  const canDrag = Boolean(activity.planId);
   return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className="flex items-center gap-1 w-full text-left hover:bg-indigo-50 rounded px-1 py-0.5 group"
-      title={activity.title ?? ''}
+    <div
+      draggable={canDrag}
+      onDragStart={canDrag ? (e) => { e.stopPropagation(); onDragStart?.(e); } : undefined}
+      onDragEnd={canDrag ? (e) => { e.stopPropagation(); onDragEnd?.(); } : undefined}
+      title={canDrag ? `${activity.title ?? ''} — drag to move` : activity.title ?? ''}
+      className={`rounded ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging ? 'opacity-40' : ''}`}
     >
-      <RepurposeDots index={repurposeIndex} total={repurposeTotal} />
-      <PlatformIcon platform={activity.platform ?? ''} size={9} className="shrink-0" />
-      <span className="truncate text-[9px] text-gray-700 group-hover:text-indigo-700 leading-tight">
-        {activity.title ?? getContentTypeLabel(activity.content_type ?? 'post')}
-      </span>
-    </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onClick(); }}
+        className="flex items-center gap-1 w-full text-left hover:bg-indigo-50 rounded px-1 py-0.5 group"
+      >
+        {canDrag && <GripVertical className="h-2.5 w-2.5 text-gray-300 shrink-0 group-hover:text-gray-500" />}
+        <RepurposeDots index={repurposeIndex} total={repurposeTotal} />
+        <PlatformIcon platform={activity.platform ?? ''} size={9} className="shrink-0" />
+        <span className="truncate text-[9px] text-gray-700 group-hover:text-indigo-700 leading-tight">
+          {activity.title ?? getContentTypeLabel(activity.content_type ?? 'post')}
+        </span>
+      </button>
+    </div>
   );
 }
 
@@ -400,7 +415,7 @@ export function CampaignDailyPlanSingleWeekView({
           type="button"
           onClick={() => onRegenerateWeek(weekNumber)}
           disabled={isRegenerating}
-          title="Re-run the blueprint scheduling engine for this week — preserves topics, updates day assignments and content types to match your frequency settings"
+          title="Rebuild day assignments from the campaign blueprint — use this when you've changed distribution settings or want to reset manual drags. Drag activities between days for individual adjustments instead."
           className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ml-2 transition-all active:scale-95 ${
             isRegenerating
               ? 'bg-indigo-200 text-indigo-800 cursor-wait'
@@ -442,7 +457,9 @@ export function CampaignDailyPlanSingleWeekView({
       {/* 7-day strip */}
       <div>
         <div className="text-xs font-medium text-gray-600 mb-2">
-          Select a day{weekActivities.some((a) => a.planId) ? ' — drag activities to rearrange' : ''}
+          {weekActivities.some((a) => a.planId)
+            ? 'Click a day to view details — drag activities directly between days to rearrange'
+            : 'Click a day to view details'}
         </div>
         <div className="grid grid-cols-7 gap-2">
           {byDay.map(({ day, dayIndex, dateStr, dayLabel, acts }) => {
@@ -452,14 +469,17 @@ export function CampaignDailyPlanSingleWeekView({
             const extraCount = acts.length > 3 ? acts.length - 3 : 0;
 
             return (
-              <button
+              // Using div instead of button so draggable children can be nested properly
+              <div
                 key={`${dayIndex}-${dateStr}`}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => onDaySelect(dayIndex)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onDaySelect(dayIndex); }}
                 onDragOver={(e) => handleDragOver(e, day)}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, day)}
-                className={`rounded-lg border p-2 min-h-[80px] text-left transition-colors ${
+                className={`rounded-lg border p-2 min-h-[80px] text-left transition-colors cursor-pointer ${
                   isDragTarget
                     ? 'border-indigo-400 ring-2 ring-indigo-300 bg-indigo-100/60'
                     : isSelected
@@ -481,6 +501,9 @@ export function CampaignDailyPlanSingleWeekView({
                         repurposeIndex={rp.index}
                         repurposeTotal={rp.total}
                         onClick={() => onActivityClick(a)}
+                        onDragStart={(e) => handleDragStart(e, a)}
+                        onDragEnd={handleDragEnd}
+                        isDragging={draggingId === a.id}
                       />
                     );
                   })}
@@ -490,7 +513,7 @@ export function CampaignDailyPlanSingleWeekView({
                     </div>
                   )}
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

@@ -188,7 +188,7 @@ export default function CommunityAiConnectors() {
                   </td>
                   <td className="px-3 py-2">{entry.expires_at || '—'}</td>
                   <td className="px-3 py-2">
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <a
                         className="px-2 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
                         href={linkForPlatform(entry.platform)}

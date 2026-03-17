@@ -1,8 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { evaluateInsights } from '../../../backend/services/communityAiInsightsService';
-import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/communityAiCapabilities';
-import { enforceActionRole, requireTenantScope, resolveBrandVoice } from './utils';
+import { requireTenantScope, resolveBrandVoice } from './utils';
 
 type EngagementGoals = {
   likes?: number;
@@ -55,14 +54,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const scope = await requireTenantScope(req, res);
   if (!scope) return;
 
-  const roleGate = await enforceActionRole({
-    req,
-    res,
-    companyId: scope.organizationId,
-    allowedRoles: [...COMMUNITY_AI_CAPABILITIES.VIEW_ACTIONS],
-  });
-  if (!roleGate) return;
-
   const platform = typeof req.query?.platform === 'string' ? req.query.platform : null;
   const contentType =
     typeof req.query?.content_type === 'string' ? req.query.content_type : null;
@@ -90,8 +81,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { data: rows, error } = await query;
+  // If the query fails (e.g. missing table or unsupported join), return empty insight rather than 500
   if (error) {
-    return res.status(500).json({ error: 'FAILED_TO_LOAD_INSIGHTS' });
+    const brandVoiceFallback = await resolveBrandVoice(scope.organizationId);
+    const emptyInsights = await evaluateInsights({
+      tenant_id: scope.tenantId,
+      organization_id: scope.organizationId,
+      platform,
+      content_type: contentType,
+      kpis: { by_platform: [], by_content_type: [] },
+      trends: [],
+      anomalies: [],
+      brand_voice: brandVoiceFallback,
+      recent_content_summary: [],
+    });
+    return res.status(200).json({
+      tenant_id: scope.tenantId,
+      organization_id: scope.organizationId,
+      summary_insight: emptyInsights.summary_insight,
+      key_findings: emptyInsights.key_findings,
+      recommended_actions: emptyInsights.recommended_actions,
+      risks: emptyInsights.risks,
+      confidence_level: emptyInsights.confidence_level,
+    });
   }
 
   const perPost = new Map<

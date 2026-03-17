@@ -74,13 +74,19 @@ export async function publishToPlatform(
     // Step 2: Fetch social account
     const socialAccount = await getSocialAccount(socialAccountId);
     if (!socialAccount) {
-      throw new Error(`Social account ${socialAccountId} not found`);
+      throw new Error(
+        `Social account not found (id: ${socialAccountId}). ` +
+        `Please reconnect your account in Settings → Social Accounts.`
+      );
     }
 
     // Step 3: Get and validate token
     let token = await getToken(socialAccountId);
     if (!token) {
-      throw new Error(`No token found for account ${socialAccountId}`);
+      throw new Error(
+        `Your ${socialAccount.platform} account token is missing or could not be decrypted. ` +
+        `Please reconnect your ${socialAccount.platform} account in Settings → Social Accounts.`
+      );
     }
 
     // Step 4: Refresh token if needed
@@ -88,7 +94,10 @@ export async function publishToPlatform(
       console.log(`🔄 Token expiring soon, refreshing...`);
       const refreshedToken = await refreshPlatformToken(socialAccount.platform, socialAccountId, token);
       if (!refreshedToken) {
-        throw new Error('Token refresh failed - please reconnect account');
+        throw new Error(
+          `Your ${socialAccount.platform} session has expired. ` +
+          `Please reconnect your account in Settings → Social Accounts.`
+        );
       }
       token = refreshedToken;
     }

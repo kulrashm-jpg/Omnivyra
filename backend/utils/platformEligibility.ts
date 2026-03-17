@@ -85,15 +85,18 @@ export function sortPlatformsByPriority(platforms: string[]): string[] {
  * Used for multi-platform posting eligibility.
  */
 export const CONTENT_PLATFORM_AFFINITY: Record<string, string[]> = {
-  post: ['linkedin', 'facebook', 'instagram', 'x'],
-  article: ['linkedin', 'facebook'],
-  blog: ['linkedin', 'facebook'],
-  video: ['youtube', 'facebook', 'instagram', 'linkedin'],
-  reel: ['instagram', 'facebook'],
-  short: ['youtube', 'instagram', 'facebook', 'tiktok'],
-  story: ['instagram', 'facebook'],
-  carousel: ['instagram', 'linkedin', 'facebook'],
-  poll: ['linkedin', 'facebook', 'instagram', 'x'],
+  post:       ['linkedin', 'facebook', 'instagram', 'x', 'reddit'],
+  article:    ['linkedin', 'facebook', 'medium', 'devto', 'github'],
+  blog:       ['linkedin', 'facebook', 'medium', 'devto'],
+  newsletter: ['linkedin', 'medium'],
+  video:      ['youtube', 'facebook', 'instagram', 'linkedin', 'tiktok'],
+  reel:       ['instagram', 'facebook'],
+  short:      ['youtube', 'instagram', 'facebook', 'tiktok'],
+  story:      ['instagram', 'facebook'],
+  carousel:   ['instagram', 'linkedin', 'facebook'],
+  poll:       ['linkedin', 'facebook', 'instagram', 'x'],
+  thread:     ['x', 'reddit'],
+  idea_pin:   ['pinterest'],
 };
 
 /**

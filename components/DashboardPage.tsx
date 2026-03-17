@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import ContentRenderer, { CarouselContent, PLATFORM_HIGHLIGHT } from './ContentRenderer';
-import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical } from 'lucide-react';
+import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical, Send } from 'lucide-react';
 import PlatformIcon from './ui/PlatformIcon';
 import { getPlatformLabel } from '../utils/platformIcons';
 import { useCompanyContext } from './CompanyContext';
@@ -95,8 +95,7 @@ export default function DashboardPage() {
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<{[key: string]: CampaignProgress}>({});
-  const [leadCaptureModalOpen, setLeadCaptureModalOpen] = useState(false);
-  const [leadCaptureToast, setLeadCaptureToast] = useState<string | null>(null);
+
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [stageAvailability, setStageAvailability] = useState<Record<string, { stages: Record<string, boolean>; counts: Record<string, number> }>>({});
   const [calendarCurrentDate, setCalendarCurrentDate] = useState(new Date());
@@ -121,8 +120,6 @@ export default function DashboardPage() {
   const getUnreadCount = (c: MessageCount | undefined) => (c ? c.unread : 0);
   const [dayChatMessages, setDayChatMessages] = useState<CollaborationMessage[]>([]);
   const [dayChatLoading, setDayChatLoading] = useState(false);
-  const [dayDetailMessages, setDayDetailMessages] = useState<CollaborationMessage[]>([]);
-  const [dayDetailMessagesLoading, setDayDetailMessagesLoading] = useState(false);
   const [activityChatMessages, setActivityChatMessages] = useState<CollaborationMessage[]>([]);
   const [activityChatLoading, setActivityChatLoading] = useState(false);
   const [chatRefresh, setChatRefresh] = useState(0);
@@ -143,7 +140,6 @@ export default function DashboardPage() {
     { id: 'planning', label: 'Planning' },
     { id: 'twelve_week_plan', label: 'Week Plan' },
     { id: 'daily_plan', label: 'Daily Plan' },
-    { id: 'charting', label: 'Charting' },
     { id: 'schedule', label: 'Schedule' },
   ] as const;
   const filteredCampaigns = stageFilter === 'all'
@@ -515,6 +511,27 @@ export default function DashboardPage() {
     setPostPreview(evt);
   };
 
+  const handlePublishNow = async (postId: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await fetchWithAuth('/api/social/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post_id: postId }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data?.error || 'Publish failed' };
+      if (data.status === 'PUBLISHED') {
+        // Refresh calendar events so the cell updates to published
+        setCalendarActivityEvents({});
+        setCalendarActivityEventsLoading(true);
+        return { success: true };
+      }
+      return { success: false, error: data?.message || 'Publish failed' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error' };
+    }
+  };
+
   const selectedCalendarCampaign = campaigns.find((campaign) => campaign.id === calendarCampaignFilter) || null;
 
   useEffect(() => {
@@ -659,39 +676,6 @@ export default function DashboardPage() {
     }
   }, [chatPanel?.mode, chatPanel?.campaignId, chatPanel?.date, chatPanel?.activityId, chatRefresh]);
 
-  useEffect(() => {
-    if (!dayDetailPanelDate) {
-      setDayDetailMessages([]);
-      return;
-    }
-    const cid = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '');
-    if (!cid) return;
-    setDayDetailMessagesLoading(true);
-    fetchWithAuth(`/api/calendar/messages?campaignId=${encodeURIComponent(cid)}&date=${encodeURIComponent(dayDetailPanelDate)}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => setDayDetailMessages(Array.isArray(data) ? data : []))
-      .catch(() => setDayDetailMessages([]))
-      .finally(() => setDayDetailMessagesLoading(false));
-  }, [dayDetailPanelDate, calendarCampaignFilter, calendarFilteredCampaigns]);
-
-  const handleDayDetailSend = async (text: string) => {
-    if (!dayDetailPanelDate) return;
-    const cid = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '');
-    if (!cid) return;
-    const res = await fetchWithAuth('/api/calendar/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ campaignId: cid, date: dayDetailPanelDate, message_text: text }),
-    });
-    if (res.ok) {
-      const msg = await res.json();
-      setDayDetailMessages((prev) => [...prev, msg]);
-      setCalendarMessageCounts((c) => ({
-        ...c,
-        [dayDetailPanelDate]: { total: getMsgTotal(c[dayDetailPanelDate]) + 1, unread: getMsgUnread(c[dayDetailPanelDate]) },
-      }));
-    }
-  };
 
   const handleChatSend = async (text: string) => {
     if (!chatPanel?.campaignId) return;
@@ -756,10 +740,14 @@ export default function DashboardPage() {
       setError(null); // Clear any previous errors
       console.log('Set isLoading to true');
       
-      // Simple fetch without timeout/abort controller
+      // Fetch campaigns and content stats in parallel
       const campaignsUrl = `/api/campaigns?companyId=${selectedCompanyId}`;
+      const contentStatsUrl = `/api/campaigns/content-stats?companyId=${selectedCompanyId}`;
       console.log('DASHBOARD_API_CALL', campaignsUrl);
-      const campaignsResponse = await fetchWithAuth(campaignsUrl);
+      const [campaignsResponse, contentStatsResponse] = await Promise.all([
+        fetchWithAuth(campaignsUrl),
+        fetchWithAuth(contentStatsUrl).catch(() => null),
+      ]);
       console.log('Received response:', campaignsResponse.status, campaignsResponse.statusText);
       
       if (!campaignsResponse.ok) {
@@ -816,13 +804,21 @@ export default function DashboardPage() {
         ).length;
         
         console.log(`Dashboard Stats - Total: ${totalCampaigns}, Active: ${activeCampaigns}`);
-        
+
+        let totalContent = 0;
+        let publishedContent = 0;
+        if (contentStatsResponse?.ok) {
+          const contentStats = await contentStatsResponse.json().catch(() => ({}));
+          totalContent = Number(contentStats.total ?? 0);
+          publishedContent = Number(contentStats.published ?? 0);
+        }
+
         console.log('Updating stats state...');
         setStats({
           totalCampaigns,
           activeCampaigns,
-          totalContent: 0, // Will implement content counting later
-          publishedContent: 0 // Will implement content counting later
+          totalContent,
+          publishedContent,
         });
         console.log('Stats state updated');
         setError(null); // Clear any previous errors on success
@@ -931,7 +927,6 @@ export default function DashboardPage() {
       planning: 'from-blue-500 to-cyan-600',
       twelve_week_plan: 'from-indigo-500 to-purple-600',
       daily_plan: 'from-amber-500 to-orange-600',
-      charting: 'from-teal-500 to-emerald-600',
       schedule: 'from-green-500 to-emerald-600',
       active: 'from-green-500 to-emerald-600',
       completed: 'from-purple-500 to-violet-600',
@@ -959,10 +954,10 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50">
+    <div className="min-h-screen bg-gray-50">
       <Header />
       {notice && (
-        <div className="max-w-7xl mx-auto px-6 pt-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-4">
           <div
             className={`rounded-lg border px-3 py-2 text-sm ${
               notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
@@ -976,16 +971,16 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-      <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
+      <div className="bg-white border-b border-gray-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
                 Content Manager
               </h1>
               <p className="text-gray-600 mt-1">Plan, create, and execute your content campaigns</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {canCreateCampaign && (
                 <button
                   onClick={() => router.push('/team-management')}
@@ -1000,7 +995,7 @@ export default function DashboardPage() {
                 title={
                   canCreateCampaign ? 'Start a new campaign from scratch (no recommendation)' : 'You do not have permission to create campaigns.'
                 }
-                className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 flex items-center gap-2 disabled:opacity-50"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors flex items-center gap-2 disabled:opacity-50 shadow-sm"
               >
                 <Plus className="h-5 w-5" />
                 Create Campaign
@@ -1011,8 +1006,8 @@ export default function DashboardPage() {
       </div>
             
       {/* Navigation Tabs */}
-      <div className="max-w-7xl mx-auto px-6 py-6">
-        <div className="flex space-x-1 bg-white/60 backdrop-blur-sm rounded-xl p-1 shadow-sm border border-gray-200/50">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
+        <div className="flex flex-wrap gap-1 bg-white rounded-xl p-1 shadow-sm border border-gray-200">
           {[
             { id: 'overview', label: 'Overview', icon: BarChart3 },
             { id: 'campaigns', label: 'Campaigns', icon: Target },
@@ -1027,7 +1022,7 @@ export default function DashboardPage() {
                 <button
                   key={tab.id}
                   onClick={() => router.push('/team-management')}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 text-gray-600 hover:text-gray-900 hover:bg-white/50"
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors text-gray-600 hover:text-gray-900 hover:bg-gray-100"
                 >
                   <Icon className="h-4 w-4" />
                   {tab.label}
@@ -1040,8 +1035,8 @@ export default function DashboardPage() {
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
                   activeTab === tab.id
-                    ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-white/50'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                 }`}
               >
                 <Icon className="h-4 w-4" />
@@ -1054,7 +1049,7 @@ export default function DashboardPage() {
 
       {/* Error Message Display */}
       {error && (
-        <div className="max-w-7xl mx-auto px-6 py-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
           <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg shadow-sm">
             <div className="flex items-start">
               <div className="flex-shrink-0">
@@ -1095,38 +1090,38 @@ export default function DashboardPage() {
       )}
 
       {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-6 pb-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-8">
         {activeTab === 'overview' && (
           <div className="space-y-8">
             {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
               {[
-                { 
-                  label: 'Total Campaigns', 
-                  value: stats.totalCampaigns, 
-                  icon: Target, 
-                  color: 'from-blue-500 to-cyan-600',
+                {
+                  label: 'Total Campaigns',
+                  value: stats.totalCampaigns,
+                  icon: Target,
+                  color: 'bg-indigo-500',
                   onClick: () => setActiveTab('campaigns')
                 },
-                { 
-                  label: 'Active Campaigns', 
-                  value: stats.activeCampaigns, 
-                  icon: Play, 
-                  color: 'from-green-500 to-emerald-600',
+                {
+                  label: 'Active Campaigns',
+                  value: stats.activeCampaigns,
+                  icon: Play,
+                  color: 'bg-emerald-500',
                   onClick: () => setActiveTab('campaigns')
                 },
-                { 
-                  label: 'Total Content', 
-                  value: stats.totalContent, 
-                  icon: Edit3, 
-                  color: 'from-purple-500 to-violet-600',
+                {
+                  label: 'Total Content',
+                  value: stats.totalContent,
+                  icon: Edit3,
+                  color: 'bg-violet-500',
                   onClick: () => window.location.href = '/content-creation'
                 },
-                { 
-                  label: 'Published', 
-                  value: stats.publishedContent, 
-                  icon: CheckCircle, 
-                  color: 'from-orange-500 to-red-600',
+                {
+                  label: 'Published',
+                  value: stats.publishedContent,
+                  icon: CheckCircle,
+                  color: 'bg-amber-500',
                   onClick: () => window.location.href = '/analytics'
                 }
               ].map((stat, index) => {
@@ -1135,7 +1130,7 @@ export default function DashboardPage() {
                   <button 
                     key={index} 
                     onClick={stat.onClick}
-                    className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50 hover:shadow-xl transition-all duration-300 text-left w-full cursor-pointer hover:scale-105"
+                    className="bg-white rounded-xl p-5 shadow-sm border border-gray-200 hover:border-indigo-200 hover:shadow-md transition-all duration-150 text-left w-full cursor-pointer"
                   >
                     <div className="flex items-center justify-between">
                       <div>
@@ -1145,10 +1140,10 @@ export default function DashboardPage() {
                             <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
                           </div>
                         ) : (
-                          <p className="text-3xl font-bold text-gray-900 mt-2">{stat.value}</p>
+                          <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-2">{stat.value}</p>
                         )}
                       </div>
-                      <div className={`p-3 rounded-xl bg-gradient-to-r ${stat.color}`}>
+                      <div className={`p-3 rounded-xl ${stat.color}`}>
                         <Icon className="h-6 w-6 text-white" />
                       </div>
                     </div>
@@ -1158,10 +1153,10 @@ export default function DashboardPage() {
             </div>
             
             {/* Campaigns List Section */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 overflow-hidden">
-              <div className="p-6 border-b border-gray-200/50">
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="p-5 border-b border-gray-100">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-2xl font-bold text-gray-900">Recent Campaigns</h2>
+                  <h2 className="text-lg font-semibold text-gray-900">Recent Campaigns</h2>
                   <button 
                     onClick={() => setActiveTab('campaigns')}
                     className="text-indigo-600 hover:text-indigo-700 font-medium flex items-center gap-2"
@@ -1189,7 +1184,7 @@ export default function DashboardPage() {
                       title={
                         canCreateCampaign ? 'Start from scratch (no recommendation)' : 'You do not have permission to create campaigns.'
                       }
-                      className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 mx-auto disabled:opacity-50"
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 mx-auto disabled:opacity-50 shadow-sm"
                     >
                       <Plus className="h-5 w-5" />
                       Create Campaign
@@ -1204,28 +1199,28 @@ export default function DashboardPage() {
                         tabIndex={0}
                         onClick={() => handleViewCampaign(campaign.id)}
                         onKeyDown={(e) => e.key === 'Enter' && handleViewCampaign(campaign.id)}
-                        className="bg-gradient-to-r from-gray-50 to-white rounded-xl p-6 border border-gray-200/50 hover:shadow-md transition-all duration-200 cursor-pointer"
+                        className="bg-white rounded-xl p-5 border border-gray-200 hover:border-indigo-200 hover:shadow-sm transition-all duration-150 cursor-pointer"
                       >
-                        <div className="flex items-center justify-between mb-4">
-                          <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-lg bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)}`}>
-                              <Play className="h-4 w-4 text-white" />
+                        <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="p-2 rounded-lg bg-indigo-50 shrink-0">
+                              <Play className="h-4 w-4 text-indigo-600" />
                             </div>
-                            <div>
-                              <h3 className="font-semibold text-gray-900">{campaign.name}</h3>
+                            <div className="min-w-0">
+                              <h3 className="font-semibold text-gray-900 truncate">{campaign.name}</h3>
                               <p className="text-xs text-gray-500 font-mono">ID: {campaign.id}</p>
                               <p className="text-sm text-gray-600">
                                 {campaign.start_date ? new Date(campaign.start_date).toLocaleDateString() : 'Not scheduled'} - {campaign.end_date ? new Date(campaign.end_date).toLocaleDateString() : 'Not scheduled'}
                               </p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleViewCampaign(campaign.id);
                               }}
-                              className={`px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)} text-white hover:opacity-80 transition-opacity`}
+                              className="px-3 py-1 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors"
                             >
                               {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
                             </button>
@@ -1329,15 +1324,6 @@ export default function DashboardPage() {
                             {stageAvailability[campaign.id].stages.aiEnrichedWeeks && (
                               <span className="text-xs px-2 py-1 rounded bg-violet-100 text-violet-700">AI Enriched</span>
                             )}
-                            {stageAvailability[campaign.id].stages.charting && (
-                              <a
-                                href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-xs px-2 py-1 rounded bg-teal-100 text-teal-700 hover:bg-teal-200"
-                              >
-                                Charting
-                              </a>
-                            )}
                             {stageAvailability[campaign.id].stages.schedule && (
                               <a
                                 href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
@@ -1365,93 +1351,73 @@ export default function DashboardPage() {
             </div>
                 
             {/* Quick Actions */}
-            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-6 items-stretch">
-              <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <Users className="h-6 w-6" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-stretch">
+              <div className="bg-white border border-gray-200 border-l-4 border-l-indigo-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-indigo-50 rounded-lg">
+                    <Users className="h-5 w-5 text-indigo-600" />
                   </div>
-                  <h3 className="text-lg font-semibold leading-snug">Company Profile</h3>
+                  <h3 className="text-base font-semibold text-gray-900 leading-snug">Company Profile</h3>
                 </div>
-                <p className="text-indigo-100 mb-4 flex-1">
+                <p className="text-sm text-gray-500 mb-4 flex-1">
                   Start here to define your company intelligence profile
                 </p>
                 <button
                   onClick={() => window.location.href = '/company-profile'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
                   Open Profile
                 </button>
               </div>
-              <div className="bg-gradient-to-br from-slate-500 to-gray-700 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <Settings className="h-6 w-6" />
+              <div className="bg-white border border-gray-200 border-l-4 border-l-slate-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-slate-50 rounded-lg">
+                    <Settings className="h-5 w-5 text-slate-600" />
                   </div>
-                  <h3 className="text-lg font-semibold leading-snug">External APIs</h3>
+                  <h3 className="text-base font-semibold text-gray-900 leading-snug">API Connections</h3>
                 </div>
-                <p className="text-gray-100 mb-4 flex-1">
-                  Configure external sources for trend signals
-                </p>
-                <button
-                  onClick={() =>
-                    window.location.href =
-                      userRole === 'SUPER_ADMIN' ? '/external-apis?mode=platform' : '/external-apis'
-                  }
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-                >
-                  Manage APIs
-                </button>
-              </div>
-              <div className="bg-gradient-to-br from-slate-600 to-slate-800 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <Settings className="h-6 w-6" />
-                  </div>
-                  <h3 className="text-lg font-semibold leading-snug">Social Platform Settings</h3>
-                </div>
-                <p className="text-slate-100 mb-4 flex-1">
-                  Define publishing rules per platform
+                <p className="text-sm text-gray-500 mb-4 flex-1">
+                  Connect social platforms and configure trend, community &amp; image APIs
                 </p>
                 <button
                   onClick={() => window.location.href = '/social-platforms'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  className="bg-slate-50 hover:bg-slate-100 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
-                  Configure Platforms
+                  Manage Connections
                 </button>
               </div>
-              <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <TrendingUp className="h-6 w-6" />
+              <div className="bg-white border border-gray-200 border-l-4 border-l-emerald-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-emerald-50 rounded-lg">
+                    <TrendingUp className="h-5 w-5 text-emerald-600" />
                   </div>
-                  <h3 className="text-lg font-semibold leading-snug">Recommendations</h3>
+                  <h3 className="text-base font-semibold text-gray-900 leading-snug">Recommendations</h3>
                 </div>
-                <p className="text-emerald-100 mb-4 flex-1 leading-relaxed">
+                <p className="text-sm text-gray-500 mb-4 flex-1 leading-relaxed">
                   Generate trend-based campaign recommendations
                 </p>
                 <button
                   onClick={() => window.location.href = '/recommendations'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
                   View Recommendations
                 </button>
               </div>
-              <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl p-6 text-white flex flex-col h-full min-h-[200px]">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <Calendar className="h-6 w-6" />
+              <div className="bg-white border border-gray-200 border-l-4 border-l-green-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-green-50 rounded-lg">
+                    <Calendar className="h-5 w-5 text-green-600" />
                   </div>
-                  <h3 className="text-lg font-semibold leading-snug">Schedule Content</h3>
+                  <h3 className="text-base font-semibold text-gray-900 leading-snug">Schedule Content</h3>
                 </div>
-                <p className="text-green-100 mb-4 flex-1">Plan and schedule your content calendar</p>
+                <p className="text-sm text-gray-500 mb-4 flex-1">Plan and schedule your content calendar</p>
                 <button
                   onClick={() => setActiveTab('calendar')}
                   disabled={!canScheduleContent}
                   title={
                     canScheduleContent ? '' : 'You do not have permission to schedule content.'
                   }
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                  className="bg-green-50 hover:bg-green-100 text-green-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                 >
                   Schedule Now
                 </button>
@@ -1464,9 +1430,9 @@ export default function DashboardPage() {
         {activeTab === 'campaigns' && (
           <div className="space-y-8">
             {/* Campaigns Header */}
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="text-3xl font-bold text-gray-900">All Campaigns</h2>
+                <h2 className="text-xl sm:text-3xl font-bold text-gray-900">All Campaigns</h2>
                 <p className="text-gray-600 mt-1">Manage and track all your content campaigns</p>
               </div>
               <button
@@ -1475,7 +1441,7 @@ export default function DashboardPage() {
                 title={
                   canCreateCampaign ? '' : 'You do not have permission to create campaigns.'
                 }
-                className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 flex items-center gap-2 disabled:opacity-50"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors flex items-center gap-2 disabled:opacity-50 shadow-sm"
               >
                 <Plus className="h-5 w-5" />
                 Create Campaign
@@ -1490,8 +1456,8 @@ export default function DashboardPage() {
                   onClick={() => setStageFilter(s.id)}
                   className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
                     stageFilter === s.id
-                      ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md'
-                      : 'bg-white/80 text-gray-600 hover:bg-gray-100 border border-gray-200'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
                   }`}
                 >
                   {s.label}
@@ -1500,7 +1466,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Campaigns List */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 overflow-hidden">
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
               {isLoadingData ? (
                 <div className="flex justify-center items-center py-16">
                   <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
@@ -1519,15 +1485,15 @@ export default function DashboardPage() {
                     title={
                       canCreateCampaign ? 'Start from scratch (no recommendation)' : 'You do not have permission to create campaigns.'
                     }
-                    className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-8 py-4 rounded-xl font-medium transition-all duration-200 flex items-center gap-2 mx-auto shadow-lg hover:shadow-xl transform hover:scale-105 disabled:opacity-50"
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 mx-auto shadow-sm disabled:opacity-50"
                   >
                     <Plus className="h-5 w-5" />
                     Create Your First Campaign
                   </button>
                 </div>
               ) : (
-                <div className="p-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="p-4 sm:p-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                     {filteredCampaigns.map((campaign) => (
                       <div
                         key={campaign.id}
@@ -1535,12 +1501,12 @@ export default function DashboardPage() {
                         tabIndex={0}
                         onClick={() => handleViewCampaign(campaign.id)}
                         onKeyDown={(e) => e.key === 'Enter' && handleViewCampaign(campaign.id)}
-                        className="bg-gradient-to-r from-gray-50 to-white rounded-xl p-6 border border-gray-200/50 hover:shadow-lg transition-all duration-200 cursor-pointer"
+                        className="bg-white rounded-xl p-5 border border-gray-200 hover:border-indigo-200 hover:shadow-sm transition-all duration-150 cursor-pointer"
                       >
                         <div className="flex items-center justify-between mb-4">
                           <div className="flex items-center gap-3">
-                            <div className={`p-3 rounded-lg bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)}`}>
-                              <Target className="h-6 w-6 text-white" />
+                            <div className="p-3 rounded-lg bg-indigo-50">
+                              <Target className="h-6 w-6 text-indigo-600" />
                             </div>
                             <div>
                               <h3 className="text-lg font-semibold text-gray-900">{campaign.name}</h3>
@@ -1553,17 +1519,17 @@ export default function DashboardPage() {
                           </div>
                         </div>
                         
-                        <div className="flex items-center justify-between mb-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleViewCampaign(campaign.id);
                               }}
-                              className={`px-4 py-2 rounded-full text-sm font-medium bg-gradient-to-r ${getStageColor(campaign.current_stage || campaign.status)} text-white hover:opacity-80 transition-opacity`}
+                              className="px-4 py-2 rounded-full text-sm font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors"
                             >
                               {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
                             </button>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <a
                               href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
                               onClick={(e) => e.stopPropagation()}
@@ -1664,15 +1630,6 @@ export default function DashboardPage() {
                             {stageAvailability[campaign.id].stages.aiEnrichedWeeks && (
                               <span className="text-xs px-2 py-1 rounded bg-violet-100 text-violet-700">AI Enriched</span>
                             )}
-                            {stageAvailability[campaign.id].stages.charting && (
-                              <a
-                                href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-xs px-2 py-1 rounded bg-teal-100 text-teal-700 hover:bg-teal-200"
-                              >
-                                Charting
-                              </a>
-                            )}
                             {stageAvailability[campaign.id].stages.schedule && (
                               <a
                                 href={`/campaign-details/${campaign.id}${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : ''}`}
@@ -1705,50 +1662,50 @@ export default function DashboardPage() {
         {activeTab === 'analytics' && (
           <div className="space-y-8">
             {/* Analytics Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
+              <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-gray-600 text-sm font-medium">Total Reach</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-2">0</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-2">0</p>
                   </div>
-                  <div className="p-3 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600">
+                  <div className="p-3 rounded-xl bg-blue-500">
                     <Eye className="h-6 w-6 text-white" />
                   </div>
                 </div>
               </div>
-              
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+
+              <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-gray-600 text-sm font-medium">Total Engagement</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-2">0</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-2">0</p>
                   </div>
-                  <div className="p-3 rounded-xl bg-gradient-to-r from-red-500 to-pink-600">
+                  <div className="p-3 rounded-xl bg-rose-500">
                     <Heart className="h-6 w-6 text-white" />
                   </div>
                 </div>
               </div>
-              
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+
+              <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-gray-600 text-sm font-medium">Total Clicks</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-2">0</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-2">0</p>
                   </div>
-                  <div className="p-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600">
+                  <div className="p-3 rounded-xl bg-emerald-500">
                     <ExternalLink className="h-6 w-6 text-white" />
                   </div>
                 </div>
               </div>
-              
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+
+              <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-gray-600 text-sm font-medium">Total Shares</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-2">0</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-2">0</p>
                   </div>
-                  <div className="p-3 rounded-xl bg-gradient-to-r from-purple-500 to-violet-600">
+                  <div className="p-3 rounded-xl bg-violet-500">
                     <Share className="h-6 w-6 text-white" />
                   </div>
                 </div>
@@ -1757,33 +1714,33 @@ export default function DashboardPage() {
 
             {/* Quick Actions */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl p-6 text-white">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <BarChart3 className="h-6 w-6" />
+              <div className="bg-white border border-gray-200 border-l-4 border-l-blue-500 rounded-xl p-5 shadow-sm">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-blue-50 rounded-lg">
+                    <BarChart3 className="h-5 w-5 text-blue-600" />
                   </div>
-                  <h3 className="text-xl font-bold">View Analytics</h3>
+                  <h3 className="text-base font-semibold text-gray-900">View Analytics</h3>
                 </div>
-                <p className="text-blue-100 mb-4">Detailed performance metrics and insights</p>
-                <button 
+                <p className="text-sm text-gray-500 mb-4">Detailed performance metrics and insights</p>
+                <button
                   onClick={() => window.location.href = '/analytics'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  className="bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
                   Open Analytics
                 </button>
               </div>
-              
-              <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl p-6 text-white">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <TrendingUp className="h-6 w-6" />
+
+              <div className="bg-white border border-gray-200 border-l-4 border-l-emerald-500 rounded-xl p-5 shadow-sm">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-emerald-50 rounded-lg">
+                    <TrendingUp className="h-5 w-5 text-emerald-600" />
                   </div>
-                  <h3 className="text-xl font-bold">Performance Report</h3>
+                  <h3 className="text-base font-semibold text-gray-900">Performance Report</h3>
                 </div>
-                <p className="text-green-100 mb-4">Generate comprehensive performance reports</p>
-                <button 
+                <p className="text-sm text-gray-500 mb-4">Generate comprehensive performance reports</p>
+                <button
                   onClick={() => window.location.href = '/analytics'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
                   Generate Report
                 </button>
@@ -1795,13 +1752,13 @@ export default function DashboardPage() {
         {/* Calendar Tab */}
         {activeTab === 'calendar' && (
           <div className="space-y-6">
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+            <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                 <div>
-                  <h2 className="text-2xl font-bold text-gray-900">Execution Calendar</h2>
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Execution Calendar</h2>
                   <p className="text-sm text-gray-600">Switch between daily and weekly campaign activity views.</p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <div className="flex items-center rounded-lg border border-gray-200 p-1 bg-white">
                     <button
                       onClick={() => setCalendarActivityMode('daily')}
@@ -1880,7 +1837,7 @@ export default function DashboardPage() {
                   >
                     <ChevronLeft className="h-4 w-4 text-gray-600" />
                   </button>
-                  <span className="text-sm font-semibold text-gray-800 min-w-[170px] text-center">
+                  <span className="text-sm font-semibold text-gray-800 min-w-[120px] sm:min-w-[170px] text-center">
                     {calendarView === 'week'
                       ? getWeekLabel(calendarCurrentDate)
                       : calendarCurrentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
@@ -1941,7 +1898,7 @@ export default function DashboardPage() {
 
               <div className="grid grid-cols-7 gap-2 text-xs font-medium text-gray-500 mb-2">
                 {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-                  <div key={day} className="px-2 py-1 text-center">{day}</div>
+                  <div key={day} className="px-1 py-1 text-center">{day}</div>
                 ))}
               </div>
 
@@ -2053,7 +2010,8 @@ export default function DashboardPage() {
               })()}
 
               {calendarView === 'month' ? (
-                <div className="grid grid-cols-7 gap-2">
+                <div className="overflow-x-auto">
+                <div className="grid grid-cols-7 gap-1 min-w-[420px]">
                   {getDaysInMonth(calendarCurrentDate).map((day, idx) => {
                     if (!day) return <div key={`empty-${idx}`} className="h-28 rounded-lg bg-gray-50 border border-gray-100" />;
                     const dateKey = formatDateKey(day);
@@ -2088,10 +2046,12 @@ export default function DashboardPage() {
                         {hasDayChat && dayCampaignId && (
                           <div
                             onClick={(e) => { e.stopPropagation(); setChatPanel({ mode: 'day', campaignId: dayCampaignId, date: dateKey }); }}
-                            className="absolute left-1 top-2 bottom-2 w-3 flex items-center justify-center text-indigo-600 hover:text-indigo-800 cursor-pointer border-l-2 border-indigo-400 rounded"
-                            title="Team Chat"
+                            className="absolute left-0 top-0 bottom-0 w-2 bg-indigo-500 hover:bg-indigo-600 cursor-pointer rounded-l-lg flex flex-col items-center justify-center gap-0.5"
+                            aria-label="Team Chat"
                           >
-                            <span className="text-[10px] font-bold">{dayUnread > 0 ? dayUnread : '|'}</span>
+                            {dayUnread > 0 && (
+                              <span className="text-[9px] font-bold text-white leading-none">{dayUnread > 9 ? '9+' : dayUnread}</span>
+                            )}
                           </div>
                         )}
                         <div className={hasDayChat && dayCampaignId ? 'pl-4' : ''}>
@@ -2099,9 +2059,10 @@ export default function DashboardPage() {
                           <div className="mt-1 space-y-1">
                           {dayItems.slice(0, 3).map((item, index) => {
                             if (isActivityEvent(item)) {
-                              const colorClass = getPlatformColorForCalendar(item.platform);
-                              const borderColor = getPlatformBorderColor(item.platform);
                               const isDraggable = !!item.scheduled_post_id;
+                              const isOverdue = item.is_overdue && item.status !== 'published';
+                              const colorClass = isOverdue ? 'bg-red-100 text-red-800' : getPlatformColorForCalendar(item.platform);
+                              const borderColor = isOverdue ? 'border-red-500' : getPlatformBorderColor(item.platform);
                               return (
                                 <div
                                   key={`${dateKey}-activity-${item.scheduled_post_id ?? index}`}
@@ -2110,8 +2071,10 @@ export default function DashboardPage() {
                                   onDragEnd={() => setDraggedActivity(null)}
                                   onClick={(e) => { e.stopPropagation(); handleActivityEventClick(item); }}
                                   className={`text-[11px] px-1.5 py-0.5 rounded truncate inline-flex items-center gap-0.5 cursor-pointer hover:opacity-90 border-l-4 ${borderColor} ${colorClass}`}
+                                  title={isOverdue ? 'Overdue — click to post now' : undefined}
                                 >
-                                  {isDraggable && <GripVertical className="w-3 h-3 shrink-0 opacity-50" />}
+                                  {isOverdue && <span className="text-red-500 font-bold shrink-0">!</span>}
+                                  {!isOverdue && isDraggable && <GripVertical className="w-3 h-3 shrink-0 opacity-50" />}
                                   <PlatformIcon platform={item.platform} size={10} />
                                   <span>{getPlatformLabel(item.platform)} — {item.title}</span>
                                   {<RepurposeDots index={item.repurpose_index} total={item.repurpose_total} contentType={item.content_type} />}
@@ -2139,8 +2102,10 @@ export default function DashboardPage() {
                     );
                   })}
                 </div>
+                </div>
               ) : (
-                <div className="grid grid-cols-7 gap-2">
+                <div className="overflow-x-auto">
+                <div className="grid grid-cols-7 gap-1 min-w-[420px]">
                   {getWeekDays(calendarCurrentDate).map((day) => {
                     const dateKey = formatDateKey(day);
                     const dayActivities = getCalendarDayItems(day);
@@ -2170,10 +2135,15 @@ export default function DashboardPage() {
                         {getMsgTotal(calendarMessageCounts[dateKey]) > 0 && (
                           <div
                             onClick={(e) => { e.stopPropagation(); setChatPanel({ mode: 'day', campaignId: calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (campaignIds.split(',')[0] || ''), date: dateKey }); }}
-                            className="absolute left-1 top-1 bottom-1 w-0.5 bg-indigo-500 rounded hover:bg-indigo-600 cursor-pointer"
-                            title="Team Chat"
+                            className="absolute left-0 top-0 bottom-0 w-2 bg-indigo-500 hover:bg-indigo-600 cursor-pointer rounded-l-lg flex flex-col items-center justify-center"
                             aria-label="Open team chat"
-                          />
+                          >
+                            {getMsgUnread(calendarMessageCounts[dateKey]) > 0 && (
+                              <span className="text-[9px] font-bold text-white leading-none">
+                                {getMsgUnread(calendarMessageCounts[dateKey]) > 9 ? '9+' : getMsgUnread(calendarMessageCounts[dateKey])}
+                              </span>
+                            )}
+                          </div>
                         )}
                         <div className="text-xs font-semibold text-gray-800">
                           {day.toLocaleDateString('en-US', { weekday: 'short' })} {day.getDate()}
@@ -2205,10 +2175,11 @@ export default function DashboardPage() {
                     );
                   })}
                 </div>
+                </div>
               )}
             </div>
 
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+            <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
               <h3 className="text-lg font-semibold text-gray-900 mb-3">
                 {calendarSelectedDate
                   ? `${calendarActivityMode === 'weekly' ? 'Weekly activities around' : 'Activities on'} ${parseDateKey(calendarSelectedDate).toLocaleDateString('en-US', {
@@ -2313,38 +2284,38 @@ export default function DashboardPage() {
         {activeTab === 'team' && (
           <div className="space-y-8">
             {/* Team Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+              <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-gray-600 text-sm font-medium">Team Members</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-2">0</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-2">0</p>
                   </div>
-                  <div className="p-3 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600">
+                  <div className="p-3 rounded-xl bg-blue-500">
                     <Users className="h-6 w-6 text-white" />
                   </div>
                 </div>
               </div>
-              
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+
+              <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-gray-600 text-sm font-medium">Active Members</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-2">0</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-2">0</p>
                   </div>
-                  <div className="p-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600">
+                  <div className="p-3 rounded-xl bg-emerald-500">
                     <CheckCircle className="h-6 w-6 text-white" />
                   </div>
                 </div>
               </div>
-              
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-gray-200/50">
+
+              <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-gray-600 text-sm font-medium">Pending Invites</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-2">0</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-2">0</p>
                   </div>
-                  <div className="p-3 rounded-xl bg-gradient-to-r from-yellow-500 to-orange-600">
+                  <div className="p-3 rounded-xl bg-amber-500">
                     <Calendar className="h-6 w-6 text-white" />
                   </div>
                 </div>
@@ -2352,13 +2323,13 @@ export default function DashboardPage() {
             </div>
 
             {/* Team Members */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 overflow-hidden">
-              <div className="p-6 border-b border-gray-200/50">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-2xl font-bold text-gray-900">Team Members</h2>
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="p-4 sm:p-6 border-b border-gray-100">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Team Members</h2>
                   <button 
                     onClick={() => window.location.href = '/team-management'}
-                    className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center gap-2"
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
                   >
                     <Users className="h-4 w-4" />
                     Manage Team
@@ -2366,40 +2337,40 @@ export default function DashboardPage() {
                 </div>
               </div>
               
-              <div className="p-6 text-sm text-gray-600">
+              <div className="p-4 sm:p-6 text-sm text-gray-600">
                 Team data is available in Team Management.
               </div>
             </div>
 
             {/* Quick Actions */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl p-6 text-white">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <UserPlus className="h-6 w-6" />
+              <div className="bg-white border border-gray-200 border-l-4 border-l-indigo-500 rounded-xl p-5 shadow-sm">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-indigo-50 rounded-lg">
+                    <UserPlus className="h-5 w-5 text-indigo-600" />
                   </div>
-                  <h3 className="text-xl font-bold">Invite Team Member</h3>
+                  <h3 className="text-base font-semibold text-gray-900">Invite Team Member</h3>
                 </div>
-                <p className="text-indigo-100 mb-4">Add new team members to collaborate on campaigns</p>
-                <button 
+                <p className="text-sm text-gray-500 mb-4">Add new team members to collaborate on campaigns</p>
+                <button
                   onClick={() => window.location.href = '/team-management'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
                   Invite Now
                 </button>
               </div>
-              
-              <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl p-6 text-white">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-white/20 rounded-lg">
-                    <Settings className="h-6 w-6" />
+
+              <div className="bg-white border border-gray-200 border-l-4 border-l-emerald-500 rounded-xl p-5 shadow-sm">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-emerald-50 rounded-lg">
+                    <Settings className="h-5 w-5 text-emerald-600" />
                   </div>
-                  <h3 className="text-xl font-bold">Team Settings</h3>
+                  <h3 className="text-base font-semibold text-gray-900">Team Settings</h3>
                 </div>
-                <p className="text-green-100 mb-4">Manage roles, permissions, and team preferences</p>
-                <button 
+                <p className="text-sm text-gray-500 mb-4">Manage roles, permissions, and team preferences</p>
+                <button
                   onClick={() => window.location.href = '/team-management'}
-                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
                   Manage Settings
                 </button>
@@ -2408,146 +2379,52 @@ export default function DashboardPage() {
           </div>
         )}
         {activeTab === 'integrations' && (
-          <div className="space-y-8">
-            {leadCaptureToast && (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                {leadCaptureToast}
-              </div>
-            )}
-            {isCompanyAdmin && (
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/50 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-900">
-                    Connect Website Lead Form (Coming Soon)
-                  </h2>
-                  <p className="text-sm text-gray-600 mt-1">
-                    This integration will allow the platform to capture leads generated from your campaigns
-                    and attribute them to specific content, channels, and themes.
-                  </p>
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-gray-900 mb-1">Integrations & Lead Capture</h2>
+              <p className="text-sm text-gray-500">Connect external tools, capture leads from your website, and manage webhook connections.</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center shrink-0">
+                    <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-900">Lead Capture</h3>
+                    <p className="text-xs text-gray-500">Forms, embeds &amp; webhook connections</p>
+                  </div>
                 </div>
-                <span className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600">
-                  Not Connected
-                </span>
-              </div>
-              <div className="space-y-4 text-sm text-gray-700">
-                <div>
-                  <div className="text-xs font-semibold text-gray-600 mb-1">What you’ll gain once connected</div>
-                  <ul className="list-disc list-inside space-y-1 text-gray-700">
-                    <li>Identify which platforms generate qualified leads</li>
-                    <li>Track conversions from campaigns to website inquiries</li>
-                    <li>Improve AI recommendations using real lead data</li>
-                    <li>Measure ROI across channels</li>
-                  </ul>
-                </div>
-                <div>
-                  <div className="text-xs font-semibold text-gray-600 mb-1">Data expected from your website form</div>
-                  <ul className="list-disc list-inside space-y-1 text-gray-700">
-                    <li>Name</li>
-                    <li>Email</li>
-                    <li>Company (optional)</li>
-                    <li>Message / Inquiry</li>
-                    <li>UTM parameters (auto-captured)</li>
-                  </ul>
-                </div>
-                <div className="text-xs text-gray-600">
-                  Next step (when enabled): You will be able to paste your form endpoint or install a lightweight
-                  tracking snippet.
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
-                <div className="space-y-1">
-                  <div className="text-xs text-gray-500">Integration Status</div>
-                  <div className="font-medium">Not Connected</div>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-xs text-gray-500">Source</div>
-                  <div className="font-medium">Website Form</div>
-                </div>
-              </div>
-              <div className="mt-5">
+                <p className="text-sm text-gray-600">Build embeddable forms for your website, connect external forms via webhook, and view all captured leads in one place.</p>
                 <button
-                  onClick={() => setLeadCaptureModalOpen(true)}
-                  className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+                  onClick={() => router.push('/leads')}
+                  className="mt-auto w-full px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
                 >
-                  View Setup Details
+                  Open Lead Capture →
+                </button>
+              </div>
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center shrink-0">
+                    <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-900">Integrations</h3>
+                    <p className="text-xs text-gray-500">WordPress, webhooks &amp; blog APIs</p>
+                  </div>
+                </div>
+                <p className="text-sm text-gray-600">Connect WordPress, custom blog APIs, and outbound lead webhooks to automate publishing and data routing.</p>
+                <button
+                  onClick={() => router.push('/integrations')}
+                  className="mt-auto w-full px-4 py-2 bg-purple-600 text-white text-sm font-semibold rounded-lg hover:bg-purple-700 transition-colors"
+                >
+                  Open Integrations →
                 </button>
               </div>
             </div>
-            )}
           </div>
         )}
       </div>
-      {leadCaptureModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl border border-gray-200">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-semibold text-gray-900">
-                Website Lead Capture Integration (Coming Soon)
-              </h3>
-              <button
-                onClick={() => setLeadCaptureModalOpen(false)}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="space-y-5 text-sm text-gray-700">
-              <div>
-                <div className="text-xs font-semibold text-gray-600 mb-1">
-                  What this integration will do
-                </div>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>Track inbound leads from website forms</li>
-                  <li>Connect leads to campaign source (UTM tracking)</li>
-                  <li>Measure platform effectiveness</li>
-                  <li>Improve lead conversion intelligence</li>
-                </ul>
-              </div>
-              <div>
-                <div className="text-xs font-semibold text-gray-600 mb-1">
-                  Information Company Admin should keep ready
-                </div>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>Website domain</li>
-                  <li>Form provider (WordPress / Webflow / Custom)</li>
-                  <li>Email destination</li>
-                  <li>CRM (if any)</li>
-                </ul>
-              </div>
-              <div>
-                <div className="text-xs font-semibold text-gray-600 mb-1">
-                  Expected Data Once Connected
-                </div>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>Name</li>
-                  <li>Email</li>
-                  <li>Phone (optional)</li>
-                  <li>Landing page URL</li>
-                  <li>UTM source/campaign</li>
-                </ul>
-              </div>
-            </div>
-            <div className="mt-6 flex flex-wrap justify-end gap-3">
-              <button
-                onClick={() => {
-                  setLeadCaptureToast('Feature will be enabled soon.');
-                  setLeadCaptureModalOpen(false);
-                }}
-                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
-              >
-                Notify Me When Available
-              </button>
-              <button
-                onClick={() => setLeadCaptureModalOpen(false)}
-                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {chatPanel && user?.userId && (
         <FloatingChatPanel
           title={chatPanel.mode === 'day' && chatPanel.date
@@ -2576,23 +2453,28 @@ export default function DashboardPage() {
             time: undefined,
             campaign_id: a.campaign_id,
           }));
+        const dayCampaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '');
+        const dayMsgCount = calendarMessageCounts[dayDetailPanelDate];
         return (
           <DayDetailPanel
             dateKey={dayDetailPanelDate}
             dateLabel={parseDateKey(dayDetailPanelDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
             activities={dayActivities}
-            messages={dayDetailMessages}
-            loadingMessages={dayDetailMessagesLoading}
+            messageCount={getMsgTotal(dayMsgCount)}
+            unreadCount={getMsgUnread(dayMsgCount)}
             currentUserId={user.userId}
-            campaignId={calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '')}
+            campaignId={dayCampaignId}
             onClose={() => setDayDetailPanelDate(null)}
-            onSendMessage={handleDayDetailSend}
+            onOpenChat={() => {
+              setDayDetailPanelDate(null);
+              setChatPanel({ mode: 'day', campaignId: dayCampaignId, date: dayDetailPanelDate });
+            }}
             onActivityClick={(act) => {
               if (act.execution_id) {
                 router.push(`/activity-workspace?campaignId=${encodeURIComponent(act.campaign_id)}&executionId=${encodeURIComponent(act.execution_id)}`);
               }
             }}
-        />
+          />
         );
       })()}
 
@@ -2601,6 +2483,7 @@ export default function DashboardPage() {
         <PostPreviewModal
           event={postPreview}
           onClose={() => setPostPreview(null)}
+          onPublish={handlePublishNow}
           onOpenWorkspace={(evt) => {
             setPostPreview(null);
             if (evt.execution_id) {
@@ -2721,11 +2604,33 @@ function PostPreviewModal({
   event,
   onClose,
   onOpenWorkspace,
+  onPublish,
 }: {
   event: ActivityEvent;
   onClose: () => void;
   onOpenWorkspace: (evt: ActivityEvent) => void;
+  onPublish?: (postId: string) => Promise<{ success: boolean; error?: string }>;
 }) {
+  const [publishState, setPublishState] = React.useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [publishError, setPublishError] = React.useState('');
+  const [currentStatus, setCurrentStatus] = React.useState(event.status);
+
+  const canPublish = !!event.scheduled_post_id && !!onPublish && currentStatus !== 'published';
+
+  const handlePublish = async () => {
+    if (!event.scheduled_post_id || !onPublish) return;
+    setPublishState('loading');
+    setPublishError('');
+    const result = await onPublish(event.scheduled_post_id);
+    if (result.success) {
+      setPublishState('success');
+      setCurrentStatus('published');
+    } else {
+      setPublishState('error');
+      setPublishError(result.error || 'Failed to publish');
+    }
+  };
+
   const platform = (event.platform || '').toLowerCase().trim();
   const contentType = (event.content_type || 'post').toLowerCase().replace(/[\s-]/g, '_');
   const cfg = PLATFORM_CONFIG[platform] ?? DEFAULT_PLATFORM_CONFIG;
@@ -2849,37 +2754,78 @@ function PostPreviewModal({
         </div>
 
         {/* ── Footer ── */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-white shrink-0">
-          <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
-            {event.repurpose_total > 1 && (
-              <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
-                Repurpose {event.repurpose_index}/{event.repurpose_total}
-              </span>
-            )}
-            {event.status && (
-              <span className={`px-2 py-0.5 rounded-full capitalize ${
-                event.status === 'published' ? 'bg-emerald-100 text-emerald-700'
-                  : event.status === 'scheduled' ? 'bg-blue-100 text-blue-700'
-                  : 'bg-gray-100 text-gray-600'
-              }`}>
-                {event.status}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={onClose}
-              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100"
-            >
-              Close
-            </button>
-            <button
-              onClick={() => onOpenWorkspace(event)}
-              className="px-4 py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1.5"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              Open in Workspace
-            </button>
+        <div className="flex flex-col gap-2 px-4 py-3 border-t border-gray-200 bg-white shrink-0">
+          {/* Publish error */}
+          {publishState === 'error' && (
+            <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-1.5">{publishError}</p>
+          )}
+          {/* Publish success */}
+          {publishState === 'success' && (
+            <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-1.5 font-medium">
+              ✓ Post published successfully!
+            </p>
+          )}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
+              {event.repurpose_total > 1 && (
+                <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                  Repurpose {event.repurpose_index}/{event.repurpose_total}
+                </span>
+              )}
+              {currentStatus && (
+                <span className={`px-2 py-0.5 rounded-full capitalize ${
+                  currentStatus === 'published' ? 'bg-emerald-100 text-emerald-700'
+                    : event.is_overdue ? 'bg-red-100 text-red-700'
+                    : currentStatus === 'scheduled' ? 'bg-blue-100 text-blue-700'
+                    : 'bg-gray-100 text-gray-600'
+                }`}>
+                  {event.is_overdue && currentStatus !== 'published' ? 'overdue' : currentStatus}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={onClose}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100"
+              >
+                Close
+              </button>
+              {canPublish && publishState !== 'success' && (
+                <button
+                  onClick={handlePublish}
+                  disabled={publishState === 'loading'}
+                  className={`px-4 py-1.5 text-sm font-medium rounded-lg flex items-center gap-1.5 transition-colors ${
+                    event.is_overdue
+                      ? 'bg-red-600 hover:bg-red-700 text-white disabled:opacity-60'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-60'
+                  }`}
+                >
+                  {publishState === 'loading' ? (
+                    <>
+                      <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 100 16v-4l-3 3 3 3v-4a8 8 0 01-8-8z"/>
+                      </svg>
+                      Posting...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      {event.is_overdue ? 'Post Now' : 'Post Now'}
+                    </>
+                  )}
+                </button>
+              )}
+              {publishState !== 'success' && (
+                <button
+                  onClick={() => onOpenWorkspace(event)}
+                  className="px-4 py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1.5"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Open in Workspace
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

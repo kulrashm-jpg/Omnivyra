@@ -604,21 +604,21 @@ export default function CampaignDailyPlanPage() {
           </div>
         </div>
       )}
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50">
+      <div className="min-h-screen bg-gray-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-center sm:justify-between">
             <button
               type="button"
               onClick={() => router.push(`/campaign-details/${id}${companyId ? `?companyId=${companyId}` : ''}`)}
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 active:scale-[0.98] transition-transform px-2 py-1 rounded hover:bg-gray-100"
+              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 active:scale-[0.98] transition-transform px-2 py-1 rounded hover:bg-gray-100 self-start"
             >
               <ArrowLeft className="w-5 h-5" />
               Back to campaign
             </button>
-            <h1 className="text-xl font-bold text-gray-900">
+            <h1 className="text-lg sm:text-xl font-bold text-gray-900">
               Daily Execution Planner{campaignName ? ` — ${campaignName}` : ''}
             </h1>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => router.push(`/campaign-calendar/${id}${companyId ? `?companyId=${companyId}` : ''}`)}
                 className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium"
@@ -706,7 +706,7 @@ export default function CampaignDailyPlanPage() {
             </div>
           )}
 
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
             {weeksToShow.length === 0 ? (
               <div className="flex flex-col items-center gap-3 py-12 text-center">
                 <p className="text-sm text-gray-600">No weeks in this plan yet.</p>

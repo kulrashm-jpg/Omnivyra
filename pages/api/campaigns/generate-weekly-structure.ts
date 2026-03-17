@@ -687,7 +687,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
 
     const rawExecutionItems: any[] | null =
       Array.isArray((weekBlueprint as any)?.execution_items) ? ((weekBlueprint as any).execution_items as any[]) : null;
-    const executionItems: ExecutionItemInput[] = (rawExecutionItems || [])
+    let executionItems: ExecutionItemInput[] = (rawExecutionItems || [])
       .map((it) => {
         const content_type = String(it?.content_type ?? it?.contentType ?? it?.type ?? '').trim().toLowerCase();
         const selected_platforms_raw =
@@ -727,23 +727,66 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         return { content_type, selected_platforms, count_per_week, topic, topic_slots };
       })
       .filter((it) => it.content_type && it.selected_platforms.length > 0 && Number(it.count_per_week) > 0);
-    const useExecutionItems = executionItems.length > 0;
-    if (!useExecutionItems) {
-      throw new Error(
-        'EXECUTION_ITEMS_REQUIRED: Week must have execution_items with topic_slots. Daily distribution is disabled; schedule comes from weekly plan only.'
+
+    // Synthesize execution_items from blueprint data when not present (BOLT campaigns, legacy campaigns).
+    // This ensures daily distribution works even when the AI plan did not produce explicit execution_items.
+    if (executionItems.length === 0) {
+      const synthPlatforms = Object.keys(weekBlueprint.platform_allocation || {})
+        .map(normalizePlatformKey)
+        .filter(Boolean);
+      const platforms = synthPlatforms.length > 0
+        ? synthPlatforms
+        : (eligiblePlatforms && eligiblePlatforms.length > 0 ? eligiblePlatforms.slice(0, 2) : ['linkedin']);
+      const contentTypes = (Array.isArray(weekBlueprint.content_type_mix) && weekBlueprint.content_type_mix.length > 0
+        ? weekBlueprint.content_type_mix
+        : ['post']
+      ).map((t) => String(t || '').trim().toLowerCase()).filter(Boolean);
+      const totalCount = postsPerWeek ?? Math.max(
+        2,
+        Object.values(weekBlueprint.platform_allocation || {}).reduce((sum: number, n: unknown) => sum + Number(n), 0) || 3
       );
+      const rawTopics: string[] = Array.isArray(weekBlueprint.topics_to_cover) && (weekBlueprint.topics_to_cover as unknown[]).length > 0
+        ? (weekBlueprint.topics_to_cover as unknown[]).map((t) => String(t ?? '').trim()).filter(Boolean)
+        : Array.isArray(weekBlueprint.topics) && (weekBlueprint.topics as any[]).length > 0
+          ? (weekBlueprint.topics as any[]).map((t: any) => String(t?.topicTitle ?? t ?? '').trim()).filter(Boolean)
+          : [];
+      const topics = rawTopics.length > 0
+        ? rawTopics
+        : [String(weekBlueprint.phase_label || weekBlueprint.primary_objective || `Week ${weekNumber} content`).trim()];
+      const ctaType = String(weekBlueprint.cta_type || 'Engage').trim() || 'Engage';
+      const objective = String(weekBlueprint.primary_objective || weekBlueprint.phase_label || 'Build brand awareness').trim() || 'Build brand awareness';
+      const countPerType = Math.max(1, Math.round(totalCount / contentTypes.length));
+      let synthGlobalIdx = (weekNumber - 1) * totalCount;
+      for (const contentType of contentTypes) {
+        const topic_slots: Array<{ topic: string | null; global_progression_index: number; intent: any }> = [];
+        for (let k = 0; k < countPerType; k++) {
+          synthGlobalIdx++;
+          const topic = topics[k % topics.length]!;
+          topic_slots.push({
+            topic,
+            global_progression_index: synthGlobalIdx,
+            intent: {
+              objective,
+              cta_type: ctaType,
+              target_audience: 'our target audience',
+              brief_summary: `${topic}: ${objective}`,
+            },
+          });
+        }
+        executionItems.push({ content_type: contentType, selected_platforms: platforms, count_per_week: countPerType, topic_slots });
+      }
     }
 
-    if (useExecutionItems) {
-      for (const it of executionItems) {
-        const slots = Array.isArray(it.topic_slots) ? it.topic_slots : [];
-        if (slots.length < Math.max(0, Math.floor(it.count_per_week))) {
+    const useExecutionItems = executionItems.length > 0;
+
+    for (const it of executionItems) {
+      const slots = Array.isArray(it.topic_slots) ? it.topic_slots : [];
+      if (slots.length < Math.max(0, Math.floor(it.count_per_week))) {
+        throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
+      }
+      for (const slot of slots) {
+        if (!slot || typeof slot !== 'object' || !slot.intent) {
           throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
-        }
-        for (const slot of slots) {
-          if (!slot || typeof slot !== 'object' || !slot.intent) {
-            throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
-          }
         }
       }
     }

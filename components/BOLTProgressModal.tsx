@@ -182,7 +182,7 @@ export default function BOLTProgressModal({ open, progress }: BOLTProgressModalP
 
           {!isFailed && (
             <p className="mt-3 text-xs text-gray-500">
-              Typically 1–3 min. Requires Redis and BOLT workers for background processing.
+              Typically 1–3 min. Progress updates every few seconds.
             </p>
           )}
         </div>

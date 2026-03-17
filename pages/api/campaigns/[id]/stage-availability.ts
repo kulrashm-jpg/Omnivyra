@@ -46,19 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('campaign_id', campaignId);
     const hasDailyPlans = (dailyPlansCount ?? 0) > 0;
 
-    // 5. Charting (platform execution plan)
-    let hasCharting = false;
-    try {
-      const { count: platformPlanCount } = await supabase
-        .from('platform_execution_plans')
-        .select('id', { count: 'exact', head: true })
-        .eq('campaign_id', campaignId);
-      hasCharting = (platformPlanCount ?? 0) > 0;
-    } catch {
-      // Table may not exist
-    }
-
-    // 6. Schedule (scheduled posts)
+    // 5. Schedule (scheduled posts)
     let scheduledPostsCount = 0;
     try {
       const { count } = await supabase
@@ -78,7 +66,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         detailedWeekPlans: hasDetailedWeekPlans,
         aiEnrichedWeeks: hasAiEnrichedWeeks,
         dailyPlans: hasDailyPlans,
-        charting: hasCharting,
         schedule: hasSchedule,
       },
       counts: {

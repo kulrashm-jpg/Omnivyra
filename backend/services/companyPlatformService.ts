@@ -4,6 +4,7 @@
  * Sources: (1) company profile social_links, (2) external API configs (social-platforms page).
  */
 
+import { supabase } from '../db/supabaseClient';
 import { getProfile } from './companyProfileService';
 import {
   getAvailablePlatformsFromProfile,
@@ -35,14 +36,18 @@ function getContentTypesForPlatform(platform: string): string[] {
     if (normalized.includes(p)) types.add(ct);
   }
   const fallbacks: Record<string, string[]> = {
-    linkedin: ['post', 'carousel', 'article', 'video'],
-    youtube: ['video', 'short'],
-    twitter: ['post', 'thread'],
-    x: ['post', 'thread'],
+    linkedin:  ['post', 'article', 'blog', 'carousel', 'video', 'poll', 'newsletter'],
+    youtube:   ['video', 'short'],
+    twitter:   ['post', 'thread', 'poll'],
+    x:         ['post', 'thread', 'poll'],
     instagram: ['post', 'reel', 'story', 'carousel'],
-    facebook: ['post', 'video', 'story', 'carousel'],
-    tiktok: ['video', 'short'],
-    blog: ['post', 'article'],
+    facebook:  ['post', 'video', 'story', 'carousel', 'blog'],
+    tiktok:    ['video', 'short'],
+    reddit:    ['post', 'thread'],
+    pinterest: ['post', 'idea_pin'],
+    medium:    ['post', 'article', 'blog', 'newsletter'],
+    devto:     ['post', 'article', 'blog'],
+    blog:      ['post', 'article', 'blog'],
   };
   const fb = fallbacks[p] ?? ['post'];
   fb.forEach((t) => types.add(t));
@@ -66,7 +71,8 @@ function platformFromApiConfig(config: { category?: string | null; name?: string
 
 /**
  * Get company platform configuration for planner.
- * Uses (1) company profile social_links, (2) external API configs as fallback.
+ * Priority: (1) company profile social_links, (2) external API configs as fallback.
+ * Content types per platform: user-configured prefs (platform_content_type_prefs) take precedence over defaults.
  * Returns empty platforms array when no platforms configured or on error.
  */
 export async function getCompanyPlatformConfig(
@@ -74,6 +80,26 @@ export async function getCompanyPlatformConfig(
 ): Promise<CompanyPlatformConfigResult> {
   const seen = new Set<string>();
   const items: PlatformConfigItem[] = [];
+  let userContentPrefs: Record<string, string[]> = {};
+
+  // 0. Load user-configured content type prefs
+  try {
+    const { data } = await supabase
+      .from('company_profiles')
+      .select('platform_content_type_prefs')
+      .eq('company_id', companyId)
+      .maybeSingle();
+    if (data?.platform_content_type_prefs && typeof data.platform_content_type_prefs === 'object') {
+      userContentPrefs = data.platform_content_type_prefs as Record<string, string[]>;
+    }
+  } catch { /* non-fatal */ }
+
+  const applyUserPrefs = (platform: string, defaults: string[]): string[] => {
+    const canonical = platform.toLowerCase().replace(/^twitter$/i, 'x');
+    const prefs = userContentPrefs[canonical] ?? userContentPrefs[platform.toLowerCase()];
+    if (Array.isArray(prefs) && prefs.length > 0) return prefs;
+    return defaults;
+  };
 
   // 1. Company profile social links
   try {
@@ -85,7 +111,7 @@ export async function getCompanyPlatformConfig(
         seen.add(canonical);
         items.push({
           platform: toDisplayPlatform(p),
-          content_types: getContentTypesForPlatform(p),
+          content_types: applyUserPrefs(p, getContentTypesForPlatform(p)),
         });
       }
     }
@@ -101,12 +127,12 @@ export async function getCompanyPlatformConfig(
         const p = platformFromApiConfig(c);
         if (!p || seen.has(p)) continue;
         seen.add(p);
-        const contentTypes = Array.isArray(c.supported_content_types) && c.supported_content_types.length > 0
+        const defaults = Array.isArray(c.supported_content_types) && c.supported_content_types.length > 0
           ? c.supported_content_types.map((t) => String(t).toLowerCase().trim()).filter(Boolean)
           : getContentTypesForPlatform(p);
         items.push({
           platform: toDisplayPlatform(p),
-          content_types: contentTypes.length > 0 ? [...new Set(contentTypes)].sort() : getContentTypesForPlatform(p),
+          content_types: applyUserPrefs(p, defaults.length > 0 ? [...new Set(defaults)].sort() : getContentTypesForPlatform(p)),
         });
       }
     } catch (err) {

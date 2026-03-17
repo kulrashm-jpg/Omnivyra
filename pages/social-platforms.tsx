@@ -24,8 +24,11 @@ import {
   X,
   TrendingUp,
   ImageIcon,
-  Zap,
-  Globe2,
+  PlusCircle,
+  Send,
+  ClipboardList,
+  Settings2,
+  ChevronRight,
 } from 'lucide-react';
 
 interface PlatformStatus {
@@ -136,11 +139,22 @@ export default function SocialPlatformsPage() {
   const [showHiddenTrend, setShowHiddenTrend] = useState(false);
   const [showHiddenImage, setShowHiddenImage] = useState(false);
   const [showHiddenCommunityApi, setShowHiddenCommunityApi] = useState(false);
-  const [activeTab, setActiveTab] = useState<'social' | 'trend' | 'community' | 'image'>('social');
+  const [activeTab, setActiveTab] = useState<'social' | 'trend' | 'community' | 'image' | 'request-new' | 'queue'>('social');
   const [catalogApis, setCatalogApis] = useState<any[]>([]);
   const [loadingCatalogApis, setLoadingCatalogApis] = useState(false);
   const [companyConfigs, setCompanyConfigs] = useState<any[]>([]);
   const [togglingApiId, setTogglingApiId] = useState<string | null>(null);
+  // Content type prefs
+  const [platformContentPrefs, setPlatformContentPrefs] = useState<Record<string, string[]>>({});
+  const [savingContentPrefs, setSavingContentPrefs] = useState(false);
+  const [expandedContentTypes, setExpandedContentTypes] = useState<Set<string>>(new Set());
+  const [customTypeInputs, setCustomTypeInputs] = useState<Record<string, string>>({});
+  // API request state (Request New / Queue tabs)
+  const [apiRequests, setApiRequests] = useState<Array<{ id: string; name: string; base_url: string; status: string; created_at: string; purpose?: string | null; category?: string | null; auth_type?: string | null; api_key_env_name?: string | null; rejection_reason?: string | null }>>([]);
+  const [isLoadingApiRequests, setIsLoadingApiRequests] = useState(false);
+  const [apiRejectionReasons, setApiRejectionReasons] = useState<Record<string, string>>({});
+  const [requestForm, setRequestForm] = useState({ name: '', base_url: '', purpose: 'trends', category: '', method: 'GET' as 'GET' | 'POST', auth_type: 'none', api_key_env_name: '', description: '' });
+  const [isSubmittingApiRequest, setIsSubmittingApiRequest] = useState(false);
 
   const isSuperAdmin = userRole === 'SUPER_ADMIN';
 
@@ -184,6 +198,131 @@ export default function SocialPlatformsPage() {
       if (r.ok) { const d = await r.json(); setCompanyConfigs(d.configs || []); }
     } catch { /* non-fatal */ }
   }, [selectedCompanyId]);
+
+  // ── Content type per platform ──────────────────────────────────────────────
+
+  /** All content types available for each social platform. */
+  const CONTENT_TYPES_PER_PLATFORM: Record<string, string[]> = {
+    linkedin:      ['post', 'article', 'blog', 'carousel', 'video', 'poll', 'newsletter'],
+    instagram:     ['post', 'reel', 'story', 'carousel'],
+    facebook:      ['post', 'video', 'story', 'carousel', 'blog'],
+    twitter:       ['post', 'thread', 'poll'],
+    x:             ['post', 'thread', 'poll'],
+    youtube:       ['video', 'short'],
+    tiktok:        ['video', 'short'],
+    reddit:        ['post', 'thread'],
+    whatsapp:      ['post'],
+    pinterest:     ['post', 'idea_pin'],
+    github:        ['post', 'article'],
+    medium:        ['post', 'article', 'blog', 'newsletter'],
+    devto:         ['post', 'article', 'blog'],
+    blog:          ['post', 'article', 'blog'],
+  };
+
+  const loadContentPrefs = useCallback(async () => {
+    if (!selectedCompanyId) return;
+    try {
+      const r = await apiFetch(`/api/social-platforms/content-type-prefs?companyId=${selectedCompanyId}`);
+      if (r.ok) { const d = await r.json(); setPlatformContentPrefs(d.prefs || {}); }
+    } catch { /* non-fatal */ }
+  }, [selectedCompanyId]);
+
+  const saveContentPrefs = async (prefs: Record<string, string[]>) => {
+    if (!selectedCompanyId) return;
+    setSavingContentPrefs(true);
+    try {
+      await apiFetch(`/api/social-platforms/content-type-prefs?companyId=${selectedCompanyId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefs }),
+      });
+      setPlatformContentPrefs(prefs);
+    } catch { /* non-fatal */ }
+    finally { setSavingContentPrefs(false); }
+  };
+
+  /** Add a type to a platform's active list (built-in re-add or new custom). */
+  const addContentType = (platformKey: string, type: string) => {
+    const normalized = type.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!normalized) return;
+    const current = platformContentPrefs[platformKey] ?? (CONTENT_TYPES_PER_PLATFORM[platformKey] ?? []);
+    if (current.includes(normalized)) return;
+    saveContentPrefs({ ...platformContentPrefs, [platformKey]: [...current, normalized] });
+  };
+
+  /** Remove a type from a platform's active list (any type, built-in or custom). */
+  const removeContentType = (platformKey: string, type: string) => {
+    const current = platformContentPrefs[platformKey] ?? (CONTENT_TYPES_PER_PLATFORM[platformKey] ?? []);
+    saveContentPrefs({ ...platformContentPrefs, [platformKey]: current.filter((t) => t !== type) });
+  };
+
+  /** Add a new custom type from the text input and clear the input. */
+  const addCustomContentType = (platformKey: string) => {
+    const raw = (customTypeInputs[platformKey] ?? '').trim().toLowerCase().replace(/\s+/g, '_');
+    if (!raw) return;
+    addContentType(platformKey, raw);
+    setCustomTypeInputs((p) => ({ ...p, [platformKey]: '' }));
+  };
+
+  const toggleExpandContentTypes = (platformKey: string) => {
+    setExpandedContentTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(platformKey)) next.delete(platformKey); else next.add(platformKey);
+      return next;
+    });
+  };
+
+  // ── API Request / Queue ─────────────────────────────────────────────────────
+
+  const loadApiRequests = useCallback(async () => {
+    if (!selectedCompanyId) return;
+    setIsLoadingApiRequests(true);
+    try {
+      const r = await apiFetch(`/api/external-apis/requests?companyId=${selectedCompanyId}`);
+      if (r.ok) { const d = await r.json(); setApiRequests(d.requests || []); }
+    } catch { /* non-fatal */ }
+    finally { setIsLoadingApiRequests(false); }
+  }, [selectedCompanyId]);
+
+  const submitApiRequest = async () => {
+    if (!selectedCompanyId || !requestForm.name.trim() || !requestForm.base_url.trim()) return;
+    setIsSubmittingApiRequest(true);
+    try {
+      const r = await apiFetch(`/api/external-apis/requests?companyId=${selectedCompanyId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...requestForm }),
+      });
+      if (r.ok) {
+        setRequestForm({ name: '', base_url: '', purpose: 'trends', category: '', method: 'GET', auth_type: 'none', api_key_env_name: '', description: '' });
+        notify('success', 'API request submitted for review.');
+        await loadApiRequests();
+        setActiveTab('queue');
+      } else {
+        const e = await r.json().catch(() => ({}));
+        notify('error', e.error || 'Failed to submit request');
+      }
+    } catch { notify('error', 'Failed to submit request'); }
+    finally { setIsSubmittingApiRequest(false); }
+  };
+
+  const updateApiRequestStatus = async (id: string, status: 'approved' | 'rejected') => {
+    const rejection_reason = status === 'rejected' ? (apiRejectionReasons[id] || '') : undefined;
+    try {
+      const r = await apiFetch('/api/external-apis/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status, rejection_reason }),
+      });
+      if (r.ok) {
+        notify('success', `Request ${status}.`);
+        await loadApiRequests();
+      } else {
+        const e = await r.json().catch(() => ({}));
+        notify('error', e.error || 'Failed to update request');
+      }
+    } catch { notify('error', 'Failed to update request'); }
+  };
 
   const toggleApiSelection = async (api: any, enable: boolean) => {
     if (!selectedCompanyId) return;
@@ -233,6 +372,8 @@ export default function SocialPlatformsPage() {
   useEffect(() => { loadStatus(); }, [loadStatus]);
   useEffect(() => { loadCatalogApis(); }, [loadCatalogApis]);
   useEffect(() => { loadCompanyConfigs(); }, [loadCompanyConfigs]);
+  useEffect(() => { loadContentPrefs(); }, [loadContentPrefs]);
+  useEffect(() => { loadApiRequests(); }, [loadApiRequests]);
 
   // Daily auto-check: re-verify any configured platform whose cache is stale
   useEffect(() => {
@@ -400,108 +541,242 @@ export default function SocialPlatformsPage() {
   const renderPlatformCard = (p: PlatformStatus) => {
     const meta = PLATFORM_META[p.platform_key];
     const isChecking = checking === p.platform_key;
+    const builtinTypes = CONTENT_TYPES_PER_PLATFORM[p.platform_key] ?? ['post'];
+    const savedPrefs = platformContentPrefs[p.platform_key];
+    // Active = what's saved (or all built-ins by default)
+    const activeTypes = savedPrefs ?? builtinTypes;
+    const activeSet = new Set<string>(activeTypes);
+    // Custom types = active types that aren't in the built-in list
+    const customExtras = activeTypes.filter((t) => !builtinTypes.includes(t));
+    // Removed built-ins = built-ins not currently active (available to re-add)
+    const removedBuiltins = builtinTypes.filter((t) => !activeSet.has(t));
+    const isExpanded = expandedContentTypes.has(p.platform_key);
 
     return (
       <div
         key={p.platform_key}
-        className={`bg-white rounded-xl border p-5 flex items-center justify-between gap-4 transition-colors ${
+        className={`bg-white rounded-xl border transition-colors ${
           p.connected ? 'border-emerald-200' : 'border-gray-200'
         }`}
       >
-        <div className="flex items-center gap-4 min-w-0">
-          <span className="text-2xl shrink-0">{meta?.icon ?? '🌐'}</span>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-semibold text-gray-900">{p.platform_label}</span>
-              {getStatusBadge(p)}
-            </div>
-            {p.connected && (
-              <div className="mt-0.5 text-xs text-gray-500 truncate">
-                {p.account_name || p.username || 'Account connected'}
-                {p.token_expires_at && (
-                  <span className="ml-2 text-gray-400">
-                    · Expires {new Date(p.token_expires_at).toLocaleDateString()}
-                  </span>
+        {/* Main row */}
+        <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-4 min-w-0">
+            <span className="text-2xl shrink-0">{meta?.icon ?? '🌐'}</span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-gray-900">{p.platform_label}</span>
+                {getStatusBadge(p)}
+              </div>
+              {p.connected && (
+                <div className="mt-0.5 text-xs text-gray-500 truncate">
+                  {p.account_name || p.username || 'Account connected'}
+                  {p.token_expires_at && (
+                    <span className="ml-2 text-gray-400">
+                      · Expires {new Date(p.token_expires_at).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+              )}
+              {!p.oauth_configured && !p.connected && isSuperAdmin && (
+                <div className="mt-0.5 text-xs text-gray-400">
+                  Add credentials in Super Admin → Platform Config
+                </div>
+              )}
+              {p.oauth_configured && !p.connected && p.auth_path && (
+                <div className="mt-0.5 text-xs text-gray-400">Ready to connect</div>
+              )}
+              {checks[p.platform_key] && (
+                <div className="mt-1">{getCheckBadge(p.platform_key)}</div>
+              )}
+              {/* Content type summary — active types */}
+              <div className="mt-1 flex items-center gap-1 flex-wrap">
+                {activeTypes.map((t) => (
+                  <span key={t} className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                    customExtras.includes(t)
+                      ? 'bg-violet-50 border-violet-200 text-violet-700'
+                      : 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                  }`}>{t}</span>
+                ))}
+                {removedBuiltins.length > 0 && (
+                  <span className="text-[10px] text-gray-400">+{removedBuiltins.length} hidden</span>
                 )}
               </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Content type config button */}
+            <button
+              onClick={() => toggleExpandContentTypes(p.platform_key)}
+              title="Configure content types for AI planning"
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                isExpanded
+                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                  : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+              }`}
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+              Content Types
+              <ChevronRight className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+            </button>
+
+            {p.oauth_configured && (
+              <button
+                onClick={() => handleCheck(p)}
+                disabled={isChecking}
+                title="Verify credentials and token"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 text-xs font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                {isChecking
+                  ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  : <FlaskConical className="h-3.5 w-3.5" />
+                }
+                {isChecking ? 'Checking…' : 'Check'}
+              </button>
             )}
-            {/* Show admin-only helper text only to super admins */}
-            {!p.oauth_configured && !p.connected && isSuperAdmin && (
-              <div className="mt-0.5 text-xs text-gray-400">
-                Add credentials in Super Admin → Platform Config
-              </div>
-            )}
-            {p.oauth_configured && !p.connected && p.auth_path && (
-              <div className="mt-0.5 text-xs text-gray-400">Ready to connect</div>
-            )}
-            {/* Check result badge */}
-            {checks[p.platform_key] && (
-              <div className="mt-1">{getCheckBadge(p.platform_key)}</div>
+
+            {p.connected ? (
+              <>
+                {p.expired && p.auth_path && (
+                  <button
+                    onClick={() => handleConnect(p)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium hover:bg-amber-100 transition-colors"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" /> Reconnect
+                  </button>
+                )}
+                <button
+                  onClick={() => handleDisconnect(p)}
+                  disabled={disconnecting === p.platform_key}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-red-600 text-xs font-medium hover:bg-red-100 transition-colors disabled:opacity-50"
+                >
+                  <Unlink className="h-3.5 w-3.5" />
+                  {disconnecting === p.platform_key ? 'Disconnecting…' : 'Disconnect'}
+                </button>
+              </>
+            ) : p.oauth_configured && p.auth_path ? (
+              <button
+                onClick={() => handleConnect(p)}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
+              >
+                <Link2 className="h-3.5 w-3.5" /> Connect
+              </button>
+            ) : p.oauth_configured && !p.auth_path ? (
+              <span className="text-xs text-gray-400">Coming soon</span>
+            ) : isSuperAdmin ? (
+              <span className="inline-flex items-center gap-1 text-xs text-gray-400">
+                <Lock className="h-3.5 w-3.5" /> Configure
+              </span>
+            ) : null}
+            {!p.connected && !p.oauth_configured && (
+              <button
+                onClick={() => socialHiders.hide(p.platform_key)}
+                title="Hide from my list"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-400 text-xs font-medium hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Check button — for any configured platform */}
-          {p.oauth_configured && (
-            <button
-              onClick={() => handleCheck(p)}
-              disabled={isChecking}
-              title="Verify credentials and token"
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 text-xs font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
-            >
-              {isChecking
-                ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                : <FlaskConical className="h-3.5 w-3.5" />
-              }
-              {isChecking ? 'Checking…' : 'Check'}
-            </button>
-          )}
+        {/* Content type configuration panel */}
+        {isExpanded && (
+          <div className="border-t border-gray-100 px-5 py-4 bg-gray-50 rounded-b-xl space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-1">
+              <p className="text-xs font-semibold text-gray-700">Content Types for AI Planning</p>
+              <p className="text-xs text-gray-400">Used in BOLT, weekly plan, daily plan &amp; AI chat</p>
+            </div>
 
-          {p.connected ? (
-            <>
-              {p.expired && p.auth_path && (
+            {/* Active types — removable tags */}
+            <div>
+              <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-2">Active</p>
+              <div className="flex flex-wrap gap-2 min-h-[32px]">
+                {activeTypes.length === 0 && (
+                  <p className="text-xs text-gray-400 italic">No types active — AI planning will use system defaults</p>
+                )}
+                {activeTypes.map((type) => (
+                  <span
+                    key={type}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm font-medium ${
+                      customExtras.includes(type)
+                        ? 'bg-violet-100 text-violet-800 border border-violet-200'
+                        : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                    }`}
+                  >
+                    {type}
+                    <button
+                      onClick={() => removeContentType(p.platform_key, type)}
+                      disabled={savingContentPrefs}
+                      title={`Remove ${type}`}
+                      className="ml-0.5 opacity-60 hover:opacity-100 hover:text-red-600 transition-colors disabled:cursor-not-allowed"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Removed built-ins — click to re-add */}
+            {removedBuiltins.length > 0 && (
+              <div>
+                <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-2">Removed — click to re-add</p>
+                <div className="flex flex-wrap gap-2">
+                  {removedBuiltins.map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => addContentType(p.platform_key, type)}
+                      disabled={savingContentPrefs}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm text-gray-500 bg-white border border-dashed border-gray-300 hover:border-indigo-400 hover:text-indigo-700 hover:bg-indigo-50 transition-colors disabled:opacity-50"
+                    >
+                      <PlusCircle className="h-3 w-3" /> {type}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Add new custom type */}
+            <div>
+              <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-2">Add custom type</p>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  placeholder="e.g. infographic, case_study, whitepaper"
+                  value={customTypeInputs[p.platform_key] ?? ''}
+                  onChange={(e) => setCustomTypeInputs((prev) => ({ ...prev, [p.platform_key]: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomContentType(p.platform_key); } }}
+                  className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-indigo-400 bg-white"
+                />
                 <button
-                  onClick={() => handleConnect(p)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium hover:bg-amber-100 transition-colors"
+                  onClick={() => addCustomContentType(p.platform_key)}
+                  disabled={!(customTypeInputs[p.platform_key] ?? '').trim() || savingContentPrefs}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-40 transition-colors"
                 >
-                  <RefreshCw className="h-3.5 w-3.5" /> Reconnect
+                  <PlusCircle className="h-3.5 w-3.5" /> Add
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4 pt-1 border-t border-gray-200">
+              {savingContentPrefs && <p className="text-xs text-gray-400">Saving…</p>}
+              {savedPrefs && (
+                <button
+                  onClick={() => {
+                    const newPrefs = { ...platformContentPrefs };
+                    delete newPrefs[p.platform_key];
+                    saveContentPrefs(newPrefs);
+                  }}
+                  className="text-xs text-gray-400 hover:text-gray-600 underline ml-auto"
+                >
+                  Reset to defaults
                 </button>
               )}
-              <button
-                onClick={() => handleDisconnect(p)}
-                disabled={disconnecting === p.platform_key}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-red-600 text-xs font-medium hover:bg-red-100 transition-colors disabled:opacity-50"
-              >
-                <Unlink className="h-3.5 w-3.5" />
-                {disconnecting === p.platform_key ? 'Disconnecting…' : 'Disconnect'}
-              </button>
-            </>
-          ) : p.oauth_configured && p.auth_path ? (
-            <button
-              onClick={() => handleConnect(p)}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
-            >
-              <Link2 className="h-3.5 w-3.5" /> Connect
-            </button>
-          ) : p.oauth_configured && !p.auth_path ? (
-            <span className="text-xs text-gray-400">Coming soon</span>
-          ) : isSuperAdmin ? (
-            <span className="inline-flex items-center gap-1 text-xs text-gray-400">
-              <Lock className="h-3.5 w-3.5" /> Configure
-            </span>
-          ) : null}
-          {/* Hide button — only for non-connected, non-configured platforms */}
-          {!p.connected && !p.oauth_configured && (
-            <button
-              onClick={() => socialHiders.hide(p.platform_key)}
-              title="Hide from my list"
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-400 text-xs font-medium hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -511,7 +786,7 @@ export default function SocialPlatformsPage() {
     return (
       <div
         key={p.platform_key}
-        className={`bg-white rounded-xl border p-5 flex items-center justify-between gap-4 transition-colors ${
+        className={`bg-white rounded-xl border p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 transition-colors ${
           archived ? 'opacity-60 border-dashed border-gray-200' : p.connected ? 'border-emerald-200' : 'border-gray-200'
         }`}
       >
@@ -536,7 +811,7 @@ export default function SocialPlatformsPage() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2">
           {archived ? (
             <button
               onClick={() => restoreCommunity(p.platform_key)}
@@ -638,12 +913,14 @@ export default function SocialPlatformsPage() {
   const connectedCommunityOAuth = communityPlatforms.filter((p) => p.connected);
   const archivedCommunityList = communityPlatforms.filter((p) => archivedCommunity.has(p.platform_key));
 
-  type TabId = 'social' | 'trend' | 'community' | 'image';
-  const ALL_TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
-    { id: 'social',    label: 'Social',    icon: <Share2 className="h-4 w-4" /> },
-    { id: 'trend',     label: 'Trend',     icon: <TrendingUp className="h-4 w-4" /> },
-    { id: 'community', label: 'Community', icon: <Users className="h-4 w-4" /> },
-    { id: 'image',     label: 'Image',     icon: <ImageIcon className="h-4 w-4" /> },
+  type TabId = 'social' | 'trend' | 'community' | 'image' | 'request-new' | 'queue';
+  const ALL_TABS: Array<{ id: TabId; label: string; icon: React.ReactNode; dividerBefore?: boolean }> = [
+    { id: 'social',       label: 'Social',       icon: <Share2 className="h-4 w-4" /> },
+    { id: 'trend',        label: 'Trend',        icon: <TrendingUp className="h-4 w-4" /> },
+    { id: 'community',    label: 'Community',    icon: <Users className="h-4 w-4" /> },
+    { id: 'image',        label: 'Image',        icon: <ImageIcon className="h-4 w-4" /> },
+    { id: 'request-new',  label: 'Request API',  icon: <PlusCircle className="h-4 w-4" />, dividerBefore: true },
+    { id: 'queue',        label: 'API Queue',    icon: <ClipboardList className="h-4 w-4" /> },
   ];
 
   const renderCatalogApiCard = (
@@ -656,7 +933,7 @@ export default function SocialPlatformsPage() {
     const hidden   = mode === 'hidden';
     const toggling = togglingApiId === api.id;
     return (
-      <div key={api.id} className={`rounded-xl border p-5 flex items-center justify-between gap-4 transition-colors ${
+      <div key={api.id} className={`rounded-xl border p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 transition-colors ${
         selected ? 'bg-indigo-50 border-indigo-300' : hidden ? 'bg-white border-dashed border-gray-200 opacity-60' : 'bg-white border-gray-200'
       }`}>
         <div className="flex items-center gap-4 min-w-0">
@@ -678,7 +955,7 @@ export default function SocialPlatformsPage() {
             <div className="mt-0.5 text-xs text-gray-400 truncate">{api.base_url}</div>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2">
           {onUnhide && (
             <button onClick={onUnhide} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors">
               <RotateCcw className="h-3.5 w-3.5" /> Unhide
@@ -710,18 +987,18 @@ export default function SocialPlatformsPage() {
 
   return (
     <>
-      <Head><title>Platform Connections</title></Head>
+      <Head><title>API Connections</title></Head>
       <Header />
       <div className="min-h-screen bg-gray-50">
-        <div className="max-w-3xl mx-auto px-6 py-10">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
 
           <div className="mb-6">
             <div className="flex items-center gap-3 mb-2">
-              <ShieldCheck className="h-6 w-6 text-indigo-600" />
-              <h1 className="text-2xl font-bold text-gray-900">Platform Connections</h1>
+              <ShieldCheck className="h-6 w-6 text-indigo-600 shrink-0" />
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">API Connections</h1>
             </div>
             <p className="text-gray-500 text-sm">
-              Connect your accounts to enable content publishing and community engagement.
+              Connect social platforms and manage trend, community &amp; image APIs in one place.
             </p>
             {connectedCount > 0 && (
               <div className="mt-3 text-sm">
@@ -747,13 +1024,14 @@ export default function SocialPlatformsPage() {
             </div>
           ) : (
             <>
-              {/* Tab bar — always 4 tabs */}
-              <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex gap-1 mb-6">
+              {/* Tab bar */}
+              <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex gap-1 overflow-x-auto mb-6 scrollbar-hide">
                 {ALL_TABS.map((tab) => (
+                  <React.Fragment key={tab.id}>
+                    {tab.dividerBefore && <span className="self-stretch w-px bg-gray-200 mx-1" />}
                   <button
-                    key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
-                    className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                       activeTab === tab.id
                         ? 'bg-indigo-600 text-white'
                         : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -762,6 +1040,7 @@ export default function SocialPlatformsPage() {
                     {tab.icon}
                     {tab.label}
                   </button>
+                  </React.Fragment>
                 ))}
               </div>
 
@@ -796,10 +1075,10 @@ export default function SocialPlatformsPage() {
                       {showHiddenSocial && (
                         <div className="mt-3 space-y-3">
                           {hiddenSocialList.map((p) => (
-                            <div key={p.platform_key} className="bg-white rounded-xl border border-dashed border-gray-200 p-5 flex items-center justify-between gap-4 opacity-60">
-                              <div className="flex items-center gap-4">
-                                <span className="text-2xl">{PLATFORM_META[p.platform_key]?.icon ?? '🌐'}</span>
-                                <span className="font-semibold text-gray-700">{p.platform_label}</span>
+                            <div key={p.platform_key} className="bg-white rounded-xl border border-dashed border-gray-200 p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 opacity-60">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <span className="text-2xl shrink-0">{PLATFORM_META[p.platform_key]?.icon ?? '🌐'}</span>
+                                <span className="font-semibold text-gray-700 truncate">{p.platform_label}</span>
                               </div>
                               <button onClick={() => socialHiders.unhide(p.platform_key)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors">
                                 <RotateCcw className="h-3.5 w-3.5" /> Unhide
@@ -966,6 +1245,198 @@ export default function SocialPlatformsPage() {
                           {hiddenImageList.map((a) => renderCatalogApiCard(a, 'hidden', undefined, () => imageHiders.unhide(a.name)))}
                         </div>
                       )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Request New API tab ── */}
+              {activeTab === 'request-new' && (
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+                  <h2 className="text-base font-semibold text-gray-900 mb-1">Request a New API</h2>
+                  <p className="text-sm text-gray-500 mb-5">
+                    Submit a request to add a new external API. Super Admin will review and approve or reject.
+                  </p>
+                  <div className="space-y-4 max-w-2xl">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                      <input
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        placeholder="e.g. Twitter Trends API"
+                        value={requestForm.name}
+                        onChange={(e) => setRequestForm((p) => ({ ...p, name: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Base URL *</label>
+                      <input
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        placeholder="https://api.example.com/v1/trends"
+                        value={requestForm.base_url}
+                        onChange={(e) => setRequestForm((p) => ({ ...p, base_url: e.target.value }))}
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Purpose</label>
+                        <select
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          value={requestForm.purpose}
+                          onChange={(e) => setRequestForm((p) => ({ ...p, purpose: e.target.value }))}
+                        >
+                          <option value="trends">Trends</option>
+                          <option value="keywords">Keywords</option>
+                          <option value="hashtags">Hashtags</option>
+                          <option value="news">News</option>
+                          <option value="demographics">Demographics</option>
+                          <option value="social">Social</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                        <input
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          placeholder="e.g. social, analytics"
+                          value={requestForm.category}
+                          onChange={(e) => setRequestForm((p) => ({ ...p, category: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Method</label>
+                        <select
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          value={requestForm.method}
+                          onChange={(e) => setRequestForm((p) => ({ ...p, method: e.target.value as 'GET' | 'POST' }))}
+                        >
+                          <option value="GET">GET</option>
+                          <option value="POST">POST</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Auth type</label>
+                        <select
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          value={requestForm.auth_type}
+                          onChange={(e) => setRequestForm((p) => ({ ...p, auth_type: e.target.value }))}
+                        >
+                          <option value="none">None</option>
+                          <option value="api_key">API Key</option>
+                          <option value="bearer">Bearer</option>
+                          <option value="query">Query param</option>
+                          <option value="header">Header</option>
+                        </select>
+                      </div>
+                    </div>
+                    {['api_key', 'bearer', 'query', 'header'].includes(requestForm.auth_type) && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">API key env var name *</label>
+                        <input
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          placeholder="e.g. TWITTER_API_KEY"
+                          value={requestForm.api_key_env_name}
+                          onChange={(e) => setRequestForm((p) => ({ ...p, api_key_env_name: e.target.value }))}
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Server-side env var; key value is not stored.</p>
+                      </div>
+                    )}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
+                      <textarea
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm min-h-[80px]"
+                        placeholder="Why your company needs this API, use case, etc."
+                        value={requestForm.description}
+                        onChange={(e) => setRequestForm((p) => ({ ...p, description: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
+                      <button
+                        type="button"
+                        onClick={submitApiRequest}
+                        disabled={isSubmittingApiRequest || !requestForm.name.trim() || !requestForm.base_url.trim()}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors w-full sm:w-auto"
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                        {isSubmittingApiRequest ? 'Submitting…' : 'Submit for approval'}
+                      </button>
+                      <span className="text-xs text-gray-400">Goes to API Queue for Super Admin review.</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── API Queue tab ── */}
+              {activeTab === 'queue' && (
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                    <h2 className="text-base font-semibold text-gray-900">API Requests Queue</h2>
+                    <button
+                      onClick={loadApiRequests}
+                      className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${isLoadingApiRequests ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  </div>
+                  {isLoadingApiRequests ? (
+                    <p className="text-sm text-gray-400">Loading requests…</p>
+                  ) : apiRequests.length === 0 ? (
+                    <div className="text-center py-10">
+                      <ClipboardList className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+                      <p className="text-sm text-gray-400">No API requests yet.</p>
+                      <button
+                        onClick={() => setActiveTab('request-new')}
+                        className="mt-3 inline-flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700"
+                      >
+                        <PlusCircle className="h-4 w-4" /> Submit a request
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {apiRequests.map((req) => (
+                        <div key={req.id} className="border border-gray-200 rounded-lg p-3 sm:p-4">
+                          <div className="flex flex-col gap-2">
+                            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="font-medium text-gray-900 text-sm">{req.name}</div>
+                                <div className="text-xs text-gray-500 truncate">{req.base_url}</div>
+                                <div className="mt-1 flex items-center gap-2 flex-wrap">
+                                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                                    req.status === 'approved' ? 'bg-green-100 text-green-700'
+                                    : req.status === 'rejected' ? 'bg-red-100 text-red-700'
+                                    : 'bg-amber-100 text-amber-700'
+                                  }`}>{req.status}</span>
+                                  {req.purpose && <span className="text-xs text-gray-400">Purpose: {req.purpose}</span>}
+                                  {req.category && <span className="text-xs text-gray-400">Category: {req.category}</span>}
+                                  <span className="text-xs text-gray-400">{new Date(req.created_at).toLocaleDateString()}</span>
+                                </div>
+                                {req.status === 'rejected' && req.rejection_reason && (
+                                  <div className="mt-1 text-xs text-red-600">Reason: {req.rejection_reason}</div>
+                                )}
+                              </div>
+                            </div>
+                            {req.status === 'pending' && isSuperAdmin && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <input
+                                  className="border border-gray-200 rounded px-2 py-1 text-xs flex-1 min-w-0"
+                                  placeholder="Rejection reason"
+                                  value={apiRejectionReasons[req.id] || ''}
+                                  onChange={(e) => setApiRejectionReasons((prev) => ({ ...prev, [req.id]: e.target.value }))}
+                                />
+                                <button
+                                  onClick={() => updateApiRequestStatus(req.id, 'approved')}
+                                  className="text-xs text-green-700 hover:text-green-800 font-medium"
+                                >Approve</button>
+                                <button
+                                  onClick={() => updateApiRequestStatus(req.id, 'rejected')}
+                                  className="text-xs text-red-600 hover:text-red-700 font-medium"
+                                >Reject</button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
