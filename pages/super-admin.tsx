@@ -2040,7 +2040,7 @@ export default function SuperAdminPanel() {
         )}
 
         {activeTab === 'social-platforms' && (() => {
-          const KNOWN_APIS: Record<string, Array<{ key: string; name: string; icon: string; env_var: string | null; auth_type: string; base_url: string; description: string }>> = {
+          const KNOWN_APIS: Record<string, Array<{ key: string; name: string; icon: string; env_var: string | null; auth_type: string; base_url: string; description: string; default_query_params?: Record<string, string>; default_headers?: Record<string, string>; optional_token?: boolean }>> = {
             trend: [
               { key: 'youtube',          name: 'YouTube Data API',        icon: '▶️',  env_var: 'YOUTUBE_API_KEY',   auth_type: 'query',  base_url: 'https://www.googleapis.com/youtube/v3/search',      description: 'Trending videos and Shorts' },
               { key: 'newsapi',          name: 'NewsAPI',                 icon: '📰',  env_var: 'NEWS_API_KEY',      auth_type: 'query',  base_url: 'https://newsapi.org/v2/top-headlines',             description: 'Top headlines + full-text search' },

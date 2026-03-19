@@ -58,11 +58,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (profile) {
       const ctx = buildCompanyContext(profile);
       const parts: string[] = [];
-      if (ctx.company_name) parts.push(`Company: ${ctx.company_name}`);
-      if (ctx.industry) parts.push(`Industry: ${ctx.industry}`);
-      if (ctx.value_proposition) parts.push(`Value proposition: ${ctx.value_proposition}`);
-      if (ctx.tone_of_voice) parts.push(`Tone of voice: ${ctx.tone_of_voice}`);
-      if (ctx.target_audience) parts.push(`Target audience: ${ctx.target_audience}`);
+      if (ctx.identity.name) parts.push(`Company: ${ctx.identity.name}`);
+      if (ctx.identity.industry) parts.push(`Industry: ${ctx.identity.industry}`);
+      if (ctx.brand.unique_value) parts.push(`Value proposition: ${ctx.brand.unique_value}`);
+      if (ctx.brand.brand_voice) parts.push(`Tone of voice: ${ctx.brand.brand_voice}`);
+      if (ctx.customer.target_audience) parts.push(`Target audience: ${ctx.customer.target_audience}`);
       brandContext = parts.join('\n');
     }
 

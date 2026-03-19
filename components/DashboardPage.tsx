@@ -765,19 +765,13 @@ export default function DashboardPage() {
         // Try to get error details from response body
         let errorMessage = `HTTP ${campaignsResponse.status}: ${campaignsResponse.statusText}`;
         let errorDetails = '';
-        
+
         try {
-          const errorData = await campaignsResponse.json();
-          console.error('API Error Response:', errorData);
-          
-          if (errorData.error) {
-            errorMessage = errorData.error;
-          }
-          if (errorData.details) {
-            errorDetails = errorData.details;
-          }
-        } catch (parseError) {
-          console.error('Could not parse error response:', parseError);
+          const raw = await campaignsResponse.text();
+          const errorData = raw && raw.trim()[0] === '{' ? JSON.parse(raw) : null;
+          if (errorData?.error) errorMessage = errorData.error;
+          if (errorData?.details) errorDetails = errorData.details;
+        } catch {
           // Use default error message
         }
         

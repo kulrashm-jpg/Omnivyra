@@ -21,6 +21,10 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
 // Parse Redis connection options — includes TLS for Upstash hosts
 function parseRedisUrl(url: string) {
+  // Strip any redis-cli command prefix (e.g. "redis-cli --tls -u redis://...")
+  const urlMatch = url.match(/rediss?:\/\/\S+/);
+  if (urlMatch) url = urlMatch[0];
+
   if (url.includes('://')) {
     const parsed = new URL(url);
     const host = parsed.hostname;

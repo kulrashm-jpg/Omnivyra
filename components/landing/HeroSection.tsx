@@ -53,7 +53,7 @@ export default function HeroSection() {
         {/* ── LEFT: Text ─────────────────────────────────────────────────── */}
         <div className="text-center lg:text-left">
           <p className="mb-4 inline-block rounded-full border border-[#3FA9F5]/30 bg-[#3FA9F5]/10 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-[#3FA9F5]">
-            AI-Driven Digital Marketing Systems
+            AI-Driven Digital Marketing System
           </p>
           <h1
             className="text-4xl font-bold leading-[1.08] tracking-tight text-white sm:text-5xl xl:text-[3.25rem]"
