@@ -5,6 +5,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import Footer from '../../components/landing/Footer';
 import { Loader2 } from 'lucide-react';
+import { getBlogCategoryImage } from '../../lib/blogImages';
 
 type BlogPost = {
   id: string;
@@ -28,16 +29,18 @@ function estimateReadTime(post: BlogPost): number {
   return Math.max(2, Math.ceil((titleWords + excerptWords + 120) / 200));
 }
 
-function ArticlePlaceholder({ aspect = '16/9' }: { aspect?: string }) {
+function ArticlePlaceholder({ category, aspect = '16/9' }: { category?: string | null; aspect?: string }) {
+  const img = getBlogCategoryImage(category);
   return (
-    <div
-      className="w-full bg-gradient-to-br from-slate-100 to-slate-200"
-      style={{ aspectRatio: aspect }}
-      aria-hidden
-    >
-      <div className="flex h-full w-full items-center justify-center">
-        <div className="h-12 w-12 rounded-full border-2 border-dashed border-slate-300" />
-      </div>
+    <div className="relative w-full overflow-hidden bg-gradient-to-br from-[#0A1F44] to-[#0A66C2]" style={{ aspectRatio: aspect }} aria-hidden>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={img.url}
+        alt=""
+        className="absolute inset-0 h-full w-full object-cover opacity-50 mix-blend-luminosity"
+        loading="lazy"
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-[#0A1F44]/60 to-transparent" />
     </div>
   );
 }
@@ -139,7 +142,7 @@ export default function BlogListingPage() {
                             <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" aria-hidden />
                           </>
                         ) : (
-                          <ArticlePlaceholder />
+                          <ArticlePlaceholder category={featured.category} />
                         )}
                       </div>
                       <div className="px-8 py-8 sm:px-10 sm:py-10">
@@ -196,7 +199,7 @@ export default function BlogListingPage() {
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/10 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" aria-hidden />
                               </>
                             ) : (
-                              <ArticlePlaceholder />
+                              <ArticlePlaceholder category={post.category} />
                             )}
                           </div>
                           <div className="flex flex-1 flex-col p-6">

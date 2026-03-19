@@ -42,7 +42,7 @@ export const resolveUserContext = async (req?: NextApiRequest): Promise<UserCont
 
   const { data: roleRows, error: roleError } = await supabase
     .from('user_company_roles')
-    .select('company_id, role, status, membership_type')
+    .select('company_id, role, status')
     .eq('user_id', user.id);
 
   if (roleError) {
@@ -66,14 +66,11 @@ export const resolveUserContext = async (req?: NextApiRequest): Promise<UserCont
   const membershipByCompany: Record<string, MembershipType> = {};
   for (const row of activeRoles) {
     if (row.company_id) {
-      membershipByCompany[row.company_id] = normalizeMembershipType(
-        (row as { membership_type?: string | null }).membership_type
-      );
+      membershipByCompany[row.company_id] = DEFAULT_MEMBERSHIP;
     }
   }
   const defaultCompanyId = companyIds[0] || '';
-  const membershipType =
-    (defaultCompanyId && membershipByCompany[defaultCompanyId]) || DEFAULT_MEMBERSHIP;
+  const membershipType = DEFAULT_MEMBERSHIP;
 
   return {
     userId: user.id,

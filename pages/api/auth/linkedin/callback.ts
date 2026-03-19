@@ -59,6 +59,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Fetch profile — try /v2/userinfo (OIDC) first, fall back to /v2/me
     let profile: Record<string, any> = {};
+    let linkedinConnectionCount = 0;
+
     const userinfoRes = await fetch('https://api.linkedin.com/v2/userinfo', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
@@ -87,6 +89,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
     }
     console.log('[LinkedIn callback] profile received:', { sub: profile.sub, name: profile.name });
+
+    // Attempt to fetch connection/follower count via /v2/me projection.
+    // Works for standard LinkedIn developer apps — no partner approval required.
+    // LinkedIn may return numConnections (exact) or numConnectionsRange (bucketed) depending on app permissions.
+    try {
+      const meProjectionRes = await fetch(
+        'https://api.linkedin.com/v2/me?projection=(id,numConnections,numConnectionsRange)',
+        {
+          headers: {
+            Authorization: `Bearer ${tokenData.access_token}`,
+            'X-Restli-Protocol-Version': '2.0.0',
+          },
+        }
+      );
+      if (meProjectionRes.ok) {
+        const meData = await meProjectionRes.json();
+        console.log('[LinkedIn callback] /v2/me projection response:', JSON.stringify(meData));
+        if (typeof meData.numConnections === 'number' && meData.numConnections > 0) {
+          linkedinConnectionCount = meData.numConnections;
+        } else if (meData.numConnectionsRange) {
+          // LinkedIn returns a range when count exceeds 500 (e.g. { start: 500, end: 999 })
+          linkedinConnectionCount = meData.numConnectionsRange.end ?? meData.numConnectionsRange.start ?? 0;
+        }
+        console.log('[LinkedIn callback] connection count:', linkedinConnectionCount);
+      } else {
+        const errText = await meProjectionRes.text();
+        console.log('[LinkedIn callback] /v2/me projection returned', meProjectionRes.status, errText);
+      }
+    } catch (connErr) {
+      console.log('[LinkedIn callback] Could not fetch connection count:', connErr);
+    }
 
     const { user } = await getSupabaseUserFromRequest(req);
     const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
@@ -149,6 +182,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       last_sync_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
+    if (linkedinConnectionCount > 0) updatePayload.follower_count = linkedinConnectionCount;
     if (companyIdUuid) updatePayload.company_id = companyIdUuid;
 
     if (existingAccount) {
@@ -185,6 +219,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         last_sync_at: new Date().toISOString(),
         access_token: encryptedCols.access_token,
         refresh_token: encryptedCols.refresh_token,
+        ...(linkedinConnectionCount > 0 && { follower_count: linkedinConnectionCount }),
       };
       if (companyIdUuid) insertPayload.company_id = companyIdUuid;
 
@@ -204,6 +239,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Save encrypted tokens using tokenStore
     await setToken(accountId, tokenObj);
+
+    // NOTE: LinkedIn connection count (r_network scope) requires LinkedIn Partner Program
+    // approval and cannot be fetched with standard OAuth scopes. Connection count will
+    // not be stored here; the UI handles missing counts gracefully.
 
     console.log('✅ LinkedIn account saved successfully:', { accountId, accountName });
 

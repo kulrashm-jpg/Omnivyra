@@ -7,6 +7,7 @@
 import React, { useState, useEffect } from 'react';
 import { usePlannerSession, type CalendarPlanActivity } from '../plannerSessionStore';
 import { ExternalLink, Sparkles, Loader2 } from 'lucide-react';
+import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
 
 export interface ContentTabProps {
   campaignId?: string | null;
@@ -54,10 +55,9 @@ export function ContentTab({ campaignId, companyId }: ContentTabProps) {
     if (!companyId || !selected) return;
     setGenerating(true);
     try {
-      const res = await fetch('/api/campaigns/ai/plan', {
+      const res = await fetchWithAuth('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           preview_mode: true,
           mode: 'planner_command',

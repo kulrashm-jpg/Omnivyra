@@ -34,7 +34,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { companyId, idea_spine, strategy_context, trend_context, duration_weeks } = req.body || {};
+    const { companyId, idea_spine, strategy_context, trend_context, duration_weeks, theme_source, alternatives } = req.body || {};
     if (!companyId || typeof companyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required' });
     }
@@ -50,47 +50,72 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const duration = Number(strategy_context?.duration_weeks ?? duration_weeks ?? 6);
     const weeks = Math.max(1, Math.min(24, Math.round(duration)));
 
-    let themes: string[] = [];
+    // Resolve theme_source: 'ai' | 'trend' | 'both' (default: 'ai')
+    const source: 'ai' | 'trend' | 'both' = theme_source === 'trend' ? 'trend' : theme_source === 'both' ? 'both' : 'ai';
 
+    // Resolve trend topic
+    let trendTopic: string | null = null;
     const trendCtx = trend_context as TrendContext | null | undefined;
+    const rawTrendTopic = typeof trendCtx?.trend_topic === 'string' ? trendCtx.trend_topic.trim() : null;
     const recId = trendCtx?.recommendation_id;
 
-    if (recId && typeof recId === 'string' && recId.trim()) {
-      const { data: rec, error } = await supabase
-        .from('recommendation_snapshots')
-        .select('trend_topic')
-        .eq('id', recId.trim())
-        .eq('company_id', companyId.trim())
-        .maybeSingle();
-
-      if (!error && rec && (rec as { trend_topic?: string }).trend_topic) {
-        const topic = String((rec as { trend_topic: string }).trend_topic).trim();
-        if (topic) {
-          themes = await generateThemesForCampaignWeeks(topic, weeks);
+    if (source !== 'ai') {
+      if (recId && typeof recId === 'string' && recId.trim()) {
+        const { data: rec, error } = await supabase
+          .from('recommendation_snapshots')
+          .select('trend_topic')
+          .eq('id', recId.trim())
+          .eq('company_id', companyId.trim())
+          .maybeSingle();
+        if (!error && rec && (rec as { trend_topic?: string }).trend_topic) {
+          trendTopic = String((rec as { trend_topic: string }).trend_topic).trim() || null;
         }
       }
+      if (!trendTopic && rawTrendTopic) trendTopic = rawTrendTopic;
     }
 
-    if (themes.length === 0) {
-      const spine = idea_spine as IdeaSpine | null | undefined;
-      const topic = [
-        spine?.refined_title,
-        spine?.title,
-        spine?.refined_description,
-        spine?.description,
-      ]
-        .filter((s) => typeof s === 'string' && String(s).trim())
-        .map((s) => String(s).trim())[0];
+    // Resolve AI topic from idea_spine
+    const spine = idea_spine as IdeaSpine | null | undefined;
+    const aiTopic = [spine?.refined_title, spine?.title, spine?.refined_description, spine?.description]
+      .filter((s) => typeof s === 'string' && String(s).trim())
+      .map((s) => String(s).trim())[0] ?? null;
 
-      if (!topic) {
-        return res.status(400).json({
-          error: 'Provide idea_spine (title/description) or trend_context.recommendation_id with valid recommendation.',
-        });
-      }
-
-      themes = await generateThemesForCampaignWeeks(topic, weeks);
+    // Build the generation topic based on source
+    let genTopic: string | null = null;
+    if (source === 'trend') {
+      genTopic = trendTopic;
+    } else if (source === 'both') {
+      const parts = [trendTopic, aiTopic].filter(Boolean);
+      genTopic = parts.length > 0 ? parts.join(' + ') : null;
+    } else {
+      genTopic = aiTopic;
     }
 
+    if (!genTopic) {
+      return res.status(400).json({
+        error: source === 'trend'
+          ? 'No trend context found. Select a trend recommendation first.'
+          : 'Provide idea_spine (title/description) to generate themes.',
+      });
+    }
+
+    // Return alternatives (1 or 2 sets) — each set is independently generated
+    const numAlts = alternatives === 2 ? 2 : 1;
+    if (numAlts === 2) {
+      const [setA, setB] = await Promise.all([
+        generateThemesForCampaignWeeks(genTopic, weeks),
+        generateThemesForCampaignWeeks(genTopic, weeks),
+      ]);
+      return res.status(200).json({
+        themes: setA.map((title, i) => ({ week: i + 1, title })),
+        alternatives: [
+          setA.map((title, i) => ({ week: i + 1, title })),
+          setB.map((title, i) => ({ week: i + 1, title })),
+        ],
+      });
+    }
+
+    const themes = await generateThemesForCampaignWeeks(genTopic, weeks);
     const themesStructured = themes.map((title, i) => ({ week: i + 1, title }));
     return res.status(200).json({ themes: themesStructured });
   } catch (err: unknown) {

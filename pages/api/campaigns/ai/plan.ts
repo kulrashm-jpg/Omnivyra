@@ -20,6 +20,21 @@ import { detectCampaignConflicts, suggestAvailableDateRange } from '../../../../
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUserCompanyRole, getCompanyRoleIncludingInvited } from '../../../../backend/services/rbacService';
 import { resolveEffectiveCampaignRole, isCompanyOverrideRole } from '../../../../backend/services/campaignRoleService';
+import {
+  getLatestCampaignContextForCompany,
+  type PreviousCampaignContext,
+} from '../../../../backend/services/campaignContextService';
+
+// ---------------------------------------------------------------------------
+// Module-level TTL cache for per-company campaign context lookups.
+// Persists across requests within the same Node.js process (Next.js API routes
+// keep module state in memory between calls in both dev and production).
+//
+// TTL: 60 s — stale enough to avoid redundant DB hits during a single planning
+// session, short enough to pick up a newly finalized campaign within a minute.
+// ---------------------------------------------------------------------------
+const companyCtxCache = new Map<string, { data: PreviousCampaignContext | null; expiresAt: number }>();
+const COMPANY_CTX_TTL_MS = 60_000;
 
 const MODES: CampaignAiMode[] = ['generate_plan', 'refine_day', 'platform_customize'];
 
@@ -57,6 +72,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       campaign_direction: bodyCampaignDirection,
       platform_content_requests: bodyPlatformContentRequests,
       campaign_type: bodyCampaignType,
+      account_context: bodyAccountContext,
+      previous_performance_insights: bodyPreviousPerformanceInsights,
     } = body;
 
     const conversationHistory = Array.isArray(bodyConversationHistory)
@@ -223,6 +240,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           posting_frequency: (strat.posting_frequency && typeof strat.posting_frequency === 'object' && !Array.isArray(strat.posting_frequency))
             ? (strat.posting_frequency as Record<string, number>)
             : { linkedin: 3 },
+          campaign_goal: typeof strat.campaign_goal === 'string' ? strat.campaign_goal : undefined,
+          target_audience: Array.isArray(strat.target_audience)
+            ? (strat.target_audience as string[]).filter(Boolean).join(', ')
+            : typeof strat.target_audience === 'string' ? strat.target_audience : undefined,
+          selected_aspects: Array.isArray(strat.selected_aspects) ? (strat.selected_aspects as string[]).filter(Boolean) : undefined,
+          selected_offerings: Array.isArray(strat.selected_offerings) ? (strat.selected_offerings as string[]).filter(Boolean) : undefined,
         };
         const ideaSpine = {
           refined_title: String(spineObj?.refined_title ?? spineObj?.title ?? ''),
@@ -612,6 +635,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? (bodyStrategyContext as { duration_weeks: number }).duration_weeks
           : 12;
 
+    // ── Previous campaign context (generate_plan only, non-fatal) ────────────
+    // Auto-fetch the most recent completed campaign context for this company so
+    // the AI can learn from what worked and failed in past campaigns.
+    // Result is TTL-cached in the module Map to avoid a DB roundtrip on every
+    // generate_plan call during the same planning session (60 s window).
+    let previousCampaignContext: PreviousCampaignContext | null = null;
+    if (effectiveMode === 'generate_plan' && companyId && typeof companyId === 'string') {
+      try {
+        const cacheKey = companyId;
+        const cached = companyCtxCache.get(cacheKey);
+        if (cached && cached.expiresAt > Date.now()) {
+          previousCampaignContext = cached.data;
+        } else {
+          previousCampaignContext = await getLatestCampaignContextForCompany(
+            companyId,
+            resolvedCampaignId ?? undefined
+          );
+          companyCtxCache.set(cacheKey, {
+            data: previousCampaignContext,
+            expiresAt: Date.now() + COMPANY_CTX_TTL_MS,
+          });
+        }
+      } catch (ctxErr) {
+        console.warn('[PLANNER][CONTEXT][WARN] Could not fetch previous campaign context (non-fatal):', (ctxErr as Error)?.message ?? ctxErr);
+      }
+    }
+
     const result = await runCampaignAiPlan({
       campaignId: resolvedCampaignId,
       mode: effectiveMode,
@@ -633,6 +683,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       chatContext: typeof chatContext === 'string' ? chatContext : undefined,
       vetScope: vetScope && typeof vetScope === 'object' && Array.isArray(vetScope.selectedWeeks) ? vetScope : undefined,
       autopilot: autopilot === true,
+      account_context: bodyAccountContext && typeof bodyAccountContext === 'object' ? bodyAccountContext : undefined,
+      previous_performance_insights: bodyPreviousPerformanceInsights && typeof bodyPreviousPerformanceInsights === 'object' ? bodyPreviousPerformanceInsights : undefined,
+      previous_campaign_context: previousCampaignContext ?? undefined,
     });
 
     if (result?.validation_result?.status === 'invalid' && effectiveMode === 'generate_plan' && !result?.plan) {

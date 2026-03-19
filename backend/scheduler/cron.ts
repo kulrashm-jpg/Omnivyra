@@ -20,6 +20,12 @@
  * - CRON_INTERVAL_SECONDS=60 (optional, default 60)
  */
 
+import { validateCronEnv } from '../utils/validateEnv';
+import { CronGuard } from '../utils/cronGuard';
+
+// Fail fast if required env vars are missing
+validateCronEnv();
+import { calibrateThresholds } from '../services/confidenceCalibrator';
 import {
   findDuePostsAndEnqueue,
   enqueueEngagementPolling,
@@ -104,7 +110,8 @@ const ENGAGEMENT_DIGEST_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const ENGAGEMENT_SIGNAL_SCHEDULER_INTERVAL_MS = 15 * 60 * 1000; // every 15 minutes
 const ENGAGEMENT_SIGNAL_ARCHIVE_INTERVAL_MS = 24 * 60 * 60 * 1000; // nightly
 const ENGAGEMENT_OPPORTUNITY_SCANNER_INTERVAL_MS = 4 * 60 * 60 * 1000; // every 4 hours
-const CONNECTOR_TOKEN_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours (G5.4)
+const CONNECTOR_TOKEN_REFRESH_INTERVAL_MS      = 6 * 60 * 60 * 1000;  // every 6 hours
+const CONFIDENCE_CALIBRATION_INTERVAL_MS       = 7 * 24 * 60 * 60 * 1000; // weekly
 let lastOpportunitySlotsRun = 0;
 let lastGovernanceAuditRun = 0;
 let lastAutoOptimizationRun = 0;
@@ -132,9 +139,11 @@ let lastEngagementSignalArchiveRun = 0;
 let lastEngagementOpportunityScannerRun = 0;
 let lastConnectorTokenRefreshRun = 0;
 let lastLeadThreadQueueCleanupRun = 0;
+let lastConfidenceCalibrationRun = 0;
 let lastScheduledLeadRunHour = -1;
 
 let cronInterval: NodeJS.Timeout | null = null;
+const cronGuard = new CronGuard();
 
 // Active worker timers — tracked so they can be cleared on shutdown
 const workerTimers: NodeJS.Timeout[] = [];
@@ -181,8 +190,41 @@ function scheduleWorker(
  * Start the cron scheduler
  */
 async function startCron() {
-  console.log('[startup] cron scheduler started');
-  console.log(`⏰ Starting cron scheduler (interval: ${CRON_INTERVAL_MS / 1000}s)...`);
+  console.log('[cron] starting scheduler loop');
+  console.log(`[cron] interval: ${CRON_INTERVAL_MS / 1000}s`);
+
+  // ── Restore last-run timestamps from Redis (survives restarts) ─────────────
+  const saved = await cronGuard.load();
+  if (Object.keys(saved).length > 0) {
+    lastOpportunitySlotsRun             = saved.opportunitySlots            ?? 0;
+    lastGovernanceAuditRun              = saved.governanceAudit             ?? 0;
+    lastAutoOptimizationRun             = saved.autoOptimization            ?? 0;
+    lastEngagementPollingEnqueue        = saved.engagementPolling           ?? 0;
+    lastIntelligencePollingEnqueue      = saved.intelligencePolling         ?? 0;
+    lastSignalClusteringRun             = saved.signalClustering            ?? 0;
+    lastSignalIntelligenceRun           = saved.signalIntelligence          ?? 0;
+    lastStrategicThemeRun               = saved.strategicTheme              ?? 0;
+    lastCampaignOpportunityRun          = saved.campaignOpportunity         ?? 0;
+    lastContentOpportunityRun           = saved.contentOpportunity          ?? 0;
+    lastNarrativeEngineRun              = saved.narrativeEngine             ?? 0;
+    lastCommunityPostRun                = saved.communityPost               ?? 0;
+    lastThreadEngineRun                 = saved.threadEngine                ?? 0;
+    lastEngagementCaptureRun            = saved.engagementCapture           ?? 0;
+    lastFeedbackIntelligenceRun         = saved.feedbackIntelligence        ?? 0;
+    lastCompanyTrendRelevanceRun        = saved.companyTrendRelevance       ?? 0;
+    lastPerformanceIngestionRun         = saved.performanceIngestion        ?? 0;
+    lastPerformanceAggregationRun       = saved.performanceAggregation      ?? 0;
+    lastCampaignHealthEvaluationRun     = saved.campaignHealthEvaluation    ?? 0;
+    lastDailyIntelligenceRun            = saved.dailyIntelligence           ?? 0;
+    lastIntelligenceEventCleanupRun     = saved.intelligenceEventCleanup    ?? 0;
+    lastEngagementDigestRun             = saved.engagementDigest            ?? 0;
+    lastEngagementSignalSchedulerRun    = saved.engagementSignalScheduler   ?? 0;
+    lastEngagementSignalArchiveRun      = saved.engagementSignalArchive     ?? 0;
+    lastEngagementOpportunityScannerRun = saved.engagementOpportunityScanner ?? 0;
+    lastConnectorTokenRefreshRun        = saved.connectorTokenRefresh       ?? 0;
+    lastLeadThreadQueueCleanupRun       = saved.leadThreadQueueCleanup      ?? 0;
+    console.info('[cron-guard] last-run timestamps restored — tasks will respect their intervals on startup');
+  }
 
   // First execution: run intelligence polling immediately (don't wait 2 hours)
   if (!lastIntelligencePollingEnqueue) {
@@ -738,6 +780,49 @@ async function runSchedulerCycle() {
       console.error('❌ Engagement signal archive error:', error.message);
     }
   }
+
+  // Calibrate confidence thresholds weekly (campaign planner edge case #3)
+  if (Date.now() - lastConfidenceCalibrationRun >= CONFIDENCE_CALIBRATION_INTERVAL_MS) {
+    lastConfidenceCalibrationRun = Date.now();
+    try {
+      const thresholds = await calibrateThresholds();
+      console.log('[confidenceCalibrator] calibration complete', thresholds);
+    } catch (error: any) {
+      console.error('❌ Confidence calibration error:', error.message);
+    }
+  }
+
+  // ── Persist last-run timestamps to Redis (survives restarts) ───────────────
+  void cronGuard.save({
+    opportunitySlots:             lastOpportunitySlotsRun,
+    governanceAudit:              lastGovernanceAuditRun,
+    autoOptimization:             lastAutoOptimizationRun,
+    engagementPolling:            lastEngagementPollingEnqueue,
+    intelligencePolling:          lastIntelligencePollingEnqueue,
+    signalClustering:             lastSignalClusteringRun,
+    signalIntelligence:           lastSignalIntelligenceRun,
+    strategicTheme:               lastStrategicThemeRun,
+    campaignOpportunity:          lastCampaignOpportunityRun,
+    contentOpportunity:           lastContentOpportunityRun,
+    narrativeEngine:              lastNarrativeEngineRun,
+    communityPost:                lastCommunityPostRun,
+    threadEngine:                 lastThreadEngineRun,
+    engagementCapture:            lastEngagementCaptureRun,
+    feedbackIntelligence:         lastFeedbackIntelligenceRun,
+    companyTrendRelevance:        lastCompanyTrendRelevanceRun,
+    performanceIngestion:         lastPerformanceIngestionRun,
+    performanceAggregation:       lastPerformanceAggregationRun,
+    campaignHealthEvaluation:     lastCampaignHealthEvaluationRun,
+    dailyIntelligence:            lastDailyIntelligenceRun,
+    intelligenceEventCleanup:     lastIntelligenceEventCleanupRun,
+    engagementDigest:             lastEngagementDigestRun,
+    engagementSignalScheduler:    lastEngagementSignalSchedulerRun,
+    engagementSignalArchive:      lastEngagementSignalArchiveRun,
+    engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
+    connectorTokenRefresh:        lastConnectorTokenRefreshRun,
+    leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
+    confidenceCalibration:        lastConfidenceCalibrationRun,
+  });
 }
 
 // Start cron if this file is run directly

@@ -53,7 +53,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Test connection by making a simple API call
     // Platform-specific test endpoints
     const testEndpoints: Record<string, string> = {
-      linkedin: 'https://api.linkedin.com/v2/me',
+      // LinkedIn: use OIDC userinfo — /v2/me is deprecated and returns 403 without special access
+      linkedin: 'https://api.linkedin.com/v2/userinfo',
       twitter: 'https://api.twitter.com/2/users/me',
       instagram: 'https://graph.instagram.com/me',
       facebook: 'https://graph.facebook.com/me',

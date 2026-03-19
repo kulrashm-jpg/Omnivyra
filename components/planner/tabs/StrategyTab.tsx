@@ -5,10 +5,12 @@
  * Strategic Themes: generate and apply weekly themes before skeleton.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { usePlannerSession, type StrategicThemeEntry } from '../plannerSessionStore';
 import { OpportunityInsightsTab } from '../OpportunityInsightsTab';
-import { Sparkles, Loader2, Palette, RotateCcw, Trash2, Target } from 'lucide-react';
+import { MultiSelectDropdown } from '../../ui/dropdown';
+import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { Sparkles, Loader2, Palette, RotateCcw, Trash2, Target, Layers } from 'lucide-react';
 
 const CAMPAIGN_GOAL_OPTIONS = [
   'Brand Awareness',
@@ -31,8 +33,8 @@ const TARGET_AUDIENCE_OPTIONS = [
   'General Consumers',
 ] as const;
 
-/** Normalize target_audience from store (string | string[]) to string[] */
-function toAudienceArray(val: string | string[] | undefined | null): string[] {
+/** Normalize a string | string[] field to string[] */
+function toStringArray(val: string | string[] | undefined | null): string[] {
   if (!val) return [];
   if (Array.isArray(val)) return val.filter((s) => typeof s === 'string' && s.trim());
   const s = String(val).trim();
@@ -40,9 +42,18 @@ function toAudienceArray(val: string | string[] | undefined | null): string[] {
   return s.split(/[,;]/).map((x) => x.trim()).filter(Boolean);
 }
 
-/** Normalize for API: string[] → comma-joined string */
-function toAudienceString(arr: string[]): string {
-  return arr.filter(Boolean).join(', ');
+const GOAL_INCOMPATIBLE_PAIRS: [string, string][] = [
+  ['Brand Awareness', 'Thought Leadership'],
+  ['Lead Generation', 'Product Launch'],
+  ['Customer Retention', 'Community Growth'],
+];
+
+function validateGoals(goals: string[]): string | null {
+  if (goals.length <= 1) return null;
+  for (const [a, b] of GOAL_INCOMPATIBLE_PAIRS) {
+    if (goals.includes(a) && goals.includes(b)) return 'Selected goals cannot be combined.';
+  }
+  return null;
 }
 
 export interface StrategyTabProps {
@@ -70,12 +81,67 @@ export function StrategyTab({
   const recommendedGoal = state.recommended_goal ?? null;
   const recommendedAudience = state.recommended_audience ?? null;
 
-  const campaignGoal = strat?.campaign_goal ?? '';
-  const targetAudienceList = toAudienceArray(strat?.target_audience);
+  const goalList = toStringArray(strat?.campaign_goal);
+  const targetAudienceList = toStringArray(strat?.target_audience);
+  const [goalError, setGoalError] = useState<string | null>(null);
 
-  const applyGoal = (goal: string) => {
+  // Strategic config from company profile
+  type StrategicConfig = { strategic_aspects: string[]; offerings_by_aspect: Record<string, string[]> };
+  const [strategicConfig, setStrategicConfig] = useState<StrategicConfig | null>(null);
+
+  useEffect(() => {
+    if (!companyId) { setStrategicConfig(null); return; }
+    let cancelled = false;
+    fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (cancelled) return;
+        const config = data?.recommendation_strategic_config;
+        const map = config?.offerings_by_aspect ?? config?.aspect_offerings_map;
+        if (config && Array.isArray(config.strategic_aspects) && typeof map === 'object') {
+          const sortAz = (a: string, b: string) => a.trim().toLowerCase().localeCompare(b.trim().toLowerCase(), undefined, { sensitivity: 'base' });
+          const sortedAspects = [...config.strategic_aspects].sort(sortAz);
+          const sortedMap: Record<string, string[]> = {};
+          for (const [k, v] of Object.entries(map ?? {})) {
+            sortedMap[k] = Array.isArray(v) ? [...v as string[]].sort(sortAz) : [];
+          }
+          setStrategicConfig({ strategic_aspects: sortedAspects, offerings_by_aspect: sortedMap });
+        }
+      })
+      .catch(() => { if (!cancelled) setStrategicConfig(null); });
+    return () => { cancelled = true; };
+  }, [companyId]);
+
+  const selectedAspects = strat?.selected_aspects ?? [];
+  const selectedOfferings = strat?.selected_offerings ?? [];
+
+  const offeringsForSelectedAspects = useMemo(() => {
+    if (!strategicConfig || selectedAspects.length === 0) return [];
+    const seen = new Set<string>();
+    for (const aspect of selectedAspects) {
+      (strategicConfig.offerings_by_aspect[aspect] ?? []).forEach((o) => seen.add(o));
+    }
+    return Array.from(seen);
+  }, [selectedAspects, strategicConfig]);
+
+  // Keep only valid offerings when aspects change
+  useEffect(() => {
+    if (selectedOfferings.length === 0) return;
+    const allowed = new Set(offeringsForSelectedAspects);
+    const next = selectedOfferings.filter((o) => allowed.has(o));
+    if (next.length !== selectedOfferings.length) {
+      const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+      setStrategyContext({ ...base, selected_offerings: next });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offeringsForSelectedAspects]);
+
+  const applyGoals = (goals: string[]) => {
+    const err = validateGoals(goals);
+    if (err) { setGoalError(err); return; }
+    setGoalError(null);
     const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
-    setStrategyContext({ ...base, campaign_goal: goal });
+    setStrategyContext({ ...base, campaign_goal: goals.filter(Boolean).join(', ') });
   };
 
   const applyAudience = (audience: string[]) => {
@@ -90,8 +156,22 @@ export function StrategyTab({
     applyAudience(Array.from(set));
   };
 
+  const toggleAspect = (aspect: string) => {
+    const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+    const set = new Set(selectedAspects);
+    if (set.has(aspect)) set.delete(aspect); else set.add(aspect);
+    setStrategyContext({ ...base, selected_aspects: Array.from(set) });
+  };
+
+  const toggleOffering = (offering: string) => {
+    const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+    const set = new Set(selectedOfferings);
+    if (set.has(offering)) set.delete(offering); else set.add(offering);
+    setStrategyContext({ ...base, selected_offerings: Array.from(set) });
+  };
+
   const applyRecommendedGoal = () => {
-    if (recommendedGoal) applyGoal(recommendedGoal);
+    if (recommendedGoal) applyGoals([...new Set([...goalList, recommendedGoal])]);
   };
 
   const applyRecommendedAudience = () => {
@@ -287,16 +367,15 @@ export function StrategyTab({
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Campaign goal</label>
-            <select
-              value={campaignGoal}
-              onChange={(e) => applyGoal(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white"
-            >
-              <option value="">Select goal…</option>
-              {CAMPAIGN_GOAL_OPTIONS.map((g) => (
-                <option key={g} value={g}>{g}</option>
-              ))}
-            </select>
+            <MultiSelectDropdown
+              options={CAMPAIGN_GOAL_OPTIONS.map((v) => ({ value: v, label: v }))}
+              values={goalList}
+              onChange={applyGoals}
+              placeholder="Select goal(s)…"
+              className="w-full"
+              size="sm"
+            />
+            {goalError && <p className="text-xs text-red-600 mt-1">{goalError}</p>}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-2">Target audience</label>
@@ -325,6 +404,71 @@ export function StrategyTab({
           </div>
         </div>
       </div>
+
+      {/* Strategic Focus — aspects + offerings from company profile */}
+      {companyId && strategicConfig && strategicConfig.strategic_aspects.length > 0 && (
+        <div className="border-t border-gray-200 pt-4">
+          <h3 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
+            <Layers className="h-4 w-4 text-indigo-600" />
+            Strategic Focus
+          </h3>
+          <p className="text-xs text-gray-500 mb-3">
+            Select strategic aspects (and specific offerings) to anchor this campaign. AI will align content topics and messaging to your selections.
+          </p>
+
+          {/* Aspect chips */}
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {strategicConfig.strategic_aspects.map((aspect) => {
+              const active = selectedAspects.includes(aspect);
+              return (
+                <button
+                  key={aspect}
+                  type="button"
+                  onClick={() => toggleAspect(aspect)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                    active
+                      ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
+                      : 'bg-gray-100 text-gray-600 border border-transparent hover:bg-gray-200'
+                  }`}
+                >
+                  {aspect}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Offerings under selected aspects */}
+          {offeringsForSelectedAspects.length > 0 && (
+            <div>
+              <p className="text-[10px] text-gray-500 mb-1.5 uppercase tracking-wide">Offerings</p>
+              <div className="flex flex-wrap gap-1.5">
+                {offeringsForSelectedAspects.map((offering) => {
+                  const label = offering.includes(':') ? offering.split(':').slice(1).join(':').trim() : offering;
+                  const active = selectedOfferings.includes(offering);
+                  return (
+                    <button
+                      key={offering}
+                      type="button"
+                      onClick={() => toggleOffering(offering)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                        active
+                          ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                          : 'bg-gray-100 text-gray-600 border border-transparent hover:bg-gray-200'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {selectedAspects.length > 0 && offeringsForSelectedAspects.length === 0 && (
+            <p className="text-xs text-gray-400">No offerings configured for this aspect.</p>
+          )}
+        </div>
+      )}
 
       {companyId && (
         <div className="border-t border-gray-200 pt-4">

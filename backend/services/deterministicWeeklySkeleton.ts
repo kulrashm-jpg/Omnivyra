@@ -1,5 +1,12 @@
 import { supabase } from '../db/supabaseClient';
 import type { ExecutionMode } from './executionModeInference';
+import type { AccountContext } from '../types/accountContext';
+
+/** Returns true when cross-platform content sharing is enabled (one piece reused across platforms). */
+const isCrossPlatformSharingEnabled = (value: unknown): boolean => {
+  if (value === true || value === 'true' || value === 'enabled' || value === 1) return true;
+  return false;
+};
 
 type DeterministicPlanningContext = {
   content_capacity?: unknown;
@@ -8,6 +15,7 @@ type DeterministicPlanningContext = {
   platforms?: unknown;
   platform_content_requests?: unknown;
   cross_platform_sharing?: unknown;
+  account_context?: AccountContext | null;
 };
 
 export type DeterministicExecutionItem = {
@@ -238,20 +246,25 @@ async function buildPlatformOptionsByContentType(): Promise<Map<string, string[]
 }
 
 /** Backward compatibility: undefined → shared mode (true). */
-function isCrossPlatformSharingEnabled(value: unknown): boolean {
-  if (value == null) return true;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'object' && !Array.isArray(value)) {
-    const obj = value as Record<string, unknown>;
-    if (typeof obj.enabled === 'boolean') return obj.enabled;
-    if (obj.enabled === undefined && obj.mode === 'unique') return false;
-  }
-  if (typeof value === 'string') {
-    const n = value.trim().toLowerCase();
-    if (n === 'false' || n === 'no' || n === 'disabled' || n === 'unique') return false;
-    if (n === 'true' || n === 'yes' || n === 'enabled' || n === 'shared') return true;
-  }
-  return true;
+function applyMaturityFrequencyAdjustment(
+  requests: Array<{ platform: string; content_type: string; count_per_week: number }>,
+  accountContext: AccountContext | null | undefined
+): Array<{ platform: string; content_type: string; count_per_week: number }> {
+  if (!accountContext) return requests;
+
+  // Maturity-based frequency multipliers
+  const maturityMultipliers: Record<string, number> = {
+    'NEW': 0.7,      // Reduce frequency for new accounts (70% of requested)
+    'GROWING': 0.9,  // Slight reduction for growing accounts (90% of requested)
+    'ESTABLISHED': 1.0 // Full frequency for established accounts
+  };
+
+  const multiplier = maturityMultipliers[accountContext.maturityStage] ?? 1.0;
+
+  return requests.map(request => ({
+    ...request,
+    count_per_week: Math.max(1, Math.floor(request.count_per_week * multiplier))
+  }));
 }
 
 export async function buildDeterministicWeeklySkeleton(
@@ -265,6 +278,9 @@ export async function buildDeterministicWeeklySkeleton(
     );
   }
 
+  // Apply maturity-based frequency adjustment
+  const adjustedRequests = applyMaturityFrequencyAdjustment(requests, planningContext.account_context);
+
   const platformOptionsByContentType = await buildPlatformOptionsByContentType();
 
   const execution_items: DeterministicExecutionItem[] = [];
@@ -273,7 +289,7 @@ export async function buildDeterministicWeeklySkeleton(
   const sharingEnabled = isCrossPlatformSharingEnabled((planningContext as any)?.cross_platform_sharing);
   const byType = new Map<string, Map<string, number>>();
 
-  for (const r of requests) {
+  for (const r of adjustedRequests) {
     const platform = normalizePlatformKey(r.platform);
     const content_type = normalizeContentType(r.content_type);
     const count = toNonNegativeInt(r.count_per_week) ?? 0;
@@ -281,21 +297,14 @@ export async function buildDeterministicWeeklySkeleton(
     if (!platform || !content_type) continue;
     if (count <= 0) continue;
 
-    const platform_options = platformOptionsByContentType.get(content_type) ?? [];
-    if (platform_options.length === 0) {
-      throw new DeterministicWeeklySkeletonError(
-        'DETERMINISTIC_UNSUPPORTED_CONTENT_TYPE',
-        `No platforms support requested content_type "${content_type}".`,
-        { content_type }
-      );
-    }
-    if (!platform_options.includes(platform)) {
-      throw new DeterministicWeeklySkeletonError(
-        'DETERMINISTIC_PLATFORM_NOT_SUPPORTED_FOR_CONTENT_TYPE',
-        `Requested platform "${platform}" does not support content_type "${content_type}".`,
-        { platform, content_type, platform_options }
-      );
-    }
+    // Use platform_content_rules as a hint; fall back to the explicitly requested platform
+    // so company-admin-configured content types (e.g. "blog") are always accepted.
+    const rulesOptions = platformOptionsByContentType.get(content_type) ?? [];
+    const platform_options = rulesOptions.includes(platform)
+      ? rulesOptions
+      : rulesOptions.length > 0
+        ? [...rulesOptions, platform]
+        : [platform];
 
     platform_allocation[platform] = (platform_allocation[platform] ?? 0) + count;
     postingsTotalsByType[content_type] = (postingsTotalsByType[content_type] ?? 0) + count;
@@ -334,8 +343,8 @@ export async function buildDeterministicWeeklySkeleton(
 
   // Build execution items at the UNIQUE piece level (sharing-aware).
   for (const [content_type, perPlatform] of byType.entries()) {
-    const platform_options = platformOptionsByContentType.get(content_type) ?? [];
     const selected_platforms = Array.from(perPlatform.keys()).sort((a, b) => a.localeCompare(b));
+    const platform_options = platformOptionsByContentType.get(content_type) ?? selected_platforms;
     const unique = uniqueTotalsByType[content_type] ?? 0;
     if (unique <= 0) continue;
 

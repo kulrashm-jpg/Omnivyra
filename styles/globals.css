@@ -1,6 +1,29 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@600;700;800&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── Float animation for hero cards ─────────────────────────────────────── */
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+@keyframes float-mid {
+  0%, 100% { transform: translateX(20px) translateY(0px); }
+  50% { transform: translateX(20px) translateY(-6px); }
+}
+@keyframes float-fast {
+  0%, 100% { transform: translateX(10px) translateY(0px); }
+  50% { transform: translateX(10px) translateY(-10px); }
+}
+.animate-float-slow  { animation: float-slow  4s ease-in-out infinite; }
+.animate-float-mid   { animation: float-mid   5s ease-in-out infinite 0.8s; }
+.animate-float-fast  { animation: float-fast  3.5s ease-in-out infinite 1.4s; }
+
+/* ── Card hover lift ─────────────────────────────────────────────────────── */
+.card-lift { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.card-lift:hover { transform: translateY(-4px); box-shadow: 0 12px 32px rgba(10,31,68,0.12); }
 
 /* Omnivyra landing theme */
 :root {

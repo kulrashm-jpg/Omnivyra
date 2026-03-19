@@ -208,7 +208,7 @@ export const getUserRole = async (
   // Query company-specific role first (happy path: 1 DB round-trip)
   const { data, error } = await supabase
     .from('user_company_roles')
-    .select('role, status, membership_type')
+    .select('role, status')
     .eq('user_id', userId)
     .eq('company_id', companyId)
     .eq('status', 'active')
@@ -217,12 +217,10 @@ export const getUserRole = async (
     return { role: null, error: null, membershipType: undefined };
   }
   if (data && data.length > 0) {
-    const row = data[0] as { role: string; status?: string; membership_type?: string | null };
+    const row = data[0] as { role: string; status?: string };
     const rawRole = typeof row.role === 'string' ? row.role.trim() : '';
     const normalizedRole = normalizeRole(rawRole || row.role);
-    const membershipType =
-      (row.membership_type || '').trim().toUpperCase() === 'EXTERNAL' ? 'EXTERNAL' : 'INTERNAL';
-    return { role: normalizedRole, error: null, membershipType };
+    return { role: normalizedRole, error: null, membershipType: 'INTERNAL' };
   }
 
   // No active role: check invited (admin fallback) before "any role" check

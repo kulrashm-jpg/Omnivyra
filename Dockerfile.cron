@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Omnivyra — Cron Scheduler Service
+# Railway deployment: single replica, runs all scheduled tasks
+# IMPORTANT: must be deployed as exactly 1 replica (never scale horizontally)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Stage 1: build ────────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install ALL deps (including devDeps: typescript, ts-node) with legacy peer
+# deps to bypass eslint v8/v9 ERESOLVE conflict
+COPY package*.json ./
+RUN npm install --legacy-peer-deps
+
+# Copy source and compile
+COPY . .
+RUN npx tsc -p tsconfig.worker.json
+
+# ── Stage 2: production ───────────────────────────────────────────────────────
+FROM node:20-alpine AS production
+
+WORKDIR /app
+
+# Install production dependencies only
+COPY package*.json ./
+RUN npm install --omit=dev --legacy-peer-deps
+
+# Copy compiled output from builder
+COPY --from=builder /app/dist ./dist
+
+# Remove any accidentally-copied secrets
+RUN rm -f .env .env.local .env.production
+
+ENV NODE_ENV=production
+ENV CRON_INTERVAL_SECONDS=60
+
+# Cron has no HTTP server — Railway uses exit-code monitoring instead
+CMD ["node", "dist/backend/scheduler/cron.js"]

@@ -16,6 +16,9 @@ import { getLatestSnapshotsPerPlatform } from '../db/platformMetricsSnapshotStor
 import { getProfile } from './companyProfileService';
 import { getAvailablePlatformsFromProfile } from '../utils/platformEligibility';
 import { buildDeterministicWeeklySkeleton, DeterministicWeeklySkeletonError } from './deterministicWeeklySkeleton';
+import { mapStrategyToSkeleton, type MappedWeeklySkeleton } from './strategyMapper';
+import { validateCampaignPlan, type CampaignValidation } from '../lib/validation/campaignValidator';
+import { generatePaidRecommendation, type PaidRecommendation } from '../lib/ads/paidAmplificationEngine';
 import {
   validateCapacityAndFrequency,
   type CapacityValidationResult,
@@ -106,6 +109,20 @@ export interface CampaignAiPlanInput {
   autopilot?: boolean;
   /** For bolt pipeline observability: correlate AI calls to bolt_execution_runs */
   bolt_run_id?: string | null;
+  /** Account context for planning influence (maturity, performance, recommendations) */
+  account_context?: import('./../types/accountContext').AccountContext | null;
+  /** Performance learnings from a previous campaign — fed forward into the AI prompt so each campaign improves on the last. */
+  previous_performance_insights?: import('./../lib/performance/performanceAnalyzer').PerformanceInsight | null;
+  /**
+   * Full context record from the most recent completed campaign.
+   * Richer than previous_performance_insights alone — includes validation + paid decision + execution results.
+   */
+  previous_campaign_context?: {
+    validation?: import('./../lib/validation/campaignValidator').CampaignValidation | null;
+    paid_recommendation?: import('./../lib/ads/paidAmplificationEngine').PaidRecommendation | null;
+    performance_insights?: import('./../lib/performance/performanceAnalyzer').PerformanceInsight | null;
+    captured_at?: string | null;
+  } | null;
 }
 
 export interface CampaignAiPlanResult {
@@ -156,6 +173,10 @@ export interface CampaignAiPlanResult {
   };
   conversationalResponse?: string;
   raw_plan_text: string;
+  /** Deterministic plan quality gate: confidence score, risk, outcomes, issues, suggestions. */
+  campaign_validation?: CampaignValidation | null;
+  /** Deterministic paid amplification decision: should we run ads, when, how much, why. */
+  paid_recommendation?: PaidRecommendation | null;
   autopilot_result?: {
     total_items: number;
     generated_masters: number;
@@ -2893,6 +2914,9 @@ async function runWithContext(
     },
     strategy_context,
     campaign_direction: input.message || 'Generate campaign plan',
+    account_context: input.account_context || null,
+    previous_performance_insights: input.previous_performance_insights ?? null,
+    previous_campaign_context: input.previous_campaign_context ?? null,
   };
 
   const { rawOutput } = await generateCampaignPlanAI(planningInput);
@@ -3970,8 +3994,8 @@ async function runWithContext(
       );
       (structured as any).weeks = pressureResult.weeks;
       (structured as any).executionPressureMetadata = {
-        pressureLevel: pressureResult.pressureLevel,
         ...pressureResult.balanceReport,
+        pressureLevel: pressureResult.pressureLevel,
       };
       const momentumResult = analyzeExecutionMomentum((structured as any).weeks);
       (structured as any).executionMomentumMetadata = {
@@ -4679,10 +4703,42 @@ export async function runCampaignAiPlan(
     if (!shouldSkipSkeleton) {
       try {
         deterministicSkeleton = await buildDeterministicWeeklySkeleton(prefilledPlanning as any);
+
+        // Stage 2: Map strategy to skeleton — assigns weekly themes, funnel stages, content distribution
+        let mappedWeeklySkeleton: MappedWeeklySkeleton | null = null;
+        try {
+          const pcr = (prefilledPlanning as any)?.platform_content_requests;
+          const platformsForMapper = Array.isArray(pcr)
+            ? [...new Set((pcr as any[]).map((r: any) => String(r?.platform ?? '')).filter(Boolean))]
+            : typeof pcr === 'object' && pcr !== null
+              ? Object.keys(pcr).filter(Boolean)
+              : [];
+          const postingFreqForMapper: Record<string, number> = {};
+          for (const p of platformsForMapper) postingFreqForMapper[p] = 3;
+          mappedWeeklySkeleton = mapStrategyToSkeleton(
+            deterministicSkeleton,
+            {
+              duration_weeks: resolvedDurationWeeks,
+              platforms: platformsForMapper,
+              posting_frequency: postingFreqForMapper,
+              campaign_goal: (prefilledPlanning as any)?.campaign_goal ?? null,
+              target_audience: (prefilledPlanning as any)?.target_audience ?? null,
+            },
+            input.account_context ?? null
+          );
+        } catch (mapErr) {
+          console.warn('[campaign-ai][strategy-mapper] Non-fatal: failed to map strategy to skeleton:', mapErr);
+        }
+
         if (incomingCollectedPlanningContext) {
           (incomingCollectedPlanningContext as any).deterministic_plan_skeleton = deterministicSkeleton;
+          if (mappedWeeklySkeleton) (incomingCollectedPlanningContext as any).mapped_weekly_skeleton = mappedWeeklySkeleton;
         }
-        prefilledPlanning = { ...prefilledPlanning, deterministic_plan_skeleton: deterministicSkeleton };
+        prefilledPlanning = {
+          ...prefilledPlanning,
+          deterministic_plan_skeleton: deterministicSkeleton,
+          ...(mappedWeeklySkeleton && { mapped_weekly_skeleton: mappedWeeklySkeleton }),
+        };
       } catch (err) {
         if (err instanceof DeterministicWeeklySkeletonError) {
           // Convert deterministic skeleton validation into the standard capacity validation shape.
@@ -4958,35 +5014,60 @@ export async function runCampaignAiPlan(
     setCampaignContext(input.campaignId, campaignContext);
   }
 
-  const result = await runWithContext(inputWithDuration, {
-    ...ctx,
-    companyId: versionRow?.company_id ?? null,
-    fastPath: useFastPath,
-    prefilledPlanning,
-    strategyMemory,
-    strategyLearningProfile,
-    strategyLearningFromCache,
-    campaignContext,
-    distributionStrategy,
-    distributionReason,
-    planSkeleton:
-      input.mode === 'generate_plan' && !deterministicSkeleton
-        ? buildDeterministicPlanSkeleton({
-            durationWeeks: resolvedDurationWeeks,
-            contentCapacity: prefilledPlanning?.content_capacity,
-          })
-        : null,
-    qaState: qaState
-      ? {
-          answeredKeys: qaState.answeredKeys,
-          userConfirmed: qaState.userConfirmed,
-          nextQuestion: qaState.nextQuestion,
-          readyToGenerate: qaState.readyToGenerate,
-          allRequiredAnswered: qaState.allRequiredAnswered,
-          missingRequiredKeys: qaState.missingRequiredKeys,
-        }
-      : undefined,
-  });
+  let result: CampaignAiPlanResult;
+  try {
+    result = await runWithContext(inputWithDuration, {
+      ...ctx,
+      companyId: versionRow?.company_id ?? null,
+      fastPath: useFastPath,
+      prefilledPlanning,
+      strategyMemory,
+      strategyLearningProfile,
+      strategyLearningFromCache,
+      campaignContext,
+      distributionStrategy,
+      distributionReason,
+      planSkeleton:
+        input.mode === 'generate_plan' && !deterministicSkeleton
+          ? buildDeterministicPlanSkeleton({
+              durationWeeks: resolvedDurationWeeks,
+              contentCapacity: prefilledPlanning?.content_capacity,
+            })
+          : null,
+      qaState: qaState
+        ? {
+            answeredKeys: qaState.answeredKeys,
+            userConfirmed: qaState.userConfirmed,
+            nextQuestion: qaState.nextQuestion,
+            readyToGenerate: qaState.readyToGenerate,
+            allRequiredAnswered: qaState.allRequiredAnswered,
+            missingRequiredKeys: qaState.missingRequiredKeys,
+          }
+        : undefined,
+    });
+  } catch (aiErr) {
+    // Failsafe: if AI generation fails and we have a mapped skeleton, return structure + themes without AI topics
+    const mappedSkeleton = (prefilledPlanning as any)?.mapped_weekly_skeleton as MappedWeeklySkeleton | null | undefined;
+    if (input.mode === 'generate_plan' && mappedSkeleton?.weekly_strategies?.length) {
+      console.warn('[campaign-ai][failsafe] AI generation failed, returning mapped skeleton without AI topics:', aiErr);
+      const fallbackWeeks = mappedSkeleton.weekly_strategies.map((ws) => ({
+        week: ws.week,
+        theme: ws.theme,
+        funnel_stage: ws.funnel_stage,
+        primary_objective: ws.primary_objective,
+        daily: [],
+      }));
+      return {
+        mode: input.mode,
+        snapshot_hash: ctx.snapshot_hash,
+        omnivyre_decision: ctx.omnivyreDecision,
+        plan: { weeks: fallbackWeeks },
+        raw_plan_text: JSON.stringify({ weeks: fallbackWeeks }),
+        validation_result: (prefilledPlanning as any)?.validation_result ?? null,
+      };
+    }
+    throw aiErr;
+  }
 
   if (result.omnivyre_decision && baselineContext && !('unavailable' in baselineContext)) {
     result.omnivyre_decision = {
@@ -5005,8 +5086,69 @@ export async function runCampaignAiPlan(
     };
   }
 
+  // Post-generation validation gate: deterministic, fast, no AI.
+  let campaign_validation: CampaignValidation | null = null;
+  if (input.mode === 'generate_plan' && Array.isArray(result.plan?.weeks) && result.plan!.weeks.length > 0) {
+    try {
+      const pcr = (prefilledPlanning as any)?.platform_content_requests;
+      const platformsForValidation: string[] = Array.isArray(pcr)
+        ? [...new Set((pcr as any[]).map((r: any) => String(r?.platform ?? '')).filter(Boolean))]
+        : typeof pcr === 'object' && pcr !== null
+          ? Object.keys(pcr).filter(Boolean)
+          : (prefilledPlanning as any)?.platforms ?? [];
+      const postingFreqForValidation: Record<string, number> = {};
+      for (const p of platformsForValidation) postingFreqForValidation[p] = 3;
+      // Use posting_frequency from prefilled if available
+      const rawFreq = (prefilledPlanning as any)?.posting_frequency;
+      const effectiveFreq = (rawFreq && typeof rawFreq === 'object' && !Array.isArray(rawFreq))
+        ? rawFreq as Record<string, number>
+        : postingFreqForValidation;
+
+      campaign_validation = validateCampaignPlan({
+        plan: result.plan!,
+        strategy_context: {
+          duration_weeks: resolvedDurationWeeks,
+          platforms: platformsForValidation,
+          posting_frequency: effectiveFreq,
+          content_mix: (prefilledPlanning as any)?.content_mix ?? null,
+          campaign_goal: (prefilledPlanning as any)?.campaign_goal ?? null,
+          target_audience: (prefilledPlanning as any)?.target_audience ?? null,
+        },
+        account_context: input.account_context ?? null,
+        execution_items: deterministicSkeleton?.execution_items ?? null,
+      });
+    } catch (validationErr) {
+      console.warn('[PLANNER][VALIDATION][WARN] Non-fatal: validation failed:', validationErr);
+    }
+  }
+
+  // Paid amplification decision: runs only when validation succeeded.
+  let paid_recommendation: PaidRecommendation | null = null;
+  if (campaign_validation) {
+    try {
+      const platformsForPaid: string[] = Array.isArray(campaign_validation)
+        ? []
+        : ((prefilledPlanning as any)?.platforms ?? []);
+      paid_recommendation = generatePaidRecommendation({
+        plan: result.plan!,
+        campaign_validation,
+        account_context: input.account_context ?? null,
+        strategy_context: {
+          duration_weeks: resolvedDurationWeeks,
+          platforms: platformsForPaid,
+          posting_frequency: (prefilledPlanning as any)?.posting_frequency ?? {},
+          campaign_goal: (prefilledPlanning as any)?.campaign_goal ?? null,
+        },
+      });
+    } catch (paidErr) {
+      console.warn('[PLANNER][ADS][WARN] Non-fatal: paid amplification engine failed:', paidErr);
+    }
+  }
+
   return {
     ...result,
     validation_result: (prefilledPlanning as any)?.validation_result ?? null,
+    campaign_validation,
+    paid_recommendation,
   };
 }

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { getBlogCategoryImage } from '../../lib/blogImages';
 
 type RelatedPost = {
   id: string;
@@ -58,8 +59,15 @@ export function ReadNextSection({
                   <div className="absolute inset-0 bg-gradient-to-t from-black/10 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" aria-hidden />
                 </>
               ) : (
-                <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200">
-                  <div className="h-10 w-10 rounded-full border-2 border-dashed border-slate-300" />
+                <div className="relative h-full w-full overflow-hidden bg-gradient-to-br from-[#0A1F44] to-[#0A66C2]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={getBlogCategoryImage(post.category).url}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-cover opacity-50 mix-blend-luminosity"
+                    loading="lazy"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-[#0A1F44]/50 to-transparent" />
                 </div>
               )}
             </div>

@@ -438,7 +438,14 @@ const AUTH_TYPES_REQUIRING_KEY = new Set(['api_key', 'bearer', 'query', 'header'
 
 const resolveEnvValue = (envName?: string | null): string | undefined => {
   if (!envName) return undefined;
-  return process.env[envName];
+  // First try as an env var name
+  const fromEnv = process.env[envName];
+  if (fromEnv) return fromEnv;
+  // If it doesn't look like an env var name (ALL_CAPS_UNDERSCORES) treat it as a literal key value.
+  // This handles the common case where users paste the actual API key instead of the var name.
+  const looksLikeEnvVarName = /^[A-Z][A-Z0-9_]{1,}$/.test(envName);
+  if (!looksLikeEnvVarName) return envName;
+  return undefined;
 };
 
 const normalizeRecord = (value: any): Record<string, any> => {

@@ -17,6 +17,13 @@ import { generateFromManualPlanner } from '../../../backend/services/executionPl
 import { syncCampaignVersionStage } from '../../../backend/db/campaignVersionStore';
 import { saveCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
 import { validateCalendarPlan } from '../../../backend/services/plannerIntegrityService';
+import { ENABLE_PLANNER_ADAPTER } from '../../../config/featureFlags';
+import {
+  adaptPlannerOutputToExecutionFormat,
+  AdapterValidationError,
+  type PlannerActivityInput,
+} from '../../../lib/adapters/plannerToExecutionAdapter';
+import { saveCampaignContextSnapshot } from '../../../backend/services/campaignContextService';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -174,7 +181,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const body = req.body || {};
-    const { companyId, idea_spine, strategy_context, campaignId: existingCampaignId, cross_platform_sharing, calendar_plan: bodyCalendarPlan } = body;
+    const {
+      companyId,
+      idea_spine,
+      strategy_context,
+      campaignId: existingCampaignId,
+      cross_platform_sharing,
+      calendar_plan: bodyCalendarPlan,
+      // Context snapshot fields — populated by FinalizeSection when preview was run first
+      account_context: bodyAccountContext,
+      campaign_validation: bodyValidation,
+      paid_recommendation: bodyPaidRecommendation,
+    } = body;
 
     if (!companyId || typeof companyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required' });
@@ -350,7 +368,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('id', campaignId);
     void syncCampaignVersionStage(campaignId, 'twelve_week_plan', companyId).catch(() => {});
 
-    if (useCalendarPlanPath && hasCalendarPlan) {
+    // -------------------------------------------------------------------------
+    // ADAPTER BRANCH (additive — does NOT modify the block below)
+    // Runs only when: request carries source='planner' AND the feature flag is
+    // enabled AND a calendar plan is present.
+    // On any failure, logs and falls through to the existing inline flow.
+    // -------------------------------------------------------------------------
+    let adapterHandledSlots = false;
+    if (
+      body.source === 'planner' &&
+      ENABLE_PLANNER_ADAPTER &&
+      useCalendarPlanPath &&
+      hasCalendarPlan
+    ) {
+      try {
+        const rawActivities = (bodyCalendarPlan as { activities: PlannerActivityInput[] }).activities;
+        const adaptedRows = adaptPlannerOutputToExecutionFormat({
+          activities: rawActivities,
+          campaignId: campaignId!,
+          startDate,
+        });
+
+        // Duplicate slot protection (mirrors existing path)
+        const { data: existingAdapterSlots } = await supabase
+          .from('daily_content_plans')
+          .select('id')
+          .eq('campaign_id', campaignId)
+          .limit(1);
+        if (existingAdapterSlots?.length) {
+          return res.status(400).json({ error: 'Slots already exist for this campaign.' });
+        }
+
+        // Route via execution engine (same service as existing path)
+        const { saveWeekPlans: saveWeekPlansAdapter } = await import('../../../backend/services/executionPlannerService');
+        const byWeekAdapter = new Map<number, typeof adaptedRows>();
+        for (const row of adaptedRows) {
+          const wn = row.week_number;
+          if (!byWeekAdapter.has(wn)) byWeekAdapter.set(wn, []);
+          byWeekAdapter.get(wn)!.push(row);
+        }
+        for (const [wn, rows] of byWeekAdapter) {
+          await saveWeekPlansAdapter(campaignId!, wn, rows as any, 'manual');
+        }
+
+        adapterHandledSlots = true;
+        console.log(`[PLANNER][ADAPTER][INFO] Saved ${adaptedRows.length} slots via adapter for campaign ${campaignId}`);
+      } catch (adapterErr) {
+        if (adapterErr instanceof AdapterValidationError) {
+          console.warn('[PLANNER][ADAPTER][WARN] Validation failed, falling back to existing flow:', (adapterErr as Error).message);
+        } else {
+          console.error('[PLANNER][ADAPTER][ERROR] Unexpected error, falling back to existing flow:', adapterErr);
+        }
+        // adapterHandledSlots remains false → existing flow below runs unchanged
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // EXISTING FLOW — completely unchanged; skipped only when adapter succeeded
+    // -------------------------------------------------------------------------
+    if (!adapterHandledSlots && useCalendarPlanPath && hasCalendarPlan) {
       const activities = (bodyCalendarPlan as { activities: Array<{ week_number?: number; day?: string; platform?: string; content_type?: string; title?: string; theme?: string; execution_id?: string }> }).activities;
 
       // FIX 3: Duplicate slot protection
@@ -424,7 +500,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await saveWeekPlans(campaignId, wn, rows as any, 'manual');
         }
       }
-    } else {
+    } else if (!adapterHandledSlots) {
       await generateFromManualPlanner({
         campaignId,
         companyId,
@@ -443,6 +519,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
       .eq('id', campaignId);
     void syncCampaignVersionStage(campaignId, 'execution_ready', companyId).catch(() => {});
+
+    // ── Save context snapshot (non-fatal — never blocks the finalize response) ──
+    void saveCampaignContextSnapshot({
+      campaignId: campaignId!,
+      companyId,
+      account_context: bodyAccountContext && typeof bodyAccountContext === 'object' ? bodyAccountContext : null,
+      validation: bodyValidation && typeof bodyValidation === 'object' ? bodyValidation : null,
+      paid_recommendation: bodyPaidRecommendation && typeof bodyPaidRecommendation === 'object' ? bodyPaidRecommendation : null,
+    }).catch((err) => {
+      console.warn('[PLANNER][CONTEXT][WARN] Context snapshot save failed (non-fatal):', err?.message ?? err);
+    });
 
     return res.status(200).json({ campaign_id: campaignId });
   } catch (err) {

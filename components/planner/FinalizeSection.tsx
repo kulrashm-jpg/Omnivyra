@@ -3,11 +3,19 @@
  * Generate Preview + Finalize buttons for one-page planner.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+import { hashMany } from '../../lib/utils/planHash';
 import { usePlannerSession } from './plannerSessionStore';
 import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
+import { CampaignValidationCard } from './CampaignValidationCard';
+import { GrowthStrategyCard } from './GrowthStrategyCard';
+import { WhatIfPanel } from './WhatIfPanel';
+import type { CampaignValidation } from '../../backend/lib/validation/campaignValidator';
+import type { PaidRecommendation } from '../../backend/lib/ads/paidAmplificationEngine';
+import type { SimulatorBasePlan } from '../../backend/lib/simulation/scenarioSimulator';
+import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 
 export interface FinalizeSectionProps {
   companyId?: string | null;
@@ -26,6 +34,22 @@ export function FinalizeSection({
   const [generating, setGenerating] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
+  const [campaignValidation, setCampaignValidation] = useState<CampaignValidation | null>(null);
+  const [paidRecommendation, setPaidRecommendation] = useState<PaidRecommendation | null>(null);
+  const [simBasePlan, setSimBasePlan] = useState<SimulatorBasePlan | null>(null);
+
+  /**
+   * Preview result cache — keyed by a stable hash of (stratForApi + spine + companyId).
+   * When the user clicks "Generate Preview" with identical inputs, skip the AI call
+   * and replay the last result instantly instead of waiting 5–10 s for the AI.
+   * Stored in a ref (not state) so it survives re-renders without causing them.
+   */
+  const previewCacheRef = useRef<{
+    key: string;
+    weeks: unknown[];
+    campaignValidation: CampaignValidation | null;
+    paidRecommendation: PaidRecommendation | null;
+  } | null>(null);
 
   const strat = state.execution_plan?.strategy_context;
 
@@ -59,13 +83,29 @@ export function FinalizeSection({
 
   const handleGeneratePreview = async () => {
     if (!companyId || !canGeneratePreview) return;
+
+    // ── Cache check ────────────────────────────────────────────────────────
+    // Hash the inputs that determine the AI output. If unchanged, replay the
+    // last result instantly rather than spending 5–10 s on a redundant AI call.
+    const previewKey = hashMany(stratForApi, spine, companyId);
+    if (previewKey && previewCacheRef.current?.key === previewKey) {
+      const cached = previewCacheRef.current;
+      const { campaign_structure, calendar_plan } = weeksToCalendarPlan(cached.weeks as Parameters<typeof weeksToCalendarPlan>[0]);
+      setCampaignStructure(campaign_structure);
+      setCalendarPlan(calendar_plan);
+      setCampaignValidation(cached.campaignValidation);
+      setPaidRecommendation(cached.paidRecommendation);
+      setSimBasePlan(cached.weeks.length > 0 ? { weeks: cached.weeks as SimulatorBasePlan['weeks'] } : null);
+      onGeneratePreview?.();
+      return; // skip fetch entirely
+    }
+
     setGenerating(true);
     setFinalizeError(null);
     try {
-      const res = await fetch('/api/campaigns/ai/plan', {
+      const res = await fetchWithAuth('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           preview_mode: true,
           mode: 'generate_plan',
@@ -87,6 +127,20 @@ export function FinalizeSection({
       const { campaign_structure, calendar_plan } = weeksToCalendarPlan(weeks);
       setCampaignStructure(campaign_structure);
       setCalendarPlan(calendar_plan);
+      setCampaignValidation(data?.campaign_validation ?? null);
+      setPaidRecommendation(data?.paid_recommendation ?? null);
+      setSimBasePlan(weeks.length > 0 ? { weeks } : null);
+
+      // ── Store in cache ───────────────────────────────────────────────────
+      if (previewKey) {
+        previewCacheRef.current = {
+          key: previewKey,
+          weeks,
+          campaignValidation: data?.campaign_validation ?? null,
+          paidRecommendation: data?.paid_recommendation ?? null,
+        };
+      }
+
       onGeneratePreview?.();
     } catch {
       setFinalizeError('Could not generate preview.');
@@ -116,6 +170,11 @@ export function FinalizeSection({
           idea_spine: spine,
           strategy_context: stratForApi,
           campaignId: campaignId || undefined,
+          source: 'planner',
+          // Context snapshot — persisted to campaign_context table at finalize time
+          account_context: state.account_context ?? null,
+          campaign_validation: campaignValidation ?? null,
+          paid_recommendation: paidRecommendation ?? null,
           ...(calendarPlan ? { calendar_plan: calendarPlan } : {}),
           ...(ENABLE_UNIFIED_CAMPAIGN_WIZARD
             ? {
@@ -172,6 +231,29 @@ export function FinalizeSection({
         </div>
       )}
       {finalizeError && <p className="text-xs text-red-600">{finalizeError}</p>}
+      {campaignValidation && (
+        <CampaignValidationCard validation={campaignValidation} />
+      )}
+      {paidRecommendation && (
+        <GrowthStrategyCard recommendation={paidRecommendation} />
+      )}
+      {campaignValidation && paidRecommendation && simBasePlan && strat && (
+        <WhatIfPanel
+          basePlan={simBasePlan}
+          baseValidation={campaignValidation}
+          basePaidRecommendation={paidRecommendation}
+          accountContext={state.account_context ?? null}
+          strategyContext={{
+            duration_weeks: strat.duration_weeks,
+            platforms: strat.platforms ?? [],
+            posting_frequency: strat.posting_frequency ?? {},
+            content_mix: Array.isArray(strat.content_mix)
+              ? Object.fromEntries(strat.content_mix.map((ct: string) => [ct, 1]))
+              : (strat.content_mix as Record<string, number> | null | undefined) ?? null,
+            campaign_goal: strat.campaign_goal ?? null,
+          }}
+        />
+      )}
     </div>
   );
 }

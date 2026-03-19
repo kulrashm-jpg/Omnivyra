@@ -4,6 +4,10 @@ import { supabase } from '../db/supabaseClient';
 import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
+import { getCachedCompletion, setCachedCompletion, buildNormalizedKey } from './aiResponseCache';
+import { resolveEffectiveModel } from './aiModelRouter';
+import { recordGptCall, recordGptLatency, recordGptFailure } from './metricsCollector';
+import { evaluateJobCost } from './jobCostEstimator';
 
 const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
@@ -88,10 +92,20 @@ type GatewayRequest = {
   prompt_template_name?: string | null;
   prompt_template_version?: string | null;
   prompt_template_hash?: string | null;
+  /**
+   * GAP 5: Cache version tag. Pass campaign.updated_at or profile.updated_at
+   * to bust stale cache entries when inputs change without rewriting prompts.
+   */
+  cache_version?: string | null;
 };
 
 // Singleton — created once per process, reuses HTTP connection pool
 let _openAiClient: OpenAI | null = null;
+
+// GAP 4: In-flight request coalescing map
+// Key: normalized cache key → Promise<GatewayResponse<string>>
+// Multiple callers with the same prompt within the same process share one API call.
+const _inFlight = new Map<string, Promise<GatewayResponse<string>>>();
 const getOpenAiClient = (): OpenAI => {
   if (!_openAiClient) {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -117,20 +131,64 @@ const buildMetadata = (model: string, usage: any): GatewayMetadata => ({
 const runCompletion = async (
   request: GatewayRequest & { operation: string }
 ): Promise<GatewayResponse<string>> => {
+  // ── GAP 6: Resolve effective model based on plan tier + usage budget ────────
+  const effectiveModel = await resolveEffectiveModel(
+    request.model,
+    request.operation,
+    request.companyId,
+  );
+
+  // ── Job Cost Estimator: pre-call block / downgrade ────────────────────────
+  const costDecision = await evaluateJobCost(
+    effectiveModel,
+    request.operation,
+    request.companyId,
+    request.messages,
+  );
+  if (costDecision.action === 'block') {
+    throw Object.assign(new Error(costDecision.reason), { code: 'COST_BLOCKED' });
+  }
+  const resolvedModel = costDecision.action === 'downgrade'
+    ? costDecision.effectiveModel
+    : effectiveModel;
+  if (costDecision.action === 'downgrade' && process.env.NODE_ENV !== 'test') {
+    console.info('[cost-estimator] downgrade', {
+      op: request.operation,
+      from: effectiveModel,
+      to: resolvedModel,
+      reason: costDecision.reason,
+      estimatedUsd: costDecision.estimate.estimatedUsd.toFixed(4),
+    });
+  }
+
   const environment = process.env.NODE_ENV || 'development';
-  const modelName = request.model;
   const isMock = environment === 'test' || !!process.env.JEST_WORKER_ID;
   console.info('[campaign-ai][model-mode]', {
     provider: 'direct-openai',
     isMock,
     environment,
-    modelName,
+    modelName: resolvedModel,
+    requestedModel: request.model,
   });
   console.info('[campaign-ai][llm-provider-call]', {
     operation: request.operation,
     provider: 'direct-openai',
-    modelName,
+    modelName: resolvedModel,
   });
+
+  // ── GAP 4: In-flight coalescing — deduplicate concurrent identical requests ─
+  // Build key from normalized inputs so GAP 1 normalization applies here too.
+  const coalescingKey = buildNormalizedKey(resolvedModel, request.messages, request.cache_version);
+  const existing = _inFlight.get(coalescingKey);
+  if (existing) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.info('[ai-gateway] in-flight-hit', { op: request.operation });
+    }
+    return existing;
+  }
+
+  // Wrap the rest of the call so concurrent callers share one Promise
+  const promise = (async (): Promise<GatewayResponse<string>> => {
   const client = getOpenAiClient();
   const start = Date.now();
 
@@ -150,9 +208,9 @@ const runCompletion = async (
       user_id: null,
       source_type: 'llm',
       provider_name: 'openai',
-      model_name: request.model,
+      model_name: resolvedModel,
       model_version: null,
-      source_name: `openai:${request.model}`,
+      source_name: `openai:${resolvedModel}`,
       process_type: request.operation,
       feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
       error_flag: true,
@@ -164,16 +222,33 @@ const runCompletion = async (
     );
   }
 
+  // ── Cache check (GAP 1+2+5): skip API call if we have a recent response ────
+  const cachedContent = await getCachedCompletion(
+    request.operation,
+    resolvedModel,
+    request.messages,
+    request.cache_version,
+  );
+  if (cachedContent !== null) {
+    return {
+      output: cachedContent,
+      metadata: buildMetadata(resolvedModel, null),
+    };
+  }
+
+  recordGptCall();
   let completion: Awaited<ReturnType<typeof client.chat.completions.create>>;
   try {
     completion = await client.chat.completions.create({
-      model: request.model,
+      model: resolvedModel,
       temperature: request.temperature,
       response_format: request.response_format,
       messages: request.messages,
     });
   } catch (error: any) {
     const latency = Date.now() - start;
+    recordGptLatency(latency);
+    recordGptFailure();
     void logUsageEvent({
       organization_id: request.companyId ?? UNKNOWN_ORG,
       campaign_id: request.campaignId ?? null,
@@ -193,6 +268,7 @@ const runCompletion = async (
     throw error;
   }
   const latency = Date.now() - start;
+  recordGptLatency(latency);
   const content = completion.choices?.[0]?.message?.content?.trim() || '';
   const metadata = buildMetadata(request.model, completion.usage);
   const usage = completion.usage;
@@ -206,9 +282,9 @@ const runCompletion = async (
     user_id: null,
     source_type: 'llm',
     provider_name: 'openai',
-    model_name: request.model,
+    model_name: resolvedModel,
     model_version: null,
-    source_name: `openai:${request.model}`,
+    source_name: `openai:${resolvedModel}`,
     process_type: request.operation,
     feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
     input_tokens: inputTokens || null,
@@ -252,6 +328,9 @@ const runCompletion = async (
     refineCampaignIdea: 'idea_refinement',
     generateAdditionalStrategicThemes: 'additional_strategic_themes',
   };
+  // ── Store result in cache — GAP 1+2+5 (fire-and-forget) ─────────────────────
+  void setCachedCompletion(request.operation, resolvedModel, request.messages, content, request.cache_version);
+
   try {
     await supabase.from('audit_logs').insert({
       action: 'AI_GATEWAY_CALL',
@@ -278,6 +357,12 @@ const runCompletion = async (
     output: content,
     metadata,
   };
+
+  // end of IIFE (in-flight coalescing wrapper)
+  })().finally(() => { _inFlight.delete(coalescingKey); });
+
+  _inFlight.set(coalescingKey, promise);
+  return promise;
 };
 
 export const generateRecommendation = async (

@@ -48,7 +48,7 @@ function getDayOfMonth(iso: string): number {
   }
 }
 
-export type CanvasViewMode = 'campaign' | 'month' | 'week' | 'day';
+export type CanvasViewMode = 'campaign' | 'month' | 'week';
 
 const CREATOR_CONTENT_TYPES = new Set(['video', 'carousel', 'story', 'reel', 'image', 'short']);
 type CampaignType = 'TEXT' | 'CREATOR' | 'HYBRID';
@@ -230,7 +230,8 @@ export function PlanningCanvas({ campaignId, companyId, collapsed, onToggleColla
     ? state.campaign_type
     : 'TEXT';
   const campaignStructure = state.campaign_design?.campaign_structure;
-  const calendarPlan = state.execution_plan?.calendar_plan;
+  // Prefer state.calendar_plan (the direct mutable field) so AI-chat edits are immediately visible.
+  const calendarPlan = state.calendar_plan ?? state.execution_plan?.calendar_plan;
   const weeks = calendarPlan?.weeks ?? [];
   const activities = calendarPlan?.activities ?? state.execution_plan?.activity_cards ?? [];
   const phases = campaignStructure?.phases ?? [];
@@ -391,7 +392,6 @@ export function PlanningCanvas({ campaignId, companyId, collapsed, onToggleColla
                                         showRepurpose={showRepurpose}
                                         repurposeIndex={repurposeIndex}
                                         repurposeTotal={repurposeTotal}
-                                        onCardClick={() => setSelectedActivity(a)}
                                       />
                                     );
                                   })}
@@ -461,7 +461,7 @@ export function PlanningCanvas({ campaignId, companyId, collapsed, onToggleColla
         })}
       </div>
     </div>
-  ) : (viewMode === 'week' || viewMode === 'day') ? (
+  ) : viewMode === 'week' ? (
     <SingleWeekExecutionView
       weeks={weeks}
       activities={activities}
@@ -488,7 +488,7 @@ export function PlanningCanvas({ campaignId, companyId, collapsed, onToggleColla
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white">
-        {(['campaign', 'month', 'week', 'day'] as const).map((mode) => (
+        {(['campaign', 'month', 'week'] as const).map((mode) => (
           <button
             key={mode}
             type="button"

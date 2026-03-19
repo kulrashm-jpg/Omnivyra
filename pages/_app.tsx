@@ -6,13 +6,13 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
 
-const LANDING_PUBLIC_ROUTES = ['/', '/pricing', '/about', '/blog', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
+const LANDING_PUBLIC_ROUTES = ['/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
 
 const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const { isAuthenticated, isLoading } = useCompanyContext();
 
-  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/pricing', '/about', '/blog'];
+  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/get-free-credits', '/create-account', '/onboarding/phone', '/onboarding/verify-phone', '/onboarding/company'];
   const isBlogRoute = router.pathname === '/blog' || router.pathname.startsWith('/blog/');
   const isAdminBlogRoute = router.pathname === '/admin/blog' || router.pathname.startsWith('/admin/blog/');
   const isSuperAdminRoute = router.pathname.startsWith('/super-admin');

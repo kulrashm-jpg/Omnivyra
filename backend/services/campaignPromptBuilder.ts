@@ -53,6 +53,108 @@ function buildContextBlock(input: PlanningGenerationInput): string {
   if (goal) parts.push(`Goal: ${goal}`);
   if (audience) parts.push(`Target audience: ${audience}`);
 
+  // --- Strategic Focus (aspects + offerings selected by user from company profile) ---
+  const selAspects = Array.isArray((strat as any)?.selected_aspects)
+    ? ((strat as any).selected_aspects as string[]).filter(Boolean)
+    : [];
+  const selOfferings = Array.isArray((strat as any)?.selected_offerings)
+    ? ((strat as any).selected_offerings as string[]).filter(Boolean)
+    : [];
+  if (selAspects.length > 0) {
+    parts.push(`Strategic focus areas: ${selAspects.join(', ')}`);
+    parts.push('Align content topics and messaging to these focus areas throughout the campaign.');
+  }
+  if (selOfferings.length > 0) {
+    const offeringLabels = selOfferings.map((o) => (o.includes(':') ? o.split(':').slice(1).join(':').trim() : o));
+    parts.push(`Specific offerings to highlight: ${offeringLabels.join(', ')}`);
+    parts.push('Ensure these offerings are prominently featured in relevant content pieces.');
+  }
+
+  // --- Account Context (influences planning behavior) ---
+  if (input.account_context) {
+    const ctx = input.account_context;
+    parts.push(`\nAccount Context (use this to tailor planning strategy):`);
+    parts.push(`  Maturity Stage: ${ctx.maturityStage} (${ctx.overallScore}/100 overall score)`);
+    parts.push(`  Platform Performance:`);
+    ctx.platforms.forEach(p => {
+      const audienceTerm = p.platform === 'linkedin' ? 'connections' : p.platform === 'youtube' ? 'subscribers' : p.platform === 'reddit' ? 'members' : 'followers';
+      parts.push(`    ${p.platform}: ${p.followers.toLocaleString()} ${audienceTerm}, ${p.engagementRate}% engagement`);
+    });
+    if (ctx.recommendations.length > 0) {
+      parts.push(`  Key Recommendations: ${ctx.recommendations.slice(0, 3).join(', ')}`);
+    }
+    parts.push(`  Tailor content strategy and pacing to account maturity level. ${ctx.maturityStage === 'NEW' ? 'Focus on awareness and engagement building.' : ctx.maturityStage === 'GROWING' ? 'Balance awareness with conversion opportunities.' : 'Optimize for high-value conversions and retention.'}`);
+  }
+
+  // --- Previous Campaign Intelligence (feed-forward — richer when full context available) ---
+  const pcc = input.previous_campaign_context;
+  const ppi = input.previous_performance_insights;
+
+  // Use full campaign context when available; fall back to standalone performance insights
+  if (pcc && (pcc.validation || pcc.paid_recommendation || pcc.performance_insights)) {
+    parts.push('\nPrevious Campaign Intelligence (use this to make this campaign smarter):');
+
+    // What the plan looked like
+    if (pcc.validation) {
+      const v = pcc.validation;
+      parts.push(`  Plan quality: ${v.confidenceScore}/100 confidence (risk: ${v.riskLevel})`);
+      if (v.issues.length > 0) {
+        parts.push('  Plan issues to avoid repeating:');
+        v.issues.slice(0, 3).forEach((i) => parts.push(`    - ${i}`));
+      }
+      if (v.suggestions.length > 0) {
+        parts.push('  Plan improvements already identified:');
+        v.suggestions.slice(0, 2).forEach((s) => parts.push(`    → ${s}`));
+      }
+    }
+
+    // What the paid decision was
+    if (pcc.paid_recommendation) {
+      const pr = pcc.paid_recommendation;
+      parts.push(`  Paid amplification: ${pr.overallRecommendation}`);
+      if (pr.reasoning.length > 0) {
+        parts.push(`    Reason: ${pr.reasoning[0]}`);
+      }
+    }
+
+    // What execution actually delivered
+    if (pcc.performance_insights) {
+      const pi = pcc.performance_insights;
+      if (pi.issues.length > 0) {
+        parts.push('  Execution issues (what failed — do not repeat):');
+        pi.issues.slice(0, 3).forEach((i) => parts.push(`    ✗ ${i}`));
+      }
+      if (pi.opportunities.length > 0) {
+        parts.push('  Execution wins (what worked — amplify these):');
+        pi.opportunities.slice(0, 2).forEach((o) => parts.push(`    ✓ ${o}`));
+      }
+      if (pi.recommendations.length > 0) {
+        parts.push('  Carry-forward recommendations:');
+        pi.recommendations.slice(0, 3).forEach((r) => parts.push(`    → ${r}`));
+      }
+    }
+
+    if (pcc.captured_at) {
+      const age = Math.round((Date.now() - new Date(pcc.captured_at).getTime()) / 86400000);
+      parts.push(`  (Context from ${age} day(s) ago)`);
+    }
+  } else if (ppi && (ppi.issues.length > 0 || ppi.opportunities.length > 0)) {
+    // Fallback: standalone performance insights only
+    parts.push('\nPrevious Campaign Learnings (incorporate — do NOT repeat past mistakes):');
+    if (ppi.issues.length > 0) {
+      parts.push('  Issues to avoid repeating:');
+      ppi.issues.slice(0, 3).forEach((i) => parts.push(`    - ${i}`));
+    }
+    if (ppi.opportunities.length > 0) {
+      parts.push('  Patterns to amplify:');
+      ppi.opportunities.slice(0, 2).forEach((o) => parts.push(`    + ${o}`));
+    }
+    if (ppi.recommendations.length > 0) {
+      parts.push('  Recommended adjustments:');
+      ppi.recommendations.slice(0, 3).forEach((r) => parts.push(`    → ${r}`));
+    }
+  }
+
   // --- Posting frequency (user-defined, MUST be followed exactly) ---
   const freq = strat?.posting_frequency;
   if (freq && typeof freq === 'object' && Object.keys(freq).length > 0) {
@@ -153,6 +255,10 @@ HARD RULES (never violate):
 7. total_weekly_content_count = sum of unique content pieces (not total postings — shared content counts as 1 piece).
 8. topics_to_cover must be distinct topics, not repetitions of the same idea. A topic title used in Week 3 must NOT appear again in Week 5, 6, or any other week.
 9. Maintain thematic consistency across weeks — each week builds on the previous.
+10. When Account Context is provided, tailor the planning strategy to the account's maturity level:
+    - NEW accounts (low scores): Focus on awareness-building, engagement, and community growth. Use simpler content, educational topics, and soft CTAs.
+    - GROWING accounts (medium scores): Balance awareness with conversion opportunities. Include thought leadership and product education.
+    - MATURE accounts (high scores): Optimize for conversions, retention, and high-value actions. Use advanced content and direct CTAs.
 
 OUTPUT FORMAT:
 Output ONLY the plan wrapped in BEGIN_12WEEK_PLAN and END_12WEEK_PLAN.

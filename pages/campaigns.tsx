@@ -40,7 +40,10 @@ export default function CampaignsList() {
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
 
   useEffect(() => {
-    if (!selectedCompanyId) return;
+    if (!selectedCompanyId) {
+      setIsLoading(false);
+      return;
+    }
     fetchCampaigns();
   }, [selectedCompanyId]);
 
@@ -133,7 +136,7 @@ export default function CampaignsList() {
         })
       });
 
-      const deleteResult = await deleteResponse.json();
+      const deleteResult = deleteResponse.ok ? await deleteResponse.json() : {};
       if (deleteResponse.ok && deleteResult.success) {
         notify('success', 'Campaign deleted successfully.');
         await fetchCampaigns();

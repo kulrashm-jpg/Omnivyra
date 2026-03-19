@@ -9,6 +9,7 @@ import { usePlannerSession } from './plannerSessionStore';
 import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
+import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 
 export interface CalendarPlannerStepProps {
   /** Plan from retrieve-plan API (when campaignId exists) */
@@ -75,10 +76,9 @@ export function CalendarPlannerStep({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/campaigns/ai/plan', {
+      const res = await fetchWithAuth('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           preview_mode: true,
           mode: 'generate_plan',

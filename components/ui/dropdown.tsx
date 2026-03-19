@@ -127,15 +127,18 @@ interface MultiSelectDropdownProps {
   placeholder?: string;
   className?: string;
   maxSelections?: number;
+  /** 'sm' uses compact py-1.5 padding to match small text inputs */
+  size?: 'sm' | 'md';
 }
 
-export function MultiSelectDropdown({ 
-  options, 
-  values, 
-  onChange, 
+export function MultiSelectDropdown({
+  options,
+  values,
+  onChange,
   placeholder = "Select options",
   className = "",
-  maxSelections
+  maxSelections,
+  size = 'md',
 }: MultiSelectDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -170,7 +173,7 @@ export function MultiSelectDropdown({
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-4 py-3 bg-white/80 backdrop-blur-sm border border-white/20 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 flex items-center justify-between hover:bg-white/90"
+        className={`w-full ${size === 'sm' ? 'px-3 py-1.5 text-sm' : 'px-4 py-3'} bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 flex items-center justify-between hover:bg-gray-50`}
       >
         <div className="flex items-center gap-3">
           {selectedOptions.length > 0 ? (

@@ -428,7 +428,9 @@ export default function SocialPlatformsPage() {
       const { data } = await sbClient.auth.getSession();
       if (data.session?.user?.id) params.set('userId', data.session.user.id);
     } catch { /* non-fatal */ }
-    window.open(`${p.auth_path}?${params.toString()}`, '_blank', 'noopener,noreferrer');
+    // Navigate same-window — popup would be blocked by browsers after an async await,
+    // and the callback already redirects back to /social-platforms on success/error.
+    window.location.href = `${p.auth_path}?${params.toString()}`;
   };
 
   const handleDisconnect = async (p: PlatformStatus) => {

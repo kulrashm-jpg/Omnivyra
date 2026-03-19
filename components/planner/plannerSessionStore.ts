@@ -12,6 +12,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
 import { hydrateWizardFromPlannerSession } from '../../lib/wizard/campaignWizardAdapter';
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
+import { AccountContext } from '../../backend/types/accountContext';
 
 const PLANNER_STORAGE_KEY_PREFIX = 'omnivyra_planner_session_';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -50,6 +51,10 @@ export interface StrategyContext {
   planned_start_date?: string;
   /** Key message or call-to-action for campaign */
   key_message?: string;
+  /** Strategic aspects selected for this campaign (from company profile). */
+  selected_aspects?: string[];
+  /** Offerings selected within the chosen strategic aspects. */
+  selected_offerings?: string[];
 }
 
 export interface CampaignBrief {
@@ -177,6 +182,8 @@ export interface PlannerSessionState {
   strategic_themes?: StrategicThemeEntry[];
   /** Last fetched campaign health report (UI-only, not persisted). */
   health_report?: Record<string, unknown> | null;
+  /** Account context for planning influence (maturity, performance, recommendations). */
+  account_context?: AccountContext | null;
 }
 
 const defaultStrategyContext: StrategyContext = {
@@ -225,6 +232,7 @@ type PlannerSessionContextValue = {
   setStrategicThemes: (themes: StrategicThemeEntry[]) => void;
   clearStrategicThemes: () => void;
   setHealthReport: (report: Record<string, unknown> | null) => void;
+  setAccountContext: (context: AccountContext | null) => void;
   reset: () => void;
 };
 
@@ -449,6 +457,10 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
     setState((prev) => ({ ...prev, health_report: report }));
   }, []);
 
+  const setAccountContext = useCallback((context: AccountContext | null) => {
+    setState((prev) => ({ ...prev, account_context: context }));
+  }, []);
+
   const reset = useCallback(() => {
     setState(defaultState);
     if (typeof window !== 'undefined') {
@@ -497,6 +509,7 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
     setStrategicThemes,
     clearStrategicThemes,
     setHealthReport,
+    setAccountContext,
     reset,
   };
 

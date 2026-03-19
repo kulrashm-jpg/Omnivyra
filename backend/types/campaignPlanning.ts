@@ -19,6 +19,10 @@ export interface StrategyContext {
   content_mix?: Record<string, number>;
   campaign_goal?: string | null;
   target_audience?: string | null;
+  /** Strategic aspects selected by the user for this campaign (from company profile). */
+  selected_aspects?: string[] | null;
+  /** Specific offerings selected within the chosen strategic aspects. */
+  selected_offerings?: string[] | null;
 }
 
 export interface PlanningGenerationInput {
@@ -32,6 +36,23 @@ export interface PlanningGenerationInput {
   platform_content_requests?: Record<string, Record<string, number>> | null;
   /** Campaign type for execution_mode: TEXT→AI, CREATOR→CREATOR, HYBRID→by content_type. */
   campaign_type?: 'TEXT' | 'CREATOR' | 'HYBRID' | null;
+  /** Account context for influencing planning behavior based on maturity and performance. */
+  account_context?: import('./accountContext').AccountContext | null;
+  /** Mapped weekly skeleton: deterministic themes + funnel stages assigned per week. Set by orchestrator, consumed by AI prompt. */
+  mapped_weekly_skeleton?: import('../services/strategyMapper').MappedWeeklySkeleton | null;
+  /** Performance learnings from previous campaigns — injected into the AI prompt so each campaign improves on the last. */
+  previous_performance_insights?: import('../lib/performance/performanceAnalyzer').PerformanceInsight | null;
+  /**
+   * Full context record from the most recent completed campaign for this company.
+   * Combines validation + paid decision + performance memory into one planning signal.
+   * When present, takes precedence over previous_performance_insights alone.
+   */
+  previous_campaign_context?: {
+    validation?: import('../lib/validation/campaignValidator').CampaignValidation | null;
+    paid_recommendation?: import('../lib/ads/paidAmplificationEngine').PaidRecommendation | null;
+    performance_insights?: import('../lib/performance/performanceAnalyzer').PerformanceInsight | null;
+    captured_at?: string | null;
+  } | null;
 }
 
 export interface PlanningParseInput {

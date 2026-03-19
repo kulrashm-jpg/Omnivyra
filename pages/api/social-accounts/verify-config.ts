@@ -95,6 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // 1. Credentials check — does the config exist (DB or env)?
   const creds = await getOAuthCredentialsForPlatform(platform).catch(() => null);
   const credentials_ok = !!(creds?.client_id && creds?.client_secret);
+  const credentials_source = creds?.source ?? null; // 'platform_config' (DB) | 'env' | null
 
   let token_ok: boolean | null = null;
   let token_detail: string | null = null;
@@ -159,6 +160,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   return res.status(200).json({
     platform,
     credentials_ok,
+    credentials_source,
     token_ok,
     token_detail,
     account_name,

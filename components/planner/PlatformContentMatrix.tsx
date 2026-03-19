@@ -16,7 +16,7 @@ import {
   getExceededFrequencies,
   autoBalanceMatrix,
 } from './platformContentPresets';
-import { Trash2, Scale } from 'lucide-react';
+import { ChevronRight, ChevronDown, Trash2, Scale } from 'lucide-react';
 
 export interface PlatformContentMatrixProps {
   companyId?: string | null;
@@ -34,6 +34,15 @@ export function PlatformContentMatrix({ companyId, className = '', durationWeeks
   const [config, setConfig] = useState<PlatformConfigItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedPlatforms, setExpandedPlatforms] = useState<Set<string>>(new Set());
+
+  const togglePlatform = (p: string) => {
+    setExpandedPlatforms((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p); else next.add(p);
+      return next;
+    });
+  };
 
   /** Build allowed map: platform -> Set<content_type> from API config */
   const allowedMap = React.useMemo(() => {
@@ -249,36 +258,56 @@ export function PlatformContentMatrix({ companyId, className = '', durationWeeks
   return (
     <div className={className}>
       <label className="block text-sm font-medium text-gray-700 mb-2">Platform content matrix (frequency per week)</label>
-      <div className="space-y-4">
+      <div className="space-y-1">
         {config.map(({ platform, content_types }) => {
           const p = platform.toLowerCase().trim();
           const label = PLATFORM_LABELS[p] ?? capitalize(p);
+          const isExpanded = expandedPlatforms.has(p);
+          const activeCount = content_types.filter((ct) => (current[p]?.[ct] ?? 0) > 0).length;
           return (
-            <div key={p} className="rounded-lg border border-gray-200 bg-gray-50/50 p-3">
-              <div className="text-sm font-medium text-gray-800 mb-2">{label}</div>
-              <div className="flex flex-wrap gap-3">
-                {content_types.map((ct) => {
-                  const val = current[p]?.[ct] ?? 0;
-                  const suggestion = (DEFAULT_FREQUENCY_SUGGESTIONS[p] ?? DEFAULT_FREQUENCY_SUGGESTIONS[p === 'twitter' ? 'x' : p === 'x' ? 'twitter' : p])?.[ct];
-                  return (
-                    <div key={ct} className="flex items-center gap-2" title={`${label} / ${capitalize(ct)}`}>
-                      <span className="text-sm text-gray-600 w-20 capitalize">{ct}</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={14}
-                        value={val}
-                        placeholder={val === 0 && suggestion != null ? String(suggestion) : undefined}
-                        onChange={(e) =>
-                          handleChange(p, ct, parseInt(e.target.value, 10) || 0)
-                        }
-                        className="w-16 px-2 py-1 text-sm border border-gray-300 rounded"
-                      />
-                      <span className="text-xs text-gray-500">/week</span>
-                    </div>
-                  );
-                })}
-              </div>
+            <div key={p} className="rounded-lg border border-gray-200 bg-gray-50/30">
+              {/* Collapsed summary row */}
+              <button
+                type="button"
+                onClick={() => togglePlatform(p)}
+                className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-50 transition-colors rounded-lg"
+              >
+                <span className="flex items-center gap-2 text-sm font-medium text-gray-800">
+                  {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-gray-400" /> : <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}
+                  {label}
+                </span>
+                <span className="text-xs text-gray-500">
+                  {activeCount > 0
+                    ? <span className="text-indigo-600 font-medium">{activeCount}/{content_types.length}</span>
+                    : <span>{content_types.length}</span>
+                  }
+                </span>
+              </button>
+
+              {/* Expanded inputs */}
+              {isExpanded && (
+                <div className="px-3 pb-3 pt-1 flex flex-wrap gap-3 border-t border-gray-100">
+                  {content_types.map((ct) => {
+                    const val = current[p]?.[ct] ?? 0;
+                    const suggestion = (DEFAULT_FREQUENCY_SUGGESTIONS[p] ?? DEFAULT_FREQUENCY_SUGGESTIONS[p === 'twitter' ? 'x' : p === 'x' ? 'twitter' : p])?.[ct];
+                    return (
+                      <div key={ct} className="flex items-center gap-2" title={`${label} / ${capitalize(ct)}`}>
+                        <span className="text-sm text-gray-600 w-20 capitalize">{ct}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={14}
+                          value={val}
+                          placeholder={val === 0 && suggestion != null ? String(suggestion) : undefined}
+                          onChange={(e) => handleChange(p, ct, parseInt(e.target.value, 10) || 0)}
+                          className="w-16 px-2 py-1 text-sm border border-gray-300 rounded"
+                        />
+                        <span className="text-xs text-gray-500">/week</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}

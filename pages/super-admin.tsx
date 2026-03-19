@@ -271,17 +271,25 @@ export default function SuperAdminPanel() {
 
   const saveOauthConfig = async (platformKey: string) => {
     const form = oauthForm[platformKey];
-    if (!form?.client_id) {
+    const alreadyConfigured = socialPlatforms.find((p) => p.platform_key === platformKey)?.configured ?? false;
+
+    // If no client_id entered but credentials already exist, allow enabled-only toggle
+    if (!form?.client_id && !alreadyConfigured) {
       setOauthSaveMsg({ platform: platformKey, type: 'error', text: 'Client ID is required' });
       return;
     }
     setSavingOauth(platformKey);
     setOauthSaveMsg(null);
     try {
+      const body: Record<string, unknown> = { platform: platformKey, enabled: form.enabled };
+      if (form.client_id) {
+        body.client_id = form.client_id;
+        body.client_secret = form.client_secret;
+      }
       const r = await fetchWithAuth('/api/super-admin/platform-oauth-configs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform: platformKey, client_id: form.client_id, client_secret: form.client_secret, enabled: form.enabled }),
+        body: JSON.stringify(body),
       });
       if (r.ok) {
         setOauthSaveMsg({ platform: platformKey, type: 'success', text: 'Saved successfully' });
@@ -323,13 +331,13 @@ export default function SuperAdminPanel() {
   };
 
   // Add to catalog + immediately open the configure form — no separate "+ Add" step
-  const addAndExpand = async (known: { key: string; name: string; env_var: string | null; base_url: string; auth_type: string }) => {
+  const addAndExpand = async (known: { key: string; name: string; env_var: string | null; base_url: string; auth_type: string; default_query_params?: Record<string, string>; default_headers?: Record<string, string>; optional_token?: boolean }) => {
     setCheckingApiId(known.key);
     try {
       const r = await fetchWithAuth('/api/external-apis?scope=platform', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: known.name, base_url: known.base_url, auth_type: known.auth_type, api_key_env_name: known.env_var, is_active: true, is_preset: true, purpose: 'trends' }),
+        body: JSON.stringify({ name: known.name, base_url: known.base_url, auth_type: known.auth_type, api_key_env_name: known.env_var, is_active: true, is_preset: true, purpose: 'trends', query_params: known.default_query_params || {}, headers: known.default_headers || {} }),
       });
       if (r.ok) {
         const d = await r.json();
@@ -342,30 +350,38 @@ export default function SuperAdminPanel() {
     finally { setCheckingApiId(null); }
   };
 
-  const saveApiEnvConfig = async (catalogEntry: any) => {
+  const saveApiEnvConfig = async (catalogEntry: any, known?: any) => {
     setSavingApiEnv(true);
     try {
       // Embed _config (model/temperature/etc.) into query_params JSONB
       const { _config: _existingConfig, ...restQP } = catalogEntry.query_params || {};
       const newConfig = apiEnvForm._config;
-      const mergedQP = { ...restQP, ...(newConfig && Object.keys(newConfig).length > 0 ? { _config: newConfig } : {}) };
+      // Canonical query_params from KNOWN_APIS take precedence (fixes Pixabay key param, Pexels endpoint)
+      const canonicalQP = known?.default_query_params || {};
+      const mergedQP = { ...restQP, ...canonicalQP, ...(newConfig && Object.keys(newConfig).length > 0 ? { _config: newConfig } : {}) };
 
-      // Community OAuth2 creds (Reddit etc.) live in headers JSONB under _client_id_env / _client_secret_env
-      const mergedHeaders: Record<string, any> = { ...(catalogEntry.headers || {}) };
+      // Canonical headers from KNOWN_APIS (fixes Pexels auth — no "Bearer " prefix)
+      const canonicalHeaders = known?.default_headers || {};
+      const mergedHeaders: Record<string, any> = { ...(catalogEntry.headers || {}), ...canonicalHeaders };
       if (apiEnvForm._client_id_env != null)     mergedHeaders._client_id_env     = apiEnvForm._client_id_env;
       if (apiEnvForm._client_secret_env != null)  mergedHeaders._client_secret_env  = apiEnvForm._client_secret_env;
+
+      const resolvedApiKeyEnvName = apiEnvForm.api_key_env_name?.trim() || null;
+      // For optional-token APIs (e.g. GitHub): if no token provided, use auth_type 'none' so Check doesn't fail
+      const canonicalAuthType = known?.auth_type ?? catalogEntry.auth_type ?? 'none';
+      const effectiveAuthType = (known?.optional_token && !resolvedApiKeyEnvName) ? 'none' : canonicalAuthType;
 
       const r = await fetchWithAuth(`/api/external-apis/${catalogEntry.id}?scope=platform`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name:              catalogEntry.name,
-          base_url:          apiEnvForm.base_url ?? catalogEntry.base_url,
+          base_url:          known?.base_url ?? apiEnvForm.base_url ?? catalogEntry.base_url,
           platform_type:     catalogEntry.platform_type ?? 'social',
           method:            catalogEntry.method ?? 'GET',
-          auth_type:         catalogEntry.auth_type ?? 'none',
+          auth_type:         effectiveAuthType,
           api_key_name:      catalogEntry.api_key_name ?? null,
-          api_key_env_name:  apiEnvForm.api_key_env_name ?? catalogEntry.api_key_env_name ?? null,
+          api_key_env_name:  resolvedApiKeyEnvName,
           headers:           mergedHeaders,
           query_params:      mergedQP,
           is_active:         apiEnvForm.is_active,
@@ -2034,11 +2050,11 @@ export default function SuperAdminPanel() {
               { key: 'pytrends',         name: 'Google Trends (Proxy)',   icon: '📈',  env_var: null,                auth_type: 'none',   base_url: 'https://trends-proxy.yourdomain.com/trends',       description: 'Requires a self-hosted PyTrends bridge' },
             ],
             community: [
-              { key: 'reddit',           name: 'Reddit Search',           icon: '🟠',  env_var: 'REDDIT_BEARER_TOKEN', auth_type: 'bearer', base_url: 'https://oauth.reddit.com/search',              description: 'Search across subreddits' },
-              { key: 'hackernews',       name: 'Hacker News',             icon: '🔶',  env_var: null,                auth_type: 'none',   base_url: 'https://hn.algolia.com/api/v1/search',             description: 'Algolia HN search — no key needed' },
-              { key: 'stackoverflow',    name: 'Stack Overflow',          icon: '📚',  env_var: null,                auth_type: 'none',   base_url: 'https://api.stackexchange.com/2.3/search/advanced','description': 'Developer Q&A trends — no key needed' },
-              { key: 'github',           name: 'GitHub',                  icon: '🐙',  env_var: 'GITHUB_TOKEN',      auth_type: 'bearer', base_url: 'https://api.github.com',                          description: 'Trending repos and topics' },
-              { key: 'discord',          name: 'Discord',                 icon: '💬',  env_var: 'DISCORD_BOT_TOKEN', auth_type: 'bearer', base_url: 'https://discord.com/api/v10',                     description: 'Community server signals' },
+              { key: 'reddit',           name: 'Reddit Search',           icon: '🟠',  env_var: null,                auth_type: 'none',   base_url: 'https://www.reddit.com/search.json',               description: 'Public Reddit search — no key needed', default_query_params: { q: 'technology', limit: '10', sort: 'new', t: 'week' } },
+              { key: 'hackernews',       name: 'Hacker News',             icon: '🔶',  env_var: null,                auth_type: 'none',   base_url: 'https://hn.algolia.com/api/v1/search',             description: 'Algolia HN search — no key needed',    default_query_params: { query: 'technology', tags: 'story', hitsPerPage: '10' } },
+              { key: 'stackoverflow',    name: 'Stack Overflow',          icon: '📚',  env_var: null,                auth_type: 'none',   base_url: 'https://api.stackexchange.com/2.3/questions',      description: 'Developer Q&A trends — no key needed', default_query_params: { site: 'stackoverflow', pagesize: '10', order: 'desc', sort: 'activity', tagged: 'javascript' } },
+              { key: 'github',           name: 'GitHub Search',           icon: '🐙',  env_var: 'GITHUB_TOKEN',      auth_type: 'bearer', base_url: 'https://api.github.com/search/repositories',      description: 'Trending repos — token optional (higher rate limit)', default_query_params: { q: 'trending', sort: 'stars', order: 'desc', per_page: '10' }, optional_token: true },
+              { key: 'discord',          name: 'Discord',                 icon: '💬',  env_var: 'DISCORD_BOT_TOKEN', auth_type: 'bearer', base_url: 'https://discord.com/api/v10/gateway',             description: 'Bot token required — community server signals', default_query_params: {} },
             ],
             llm: [
               { key: 'openai',           name: 'OpenAI (GPT-4o)',         icon: '🤖',  env_var: 'OPENAI_API_KEY',    auth_type: 'bearer', base_url: 'https://api.openai.com/v1',                        description: 'GPT-4o, GPT-4, GPT-3.5 models' },
@@ -2053,9 +2069,9 @@ export default function SuperAdminPanel() {
               { key: 'stability',        name: 'Stability AI',            icon: '🎨',  env_var: 'STABILITY_API_KEY', auth_type: 'bearer', base_url: 'https://api.stability.ai/v1',                      description: 'Stable Diffusion XL, SD3' },
               { key: 'replicate',        name: 'Replicate',               icon: '🔁',  env_var: 'REPLICATE_API_TOKEN', auth_type: 'bearer', base_url: 'https://api.replicate.com/v1',                  description: 'Flux, SDXL and any open model' },
               { key: 'fal',              name: 'fal.ai',                  icon: '⚡',  env_var: 'FAL_API_KEY',       auth_type: 'bearer', base_url: 'https://fal.run',                                  description: 'Fast Flux and image models' },
-              { key: 'unsplash',         name: 'Unsplash',                icon: '📷',  env_var: 'UNSPLASH_ACCESS_KEY', auth_type: 'query', base_url: 'https://api.unsplash.com',                       description: 'High-quality free stock photos' },
-              { key: 'pixabay',          name: 'Pixabay',                 icon: '🌄',  env_var: 'PIXABAY_API_KEY',   auth_type: 'query',  base_url: 'https://pixabay.com/api',                          description: 'Free stock images, videos and music' },
-              { key: 'pexels',           name: 'Pexels',                  icon: '🖼️',  env_var: 'PEXELS_API_KEY',    auth_type: 'bearer', base_url: 'https://api.pexels.com/v1',                        description: 'Free stock photos and videos' },
+              { key: 'unsplash',         name: 'Unsplash',                icon: '📷',  env_var: 'UNSPLASH_ACCESS_KEY', auth_type: 'query', base_url: 'https://api.unsplash.com/photos', description: 'High-quality free stock photos', default_query_params: { client_id: '{{api_key}}', per_page: '3' } },
+              { key: 'pixabay',          name: 'Pixabay',                 icon: '🌄',  env_var: 'PIXABAY_API_KEY',   auth_type: 'query',  base_url: 'https://pixabay.com/api/',         description: 'Free stock images, videos and music', default_query_params: { key: '{{api_key}}', q: 'nature', per_page: '3', image_type: 'photo' } },
+              { key: 'pexels',           name: 'Pexels',                  icon: '🖼️',  env_var: 'PEXELS_API_KEY',    auth_type: 'none',   base_url: 'https://api.pexels.com/v1/search', description: 'Free stock photos and videos',       default_query_params: { query: 'nature', per_page: '1' }, default_headers: { Authorization: '{{api_key}}' } },
             ],
             others: [
               { key: 'serper',           name: 'Serper (Google Search)',  icon: '🔎',  env_var: 'SERPER_API_KEY',    auth_type: 'api_key',base_url: 'https://google.serper.dev/search',                 description: 'Google Search JSON API' },
@@ -2104,13 +2120,13 @@ export default function SuperAdminPanel() {
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-medium text-gray-900 text-sm">{known.name}</span>
                                 {isInCatalog ? (() => {
-                                  if (!isEnabled) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">Disabled</span>;
-                                  if (lastTestStatus === 'ok') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"><CheckCircle className="h-3 w-3" /> Active</span>;
-                                  if (lastTestStatus === 'error') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200"><XCircle className="h-3 w-3" /> Error</span>;
-                                  // active but never tested
-                                  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Configured — not tested</span>;
+                                  if (!isEnabled) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200" title="Added but marked inactive — toggle Active and save to enable">Inactive</span>;
+                                  if (lastTestStatus === 'ok') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200" title={everTested ? `Last tested ${new Date(everTested).toLocaleString()}` : ''}><CheckCircle className="h-3 w-3" /> Active · Verified</span>;
+                                  if (lastTestStatus === 'error') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200" title="Last check failed — verify your API key"><XCircle className="h-3 w-3" /> Key invalid</span>;
+                                  // active, never tested
+                                  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200" title="API key saved and active. Click Check to verify it works."><CheckCircle className="h-3 w-3" /> Active · Not tested yet</span>;
                                 })() : (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200"><XCircle className="h-3 w-3" /> Not added</span>
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200" title="Click Configure to add this API"><XCircle className="h-3 w-3" /> Not configured</span>
                                 )}
                               </div>
                               <div className="text-xs text-gray-400 mt-0.5">{known.description}</div>
@@ -2120,20 +2136,21 @@ export default function SuperAdminPanel() {
                             </div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
-                            {/* Check result pill — shown inline next to buttons, like social platforms */}
+                            {/* Check result pill */}
                             {checkResult && (
                               checkResult.ok
-                                ? <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700"><CheckCircle className="h-3 w-3" /> Live · OK</span>
-                                : <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title={checkResult.detail}><XCircle className="h-3 w-3" /> Check failed</span>
+                                ? <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700" title={checkResult.detail}><CheckCircle className="h-3 w-3" /> {checkResult.detail || 'Live · OK'}</span>
+                                : <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title={checkResult.detail}><XCircle className="h-3 w-3" /> {checkResult.detail || 'Check failed'}</span>
                             )}
                             {isInCatalog && (
                               <button
                                 onClick={async () => {
                                   setCheckingApiId(known.key);
                                   try {
-                                    const r = await fetchWithAuth(`/api/external-apis/${catalogEntry.id}/test?scope=platform`, { method: 'POST' });
+                                    const r = await fetchWithAuth(`/api/external-apis/${catalogEntry.id}/test?scope=platform`);
                                     const d = await r.json().catch(() => ({}));
-                                    setApiCheckResults((prev) => ({ ...prev, [known.key]: { ok: r.ok, detail: d.detail || (r.ok ? 'Connection OK' : 'Check failed'), checked_at: new Date().toISOString() } }));
+                                    const detail = d.detail || d.error || (r.ok ? `Connection OK${d.response?.status ? ` (${d.response.status})` : ''}` : `Check failed${d.response?.status ? ` — HTTP ${d.response.status}` : ''}`);
+                                    setApiCheckResults((prev) => ({ ...prev, [known.key]: { ok: r.ok && d.response?.ok !== false, detail, checked_at: new Date().toISOString() } }));
                                   } catch { setApiCheckResults((prev) => ({ ...prev, [known.key]: { ok: false, detail: 'Request failed', checked_at: new Date().toISOString() } })); }
                                   finally { setCheckingApiId(null); }
                                 }}
@@ -2191,24 +2208,22 @@ export default function SuperAdminPanel() {
 
                             {/* ── Community APIs ── */}
                             {categoryKey === 'community' && (<>
-                              {known.key === 'reddit' && (<>
-                                <div>
-                                  <label className="block text-xs font-medium text-gray-700 mb-1">Client ID Env Var <span className="font-normal text-gray-400">— Reddit OAuth2 App client_id</span></label>
-                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="REDDIT_CLIENT_ID" value={apiEnvForm._client_id_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _client_id_env: e.target.value }))} />
-                                </div>
-                                <div>
-                                  <label className="block text-xs font-medium text-gray-700 mb-1">Client Secret Env Var <span className="font-normal text-gray-400">— Reddit OAuth2 App client_secret</span></label>
-                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="REDDIT_CLIENT_SECRET" value={apiEnvForm._client_secret_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _client_secret_env: e.target.value }))} />
-                                </div>
-                              </>)}
-                              {(known.key === 'github' || known.key === 'discord') && (
-                                <div>
-                                  <label className="block text-xs font-medium text-gray-700 mb-1">{known.key === 'github' ? 'Personal Access Token Env Var' : 'Bot Token Env Var'} <span className="font-normal text-gray-400">— variable name in .env</span></label>
-                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={known.env_var || 'API_TOKEN'} value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                              {known.auth_type === 'none' && (
+                                <div className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2 border border-green-200">
+                                  No API key required — publicly accessible. Just activate and it's ready to use.
                                 </div>
                               )}
-                              {known.auth_type === 'none' && (
-                                <div className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">No API key required — this service is publicly accessible.</div>
+                              {known.key === 'github' && (
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">Personal Access Token <span className="font-normal text-gray-400">— optional, raises rate limit from 60 to 5,000 req/hr</span></label>
+                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="Paste token or GITHUB_TOKEN" value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                                </div>
+                              )}
+                              {known.key === 'discord' && (
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">Bot Token <span className="font-normal text-gray-400">— from Discord Developer Portal → Bot → Token</span></label>
+                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="Paste token or DISCORD_BOT_TOKEN" value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                                </div>
                               )}
                             </>)}
 
@@ -2268,17 +2283,17 @@ export default function SuperAdminPanel() {
                               return (<>
                                 {known.key === 'unsplash' ? (<>
                                   <div>
-                                    <label className="block text-xs font-medium text-gray-700 mb-1">Access Key Env Var <span className="font-normal text-gray-400">— Unsplash OAuth2 Access Key (Client ID)</span></label>
-                                    <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="UNSPLASH_ACCESS_KEY" value={apiEnvForm._client_id_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _client_id_env: e.target.value }))} />
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Access Key <span className="font-normal text-gray-400">— paste the key directly or enter env var name</span></label>
+                                    <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="Paste key or UNSPLASH_ACCESS_KEY" value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value, _client_id_env: e.target.value }))} />
                                   </div>
                                   <div>
-                                    <label className="block text-xs font-medium text-gray-700 mb-1">Secret Key Env Var <span className="font-normal text-gray-400">— Unsplash OAuth2 Secret Key</span></label>
-                                    <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="UNSPLASH_SECRET_KEY" value={apiEnvForm._client_secret_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _client_secret_env: e.target.value }))} />
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Secret Key <span className="font-normal text-gray-400">— paste the key directly or enter env var name</span></label>
+                                    <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="Paste key or UNSPLASH_SECRET_KEY" value={apiEnvForm._client_secret_env || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, _client_secret_env: e.target.value }))} />
                                   </div>
                                 </>) : (
                                 <div>
-                                  <label className="block text-xs font-medium text-gray-700 mb-1">API Key Env Var <span className="font-normal text-gray-400">— variable name in .env</span></label>
-                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={known.env_var || 'IMAGE_API_KEY'} value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">API Key <span className="font-normal text-gray-400">— paste the key directly or enter env var name</span></label>
+                                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={`Paste key or ${known.env_var || 'API_KEY'}`} value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
                                 </div>
                                 )}
                                 {/* Model / size — not applicable to stock photo APIs */}
@@ -2337,7 +2352,7 @@ export default function SuperAdminPanel() {
 
                             <div className="flex gap-2 pt-1">
                               <button onClick={() => setExpandedApiId(null)} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Cancel</button>
-                              <button onClick={() => saveApiEnvConfig(catalogEntry)} disabled={savingApiEnv} className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">{savingApiEnv ? 'Saving…' : 'Save'}</button>
+                              <button onClick={() => saveApiEnvConfig(catalogEntry, known)} disabled={savingApiEnv} className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">{savingApiEnv ? 'Saving…' : 'Save'}</button>
                             </div>
                           </div>
                         )}
@@ -2393,15 +2408,20 @@ export default function SuperAdminPanel() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium text-gray-900 text-sm">{p.platform_label}</span>
                             {p.configured ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                <CheckCircle className="h-3 w-3" /> Configured
-                              </span>
+                              p.enabled ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200" title="Credentials saved and platform is enabled — users can connect their accounts">
+                                  <CheckCircle className="h-3 w-3" /> Ready
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200" title="Credentials are saved but the platform is not enabled. Tick 'Enable this platform' and save.">
+                                  <AlertCircle className="h-3 w-3" /> Saved · Not enabled
+                                </span>
+                              )
                             ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">
-                                <XCircle className="h-3 w-3" /> Not configured
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200" title="No credentials entered yet">
+                                <XCircle className="h-3 w-3" /> Not set up
                               </span>
                             )}
-                            {p.enabled && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-600 border border-blue-200">Enabled</span>}
                           </div>
                           {p.configured && (
                             <div className="text-xs text-gray-400 mt-0.5">
@@ -2416,24 +2436,29 @@ export default function SuperAdminPanel() {
                           const cr = platformCheckResults[p.platform_key];
                           if (!cr) return null;
                           if (!cr.credentials_ok) return (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title="No credentials configured">
-                              <XCircle className="h-3 w-3" /> No credentials
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title="Client ID / Secret not found — enter credentials and save">
+                              <XCircle className="h-3 w-3" /> Credentials missing
                             </span>
                           );
                           if (cr.token_ok === false) return (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title={cr.token_detail ?? ''}>
-                              <XCircle className="h-3 w-3" /> Live check failed
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title={cr.token_detail ?? 'Token invalid or expired — reconnect the account'}>
+                              <XCircle className="h-3 w-3" /> Token invalid — {cr.token_detail ?? 'reconnect account'}
                             </span>
                           );
                           if (cr.token_ok === true) return (
                             <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700" title={cr.token_detail ?? ''}>
-                              <CheckCircle className="h-3 w-3" /> Live · OK
+                              <CheckCircle className="h-3 w-3" /> {cr.token_detail ?? 'Live · OK'}
                             </span>
                           );
-                          // credentials_ok but no connected account to test
-                          return (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-amber-50 border border-amber-200 text-amber-700" title={cr.token_detail ?? 'Connect an account to test live'}>
-                              <AlertCircle className="h-3 w-3" /> Creds only
+                          // credentials_ok=true, token_ok=null — app credentials are valid, no connected account to live-test
+                          const fromEnv = (cr as any).credentials_source === 'env';
+                          return fromEnv ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-amber-50 border border-amber-200 text-amber-700" title="Credentials found in .env file only — not saved via Super Admin. Add them here to manage centrally.">
+                              <AlertCircle className="h-3 w-3" /> Creds from .env only · Add to DB
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700" title="OAuth app credentials verified in DB. No user account connected yet — go to Social Platforms to connect one.">
+                              <CheckCircle className="h-3 w-3" /> App credentials OK · No account connected yet
                             </span>
                           );
                         })()}

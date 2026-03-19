@@ -7,11 +7,13 @@ import { useCompanyIntegrations } from '@/hooks/useCompanyIntegrations';
 import { supabase } from '../utils/supabaseClient';
 import { CreditMeter } from './ui/CreditMeter';
 import PlatformIcon from './ui/PlatformIcon';
+import { useCredits } from '@/hooks/useCredits';
 
 const Header: React.FC = () => {
   const router = useRouter();
   const { userName, selectedCompanyId, userRole, isAuthenticated } = useCompanyContext();
   const { platforms: connectedPlatforms } = useCompanyIntegrations(selectedCompanyId || '');
+  const { totalCredits, remainingCredits, categories } = useCredits(isAuthenticated ? selectedCompanyId : null);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [noCompanyLabel, setNoCompanyLabel] = useState('No company selected');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -77,11 +79,8 @@ const Header: React.FC = () => {
           <div className="hidden md:flex items-center gap-1.5 flex-wrap">
             <button onClick={() => router.push('/dashboard')} className={navBtnClass}>Home</button>
             <button onClick={() => router.push('/campaign-proposals')} className={navBtnClass}>Campaign Proposals</button>
-            <button onClick={() => router.push('/social-platforms')} className={navBtnClass}>API Connections</button>
             <button onClick={() => router.push('/community-ai')} className={navBtnClass}>Engagement Center</button>
-            <button onClick={() => router.push('/leads')} className={navBtnClass}>Lead Capture</button>
             <button onClick={() => router.push('/blogs')} className={navBtnClass}>Blog</button>
-            <button onClick={() => router.push('/integrations')} className={navBtnClass}>Integrations</button>
             {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={navBtnClass}>Usage</button>
             )}
@@ -108,7 +107,13 @@ const Header: React.FC = () => {
                   {isSigningOut ? 'Signing out...' : 'Logout'}
                 </button>
               </div>
-              {isAuthenticated && <CreditMeter variant="compact" />}
+              {isAuthenticated && (
+                <CreditMeter
+                  variant="compact"
+                  totalCredits={totalCredits}
+                  remainingCredits={remainingCredits}
+                />
+              )}
             </div>
           </div>
 
@@ -130,11 +135,8 @@ const Header: React.FC = () => {
           <div className="md:hidden mt-3 pb-2 space-y-1.5 border-t border-gray-200 pt-3">
             <button onClick={() => router.push('/dashboard')} className={mobileNavBtnClass}>Home</button>
             <button onClick={() => router.push('/campaign-proposals')} className={mobileNavBtnClass}>Campaign Proposals</button>
-            <button onClick={() => router.push('/social-platforms')} className={mobileNavBtnClass}>API Connections</button>
             <button onClick={() => router.push('/community-ai')} className={mobileNavBtnClass}>Engagement Center</button>
-            <button onClick={() => router.push('/leads')} className={mobileNavBtnClass}>Lead Capture</button>
             <button onClick={() => router.push('/blogs')} className={mobileNavBtnClass}>Blog</button>
-            <button onClick={() => router.push('/integrations')} className={mobileNavBtnClass}>Integrations</button>
             {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={mobileNavBtnClass}>Usage</button>
             )}
@@ -150,7 +152,11 @@ const Header: React.FC = () => {
             </div>
             {isAuthenticated && (
               <div className="px-1">
-                <CreditMeter variant="compact" />
+                <CreditMeter
+                  variant="compact"
+                  totalCredits={totalCredits}
+                  remainingCredits={remainingCredits}
+                />
               </div>
             )}
             {selectedCompanyId && connectedPlatforms.length > 0 && (

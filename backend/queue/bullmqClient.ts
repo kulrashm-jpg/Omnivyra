@@ -15,17 +15,21 @@
 
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
+import { createHash } from 'crypto';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
-// Parse Redis connection options
+// Parse Redis connection options — includes TLS for Upstash hosts
 function parseRedisUrl(url: string) {
   if (url.includes('://')) {
     const parsed = new URL(url);
+    const host = parsed.hostname;
+    const needsTls = host.includes('upstash.io');
     return {
-      host: parsed.hostname,
+      host,
       port: parseInt(parsed.port || '6379'),
       password: parsed.password || undefined,
+      ...(needsTls ? { tls: {} } : {}),
     };
   }
   return {
@@ -50,6 +54,7 @@ function getRedisConnection(): IORedis {
       host: redisConfig.host,
       port: redisConfig.port,
       password: redisConfig.password,
+      tls: redisConfig.host.includes('upstash.io') ? {} : undefined,
       enableReadyCheck: false,
       maxRetriesPerRequest: null,
     });
@@ -59,15 +64,82 @@ function getRedisConnection(): IORedis {
     });
 
     redisConnection.on('connect', () => {
-      console.log('✅ Redis connected:', REDIS_URL);
+      console.log('✅ Redis connected');
     });
   }
   return redisConnection;
 }
 
+/**
+ * Shared Redis client — use this in ALL services (cache, metrics, strategy index).
+ * Singleton: one connection per process, reused across imports.
+ * Never call .quit() on this — it is long-lived.
+ */
+export function getSharedRedisClient(): IORedis {
+  return getRedisConnection();
+}
+
 // Queue instance for enqueuing jobs
 let publishQueue: Queue | null = null;
 let engagementPollingQueue: Queue | null = null;
+
+// ── RISK 1: Priority queues (separate AI-heavy from time-critical posting) ────
+let aiHeavyQueue: Queue | null = null;
+let postingQueue: Queue | null = null;
+
+/**
+ * High-priority queue for time-critical publishing operations.
+ * Never blocked by AI generation jobs.
+ */
+export function getPostingQueue(): Queue {
+  if (!postingQueue) {
+    postingQueue = new Queue('posting', {
+      connection: {
+        host: redisConfig.host,
+        port: redisConfig.port,
+        password: redisConfig.password,
+      },
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5_000 },
+        priority: 1, // lower number = higher priority in BullMQ
+        removeOnComplete: { age: 24 * 3600, count: 500 },
+        removeOnFail: { age: 7 * 24 * 3600 },
+      },
+    });
+    postingQueue.on('error', (err) => {
+      console.error('Posting queue error:', err);
+    });
+  }
+  return postingQueue;
+}
+
+/**
+ * Low-priority queue for AI-heavy operations (blueprint, campaign plan, etc.).
+ * Won't starve the posting queue even under heavy AI load.
+ */
+export function getAiHeavyQueue(): Queue {
+  if (!aiHeavyQueue) {
+    aiHeavyQueue = new Queue('ai-heavy', {
+      connection: {
+        host: redisConfig.host,
+        port: redisConfig.port,
+        password: redisConfig.password,
+      },
+      defaultJobOptions: {
+        attempts: 2,
+        backoff: { type: 'exponential', delay: 30_000 },
+        priority: 10, // lower priority than posting
+        removeOnComplete: { age: 12 * 3600, count: 200 },
+        removeOnFail: { age: 3 * 24 * 3600 },
+      },
+    });
+    aiHeavyQueue.on('error', (err) => {
+      console.error('AI-heavy queue error:', err);
+    });
+  }
+  return aiHeavyQueue;
+}
 
 /**
  * Get or create the engagement-polling queue instance.
@@ -219,6 +291,14 @@ export async function closeConnections(): Promise<void> {
     await engagementPollingQueue.close();
     engagementPollingQueue = null;
   }
+  if (postingQueue) {
+    await postingQueue.close();
+    postingQueue = null;
+  }
+  if (aiHeavyQueue) {
+    await aiHeavyQueue.close();
+    aiHeavyQueue = null;
+  }
   if (redisConnection) {
     await redisConnection.quit();
     redisConnection = null;
@@ -322,3 +402,24 @@ export function createWorker(
   return worker;
 }
 
+/**
+ * GAP 3: Generate a stable, content-addressed jobId.
+ *
+ * BullMQ silently ignores `queue.add()` calls when a job with the same jobId
+ * already exists in waiting/active/delayed state. This prevents:
+ *  - Duplicate clicks enqueuing the same work twice
+ *  - Cron overlap (two scheduler cycles adding the same job)
+ *  - Retry storms re-enqueuing an already-queued job
+ *
+ * Usage:
+ *   const jobId = makeStableJobId('publish', { postId, scheduledFor });
+ *   await queue.add('publish', payload, { jobId });
+ *
+ * @param prefix  - Queue/job name (e.g. 'publish', 'intelligence-poll')
+ * @param payload - Job payload object; keys are sorted before hashing
+ */
+export function makeStableJobId(prefix: string, payload: Record<string, unknown>): string {
+  const sorted = JSON.stringify(payload, Object.keys(payload).sort());
+  const hash = createHash('sha256').update(`${prefix}:${sorted}`).digest('hex').slice(0, 16);
+  return `${prefix}:${hash}`;
+}

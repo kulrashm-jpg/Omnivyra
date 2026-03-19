@@ -8,6 +8,7 @@ export { CampaignHealthPanel } from './CampaignHealthPanel';
 export { PlannerControlPanel } from './PlannerControlPanel';
 export { StrategySetupPanel } from './StrategySetupPanel';
 export { ExecutionSetupPanel } from './ExecutionSetupPanel';
+export { StrategicThemeCards } from './StrategicThemeCards';
 export { StructureTab } from './tabs/StructureTab';
 export { ContentTab } from './tabs/ContentTab';
 export { StrategyTab } from './tabs/StrategyTab';

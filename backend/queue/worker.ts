@@ -1,17 +1,14 @@
-import 'dotenv/config';
 import { Worker } from 'bullmq';
-import { supabase } from '../db/supabaseClient';
+import { getRedisConfig } from './bullmqClient';
 
-console.log('ENV CHECK:', process.env.SUPABASE_URL);
-
-console.info('🚀 Engine Worker started...');
+console.info('[engine-worker] starting...');
 
 const worker = new Worker(
   'engine-jobs',
   async job => {
     const { type, jobId } = job.data;
 
-    console.info('Processing job', type, jobId);
+    console.info('[engine-worker] processing', { type, jobId });
 
     if (type === 'LEAD') {
       const { processLeadJobV1 } = await import('../services/leadJobProcessor');
@@ -23,13 +20,10 @@ const worker = new Worker(
       await processMarketPulseJobV1(jobId);
     }
 
-    console.info('Finished job', type, jobId);
+    console.info('[engine-worker] finished', { type, jobId });
   },
   {
-    connection: {
-      host: '127.0.0.1',
-      port: 6379,
-    },
+    connection: getRedisConfig(),
   }
 );
 
