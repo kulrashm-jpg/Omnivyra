@@ -13,6 +13,7 @@ const nextConfig = {
     ],
   },
   rewrites: async () => [
+    { source: '/health', destination: '/api/health' },
     { source: '/blog/rss.xml', destination: '/api/blog/rss' },
     { source: '/blog/sitemap.xml', destination: '/api/blog/sitemap' },
   ],
