@@ -984,6 +984,7 @@ export default function DashboardPage() {
                 </button>
               )}
               <button
+                data-tour-id="create-campaign-btn"
                 onClick={() => window.location.href = '/campaign-planner?mode=direct'}
                 disabled={!canCreateCampaign}
                 title={
@@ -1346,7 +1347,7 @@ export default function DashboardPage() {
                 
             {/* Quick Actions */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-stretch">
-              <div className="bg-white border border-gray-200 border-l-4 border-l-indigo-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
+              <div data-tour-id="company-profile-card" className="bg-white border border-gray-200 border-l-4 border-l-indigo-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="p-2 bg-indigo-50 rounded-lg">
                     <Users className="h-5 w-5 text-indigo-600" />
@@ -1363,7 +1364,7 @@ export default function DashboardPage() {
                   Open Profile
                 </button>
               </div>
-              <div className="bg-white border border-gray-200 border-l-4 border-l-slate-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
+              <div data-tour-id="api-connections-card" className="bg-white border border-gray-200 border-l-4 border-l-slate-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="p-2 bg-slate-50 rounded-lg">
                     <Settings className="h-5 w-5 text-slate-600" />
@@ -1380,7 +1381,7 @@ export default function DashboardPage() {
                   Manage Connections
                 </button>
               </div>
-              <div className="bg-white border border-gray-200 border-l-4 border-l-emerald-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
+              <div data-tour-id="recommendations-card" className="bg-white border border-gray-200 border-l-4 border-l-emerald-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="p-2 bg-emerald-50 rounded-lg">
                     <TrendingUp className="h-5 w-5 text-emerald-600" />

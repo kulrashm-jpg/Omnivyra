@@ -45,7 +45,16 @@
       "Bash(echo \"EXIT:$?\")",
       "Bash(npx next:*)",
       "Bash(node -e \"require\\(''''./pages/api/planner/skeleton-command.ts''''\\)\")",
-      "Bash(node -e \"const p=require\\(''''fs''''\\).readFileSync\\(''''/dev/stdin'''',''''utf8''''\\); const j=JSON.parse\\(p\\); console.log\\(''''next:'''', j.dependencies?.next || j.devDependencies?.next\\)\")"
+      "Bash(node -e \"const p=require\\(''''fs''''\\).readFileSync\\(''''/dev/stdin'''',''''utf8''''\\); const j=JSON.parse\\(p\\); console.log\\(''''next:'''', j.dependencies?.next || j.devDependencies?.next\\)\")",
+      "Bash(find ./backend/prompts -type f -name *.ts)",
+      "Bash(find /c/virality/backend/services -name *Algorithm* -o -name *Formatting*)",
+      "Bash(grep -rn \"BOLT\\\\|bolt.*execute\\\\|/api/bolt\\\\|outcomeView\\\\|bolt_outcome\" C:/virality/pages --include=*.tsx --include=*.ts -l)",
+      "Bash(grep -rn \"outcomeView\\\\|bolt_outcome\\\\|BOLT\" C:/virality/components --include=*.tsx --include=*.ts -l)",
+      "Bash(grep -rn \"recommended.*hub\\\\|RecommendedHub\\\\|ChatWeek\" /c/virality --include=*.tsx --include=*.ts)",
+      "Bash(cat /c/virality/logs/*.log)",
+      "Bash(pm2 logs:*)",
+      "Bash(find /c/virality -name *.log -newer /c/virality/package.json)",
+      "Bash(grep -r \"duration_weeks\\\\|theme.*week\\\\|strategic_theme\" /c/virality/components/planner/*.tsx --include=\"*.tsx\")"
     ]
   },
   "enabledMcpjsonServers": [

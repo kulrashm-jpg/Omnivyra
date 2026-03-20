@@ -5,6 +5,7 @@ import { CompanyProvider } from '../components/CompanyContext';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
+import { TourProvider } from '../components/tour/TourContext';
 
 const LANDING_PUBLIC_ROUTES = ['/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
 
@@ -12,7 +13,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const { isAuthenticated, isLoading } = useCompanyContext();
 
-  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/get-free-credits', '/create-account', '/onboarding/phone', '/onboarding/verify-phone', '/onboarding/company'];
+  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/get-free-credits', '/create-account', '/onboarding/phone', '/onboarding/verify-phone', '/onboarding/company', '/auth/callback'];
   const isBlogRoute = router.pathname === '/blog' || router.pathname.startsWith('/blog/');
   const isAdminBlogRoute = router.pathname === '/admin/blog' || router.pathname.startsWith('/admin/blog/');
   const isSuperAdminRoute = router.pathname.startsWith('/super-admin');
@@ -56,12 +57,14 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 function MyApp({ Component, pageProps }: AppProps) {
   return (
     <CompanyProvider>
-      <Head>
-        <link rel="icon" href="/favicon.jpg" />
-      </Head>
-      <AuthGate>
-        <Component {...pageProps} />
-      </AuthGate>
+      <TourProvider>
+        <Head>
+          <link rel="icon" href="/favicon.jpg" />
+        </Head>
+        <AuthGate>
+          <Component {...pageProps} />
+        </AuthGate>
+      </TourProvider>
     </CompanyProvider>
   );
 }

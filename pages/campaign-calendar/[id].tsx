@@ -582,19 +582,37 @@ export default function CampaignCalendarPage() {
     if (masterContent && !(dailyExecutionItem as any).master_content) {
       (dailyExecutionItem as any).master_content = masterContent;
     }
-    const schedulesFromVariants = platformVariants.length > 0
-      ? platformVariants.map((v: any, i: number) => ({
-          id: `${activity.execution_id}-${v.platform}-${v.content_type}-${i}`,
-          platform: v.platform || activity.platform,
-          contentType: v.content_type || activity.content_type,
-          date: activity.date,
-          time: activity.time,
-          status: activity.execution_status === 'SCHEDULED' ? 'scheduled' : 'planned',
-          description: '',
-          title: activity.title,
-        }))
+
+    // Collect ALL sibling activities for this topic across the same week (all platforms)
+    const normalizeT = (t: string) => String(t ?? '').trim().toLowerCase();
+    const topicKey = normalizeT(activity.title);
+    const siblingActivities = activities.filter(
+      (a) => a.week_number === activity.week_number && normalizeT(a.title) === topicKey && a.platform !== 'team'
+    );
+    const seenPlatKeys = new Set<string>();
+    const schedulesFromVariants = siblingActivities.length > 0
+      ? siblingActivities
+          .filter((a) => {
+            const k = `${a.platform}::${a.content_type}`;
+            if (seenPlatKeys.has(k)) return false;
+            seenPlatKeys.add(k);
+            return true;
+          })
+          .map((a, i) => ({
+            id: `${a.execution_id}-${a.platform}-${a.content_type}-${i}`,
+            executionId: a.execution_id,
+            platform: a.platform,
+            contentType: a.content_type,
+            date: a.date,
+            time: a.time,
+            status: a.execution_status === 'SCHEDULED' ? 'scheduled' : 'planned',
+            description: '',
+            title: a.title,
+            isPrimary: a.execution_id === activity.execution_id,
+          }))
       : [{
           id: activity.execution_id,
+          executionId: activity.execution_id,
           platform: activity.platform,
           contentType: activity.content_type,
           date: activity.date,
@@ -602,6 +620,7 @@ export default function CampaignCalendarPage() {
           status: activity.execution_status === 'SCHEDULED' ? 'scheduled' : 'planned',
           description: '',
           title: activity.title,
+          isPrimary: true,
         }];
     const workspaceKey = `activity-workspace-${campaignId}-${activity.execution_id}`;
     const payload = {

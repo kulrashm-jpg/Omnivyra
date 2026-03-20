@@ -21,6 +21,11 @@ async function resolveTier(
   res: NextApiResponse,
   companyId?: string
 ): Promise<{ tier: ConsumptionTier; orgId: string | null } | null> {
+  // Super admin cookie session (username/password login — no Supabase token)
+  if (req.cookies?.super_admin_session === '1') {
+    return { tier: 'super_admin', orgId: companyId ?? null };
+  }
+
   const auth = await getSupabaseUserFromRequest(req);
   if (auth.error || !auth.user) { res.status(401).json({ error: 'UNAUTHORIZED' }); return null; }
   const userId = auth.user.id;

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../CompanyContext';
 import { supabase } from '../../utils/supabaseClient';
+import { useCredits } from '../../hooks/useCredits';
 import { ChevronDown, LayoutDashboard, LogOut, User, Menu, X, Coins } from 'lucide-react';
 
 const LANDING_ROUTES = ['/', '/pricing', '/about', '/blog'];
@@ -18,7 +19,8 @@ const NAV_LINKS = [
 ];
 
 export default function LandingNavbar() {
-  const { isAuthenticated, userName } = useCompanyContext();
+  const { isAuthenticated, userName, selectedCompanyId } = useCompanyContext();
+  const { remainingCredits, loading: creditsLoading } = useCredits(isAuthenticated ? selectedCompanyId : null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -120,8 +122,9 @@ export default function LandingNavbar() {
                 <LayoutDashboard className="h-4 w-4" />
                 Dashboard
               </Link>
-              <div className="hidden h-8 items-center rounded-full border border-gray-200 bg-[#F5F9FF] px-3 text-sm font-semibold text-gray-800 sm:flex">
-                25,000 Credits
+              <div className="hidden h-8 items-center gap-1.5 rounded-full border border-gray-200 bg-[#F5F9FF] px-3 text-sm font-semibold text-gray-800 sm:flex">
+                <Coins className="h-3.5 w-3.5 text-[#0A66C2]" />
+                {creditsLoading ? '—' : remainingCredits.toLocaleString()} credits
               </div>
               <div className="relative" ref={dropdownRef}>
                 <button

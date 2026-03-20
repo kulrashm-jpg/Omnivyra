@@ -6,29 +6,35 @@
  */
 
 import { getProfile } from './companyProfileService';
+import { listPlatformRules } from '../db/platformPromotionStore';
 import type { PlanningGenerationInput } from '../types/campaignPlanning';
 
 export type PromptMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
-/** Platform-to-supported-content-types map for validation hints in the prompt. */
-const PLATFORM_CONTENT_GUIDE: Record<string, string[]> = {
-  youtube: ['video', 'short', 'reel'],
-  tiktok: ['video', 'short', 'reel'],
-  instagram: ['post', 'reel', 'story', 'carousel', 'image'],
-  linkedin: ['post', 'article', 'carousel', 'video'],
-  twitter: ['post', 'thread', 'tweet'],
-  x: ['post', 'thread', 'tweet'],
-  facebook: ['post', 'video', 'image', 'story'],
-  pinterest: ['image', 'carousel'],
-  reddit: ['post', 'article'],
-  discord: ['post'],
-  slack: ['post'],
-};
+/**
+ * Build platform→content-types compatibility map from the DB.
+ * DB is the mandatory single source of truth — throws if no rules found.
+ */
+async function loadPlatformContentGuide(_platforms: string[]): Promise<Record<string, string[]>> {
+  const allRules = await listPlatformRules();
+  if (!allRules || allRules.length === 0) {
+    throw new Error('No platform_content_rules found in DB — cannot build platform content guide');
+  }
+  const guide: Record<string, string[]> = {};
+  for (const rule of allRules) {
+    const p = String(rule.platform || '').toLowerCase();
+    const ct = String(rule.content_type || '').toLowerCase();
+    if (!p || !ct) continue;
+    if (!guide[p]) guide[p] = [];
+    if (!guide[p].includes(ct)) guide[p].push(ct);
+  }
+  return guide;
+}
 
 /** Platforms that are video-first — topics going here must use video content type. */
 const VIDEO_FIRST_PLATFORMS = new Set(['youtube', 'tiktok']);
 
-function buildContextBlock(input: PlanningGenerationInput): string {
+function buildContextBlock(input: PlanningGenerationInput, platformContentGuide: Record<string, string[]>): string {
   const parts: string[] = [];
   const spine = input.idea_spine;
   const title = (spine?.refined_title ?? spine?.title ?? '').toString().trim();
@@ -198,7 +204,7 @@ function buildContextBlock(input: PlanningGenerationInput): string {
   // --- Platform content-type guide ---
   const platformGuideLines = platforms
     .map((p) => {
-      const types = PLATFORM_CONTENT_GUIDE[p];
+      const types = platformContentGuide[p];
       return types ? `  ${p}: supports ${types.join(', ')}` : null;
     })
     .filter(Boolean);
@@ -217,7 +223,11 @@ function buildContextBlock(input: PlanningGenerationInput): string {
 export async function buildCampaignPlanningPrompt(
   input: PlanningGenerationInput
 ): Promise<PromptMessage[]> {
-  const message = buildContextBlock(input) || 'Generate a campaign plan.';
+  const platforms = Array.isArray(input.strategy_context?.platforms) && input.strategy_context.platforms.length > 0
+    ? input.strategy_context.platforms.map((p: string) => String(p).toLowerCase().trim())
+    : ['linkedin'];
+  const platformContentGuide = await loadPlatformContentGuide(platforms);
+  const message = buildContextBlock(input, platformContentGuide) || 'Generate a campaign plan.';
   let companyContext = '';
   if (input.companyId && typeof input.companyId === 'string') {
     try {

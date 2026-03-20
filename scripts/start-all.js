@@ -84,12 +84,14 @@ function waitForRedis() {
   return new Promise((resolve, reject) => {
     const IORedis = require('ioredis');
     const config = parseRedisUrl(REDIS_URL);
+    const needsTls = config.host.includes('upstash.io');
     const redis = new IORedis({
       host: config.host,
       port: config.port,
       password: config.password,
       connectTimeout: 3000,
       maxRetriesPerRequest: 1,
+      ...(needsTls ? { tls: {} } : {}),
     });
 
     const start = Date.now();

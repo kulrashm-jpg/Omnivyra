@@ -7,7 +7,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { generateThemesForCampaignWeeks } from '../../../backend/services/strategicThemeEngine';
+import { generateRichThemesForCampaignWeeks } from '../../../backend/services/strategicThemeEngine';
 import { supabase } from '../../../backend/db/supabaseClient';
 
 type IdeaSpine = {
@@ -103,21 +103,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const numAlts = alternatives === 2 ? 2 : 1;
     if (numAlts === 2) {
       const [setA, setB] = await Promise.all([
-        generateThemesForCampaignWeeks(genTopic, weeks),
-        generateThemesForCampaignWeeks(genTopic, weeks),
+        generateRichThemesForCampaignWeeks(genTopic, weeks),
+        generateRichThemesForCampaignWeeks(genTopic, weeks),
       ]);
       return res.status(200).json({
-        themes: setA.map((title, i) => ({ week: i + 1, title })),
-        alternatives: [
-          setA.map((title, i) => ({ week: i + 1, title })),
-          setB.map((title, i) => ({ week: i + 1, title })),
-        ],
+        themes: setA,
+        alternatives: [setA, setB],
       });
     }
 
-    const themes = await generateThemesForCampaignWeeks(genTopic, weeks);
-    const themesStructured = themes.map((title, i) => ({ week: i + 1, title }));
-    return res.status(200).json({ themes: themesStructured });
+    const themes = await generateRichThemesForCampaignWeeks(genTopic, weeks);
+    return res.status(200).json({ themes });
   } catch (err: unknown) {
     console.error('[planner/generate-themes]', err);
     return res.status(500).json({

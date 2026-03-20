@@ -37,6 +37,50 @@ const THEME_PROGRESSION = [
   'Conversion',
 ];
 
+/** Per-phase marketing metadata used to enrich theme cards and AI context. */
+const PHASE_METADATA: Record<string, { objective: string; content_focus: string; cta_focus: string }> = {
+  Awareness: {
+    objective: 'Build brand visibility and introduce your topic to a new audience',
+    content_focus: 'Educational content, industry insights, thought leadership posts',
+    cta_focus: 'Follow · Subscribe',
+  },
+  Education: {
+    objective: 'Establish authority and teach your audience key concepts',
+    content_focus: 'How-to guides, tips, frameworks, listicles, deep dives',
+    cta_focus: 'Save · Share',
+  },
+  Problem: {
+    objective: 'Amplify pain points and spark recognition in your audience',
+    content_focus: 'Pain point stories, industry challenges, misconception-busting content',
+    cta_focus: 'Comment · Engage',
+  },
+  Solution: {
+    objective: 'Position your offering as the clear answer to the problem',
+    content_focus: 'Solution reveals, product walkthroughs, demos, comparisons',
+    cta_focus: 'Learn More · Sign Up',
+  },
+  Proof: {
+    objective: 'Build trust through evidence, results, and social proof',
+    content_focus: 'Customer testimonials, data results, case studies, behind-the-scenes',
+    cta_focus: 'Book a Call · Start Trial',
+  },
+  Conversion: {
+    objective: 'Drive decisive action and close the consideration loop',
+    content_focus: 'Offers, urgency plays, clear value propositions, objection handling',
+    cta_focus: 'Buy Now · Schedule Demo',
+  },
+};
+
+/** Rich theme entry returned from generateRichThemesForCampaignWeeks. */
+export type RichThemeEntry = {
+  week: number;
+  title: string;
+  phase_label: string;
+  objective: string;
+  content_focus: string;
+  cta_focus: string;
+};
+
 type IntelligenceRow = {
   id: string;
   cluster_id: string;
@@ -162,6 +206,35 @@ export async function generateThemesForCampaignWeeks(
   }
 
   return progressionResults;
+}
+
+/**
+ * Generate rich theme entries for each campaign week — same logic as generateThemesForCampaignWeeks
+ * but returns full phase metadata (phase_label, objective, content_focus, cta_focus) alongside title.
+ * Used by the planner so theme cards and AI context carry all strategic detail.
+ */
+export async function generateRichThemesForCampaignWeeks(
+  topic: string,
+  weeks: number,
+  campaign_tone?: string
+): Promise<RichThemeEntry[]> {
+  const titles = await generateThemesForCampaignWeeks(topic, weeks, campaign_tone);
+  return titles.map((title, i) => {
+    const stage = THEME_PROGRESSION[i % THEME_PROGRESSION.length];
+    const meta = PHASE_METADATA[stage] ?? {
+      objective: `Drive results for ${stage.toLowerCase()} phase`,
+      content_focus: 'Content aligned to campaign phase',
+      cta_focus: 'Engage',
+    };
+    return {
+      week: i + 1,
+      title,
+      phase_label: stage,
+      objective: meta.objective,
+      content_focus: meta.content_focus,
+      cta_focus: meta.cta_focus,
+    };
+  });
 }
 
 /**

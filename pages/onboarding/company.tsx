@@ -20,7 +20,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { supabase } from '../../utils/supabaseClient';
 
-type Step = 'loading' | 'website' | 'details' | 'saving';
+type Step = 'loading' | 'website' | 'details' | 'saving' | 'joined';
 
 const INDUSTRIES = [
   'Technology & Software',
@@ -71,6 +71,7 @@ export default function CompanySetupPage() {
   const [industry, setIndustry]     = useState('');
   const [teamSize, setTeamSize]     = useState('');
   const [errorMsg, setErrorMsg]     = useState<string | null>(null);
+  const [joinedCompanyName, setJoinedCompanyName] = useState<string | null>(null);
 
   // ── Check session + existing company ─────────────────────────────────────
   useEffect(() => {
@@ -132,6 +133,14 @@ export default function CompanySetupPage() {
 
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Failed to create company');
+
+      if (json.selfJoined) {
+        setJoinedCompanyName(json.matchedCompanyName ?? companyName.trim());
+        setStep('joined');
+        // Auto-redirect to dashboard after 4 seconds
+        setTimeout(() => router.replace('/dashboard'), 4000);
+        return;
+      }
 
       router.replace('/dashboard');
     } catch (err: any) {
@@ -387,6 +396,40 @@ export default function CompanySetupPage() {
                       We use these details to personalise your campaigns, content suggestions, and marketing strategy — you can update them any time from your profile settings.
                     </p>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Step: self-joined existing company ──────────────────── */}
+            {step === 'joined' && (
+              <div className="animate-fadeIn text-center">
+                <div className="mb-6 inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 shadow-lg text-3xl">
+                  🎉
+                </div>
+                <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]">
+                  You've been added to {joinedCompanyName}
+                </h1>
+                <p className="mt-3 text-sm leading-relaxed text-[#6B7C93] max-w-sm mx-auto">
+                  Your company is already on Omnivyra. You've been added as a <strong>Content Creator</strong>
+                  {' '}and the company admin has been notified.
+                </p>
+                <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-left space-y-2">
+                  <p className="text-xs font-semibold text-emerald-800">What you can do:</p>
+                  <ul className="text-xs text-emerald-700 space-y-1">
+                    <li>✓ View and work on campaigns</li>
+                    <li>✓ Create and edit content</li>
+                    <li>✓ Access analytics and insights</li>
+                  </ul>
+                  <p className="text-xs text-emerald-600 mt-2">
+                    The company admin can adjust your access level at any time from Team Settings.
+                  </p>
+                </div>
+                <p className="mt-5 text-xs text-[#6B7C93]">Taking you to your dashboard…</p>
+                <div className="mt-2 flex justify-center">
+                  <svg className="h-5 w-5 animate-spin text-[#0A66C2]" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
                 </div>
               </div>
             )}

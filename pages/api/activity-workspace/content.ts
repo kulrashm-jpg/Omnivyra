@@ -3,9 +3,13 @@ import {
   buildPlatformVariantsFromMaster,
   generateMasterContentFromIntent,
   optimizeDiscoverabilityForPlatform,
+  type MasterContentPayload,
 } from '@/backend/services/contentGenerationPipeline';
-import { generateCampaignPlan } from '@/backend/services/aiGateway';
-import { refineLanguageOutput } from '@/backend/services/languageRefinementService';
+import { runCompletionWithOperation } from '@/backend/services/aiGateway';
+import { processContent } from '@/backend/services/unifiedContentProcessor';
+import { supabase } from '@/backend/db/supabaseClient';
+import { hasEnoughCredits } from '@/backend/services/creditDeductionService';
+import { deductCreditsAwaited } from '@/backend/services/creditExecutionService';
 
 type WorkspaceAction = 'generate_master' | 'generate_variants' | 'refine_variant' | 'improve_variant' | 'improve_variant_all';
 type ImprovementType = 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
@@ -14,6 +18,39 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/** Merge master_content into daily_content_plans.content JSON blob for the given activity row. */
+async function persistMasterToDb(activityId: string, master: MasterContentPayload): Promise<void> {
+  if (!activityId || activityId.startsWith('workspace-')) return; // transient ID, nothing to persist
+  try {
+    const { data: row } = await supabase
+      .from('daily_content_plans')
+      .select('content')
+      .eq('id', activityId)
+      .maybeSingle();
+    if (!row) return;
+    let existing: Record<string, unknown> = {};
+    try { existing = typeof row.content === 'string' ? JSON.parse(row.content) : (row.content ?? {}); } catch { /* ignore */ }
+    const updated = { ...existing, master_content: master };
+    await supabase
+      .from('daily_content_plans')
+      .update({ content: JSON.stringify(updated), updated_at: new Date().toISOString() })
+      .eq('id', activityId);
+  } catch (err) {
+    console.warn('[activity-workspace/content] persistMasterToDb failed:', (err as Error)?.message);
+  }
+}
+
+const FAILED_VARIANT_PREFIXES = [
+  '[PLATFORM ADAPTATION FAILED]',
+  '[PLATFORM MEDIA BLUEPRINT]',
+  '[MASTER GENERATION FAILED',
+];
+
+function isFailedVariant(v: unknown): boolean {
+  const content = String((v as any)?.generated_content ?? '').trim();
+  return FAILED_VARIANT_PREFIXES.some((p) => content.startsWith(p));
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -27,6 +64,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const schedules = Array.isArray((req.body as any)?.schedules) ? (req.body as any).schedules : [];
     const dailyExecutionItemRaw = asObject((req.body as any)?.dailyExecutionItem) || {};
     const extra_instruction = typeof (req.body as any)?.extra_instruction === 'string' ? String((req.body as any).extra_instruction).trim() || undefined : undefined;
+    // Prefer client-supplied companyId; fall back to DB lookup via activity id → campaign → company
+    let companyId: string | null = String((req.body as any)?.companyId || '').trim() || null;
+    if (!companyId) {
+      const activityId = String((req.body as any)?.activity?.id || '').trim();
+      const campaignId = String((req.body as any)?.campaignId || '').trim();
+      try {
+        if (activityId && !activityId.startsWith('workspace-')) {
+          const { data: plan } = await supabase.from('daily_content_plans').select('campaign_id').eq('id', activityId).maybeSingle();
+          const cid = plan?.campaign_id || campaignId;
+          if (cid) {
+            const { data: camp } = await supabase.from('campaigns').select('company_id').eq('id', cid).maybeSingle();
+            companyId = camp?.company_id ?? null;
+          }
+        } else if (campaignId) {
+          const { data: camp } = await supabase.from('campaigns').select('company_id').eq('id', campaignId).maybeSingle();
+          companyId = camp?.company_id ?? null;
+        }
+      } catch { /* non-fatal */ }
+    }
 
     if (!action || !['generate_master', 'generate_variants', 'refine_variant', 'improve_variant', 'improve_variant_all'].includes(action)) {
       return res.status(400).json({ error: 'Invalid action' });
@@ -115,9 +171,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               'Output the complete revised content now:',
             ].join('\n');
 
-      const aiResult = await generateCampaignPlan({
-        companyId: null,
+      const aiResult = await runCompletionWithOperation({
+        companyId,
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        operation: 'regenerateContent',
         temperature: 0.2,
         messages: [
           { role: 'system', content: systemPrompt },
@@ -128,16 +185,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!revised) {
         return res.status(500).json({ error: 'Improvement returned empty output' });
       }
-      const refinedImprove = await refineLanguageOutput({
+      const refinedImprove = await processContent({
         content: revised,
-        card_type: 'platform_variant',
         platform,
+        card_type: 'platform_variant',
+        enforce_char_limit: true,
       });
-      revised = (refinedImprove.refined as string) || revised;
+      revised = refinedImprove.content || revised;
       const improved_variant = {
         ...variant,
         generated_content: revised,
       };
+      if (companyId) await deductCreditsAwaited(companyId, 'content_rewrite', { note: `Improve ${improvementType.toLowerCase()}` });
       return res.status(200).json({ success: true, improved_variant });
     }
 
@@ -216,9 +275,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         userPromptParts.push('', 'Output the complete revised content now:');
 
-        const aiResult = await generateCampaignPlan({
-          companyId: null,
+        const aiResult = await runCompletionWithOperation({
+          companyId,
           model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          operation: 'regenerateContent',
           temperature: 0.2,
           messages: [
             { role: 'system', content: systemPrompt },
@@ -229,12 +289,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!revised) {
           return res.status(500).json({ error: 'Improvement returned empty output' });
         }
-        const refinedImprove = await refineLanguageOutput({
+        const refinedImprove = await processContent({
           content: revised,
-          card_type: 'platform_variant',
           platform,
+          card_type: 'platform_variant',
+          enforce_char_limit: true,
         });
-        revisedContent = (refinedImprove.refined as string) || revised;
+        revisedContent = refinedImprove.content || revised;
       }
 
       const improved_variant = {
@@ -242,6 +303,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         generated_content: revisedContent,
         ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
       };
+      if (companyId) await deductCreditsAwaited(companyId, 'content_rewrite', { note: `Improve all: ${improvementTypes.join(', ')}` });
       return res.status(200).json({ success: true, improved_variant });
     }
 
@@ -283,11 +345,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (dailyExecutionItemRaw as any)?.media_status === 'ready' || (dailyExecutionItemRaw as any)?.media_status === 'missing'
           ? (dailyExecutionItemRaw as any).media_status
           : undefined,
+      company_id: companyId,
       ...(extra_instruction ? { extra_instruction } : {}),
     };
 
     if (action === 'generate_master') {
+      if (companyId) {
+        const check = await hasEnoughCredits(companyId, 'content_basic');
+        if (!check.sufficient) {
+          return res.status(402).json({ error: 'Insufficient credits to generate content', required: check.required, balance: check.balance });
+        }
+      }
       const master = await generateMasterContentFromIntent(item);
+      // Persist immediately so subsequent repurpose calls on other platforms can reuse it
+      const activityDbId = String((req.body as any)?.activity?.id || '').trim();
+      await persistMasterToDb(activityDbId, master);
+      if (companyId) await deductCreditsAwaited(companyId, 'content_basic', { note: 'Master content generation' });
       return res.status(200).json({
         success: true,
         master_content: master,
@@ -311,9 +384,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Current content is required for refinement' });
       }
 
-      const aiResult = await generateCampaignPlan({
-        companyId: null,
+      const aiResult = await runCompletionWithOperation({
+        companyId,
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        operation: 'regenerateContent',
         temperature: 0.2,
         messages: [
           {
@@ -339,18 +413,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!refined) {
         return res.status(500).json({ error: 'AI refinement returned empty output' });
       }
-      const refinedOutput = await refineLanguageOutput({
+      const refinedOutput = await processContent({
         content: refined,
-        card_type: 'repurpose_card',
         platform,
+        card_type: 'repurpose_card',
+        enforce_char_limit: true,
       });
-      refined = (refinedOutput.refined as string) || refined;
+      refined = refinedOutput.content || refined;
 
+      if (companyId) await deductCreditsAwaited(companyId, 'content_rewrite', { note: 'Content refinement' });
       return res.status(200).json({
         success: true,
         refined_content: refined,
       });
     }
+
+    // ── generate_variants ─────────────────────────────────────────────────────
+    const activityDbId = String((req.body as any)?.activity?.id || '').trim();
 
     const creatorAsset = asObject((dailyExecutionItemRaw as any)?.creator_asset);
     const hasCreatorAsset = creatorAsset && (
@@ -360,31 +439,60 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? (String(creatorAsset.description ?? '').trim() || String(creatorAsset.transcript ?? '').trim() || String(creatorAsset.theme ?? '').trim() || String(item.topic ?? item.title ?? '').trim())
       : '';
 
+    // If no master yet: auto-generate it now (first repurpose button press on any platform).
+    // Persist to DB immediately so every subsequent platform repurpose reuses the same master.
+    let itemWithMaster = item;
     if (!item.master_content && !creatorMasterText) {
-      return res.status(400).json({
-        error: 'MASTER_CONTENT_REQUIRED',
-        message: 'Generate master content or upload creator asset (with description/transcript/theme) before platform variants.',
+      const generatedMaster = await generateMasterContentFromIntent(item);
+      await persistMasterToDb(activityDbId, generatedMaster);
+      itemWithMaster = { ...item, master_content: generatedMaster };
+    } else if (creatorMasterText) {
+      itemWithMaster = {
+        ...item,
+        master_content: {
+          id: `creator-${item.execution_id}`,
+          generated_at: new Date().toISOString(),
+          content: creatorMasterText,
+          generation_status: 'generated' as const,
+          generation_source: 'creator' as const,
+          content_type_mode: 'text' as const,
+        },
+      };
+    }
+
+    if (companyId) {
+      const check = await hasEnoughCredits(companyId, 'content_basic');
+      if (!check.sufficient) {
+        return res.status(402).json({ error: 'Insufficient credits to generate content', required: check.required, balance: check.balance });
+      }
+    }
+
+    const variants = await buildPlatformVariantsFromMaster(itemWithMaster);
+
+    // Filter out failed/placeholder variants — never return error strings as content
+    const successfulVariants = variants.filter((v) => !isFailedVariant(v));
+    if (successfulVariants.length === 0 && variants.length > 0) {
+      // All variants failed — surface the actual error instead of silently returning garbage
+      return res.status(500).json({
+        error: 'VARIANT_GENERATION_FAILED',
+        message: 'Platform adaptation failed for all targets.',
+        master_content: (itemWithMaster as any).master_content,
       });
     }
 
-    const itemWithMaster = creatorMasterText
-      ? {
-          ...item,
-          master_content: {
-            id: `creator-${item.execution_id}`,
-            generated_at: new Date().toISOString(),
-            content: creatorMasterText,
-            generation_status: 'generated' as const,
-            generation_source: 'creator' as const,
-            content_type_mode: 'text' as const,
-          },
-        }
-      : item;
+    // Charge content_basic per platform variant successfully generated
+    if (companyId && successfulVariants.length > 0) {
+      await deductCreditsAwaited(companyId, 'content_basic', {
+        note: `Generated ${successfulVariants.length} platform variant${successfulVariants.length > 1 ? 's' : ''}`,
+        multiplier: successfulVariants.length,
+      });
+    }
 
-    const variants = await buildPlatformVariantsFromMaster(itemWithMaster);
     return res.status(200).json({
       success: true,
-      platform_variants: variants,
+      platform_variants: successfulVariants,
+      // Return master so the client can update its state even if it didn't have one before
+      master_content: (itemWithMaster as any).master_content ?? null,
     });
   } catch (error) {
     console.error('activity-workspace content API error:', error);

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,8 +68,8 @@ function CompactMeter({ totalCredits, remainingCredits, className }: CreditMeter
 // ── Full variant ──────────────────────────────────────────────────────────────
 
 export function CreditMeter({
-  totalCredits = 25000,
-  remainingCredits = 18420,
+  totalCredits = 0,
+  remainingCredits = 0,
   categories,
   onSmartModeChange,
   smartModeEnabled = true,

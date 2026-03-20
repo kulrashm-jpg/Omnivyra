@@ -137,10 +137,18 @@ export interface ExecutionPlan {
 export type CampaignType = 'TEXT' | 'CREATOR' | 'HYBRID';
 export type PlatformContentRequests = Record<string, Record<string, number>>;
 
-/** Strategic theme per week. Future-proof structure for extensions (e.g. description, objectives). */
+/** Strategic theme per week — carries full phase metadata for AI context and card display. */
 export interface StrategicThemeEntry {
   week: number;
   title: string;
+  /** Marketing phase label e.g. "Awareness", "Education", "Solution" */
+  phase_label?: string;
+  /** What this week achieves for the audience */
+  objective?: string;
+  /** Primary content angle and format for the week */
+  content_focus?: string;
+  /** Call-to-action direction for the week */
+  cta_focus?: string;
 }
 
 export interface PlannerSessionState {
@@ -273,9 +281,16 @@ function loadPersistedSession(storageKey: string): Partial<PlannerSessionState> 
           .filter((s) => typeof s === 'string' && String(s).trim())
           .map((s, i) => ({ week: i + 1, title: String(s).trim() }));
       } else if (typeof first === 'object' && first && 'week' in first && 'title' in first) {
-        strategic_themes = (rawThemes as Array<{ week: number; title: string }>)
+        strategic_themes = (rawThemes as Array<StrategicThemeEntry>)
           .filter((t) => typeof t?.week === 'number' && typeof t?.title === 'string')
-          .map((t) => ({ week: t.week, title: String(t.title).trim() }));
+          .map((t) => ({
+            week: t.week,
+            title: String(t.title).trim(),
+            ...(t.phase_label ? { phase_label: t.phase_label } : {}),
+            ...(t.objective ? { objective: t.objective } : {}),
+            ...(t.content_focus ? { content_focus: t.content_focus } : {}),
+            ...(t.cta_focus ? { cta_focus: t.cta_focus } : {}),
+          }));
       }
     }
     return {

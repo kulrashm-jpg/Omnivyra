@@ -1047,6 +1047,11 @@ type StructuredWeek = {
       };
     };
   }>;
+  /** Recommendation-specific fields */
+  summary?: string;
+  objectives?: string[];
+  goals?: string[];
+  suggested_days_to_post?: string[];
 };
 
 type StructuredPlan = {
@@ -5398,15 +5403,48 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                 },
               })))
             : [];
+          // Helper to render rec-specific fields (summary, objectives, goals, suggested days)
+          const renderRecFields = () => (
+            <>
+              {week.summary && (
+                <div className="italic text-gray-600 border-l-2 border-emerald-200 pl-2">{week.summary}</div>
+              )}
+              {week.objectives && week.objectives.length > 0 && (
+                <div>
+                  <div className="text-gray-500 font-medium">Objectives:</div>
+                  <ul className="list-disc list-inside mt-0.5 text-gray-600">{week.objectives.map((o, i) => <li key={i}>{o}</li>)}</ul>
+                </div>
+              )}
+              {week.goals && week.goals.length > 0 && (
+                <div>
+                  <div className="text-gray-500 font-medium">Goals:</div>
+                  <ul className="list-disc list-inside mt-0.5 text-gray-600">{week.goals.map((g, i) => <li key={i}>{g}</li>)}</ul>
+                </div>
+              )}
+              {week.suggested_days_to_post && week.suggested_days_to_post.length > 0 && (
+                <div>
+                  <div className="text-gray-500 font-medium">Suggested posting days:</div>
+                  <div className="flex flex-wrap gap-1 mt-0.5">
+                    {week.suggested_days_to_post.map((d, i) => (
+                      <span key={i} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded text-xs">{d}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          );
           return (
           <div key={week.week} className="bg-white border border-gray-200 rounded-lg p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="text-sm font-semibold text-gray-900">Week {week.week}</div>
-              <div className="text-xs text-gray-500">{themeLabel}</div>
+              {themeLabel !== `Week ${week.week}` && (
+                <div className="text-xs text-gray-500 text-right max-w-[60%]">{themeLabel}</div>
+              )}
             </div>
             {isBlueprint ? (
               <div className="space-y-2 text-xs">
                 {week.primary_objective && <div className="text-gray-600">{week.primary_objective}</div>}
+                {renderRecFields()}
                 {hasEnrichedTopics ? (
                   <div className="space-y-2">
                     {(week as any)?.weeklyContextCapsule && (
@@ -5452,7 +5490,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                 {renderResolvedPostingMetadata(week)}
               </div>
             ) : (
-            <div className="space-y-3">
+            <div className="space-y-3 text-xs">
               {(week.daily || []).map((day) => (
                 <div key={`${week.week}-${day.day}`} className="border-t pt-3">
                   <div className="text-sm font-medium text-gray-800">{day.day}</div>
@@ -5502,6 +5540,21 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                   </div>
                 </div>
               ))}
+              {(!week.daily || week.daily.length === 0) && (
+                <div className="space-y-2">
+                  {week.primary_objective && <div className="text-gray-600">{week.primary_objective}</div>}
+                  {renderRecFields()}
+                  {(week.topics_to_cover?.length ?? 0) > 0 && (
+                    <div>
+                      <div className="text-gray-500 font-medium">Topics to cover:</div>
+                      <ul className="list-disc list-inside mt-0.5 text-gray-600">{week.topics_to_cover!.map((t, i) => <li key={i}>{t}</li>)}</ul>
+                    </div>
+                  )}
+                  {renderWeekPlatformContent(week)}
+                  {week.cta_type && <div className="text-gray-600">CTA: {week.cta_type}</div>}
+                  {week.weekly_kpi_focus && <div className="text-gray-600">KPI: {week.weekly_kpi_focus}</div>}
+                </div>
+              )}
             </div>
             )}
           </div>
@@ -7123,10 +7176,35 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                           </div>
                         ) : (
                           <>
+                            {week.summary && (
+                              <div className="mb-2 text-xs italic text-gray-600 border-l-2 border-emerald-200 pl-2">{week.summary}</div>
+                            )}
                             {(week.topics_to_cover?.length ?? 0) > 0 && (
                               <div className="mb-2">
                                 <div className="text-gray-500 font-medium text-xs">Topics to cover:</div>
                                 <ul className="list-disc list-inside text-xs text-gray-700">{week.topics_to_cover!.map((t, i) => <li key={i}>{t}</li>)}</ul>
+                              </div>
+                            )}
+                            {week.objectives && week.objectives.length > 0 && (
+                              <div className="mb-2">
+                                <div className="text-gray-500 font-medium text-xs">Objectives:</div>
+                                <ul className="list-disc list-inside text-xs text-gray-700">{week.objectives.map((o, i) => <li key={i}>{o}</li>)}</ul>
+                              </div>
+                            )}
+                            {week.goals && week.goals.length > 0 && (
+                              <div className="mb-2">
+                                <div className="text-gray-500 font-medium text-xs">Goals:</div>
+                                <ul className="list-disc list-inside text-xs text-gray-700">{week.goals.map((g, i) => <li key={i}>{g}</li>)}</ul>
+                              </div>
+                            )}
+                            {week.suggested_days_to_post && week.suggested_days_to_post.length > 0 && (
+                              <div className="mb-2">
+                                <div className="text-gray-500 font-medium text-xs">Suggested posting days:</div>
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  {week.suggested_days_to_post.map((d, i) => (
+                                    <span key={i} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded text-xs">{d}</span>
+                                  ))}
+                                </div>
                               </div>
                             )}
                             <div className="text-xs space-y-1 mb-1">

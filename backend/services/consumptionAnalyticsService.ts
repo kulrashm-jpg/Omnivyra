@@ -43,6 +43,8 @@ export interface LlmByFeatureArea {
 
 export interface LlmByUser {
   user_id: string | null;
+  email?: string | null;
+  user_type: 'member' | 'guest' | 'system';
   call_count: number;
   total_tokens: number;
   total_cost_usd?: number | null;
@@ -149,13 +151,10 @@ export async function getLlmConsumption(
   const endDate = new Date(Date.UTC(year, month, 1)).toISOString();
 
   // Base query — LLM events for this org and period
+  // Use * so missing optional columns (e.g. feature_area pre-migration) don't crash the query.
   const { data: events, error } = await supabase
     .from('usage_events')
-    .select(
-      'model_name, provider_name, process_type, feature_area, user_id, campaign_id,' +
-      'input_tokens, output_tokens, total_tokens, latency_ms, error_flag,' +
-      'total_cost, created_at'
-    )
+    .select('*')
     .eq('organization_id', organizationId)
     .eq('source_type', 'llm')
     .gte('created_at', startDate)
@@ -278,18 +277,53 @@ export async function getLlmConsumption(
     result.by_campaign = Array.from(campMap.values()).sort((a, b) => b.total_tokens - a.total_tokens);
   }
 
-  // super_admin also gets by_user
+  // super_admin also gets by_user — with email resolution and membership type
   if (tier === 'super_admin') {
+    const ZERO_UUID = '00000000-0000-0000-0000-000000000000';
     const userMap = new Map<string, LlmByUser>();
     for (const r of rows) {
       const uid = r.user_id ?? '__system__';
-      const uRow = userMap.get(uid) ?? { user_id: r.user_id, call_count: 0, total_tokens: 0, total_cost_usd: 0 };
+      const isSystem = !r.user_id || r.user_id === ZERO_UUID;
+      const uRow = userMap.get(uid) ?? {
+        user_id: r.user_id,
+        user_type: isSystem ? 'system' : 'guest', // default guest; upgraded to 'member' below
+        call_count: 0,
+        total_tokens: 0,
+        total_cost_usd: 0,
+      };
       uRow.call_count += 1;
       uRow.total_tokens += r.total_tokens ?? 0;
       uRow.total_cost_usd = (uRow.total_cost_usd ?? 0) + (r.total_cost ?? 0);
       userMap.set(uid, uRow);
     }
-    result.by_user = Array.from(userMap.values()).sort((a, b) => b.total_tokens - a.total_tokens);
+
+    // Resolve emails via auth.admin
+    const realUserIds = Array.from(userMap.keys()).filter(uid => uid !== '__system__' && uid !== ZERO_UUID);
+    if (realUserIds.length > 0) {
+      try {
+        const { data: authData } = await (supabase.auth as any).admin.listUsers({ perPage: 1000 });
+        const authUsers: Array<{ id: string; email?: string }> = authData?.users ?? [];
+        const emailMap = new Map(authUsers.map((u: { id: string; email?: string }) => [u.id, u.email ?? null]));
+        for (const uid of realUserIds) {
+          const row = userMap.get(uid);
+          if (row) row.email = emailMap.get(uid) ?? null;
+        }
+      } catch { /* auth.admin unavailable — emails stay null */ }
+
+      // Resolve membership type: users with a role row in this org are 'member'; others are 'guest'
+      const { data: roleRows } = await supabase
+        .from('user_company_roles')
+        .select('user_id')
+        .eq('company_id', organizationId)
+        .in('user_id', realUserIds);
+      const memberSet = new Set((roleRows ?? []).map((r: { user_id: string }) => r.user_id));
+      for (const uid of realUserIds) {
+        const row = userMap.get(uid);
+        if (row) row.user_type = memberSet.has(uid) ? 'member' : 'guest';
+      }
+    }
+
+    result.by_user = Array.from(userMap.values()).sort((a, b) => (b.total_cost_usd ?? 0) - (a.total_cost_usd ?? 0));
   }
 
   return result;

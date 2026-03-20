@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
-import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag } from 'lucide-react';
+import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag, Server } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { supabase } from '../../utils/supabaseClient';
 import LLMConsumptionPanel from '../../components/super-admin/LLMConsumptionPanel';
@@ -19,21 +19,24 @@ import ApiConsumptionPanel from '../../components/super-admin/ApiConsumptionPane
 import CreditsManagementPanel from '../../components/super-admin/CreditsManagementPanel';
 import AllOrgsConsumptionTable from '../../components/super-admin/AllOrgsConsumptionTable';
 import PlansPricingPanel from '../../components/super-admin/PlansPricingPanel';
+import InfraConsumptionPanel from '../../components/super-admin/InfraConsumptionPanel';
 
-type ActiveTab = 'overview' | 'llm' | 'apis' | 'credits' | 'external_apis' | 'plans';
+type ActiveTab = 'overview' | 'llm' | 'apis' | 'credits' | 'external_apis' | 'plans' | 'infra';
 type Tier = 'super_admin' | 'company_admin' | 'user';
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export default function ConsumptionPage() {
   const router = useRouter();
-  const { selectedCompanyId: ctxCompanyId, userRole } = useCompanyContext();
+  const { selectedCompanyId: ctxCompanyId, userRole, isLoading: ctxLoading, isAuthenticated } = useCompanyContext();
 
   const [tier, setTier] = useState<Tier>('user');
+  const [tierResolved, setTierResolved] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('llm');
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [externalApis, setExternalApis] = useState<any[]>([]);
   const [loadingExternalApis, setLoadingExternalApis] = useState(false);
+  const [orgs, setOrgs] = useState<{ id: string; name: string }[]>([]);
 
   // Period selector
   const now = new Date();
@@ -43,19 +46,55 @@ export default function ConsumptionPage() {
   // Super admin org drill-down
   const [orgSearchMode, setOrgSearchMode] = useState(false);
 
+  // Detect tier: check super_admin_session cookie (HttpOnly — must ask server),
+  // then fall back to Supabase userRole for regular users.
+  // Wait for CompanyContext to finish loading so we don't fire panels with no auth.
   useEffect(() => {
-    const role = userRole?.toUpperCase();
-    if (role === 'SUPER_ADMIN') {
-      setTier('super_admin');
-      setActiveTab('overview');
-    } else if (role === 'COMPANY_ADMIN' || role === 'ADMIN') {
-      setTier('company_admin');
-      setActiveTab('llm');
-    } else {
-      setTier('user');
-      setActiveTab('llm');
+    async function resolveTier() {
+      try {
+        const res = await fetch('/api/super-admin/session', { credentials: 'include' });
+        const json = await res.json();
+        if (json.isSuperAdmin) {
+          setTier('super_admin');
+          setActiveTab('overview');
+          setTierResolved(true);
+          return;
+        }
+      } catch { /* ignore — fall through to userRole */ }
+
+      // Don't resolve until CompanyContext has finished loading its auth state
+      if (ctxLoading) return;
+
+      // No Supabase session and no super-admin cookie → redirect to login
+      if (!isAuthenticated) {
+        router.replace('/login');
+        return;
+      }
+
+      const role = userRole?.toUpperCase();
+      if (role === 'SUPER_ADMIN') {
+        setTier('super_admin');
+        setActiveTab('overview');
+      } else if (role === 'COMPANY_ADMIN' || role === 'ADMIN') {
+        setTier('company_admin');
+        setActiveTab('llm');
+      } else {
+        setTier('user');
+        setActiveTab('llm');
+      }
+      setTierResolved(true);
     }
-  }, [userRole]);
+    resolveTier();
+  }, [userRole, ctxLoading, isAuthenticated]);
+
+  // Load org list for super admin org selector
+  useEffect(() => {
+    if (tier !== 'super_admin') return;
+    fetch('/api/super-admin/companies', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.companies) setOrgs(d.companies.map((c: any) => ({ id: c.id, name: c.name }))); })
+      .catch(() => {});
+  }, [tier]);
 
   const effectiveCompanyId = selectedOrgId ?? ctxCompanyId;
 
@@ -85,9 +124,18 @@ export default function ConsumptionPage() {
     { key: 'credits' as ActiveTab,       label: 'Credits',       icon: <Coins className="w-4 h-4" /> },
     { key: 'external_apis' as ActiveTab, label: 'External APIs', icon: <Globe2 className="w-4 h-4" /> },
     { key: 'plans' as ActiveTab,         label: 'Plans & Pricing', icon: <Tag className="w-4 h-4" />, superAdminOnly: true },
+    { key: 'infra' as ActiveTab,         label: 'Infra',           icon: <Server className="w-4 h-4" />, superAdminOnly: true },
   ] as { key: ActiveTab; label: string; icon: React.ReactNode; superAdminOnly?: boolean }[]).filter(t => !t.superAdminOnly || tier === 'super_admin');
 
   const yearOptions = Array.from({ length: 3 }, (_, i) => now.getFullYear() - i);
+
+  if (!tierResolved) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <RefreshCw className="w-5 h-5 text-gray-400 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -133,10 +181,19 @@ export default function ConsumptionPage() {
           </select>
 
           {/* Org selector for super_admin drill-down */}
-          {tier === 'super_admin' && selectedOrgId && (
-            <div className="flex items-center gap-2 ml-4 bg-violet-900/30 border border-violet-700 rounded-lg px-3 py-1.5 text-sm">
-              <span className="text-violet-300">Viewing: <span className="font-mono text-xs">{selectedOrgId.slice(0, 12)}…</span></span>
-              <button onClick={() => setSelectedOrgId(null)} className="text-gray-400 hover:text-white ml-2">✕</button>
+          {tier === 'super_admin' && (
+            <div className="flex items-center gap-2 ml-4">
+              <Building2 className="w-4 h-4 text-gray-400" />
+              <select
+                value={selectedOrgId ?? ''}
+                onChange={e => setSelectedOrgId(e.target.value || null)}
+                className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-violet-500 max-w-[220px]"
+              >
+                <option value="">All organizations</option>
+                {orgs.map(o => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
             </div>
           )}
         </div>
@@ -208,6 +265,10 @@ export default function ConsumptionPage() {
 
           {activeTab === 'plans' && tier === 'super_admin' && (
             <PlansPricingPanel />
+          )}
+
+          {activeTab === 'infra' && tier === 'super_admin' && (
+            <InfraConsumptionPanel />
           )}
 
           {activeTab === 'external_apis' && (

@@ -29,6 +29,11 @@ async function resolveTier(
   res: NextApiResponse,
   companyId?: string
 ): Promise<{ tier: ConsumptionTier; userId: string; orgId: string | null } | null> {
+  // Super admin cookie session (username/password login — no Supabase token)
+  if (req.cookies?.super_admin_session === '1') {
+    return { tier: 'super_admin', userId: 'super_admin_session', orgId: companyId ?? null };
+  }
+
   const auth = await getSupabaseUserFromRequest(req);
   if (auth.error || !auth.user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
@@ -80,7 +85,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const data = await getLlmConsumption(orgId, tier, { year, month });
     return res.status(200).json({ tier, scope: 'single_org', data });
   } catch (err: any) {
-    console.error('[api/admin/consumption/llm]', err?.message);
-    return res.status(500).json({ error: 'Internal server error' });
+    console.error('[api/admin/consumption/llm]', err?.message, err?.stack);
+    const msg = process.env.NODE_ENV !== 'production' ? (err?.message ?? 'Unknown error') : 'Internal server error';
+    return res.status(500).json({ error: msg });
   }
 }

@@ -14,6 +14,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { checkDomainEligibility } from './domainEligibilityService';
 
 // ── Credit cost map ───────────────────────────────────────────────────────────
 
@@ -23,19 +24,29 @@ export type CreditAction =
   | 'auto_post'           // 2
   | 'content_rewrite'     // 3
   | 'content_basic'       // 5
+  | 'reply_generation'    // 2  — community reply
   // Medium — value actions
   | 'trend_analysis'      // 25
   | 'market_insight_manual' // 30
   | 'campaign_creation'   // 40
   | 'website_audit'       // 50
+  | 'prediction'          // 10 — campaign outcome prediction
+  | 'insight_generation'  // 8  — intelligence insight
+  | 'pattern_detection'   // 12 — pattern detection sweep
+  | 'market_positioning'  // 10 — market positioning eval
+  | 'competitor_signals'  // 8  — competitor intelligence
   // High — system/background (value-gated)
   | 'lead_detection'      // 15 (only if lead found)
   | 'daily_insight_scan'  // 20 (only if actionable insight found)
   | 'campaign_optimization' // 30 (only if change recommended)
+  | 'optimization_loop'   // 15 — live optimization iteration
+  | 'portfolio_decision'  // 20 — multi-campaign rebalancing
+  | 'strategy_evolution'  // 15 — strategy evolution
   // Heavy — LLM/voice/multi-step
   | 'voice_per_minute'    // 10
   | 'deep_analysis'       // 60
-  | 'full_strategy'       // 80;
+  | 'full_strategy'       // 80
+  | 'campaign_generation'; // 50 — autonomous campaign generation
 
 export const CREDIT_COSTS: Record<CreditAction, number> = {
   // Low
@@ -43,20 +54,49 @@ export const CREDIT_COSTS: Record<CreditAction, number> = {
   auto_post:             2,
   content_rewrite:       3,
   content_basic:         5,
+  reply_generation:      2,
   // Medium
   trend_analysis:        25,
   market_insight_manual: 30,
   campaign_creation:     40,
   website_audit:         50,
+  prediction:            10,
+  insight_generation:    8,
+  pattern_detection:     12,
+  market_positioning:    10,
+  competitor_signals:    8,
   // High (background — charged only when value delivered)
   lead_detection:        15,
   daily_insight_scan:    20,
   campaign_optimization: 30,
+  optimization_loop:     15,
+  portfolio_decision:    20,
+  strategy_evolution:    15,
   // Heavy
   voice_per_minute:      10,
   deep_analysis:         60,
   full_strategy:         80,
+  campaign_generation:   50,
 };
+
+// ── DB-driven cost getter (overrides hardcoded map when config row exists) ─────
+
+/** Returns the credit cost for an action, preferring DB config over hardcoded map. */
+export async function getCreditCost(action: CreditAction): Promise<number> {
+  try {
+    const { data } = await supabase
+      .from('credit_cost_config')
+      .select('credits')
+      .eq('action_type', action)
+      .maybeSingle();
+    if (data && typeof (data as any).credits === 'number') {
+      return (data as any).credits as number;
+    }
+  } catch {
+    // fall through to hardcoded
+  }
+  return CREDIT_COSTS[action];
+}
 
 // Smart Mode dedup windows (seconds) — skip re-running same action within window
 const SMART_MODE_DEDUP_SECONDS: Partial<Record<CreditAction, number>> = {
@@ -276,5 +316,33 @@ export function getCreditCostTiers() {
         { action: 'full_strategy'    as CreditAction, label: 'Full campaign strategy',     credits: CREDIT_COSTS.full_strategy },
       ],
     },
+  };
+}
+
+// ── Domain eligibility gate ───────────────────────────────────────────────────
+
+/**
+ * Returns whether a user's email domain qualifies for free credit access.
+ * Eligible   → may claim free credits immediately.
+ * Pending    → must submit an access request; admin approval required.
+ * Blocked    → not eligible; no access request allowed.
+ */
+export async function hasFreeCreditAccess(userId: string): Promise<{
+  allowed: boolean;
+  status: 'eligible' | 'pending_review' | 'blocked';
+  reason: string;
+}> {
+  // Fetch user email from Supabase auth
+  const { data: { user }, error } = await supabase.auth.admin.getUserById(userId);
+  if (error || !user?.email) {
+    return { allowed: false, status: 'blocked', reason: 'user_not_found' };
+  }
+
+  const result = await checkDomainEligibility(user.email, userId);
+
+  return {
+    allowed: result.status === 'eligible',
+    status: result.status,
+    reason: result.reason,
   };
 }

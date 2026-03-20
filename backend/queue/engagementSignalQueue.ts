@@ -5,7 +5,7 @@
  */
 
 import { Queue } from 'bullmq';
-import { getRedisConfig } from './bullmqClient';
+import { getConnectionConfig } from './bullmqClient';
 import { calculateEngagementScore } from '../services/engagementScoreService';
 import { supabase } from '../db/supabaseClient';
 
@@ -16,13 +16,8 @@ let engagementSignalQueue: Queue | null = null;
 
 export function getEngagementSignalQueue(): Queue {
   if (!engagementSignalQueue) {
-    const config = getRedisConfig();
     engagementSignalQueue = new Queue(QUEUE_NAME, {
-      connection: {
-        host: config.host,
-        port: config.port,
-        password: config.password,
-      },
+      connection: getConnectionConfig(),
       defaultJobOptions: {
         attempts: 2,
         removeOnComplete: { count: 1000 },

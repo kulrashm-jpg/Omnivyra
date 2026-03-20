@@ -17,6 +17,7 @@ import { useRef, useState } from 'react';
 import {
   Palette, Calendar, LayoutList, CreditCard, ArrowRight, MessageSquare,
   Loader2, Sparkles, ArrowLeft, CheckCircle2, FileText, Zap, ChevronRight,
+  Target, BookOpen, MousePointerClick,
 } from 'lucide-react';
 import { usePlannerSession, type CalendarPlanActivity } from './plannerSessionStore';
 import PlatformIcon from '../ui/PlatformIcon';
@@ -168,7 +169,7 @@ function CardsView({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || 'Generation failed');
-      const raw: Array<{ week: number; title: string }> = Array.isArray(data.themes) ? data.themes : [];
+      const raw: Array<{ week: number; title: string; phase_label?: string; objective?: string; content_focus?: string; cta_focus?: string }> = Array.isArray(data.themes) ? data.themes : [];
       setStrategicThemes(raw.filter((t) => typeof t.week === 'number' && typeof t.title === 'string'));
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : 'Could not generate themes');
@@ -203,7 +204,10 @@ function CardsView({
         company_context_mode: 'full_company_context',
         campaign_type: state.campaign_type ?? 'TEXT',
         account_context: state.account_context,
-        prefilledPlanning: { strategic_themes: themes.map((t) => t.title) },
+        prefilledPlanning: {
+          strategic_themes: themes.map((t) => t.title),
+          strategic_theme_entries: themes,
+        },
       };
       if (pcr && Object.keys(pcr).length > 0) body.platform_content_requests = pcr;
 
@@ -286,11 +290,16 @@ function CardsView({
                 <div className={`p-4 bg-gradient-to-br ${color.bg} rounded-[10px]`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0 space-y-2">
-                      {/* Week badge */}
-                      <div className="flex items-center gap-2">
+                      {/* Week badge + phase label */}
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className={`inline-flex items-center text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded-full ${color.badge}`}>
                           Week {theme.week}
                         </span>
+                        {theme.phase_label && (
+                          <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full border ${color.badge} opacity-80`}>
+                            {theme.phase_label}
+                          </span>
+                        )}
                         {isSelected && (
                           <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-indigo-600 text-white px-2 py-0.5 rounded-full">
                             <MessageSquare className="h-2.5 w-2.5" />
@@ -302,6 +311,30 @@ function CardsView({
                       <p className="text-sm font-semibold text-gray-900 leading-snug">
                         {theme.title || <span className="text-gray-400 italic font-normal">No theme set</span>}
                       </p>
+                      {/* Objective */}
+                      {theme.objective && (
+                        <div className="flex items-start gap-1.5">
+                          <Target className="h-3 w-3 text-gray-400 flex-shrink-0 mt-0.5" />
+                          <p className="text-[11px] text-gray-600 leading-snug">{theme.objective}</p>
+                        </div>
+                      )}
+                      {/* Content focus + CTA */}
+                      {(theme.content_focus || theme.cta_focus) && (
+                        <div className="flex flex-col gap-1 pt-1 border-t border-black/5">
+                          {theme.content_focus && (
+                            <div className="flex items-start gap-1.5">
+                              <BookOpen className="h-3 w-3 text-gray-400 flex-shrink-0 mt-0.5" />
+                              <p className="text-[10px] text-gray-500 leading-snug">{theme.content_focus}</p>
+                            </div>
+                          )}
+                          {theme.cta_focus && (
+                            <div className="flex items-center gap-1.5">
+                              <MousePointerClick className="h-3 w-3 text-gray-400 flex-shrink-0" />
+                              <p className="text-[10px] font-medium text-gray-600">{theme.cta_focus}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                     {/* Color accent dot */}
                     <span className={`flex-shrink-0 w-2.5 h-2.5 rounded-full mt-1 ${color.accent}`} />

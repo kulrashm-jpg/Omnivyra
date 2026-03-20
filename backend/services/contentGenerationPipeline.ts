@@ -9,8 +9,9 @@ import {
 } from '../prompts';
 import { validateContentBlueprint, validatePlatformVariants } from './aiOutputValidationService';
 import { getDiscoverabilityTargets } from './discoverabilityRules';
-import { getAlgorithmicFormattingRules } from './platformAlgorithmFormattingRules';
+import { applyAlgorithmicFormatting } from './platformAlgorithmFormattingRules';
 import { getMediaIntentDescriptor } from './mediaIntentDescriptorRules';
+import { processContent } from './unifiedContentProcessor';
 import { getMediaRequirements, getPlatformMediaSearchRule } from './platformMediaSearchRules';
 
 type GenerationStatus = 'pending' | 'generated' | 'failed';
@@ -417,109 +418,9 @@ function appendHashtagsToVariantContent(
   return `${content.trim()}\n\n${shortenedTags}`.trim();
 }
 
-function splitIntoSentences(text: string): string[] {
-  return String(text || '')
-    .replace(/\r/g, '')
-    .split(/(?<=[.!?])\s+/g)
-    .map((part) => nonEmpty(part))
-    .filter(Boolean);
-}
-
-function isLikelyCtaSentence(sentence: string): boolean {
-  const lower = nonEmpty(sentence).toLowerCase();
-  if (!lower) return false;
-  return (
-    lower.includes('learn more') ||
-    lower.includes('book') ||
-    lower.includes('contact') ||
-    lower.includes('start') ||
-    lower.includes('join') ||
-    lower.includes('subscribe') ||
-    lower.includes('follow') ||
-    lower.includes('try') ||
-    lower.includes('download')
-  );
-}
-
-export function applyAlgorithmicFormatting(
-  adaptedContent: string,
-  platform: string
-): { content: string; meta: NonNullable<PlatformVariantPayload['algorithmic_formatting_meta']> } {
-  const rules = getAlgorithmicFormattingRules(platform);
-  const metaBase = { platform: nonEmpty(platform).toLowerCase() || 'unknown', formatting_applied: true as const };
-
-  // If the AI already produced structured content (has newlines), trust and preserve it.
-  // Only apply CTA ordering and basic line normalization.
-  const hasStructure = adaptedContent.includes('\n');
-  if (hasStructure) {
-    // Collapse 3+ blank lines to 2; trim each line
-    let structured = adaptedContent
-      .split('\n')
-      .map((line) => line.trimEnd())
-      .join('\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-
-    // For X/Twitter: ensure each sentence is on its own line
-    if (rules.preferSentencePerLine) {
-      const paragraphs = structured.split(/\n{2,}/);
-      const lines: string[] = [];
-      for (const para of paragraphs) {
-        const paraLines = para.split('\n').map((l) => l.trim()).filter(Boolean);
-        for (const line of paraLines) {
-          const sents = splitIntoSentences(line);
-          lines.push(...sents);
-        }
-        lines.push('');
-      }
-      structured = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-    }
-
-    // Enforce CTA at end if required
-    if (rules.enforceCtaAtEnd) {
-      const paras = structured.split(/\n{2,}/);
-      if (paras.length > 1) {
-        const ctaIdx = paras.findIndex(isLikelyCtaSentence);
-        if (ctaIdx >= 0 && ctaIdx !== paras.length - 1) {
-          const [cta] = paras.splice(ctaIdx, 1);
-          paras.push(cta);
-          structured = paras.join('\n\n');
-        }
-      }
-    }
-
-    return { content: structured, meta: metaBase };
-  }
-
-  // Flat content — fall back to sentence-splitting and grouping
-  const sentences = splitIntoSentences(adaptedContent);
-  if (sentences.length <= 1) {
-    return { content: nonEmpty(adaptedContent), meta: metaBase };
-  }
-
-  let ordered = [...sentences];
-  if (rules.enforceCtaAtEnd) {
-    const ctaIndex = ordered.findIndex(isLikelyCtaSentence);
-    if (ctaIndex >= 0 && ctaIndex !== ordered.length - 1) {
-      const [cta] = ordered.splice(ctaIndex, 1);
-      ordered.push(cta);
-    }
-  }
-
-  let formatted = '';
-  if (rules.preferSentencePerLine) {
-    formatted = ordered.join('\n');
-  } else {
-    const chunks: string[] = [];
-    for (let i = 0; i < ordered.length; i += rules.maxSentencesPerParagraph) {
-      const chunk = ordered.slice(i, i + rules.maxSentencesPerParagraph).join(' ');
-      chunks.push(chunk);
-    }
-    formatted = chunks.join('\n\n');
-  }
-
-  return { content: formatted.trim(), meta: metaBase };
-}
+// applyAlgorithmicFormatting, splitIntoSentences, isLikelyCtaSentence have been
+// moved to platformAlgorithmFormattingRules.ts to eliminate circular imports with
+// unifiedContentProcessor. Import applyAlgorithmicFormatting from there if needed directly.
 
 function compactQueryPhrase(value: string, fallback: string, maxWords: number): string {
   const cleaned = String(value || '')
@@ -1161,7 +1062,7 @@ export async function generateContentBlueprint(item: DailyExecutionItemLike): Pr
   const { content: systemPrompt, template_name, template_version, template_hash } = getContentBlueprintPromptWithFingerprint();
   console.info('Prompt executed', { prompt: 'content_blueprint', version: CONTENT_GENERATION_PROMPT_VERSION });
   const result = await runCompletionWithOperation({
-    companyId: null,
+    companyId: (item as any)?.company_id ?? null,
     campaignId: null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
@@ -1290,9 +1191,10 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
       creator_instruction: nonEmpty((item as any)?.creatorInstruction) || nonEmpty((item as any)?.creator_instruction) || '',
     };
     try {
-      const productionResult = await generateCampaignPlan({
-        companyId: null,
+      const productionResult = await runCompletionWithOperation({
+        companyId: (item as any)?.company_id ?? null,
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        operation: 'generateMasterContent',
         temperature: 0.3,
         messages: [
           { role: 'system', content: productionSystemPrompt },
@@ -1372,9 +1274,10 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
   try {
     const systemPrompt = contentTypeSystemPrompt;
     console.info('Prompt executed', { prompt: 'content_generation', version: CONTENT_GENERATION_PROMPT_VERSION, content_type: contextPayload.content_type });
-    const aiResult = await generateCampaignPlan({
-      companyId: null,
+    const aiResult = await runCompletionWithOperation({
+      companyId: (item as any)?.company_id ?? null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      operation: 'generateMasterContent',
       temperature: 0,
       messages: [
         {
@@ -1451,7 +1354,7 @@ const PLATFORM_STYLE_MAP: Record<string, string> = {
 async function generatePlatformVariantsInOneCall(
   masterContentOrBlueprints: string | ContentBlueprint[],
   targets: Array<{ platform: string; content_type: string; max_length?: number; discoverabilityMeta?: DiscoverabilityMeta }>,
-  context: { writer_content_brief?: Record<string, unknown>; intent?: Record<string, unknown> }
+  context: { writer_content_brief?: Record<string, unknown>; intent?: Record<string, unknown>; company_id?: string | null }
 ): Promise<Record<string, string> | Array<Record<string, string>>> {
   const isBatch = Array.isArray(masterContentOrBlueprints);
   const blueprints = isBatch ? (masterContentOrBlueprints as ContentBlueprint[]) : null;
@@ -1472,7 +1375,7 @@ async function generatePlatformVariantsInOneCall(
   const systemPrompt = PLATFORM_VARIANTS_SYSTEM;
   console.info('Prompt executed', { prompt: 'platform_variants', version: CONTENT_GENERATION_PROMPT_VERSION });
   const result = await runCompletionWithOperation({
-    companyId: null,
+    companyId: context.company_id ?? null,
     campaignId: null,
     model,
     temperature: 0,
@@ -1580,16 +1483,14 @@ export async function renderPlatformVariantsFromBlueprint(
       discoverabilityMeta,
       blueprint.cta ? String(blueprint.cta).trim() : null
     );
-    let bounded = target.max_length ? rawContent.slice(0, target.max_length) : rawContent;
-    const formatted = applyAlgorithmicFormatting(bounded, target.platform);
-    bounded = target.max_length ? formatted.content.slice(0, target.max_length) : formatted.content;
-    const refined = await refineLanguageOutput({
-      content: bounded,
-      card_type: 'platform_variant',
+    let rawBounded = target.max_length ? rawContent.slice(0, target.max_length) : rawContent;
+    const processed = await processContent({
+      content: rawBounded,
       platform: target.platform,
+      content_type: target.content_type,
+      card_type: 'platform_variant',
     });
-    bounded = (refined.refined as string) || bounded;
-    bounded = target.max_length ? bounded.slice(0, target.max_length) : bounded;
+    let bounded = target.max_length ? processed.content.slice(0, target.max_length) : processed.content;
     const mediaSearchIntent = buildMediaSearchIntent(
       target.platform,
       target.content_type,
@@ -1617,7 +1518,9 @@ export async function renderPlatformVariantsFromBlueprint(
         adaptation_reason: `Deterministic: ${target.platform} from blueprint.`,
       },
       discoverability_meta: discoverabilityMeta,
-      algorithmic_formatting_meta: formatted.meta,
+      algorithmic_formatting_meta: processed.processing_trace.structural_formatting_applied
+        ? { platform: target.platform, formatting_applied: true as const }
+        : undefined,
       media_intent: getMediaIntentDescriptor(target.platform),
       media_search_intent: mediaSearchIntent,
     });
@@ -1671,16 +1574,14 @@ export async function renderPlatformVariantsFromBlueprint(
       }
 
       const maxLength = toPositiveNumber(target.max_length);
-      let bounded = maxLength ? rawContent.slice(0, maxLength) : rawContent;
-      const formatted = applyAlgorithmicFormatting(bounded, target.platform);
-      bounded = maxLength ? formatted.content.slice(0, maxLength) : formatted.content;
-      const refined = await refineLanguageOutput({
-        content: bounded,
-        card_type: 'platform_variant',
+      const rawBounded2 = maxLength ? rawContent.slice(0, maxLength) : rawContent;
+      const processed2 = await processContent({
+        content: rawBounded2,
         platform: target.platform,
+        content_type: target.content_type,
+        card_type: 'platform_variant',
       });
-      bounded = (refined.refined as string) || bounded;
-      bounded = maxLength ? bounded.slice(0, maxLength) : bounded;
+      let bounded = maxLength ? processed2.content.slice(0, maxLength) : processed2.content;
       const mediaSearchIntent = buildMediaSearchIntent(
         target.platform,
         target.content_type,
@@ -1708,7 +1609,9 @@ export async function renderPlatformVariantsFromBlueprint(
           adaptation_reason: `AI-adapted for ${target.platform}.`,
         },
         discoverability_meta: discoverabilityMeta,
-        algorithmic_formatting_meta: formatted.meta,
+        algorithmic_formatting_meta: processed2.processing_trace.structural_formatting_applied
+          ? { platform: target.platform, formatting_applied: true as const }
+          : undefined,
         media_intent: getMediaIntentDescriptor(target.platform),
         media_search_intent: mediaSearchIntent,
       });
@@ -1730,6 +1633,7 @@ export async function generatePlatformVariantFromMaster(
     intent?: Record<string, unknown>;
     discoverabilityMeta?: DiscoverabilityMeta;
     existingMediaSearchIntent?: unknown;
+    company_id?: string | null;
   } = {}
 ): Promise<PlatformVariantPayload> {
   const normalizedPlatform = nonEmpty(platform).toLowerCase() || 'unknown';
@@ -1817,9 +1721,10 @@ export async function generatePlatformVariantFromMaster(
     });
 
   const requestVariant = async (instruction: string): Promise<string> => {
-    const aiResult = await generateCampaignPlan({
-      companyId: null,
+    const aiResult = await runCompletionWithOperation({
+      companyId: constraints.company_id ?? null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      operation: 'generateContentVariant',
       temperature: 0,
       messages: [
         {
@@ -1883,29 +1788,31 @@ export async function generatePlatformVariantFromMaster(
       };
     }
 
-    let bounded = maxLength ? aiContent.slice(0, maxLength) : aiContent;
-    const formatted = applyAlgorithmicFormatting(bounded, normalizedPlatform);
-    bounded = maxLength ? formatted.content.slice(0, maxLength) : formatted.content;
+    let rawBounded3 = maxLength ? aiContent.slice(0, maxLength) : aiContent;
+    const processed3 = await processContent({
+      content: rawBounded3,
+      platform: normalizedPlatform,
+      content_type: contentType,
+      card_type: 'platform_variant',
+    });
+    let bounded = maxLength ? processed3.content.slice(0, maxLength) : processed3.content;
     if (maxLength && targetLength && bounded.length < targetLength) {
       const expanded = await requestVariant(
         `Rewrite for platform "${normalizedPlatform}" and content_type "${contentType}" with richer promotional detail (CTA, hook, value) while staying <= ${maxLength} chars and targeting ~${targetLength} chars. Style: ${styleInstruction}`
       );
-      const expandedBounded = nonEmpty(maxLength ? expanded.slice(0, maxLength) : expanded);
-      if (expandedBounded.length > bounded.length) {
-        bounded = expandedBounded;
+      const expandedRaw = nonEmpty(maxLength ? expanded.slice(0, maxLength) : expanded);
+      if (expandedRaw.length > bounded.length) {
+        const processed3b = await processContent({
+          content: expandedRaw,
+          platform: normalizedPlatform,
+          content_type: contentType,
+          card_type: 'platform_variant',
+        });
+        const expandedBounded = maxLength ? processed3b.content.slice(0, maxLength) : processed3b.content;
+        if (expandedBounded.length > bounded.length) bounded = expandedBounded;
       }
     }
-    const refinedVariant = await refineLanguageOutput({
-      content: bounded,
-      card_type: 'platform_variant',
-      platform: normalizedPlatform,
-    });
-    bounded = (refinedVariant.refined as string) || bounded;
-    bounded = maxLength ? bounded.slice(0, maxLength) : bounded;
-    const traceWithLength = {
-      ...adaptationTrace,
-      actual_length_used: bounded.length,
-    };
+    const traceWithLength = { ...adaptationTrace, actual_length_used: bounded.length };
     const mediaSearchIntent =
       normalizeLegacyMediaSearchIntent(constraints.existingMediaSearchIntent) ||
       buildMediaSearchIntent(normalizedPlatform, contentType, masterContent, constraints.intent || null);
@@ -1921,7 +1828,9 @@ export async function generatePlatformVariantFromMaster(
       generation_overrides: constraints.generation_overrides,
       adaptation_trace: traceWithLength,
       discoverability_meta: constraints.discoverabilityMeta,
-      algorithmic_formatting_meta: formatted.meta,
+      algorithmic_formatting_meta: processed3.processing_trace.structural_formatting_applied
+        ? { platform: normalizedPlatform, formatting_applied: true as const }
+        : undefined,
       media_intent: getMediaIntentDescriptor(normalizedPlatform),
       media_search_intent: mediaSearchIntent,
     };
@@ -1991,6 +1900,7 @@ export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLi
         ? await generatePlatformVariantsInOneCall(nonEmpty(master?.content) || '', textTargetsWithMeta, {
             writer_content_brief: asObject(item?.writer_content_brief) || undefined,
             intent: asObject(item?.intent) || undefined,
+            company_id: (item as any)?.company_id ?? null,
           })
         : null;
 
@@ -2020,6 +1930,7 @@ export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLi
             intent: asObject(item?.intent) || undefined,
             discoverabilityMeta,
             existingMediaSearchIntent: existingVariant?.media_search_intent,
+            company_id: (item as any)?.company_id ?? null,
           });
           built.push(single);
         } catch {
@@ -2104,16 +2015,14 @@ export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLi
       }
 
       const maxLength = toPositiveNumber(target.max_length);
-      let bounded = maxLength ? rawContent.slice(0, maxLength) : rawContent;
-      const formatted = applyAlgorithmicFormatting(bounded, target.platform);
-      bounded = maxLength ? formatted.content.slice(0, maxLength) : formatted.content;
-      const refined = await refineLanguageOutput({
-        content: bounded,
-        card_type: 'platform_variant',
+      const rawBounded4 = maxLength ? rawContent.slice(0, maxLength) : rawContent;
+      const processed4 = await processContent({
+        content: rawBounded4,
         platform: target.platform,
+        content_type: target.content_type,
+        card_type: 'platform_variant',
       });
-      bounded = (refined.refined as string) || bounded;
-      bounded = maxLength ? bounded.slice(0, maxLength) : bounded;
+      let bounded = maxLength ? processed4.content.slice(0, maxLength) : processed4.content;
 
       const mediaSearchIntent =
         normalizeLegacyMediaSearchIntent(existingVariant?.media_search_intent) ||
@@ -2139,7 +2048,9 @@ export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLi
           adaptation_reason: `Adapted from master for ${target.platform} (batch).`,
         },
         discoverability_meta: discoverabilityMeta,
-        algorithmic_formatting_meta: formatted.meta,
+        algorithmic_formatting_meta: processed4.processing_trace.structural_formatting_applied
+          ? { platform: target.platform, formatting_applied: true as const }
+          : undefined,
         media_intent: getMediaIntentDescriptor(target.platform),
         media_search_intent: mediaSearchIntent,
       });

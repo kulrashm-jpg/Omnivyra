@@ -362,7 +362,7 @@ import { apiFetch } from '@/lib/apiFetch';
 
 export default function ActivityWorkspacePage() {
   const router = useRouter();
-  const { user } = useCompanyContext();
+  const { user, selectedCompanyId } = useCompanyContext();
   const queryWorkspaceKey = useMemo(() => {
     const raw = Array.isArray(router.query.workspaceKey) ? router.query.workspaceKey[0] : router.query.workspaceKey;
     return String(raw || '').trim();
@@ -1251,6 +1251,8 @@ export default function ActivityWorkspacePage() {
           refinement_prompt: prompt,
           current_content: currentContent,
           dailyExecutionItem: payload?.dailyExecutionItem || null,
+          companyId: selectedCompanyId || payload?.companyId || null,
+          campaignId: payload?.campaignId || queryCampaignId || null,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -1450,6 +1452,8 @@ export default function ActivityWorkspacePage() {
           activity: buildActivityRequestPayload(),
           schedules,
           dailyExecutionItem: payload?.dailyExecutionItem || null,
+          companyId: selectedCompanyId || payload?.companyId || null,
+          campaignId: payload?.campaignId || queryCampaignId || null,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -1501,6 +1505,7 @@ export default function ActivityWorkspacePage() {
         masterDocument: masterDoc,
         dailyExecutionItem,
         schedules,
+        companyId: selectedCompanyId || payload?.companyId || null,
       });
       const incomingVariants = Array.isArray(result.platform_variants) ? result.platform_variants : [];
       const normalizeKey = (v: unknown) => String(v ?? '').trim().toLowerCase();
@@ -1575,6 +1580,8 @@ export default function ActivityWorkspacePage() {
               activity: buildActivityRequestPayload(),
               schedules,
               dailyExecutionItem: payload?.dailyExecutionItem || null,
+              companyId: selectedCompanyId || payload?.companyId || null,
+              campaignId: payload?.campaignId || queryCampaignId || null,
             }),
           });
           const masterData = await masterRes.json().catch(() => ({}));
@@ -1607,11 +1614,19 @@ export default function ActivityWorkspacePage() {
             master_content: activeMasterContent || currentDaily.master_content || null,
             platform_variants: platformVariants,
           },
+          companyId: selectedCompanyId || payload?.companyId || null,
+          campaignId: payload?.campaignId || queryCampaignId || null,
         }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(String(data?.message || data?.error || 'Failed to repurpose content'));
+      }
+      // If the API auto-generated a master (first repurpose press), capture it in state
+      const returnedMaster = asObject(data?.master_content);
+      if (returnedMaster && !activeMasterContent) {
+        activeMasterContent = returnedMaster;
+        setLatestMasterContent(returnedMaster);
       }
       const incoming = Array.isArray(data.platform_variants) ? data.platform_variants : [];
       const mergedByKey = new Map<string, Record<string, unknown>>();
@@ -1634,6 +1649,8 @@ export default function ActivityWorkspacePage() {
           dailyExecutionItem: {
             ...current,
             platform_variants: mergedVariants,
+            // Keep master in payload so page reload can recover it from state
+            ...(returnedMaster && !current.master_content ? { master_content: returnedMaster } : {}),
           },
         };
       });
@@ -1702,6 +1719,8 @@ export default function ActivityWorkspacePage() {
             master_content: null,
             platform_variants: platformVariants,
           },
+          companyId: selectedCompanyId || payload?.companyId || null,
+          campaignId: payload?.campaignId || queryCampaignId || null,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -2062,6 +2081,8 @@ export default function ActivityWorkspacePage() {
                     activity: buildActivityRequestPayload(),
                     schedules,
                     dailyExecutionItem: itemWithCreator,
+                    companyId: selectedCompanyId || payload?.companyId || null,
+                    campaignId: payload?.campaignId || queryCampaignId || null,
                   }),
                 });
                 const data = await res.json().catch(() => ({}));
@@ -2444,6 +2465,7 @@ export default function ActivityWorkspacePage() {
                                           improvementTypes: allActions,
                                           variant: matchedVariant as Record<string, unknown>,
                                           dailyExecutionItem: payload?.dailyExecutionItem ?? undefined,
+                                          companyId: selectedCompanyId || payload?.companyId || null,
                                         });
                                         const nextVariants = [...platformVariants];
                                         const vi = nextVariants.findIndex(

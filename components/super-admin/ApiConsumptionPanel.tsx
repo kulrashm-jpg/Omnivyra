@@ -1,5 +1,18 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Zap, AlertCircle, RefreshCw } from 'lucide-react';
+import { supabase } from '../../utils/supabaseClient';
+
+// 1 credit = $0.01 USD; Starter plan = $29/mo = 1,000 credits/mo
+const CREDIT_RATE = 0.01;
+const STARTER_PLAN_USD = 29;
+const toCr = (usd: number | null | undefined): number | null =>
+  usd == null ? null : usd / CREDIT_RATE;
+const fmtCr = (n: number | null | undefined): string => {
+  if (n == null) return '—';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return Math.round(n).toString();
+};
 
 interface ApiSourceRow {
   source_name: string;
@@ -43,7 +56,11 @@ export default function ApiConsumptionPanel({ tier, companyId, year, month }: Pr
     if (year) params.set('year', String(year));
     if (month) params.set('month', String(month));
     try {
-      const resp = await fetch(`/api/admin/consumption/apis?${params}`);
+      const { data: { session } } = await supabase.auth.getSession();
+      const resp = await fetch(`/api/admin/consumption/apis?${params}`, {
+        credentials: 'include',
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
       if (!resp.ok) throw new Error((await resp.json()).error ?? 'Failed');
       const json = await resp.json();
       setData(json.data);
@@ -68,9 +85,33 @@ export default function ApiConsumptionPanel({ tier, companyId, year, month }: Pr
     </div>
   );
 
-  if (!data) return null;
+  if (!data || Array.isArray(data)) {
+    if (tier === 'super_admin' && !companyId) {
+      return (
+        <p className="text-gray-400 text-sm py-8 text-center">
+          Select an organization from the <strong>All Orgs</strong> tab to view API details.
+        </p>
+      );
+    }
+    return null;
+  }
 
-  const periodLabel = `${MONTH_NAMES[(data.period.month ?? 1) - 1]} ${data.period.year}`;
+  const periodMonth = data.period?.month ?? month ?? new Date().getMonth() + 1;
+  const periodYear  = data.period?.year  ?? year  ?? new Date().getFullYear();
+  const periodLabel = `${MONTH_NAMES[(periodMonth - 1)]} ${periodYear}`;
+
+  const totalCostUsd = data.totals.total_cost_usd ?? 0;
+  const totalCr = toCr(totalCostUsd);
+  // Starter plan headroom: what % of Starter plan revenue ($29) is consumed by API costs
+  const starterPct = (totalCostUsd / STARTER_PLAN_USD) * 100;
+  const headroomColor =
+    starterPct >= 30 ? 'text-red-400' :
+    starterPct >= 10 ? 'text-yellow-400' :
+    'text-emerald-400';
+  const headroomBarColor =
+    starterPct >= 30 ? 'bg-red-500' :
+    starterPct >= 10 ? 'bg-yellow-500' :
+    'bg-emerald-500';
 
   return (
     <div className="space-y-6">
@@ -85,7 +126,7 @@ export default function ApiConsumptionPanel({ tier, companyId, year, month }: Pr
       </div>
 
       {/* Totals */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-gray-800 rounded-lg p-4">
           <p className="text-xs text-gray-400 mb-1">Total API Calls</p>
           <p className="text-xl font-bold text-white">{fmt(data.totals.call_count)}</p>
@@ -96,10 +137,25 @@ export default function ApiConsumptionPanel({ tier, companyId, year, month }: Pr
             {fmt(data.totals.error_count)}
           </p>
         </div>
-        {tier !== 'user' && data.totals.total_cost_usd != null && (
+        {tier !== 'user' && (
           <div className="bg-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-400 mb-1">Total Cost (USD)</p>
-            <p className="text-xl font-bold text-emerald-400">{fmtUsd(data.totals.total_cost_usd)}</p>
+            <p className="text-xs text-gray-400 mb-1">API Cost</p>
+            <p className="text-xl font-bold text-amber-400">{fmtCr(totalCr)} cr</p>
+            <p className="text-xs text-gray-500 mt-0.5">{fmtUsd(data.totals.total_cost_usd)}</p>
+          </div>
+        )}
+        {/* Starter plan headroom — shows cost even on free/starter tier */}
+        {tier !== 'user' && (
+          <div className="bg-gray-800 rounded-lg p-4">
+            <p className="text-xs text-gray-400 mb-1">Starter Plan Cost</p>
+            <p className={`text-xl font-bold ${headroomColor}`}>{starterPct.toFixed(1)}%</p>
+            <div className="mt-1.5 w-full bg-gray-700 rounded-full h-1.5">
+              <div
+                className={`h-1.5 rounded-full ${headroomBarColor} transition-all`}
+                style={{ width: `${Math.min(starterPct, 100)}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray-500 mt-1">of $29/mo Starter revenue</p>
           </div>
         )}
       </div>
@@ -119,11 +175,12 @@ export default function ApiConsumptionPanel({ tier, companyId, year, month }: Pr
                   <th className="px-4 py-2 font-medium text-right">Errors</th>
                   <th className="px-4 py-2 font-medium text-right">Error Rate</th>
                   <th className="px-4 py-2 font-medium text-right">Avg Latency</th>
-                  {tier !== 'user' && <th className="px-4 py-2 font-medium text-right">Cost (USD)</th>}
+                  {tier !== 'user' && <th className="px-4 py-2 font-medium text-right text-amber-400">Credits</th>}
+                  {tier === 'super_admin' && <th className="px-4 py-2 font-medium text-right text-gray-500">USD</th>}
                 </tr>
               </thead>
               <tbody>
-                {data.by_source.map((s) => (
+                {[...data.by_source].sort((a, b) => (b.total_cost_usd ?? 0) - (a.total_cost_usd ?? 0)).map((s) => (
                   <tr key={s.source_name} className="border-b border-gray-800 hover:bg-gray-800/40">
                     <td className="px-4 py-2 text-white font-mono text-xs">{s.source_name}</td>
                     <td className="px-4 py-2 text-right text-gray-300">{fmt(s.call_count)}</td>
@@ -135,7 +192,12 @@ export default function ApiConsumptionPanel({ tier, companyId, year, month }: Pr
                       {s.avg_latency_ms != null ? `${s.avg_latency_ms}ms` : '—'}
                     </td>
                     {tier !== 'user' && (
-                      <td className="px-4 py-2 text-right text-emerald-400">{fmtUsd(s.total_cost_usd)}</td>
+                      <td className="px-4 py-2 text-right font-semibold text-amber-400">
+                        {fmtCr(toCr(s.total_cost_usd))} cr
+                      </td>
+                    )}
+                    {tier === 'super_admin' && (
+                      <td className="px-4 py-2 text-right text-gray-500 text-xs">{fmtUsd(s.total_cost_usd)}</td>
                     )}
                   </tr>
                 ))}

@@ -13,7 +13,7 @@ const TIERS = [
     name: 'Starter',
     tagline: 'For individuals & creators',
     credits: '1,000',
-    price: '$19',
+    price: '',
     cta: 'Buy Now',
     ctaHref: '/login?plan=starter',
     accent: 'emerald',
@@ -25,7 +25,7 @@ const TIERS = [
     name: 'Growth',
     tagline: 'For start-ups',
     credits: '5,000',
-    price: '$49',
+    price: '',
     cta: 'Buy Now',
     ctaHref: '/login?plan=growth',
     accent: 'blue',
@@ -37,7 +37,7 @@ const TIERS = [
     name: 'Scale',
     tagline: 'For SMBs',
     credits: '20,000',
-    price: '$119',
+    price: '',
     cta: 'Buy Now',
     ctaHref: '/login?plan=scale',
     accent: 'violet',
@@ -113,9 +113,9 @@ const CREDIT_TIERS = [
 ];
 
 const ADDON_PACKS = [
-  { credits: 500,    price: '$9',   saving: null,   popular: false },
-  { credits: 2_000,  price: '$29',  saving: '19%',  popular: true },
-  { credits: 10_000, price: '$99',  saving: '45%',  popular: false },
+  { credits: 500,    price: '',  saving: null,   popular: false },
+  { credits: 2_000,  price: '',  saving: null,   popular: true },
+  { credits: 10_000, price: '',  saving: null,   popular: false },
 ];
 
 const CAPABILITIES = [
@@ -234,23 +234,14 @@ export default function PricingPage() {
                   <p className="mt-2 text-sm text-[#6B7C93]">{tier.tagline}</p>
                 </div>
 
-                {/* Price + credits */}
+                {/* Credits */}
                 <div className="mt-6">
                   {tier.enterprise ? (
-                    <>
-                      <p className="text-3xl font-bold text-[#0B1F33]">Custom</p>
-                      <p className="mt-1 text-sm text-[#6B7C93]">Credits &amp; pricing on request</p>
-                    </>
+                    <p className="mt-1 text-sm text-[#6B7C93]">Credits &amp; pricing on request</p>
                   ) : (
-                    <>
-                      <p className="text-3xl font-bold text-[#0B1F33]">
-                        {tier.price}
-                        <span className="text-base font-normal text-[#6B7C93]"> / person / mo</span>
-                      </p>
-                      <p className="mt-1.5 text-sm text-[#6B7C93]">
-                        <span className="font-semibold text-[#0B1F33]">{tier.credits}</span> credits / month
-                      </p>
-                    </>
+                    <p className="text-sm text-[#6B7C93]">
+                      <span className="text-2xl font-bold text-[#0B1F33]">{tier.credits}</span> credits / month
+                    </p>
                   )}
                 </div>
 
@@ -388,12 +379,6 @@ export default function PricingPage() {
                   )}
                   <p className="text-3xl font-bold text-[#0B1F33]">{pack.credits.toLocaleString()}</p>
                   <p className="text-sm text-[#6B7C93]">credits</p>
-                  <p className="mt-3 text-2xl font-semibold text-[#0B1F33]">{pack.price}</p>
-                  {pack.saving && (
-                    <span className="mt-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
-                      Save {pack.saving}
-                    </span>
-                  )}
                   <Link
                     href="/login"
                     className={`mt-5 w-full rounded-full py-2.5 text-sm font-semibold transition ${

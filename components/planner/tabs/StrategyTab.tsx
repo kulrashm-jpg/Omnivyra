@@ -283,8 +283,17 @@ export function StrategyTab({
       const raw = Array.isArray(data?.themes) ? data.themes : [];
       const themes: StrategicThemeEntry[] = raw
         .map((t: unknown, i: number) => {
-          if (t && typeof t === 'object' && 'week' in t && 'title' in t)
-            return { week: Number((t as { week: unknown }).week) || i + 1, title: String((t as { title: unknown }).title ?? '') };
+          if (t && typeof t === 'object' && 'week' in t && 'title' in t) {
+            const entry = t as { week: unknown; title: unknown; phase_label?: string; objective?: string; content_focus?: string; cta_focus?: string };
+            return {
+              week: Number(entry.week) || i + 1,
+              title: String(entry.title ?? ''),
+              ...(entry.phase_label ? { phase_label: entry.phase_label } : {}),
+              ...(entry.objective ? { objective: entry.objective } : {}),
+              ...(entry.content_focus ? { content_focus: entry.content_focus } : {}),
+              ...(entry.cta_focus ? { cta_focus: entry.cta_focus } : {}),
+            };
+          }
           if (typeof t === 'string') return { week: i + 1, title: t };
           return null;
         })

@@ -262,7 +262,7 @@ function CampaignPlannerLayout({
                 selectedWeek={selectedThemeWeek}
                 onSelectWeek={(week) => {
                   setSelectedThemeWeek(week);
-                  setLeftPanelTab('chat');
+                  if (week !== null) setLeftPanelTab('chat');
                 }}
               />
             </div>

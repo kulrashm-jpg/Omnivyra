@@ -4,19 +4,14 @@
  */
 
 import { Queue } from 'bullmq';
-import { getRedisConfig } from './bullmqClient';
+import { getConnectionConfig } from './bullmqClient';
 
 let boltQueue: Queue | null = null;
 
 export function getBoltQueue(): Queue {
   if (!boltQueue) {
-    const config = getRedisConfig();
     boltQueue = new Queue('bolt-execution', {
-      connection: {
-        host: config.host,
-        port: config.port,
-        password: config.password,
-      },
+      connection: getConnectionConfig(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: { age: 86400, count: 500 },

@@ -49,6 +49,18 @@ export function getRedisConfig() {
   return redisConfig;
 }
 
+/** Full IORedis-compatible connection options including TLS for Upstash. */
+export function getConnectionConfig() {
+  return {
+    host: redisConfig.host,
+    port: redisConfig.port,
+    password: redisConfig.password,
+    ...(redisConfig.tls ? { tls: redisConfig.tls } : {}),
+    enableReadyCheck: false,
+    maxRetriesPerRequest: null,
+  };
+}
+
 // Redis connection instance (shared across Queue/Worker)
 let redisConnection: IORedis | null = null;
 
@@ -98,11 +110,7 @@ let postingQueue: Queue | null = null;
 export function getPostingQueue(): Queue {
   if (!postingQueue) {
     postingQueue = new Queue('posting', {
-      connection: {
-        host: redisConfig.host,
-        port: redisConfig.port,
-        password: redisConfig.password,
-      },
+      connection: getConnectionConfig(),
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5_000 },
@@ -125,11 +133,7 @@ export function getPostingQueue(): Queue {
 export function getAiHeavyQueue(): Queue {
   if (!aiHeavyQueue) {
     aiHeavyQueue = new Queue('ai-heavy', {
-      connection: {
-        host: redisConfig.host,
-        port: redisConfig.port,
-        password: redisConfig.password,
-      },
+      connection: getConnectionConfig(),
       defaultJobOptions: {
         attempts: 2,
         backoff: { type: 'exponential', delay: 30_000 },
@@ -153,11 +157,7 @@ export function getEngagementPollingQueue(): Queue {
   if (!engagementPollingQueue) {
     const connection = getRedisConnection();
     engagementPollingQueue = new Queue('engagement-polling', {
-      connection: {
-        host: redisConfig.host,
-        port: redisConfig.port,
-        password: redisConfig.password,
-      },
+      connection: getConnectionConfig(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: true,
@@ -181,11 +181,7 @@ export function getQueue(): Queue {
     const queueName = 'publish';
     
     publishQueue = new Queue(queueName, {
-      connection: {
-        host: redisConfig.host,
-        port: redisConfig.port,
-        password: redisConfig.password,
-      },
+      connection: getConnectionConfig(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: {
@@ -220,15 +216,11 @@ export function getWorker(
   const connection = getRedisConnection();
   const concurrency = opts?.concurrency ?? 5;
   const worker = new Worker(queueName, processor, {
-    connection: {
-      host: redisConfig.host,
-      port: redisConfig.port,
-      password: redisConfig.password,
-    },
+    connection: getConnectionConfig(),
     concurrency,
     limiter: {
-      max: 10, // Max 10 jobs
-      duration: 1000, // Per second
+      max: 10,
+      duration: 1000,
     },
   });
 
@@ -259,11 +251,7 @@ export function getEngagementPollingWorker(): Worker {
       await processEngagementPollingJob();
     },
     {
-      connection: {
-        host: redisConfig.host,
-        port: redisConfig.port,
-        password: redisConfig.password,
-      },
+      connection: getConnectionConfig(),
       concurrency: 1,
     }
   );
@@ -321,11 +309,7 @@ export function createQueue(name: string): Queue {
   // Note: BullMQ v5+ handles delayed jobs automatically, no QueueScheduler needed
   
   return new Queue(name, {
-    connection: {
-      host: redisConfig.host,
-      port: redisConfig.port,
-      password: redisConfig.password,
-    },
+    connection: getConnectionConfig(),
     defaultJobOptions: {
       attempts: 3,
       backoff: {
@@ -361,11 +345,7 @@ export function createWorker(
   const processor = processorPathOrFn;
   
   const worker = new Worker(name, processor as any, {
-    connection: {
-      host: redisConfig.host,
-      port: redisConfig.port,
-      password: redisConfig.password,
-    },
+    connection: getConnectionConfig(),
     concurrency,
     limiter: {
       max: 10,

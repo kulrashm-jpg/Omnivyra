@@ -30,6 +30,7 @@ export type ExecuteMasterContentPipelineParams = {
   activity?: ActivityLike | null;
   /** Optional: when set, used to derive bias instruction for generate_master. If unset and campaignId present, fetched from API. */
   memoryProfile?: StrategicMemoryProfile | null;
+  companyId?: string | null;
 };
 
 export type ExecuteMasterContentPipelineResult = {
@@ -85,6 +86,7 @@ export async function executeMasterContentPipeline({
   schedules,
   activity: activityOverride,
   memoryProfile: memoryProfileOverride,
+  companyId,
 }: ExecuteMasterContentPipelineParams): Promise<ExecuteMasterContentPipelineResult> {
   const activity = activityOverride ?? buildActivityFromItem(dailyExecutionItem, executionId);
 
@@ -108,6 +110,7 @@ export async function executeMasterContentPipeline({
     activity,
     schedules,
     dailyExecutionItem: dailyExecutionItem || {},
+    companyId: companyId ?? null,
   };
   if (biasInstruction) masterPayload.extra_instruction = biasInstruction;
 
@@ -144,6 +147,7 @@ export async function executeMasterContentPipeline({
       activity,
       schedules: schedules.length > 0 ? schedules : (masterDocument?.platforms ?? []).map((p) => ({ platform: p, contentType: 'post' })),
       dailyExecutionItem: itemWithMaster,
+      companyId: companyId ?? null,
     }),
   });
 
@@ -167,6 +171,7 @@ export type ExecuteVariantImprovementParams = {
   improvementType: ImprovementType;
   variant: Record<string, unknown>;
   dailyExecutionItem?: Record<string, unknown> | null;
+  companyId?: string | null;
 };
 
 export type ExecuteVariantImprovementAllParams = {
@@ -176,6 +181,7 @@ export type ExecuteVariantImprovementAllParams = {
   improvementTypes: ImprovementType[];
   variant: Record<string, unknown>;
   dailyExecutionItem?: Record<string, unknown> | null;
+  companyId?: string | null;
 };
 
 /**
@@ -198,6 +204,7 @@ export async function executeVariantImprovement(
       execution_id: payload.executionId,
       variant: payload.variant,
       dailyExecutionItem: payload.dailyExecutionItem ?? {},
+      companyId: payload.companyId ?? null,
     }),
   });
   if (!res.ok) {
@@ -233,6 +240,7 @@ export async function executeVariantImprovementAll(
       execution_id: payload.executionId,
       variant: payload.variant,
       dailyExecutionItem: payload.dailyExecutionItem ?? {},
+      companyId: payload.companyId ?? null,
     }),
   });
   if (!res.ok) {

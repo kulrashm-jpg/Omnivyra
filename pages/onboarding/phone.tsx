@@ -36,7 +36,7 @@ export default function PhoneVerificationPage() {
   const [session, setSession]       = useState<any>(null);
   const [loading, setLoading]       = useState(false);
   const [errorMsg, setErrorMsg]     = useState<string | null>(null);
-  const [firebaseUid, setFirebaseUid] = useState('');
+
   const [claimedActions, setClaimedActions] = useState<Record<string, boolean>>({});
   const [claimingAction, setClaimingAction] = useState<string | null>(null);
 
@@ -85,7 +85,9 @@ export default function PhoneVerificationPage() {
     try {
       const credential = await confirmationRef.current!.confirm(otp.trim());
       const fbUid = credential.user.uid;
-      setFirebaseUid(fbUid);
+
+      // Get the Firebase ID token to let the server verify phone auth server-side
+      const firebaseIdToken = await credential.user.getIdToken();
 
       // Call our API to finalise onboarding
       const resp = await fetch('/api/onboarding/complete', {
@@ -97,6 +99,7 @@ export default function PhoneVerificationPage() {
         body: JSON.stringify({
           phoneNumber:      phone.trim(),
           firebaseUid:      fbUid,
+          firebaseIdToken,
           intentGoals:      goals ? goals.split(',') : [],
           intentTeam:       team,
           intentChallenges: challenge ? challenge.split(',') : [],

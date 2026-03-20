@@ -50,6 +50,8 @@ import { assignWeeklySchedule } from './weeklyScheduleAllocator';
 import { getEnrichedDistributionInsights } from './contentDistributionIntelligence';
 import { getWeeklyStrategyIntelligence } from './weeklyStrategyIntelligenceService';
 import { computeStrategyBias } from './strategyBiasService';
+import { generatePerformanceInsights } from './performanceInsightGenerator';
+import { refreshAccountContext } from './accountContextRefreshService';
 import { getStrategyMemory } from './campaignStrategyMemoryService';
 import { getCachedStrategyProfile } from './strategyProfileCache';
 import { normalizeStrategyContext } from './strategyContextService';
@@ -2877,6 +2879,30 @@ async function runWithContext(
     // Advisory only; do not fail plan generation
   }
 
+  // Closed-loop guarantee: always inject performance insights from the most recent campaign.
+  // Looks up the previous campaign for this company if campaignId has no feedback yet.
+  {
+    let lastCampaignId: string | null = input.campaignId ?? null;
+    if (!lastCampaignId && ctx.companyId) {
+      try {
+        const { data: prev } = await supabase
+          .from('campaigns')
+          .select('id')
+          .eq('company_id', ctx.companyId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        lastCampaignId = (prev as { id?: string } | null)?.id ?? null;
+      } catch (_) { /* continue */ }
+    }
+    if (lastCampaignId) {
+      try {
+        (input as any).previous_performance_insights =
+          await generatePerformanceInsights(lastCampaignId);
+      } catch (_) { /* continue without insights */ }
+    }
+  }
+
   const execConfig = effectivePrefilledPlanning?.execution_config as Record<string, unknown> | null | undefined;
   const rawDuration =
     execConfig != null && typeof execConfig.campaign_duration === 'number'
@@ -2918,6 +2944,11 @@ async function runWithContext(
     previous_performance_insights: input.previous_performance_insights ?? null,
     previous_campaign_context: input.previous_campaign_context ?? null,
   };
+
+  // Refresh account context before planning so authority score and engagement trends are current
+  if (ctx.companyId) {
+    await refreshAccountContext(ctx.companyId).catch(() => { /* non-blocking */ });
+  }
 
   const { rawOutput } = await generateCampaignPlanAI(planningInput);
 

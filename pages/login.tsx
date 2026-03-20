@@ -55,8 +55,10 @@ export default function LoginPage() {
         return;
       }
 
-      // ── Step 2: send magic link → redirect to phone verification ───────────
-      const redirectTo = `${window.location.origin}/onboarding/verify-phone`;
+      // ── Step 2: send magic link → redirect through auth callback ──────────
+      // /auth/callback handles the PKCE code exchange then forwards to verify-phone.
+      // Never redirect straight to verify-phone — session won't be ready yet.
+      const redirectTo = `${window.location.origin}/auth/callback`;
       const { error: authErr } = await supabase.auth.signInWithOtp({
         email: trimmed,
         options: {

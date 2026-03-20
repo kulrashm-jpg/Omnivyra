@@ -390,39 +390,40 @@ export default function CampaignDailyPlanPage() {
 
     const normalizeTitle = (t: string) => String(t ?? '').trim().toLowerCase();
     const sameTopic = normalizeTitle(activity.title);
-    const activitiesForThisTopicOnDay = activities.filter(
+    // Match all platforms for this topic across the whole week (not just same day)
+    const activitiesForThisTopic = activities.filter(
       (a) =>
         a.week_number === activity.week_number &&
-        a.day === activity.day &&
         normalizeTitle(a.title) === sameTopic
     );
 
-    const dayIndex = DAYS.map((d) => d.toLowerCase()).indexOf(String(activity.day || '').trim().toLowerCase());
-    const safeDayIndex = dayIndex >= 0 ? dayIndex : 0;
-    let scheduleDate = '';
-    if (campaignStartDate) {
+    const computeDateForDay = (day: string): string => {
+      if (!campaignStartDate) return '';
       try {
+        const dayIndex = DAYS.map((d) => d.toLowerCase()).indexOf(String(day || '').trim().toLowerCase());
+        const safeDayIndex = dayIndex >= 0 ? dayIndex : 0;
         const base = new Date(campaignStartDate + 'T12:00:00');
-        const offsetDays = (activity.week_number - 1) * 7 + safeDayIndex;
-        base.setDate(base.getDate() + offsetDays);
-        scheduleDate = base.toISOString().slice(0, 10);
+        base.setDate(base.getDate() + (activity.week_number - 1) * 7 + safeDayIndex);
+        return base.toISOString().slice(0, 10);
       } catch {
-        scheduleDate = '';
+        return '';
       }
-    }
+    };
 
-    const totalDistributions = activitiesForThisTopicOnDay.length;
-    const schedules = activitiesForThisTopicOnDay.map((a, idx) => ({
+    const totalDistributions = activitiesForThisTopic.length;
+    const schedules = activitiesForThisTopic.map((a, idx) => ({
       id: a.planId ? `plan-${a.planId}` : `repurpose-${a.execution_id}-${idx}`,
+      executionId: a.execution_id,
       platform: a.platform.toLowerCase(),
       contentType: a.content_type || 'post',
-      date: scheduleDate,
+      date: computeDateForDay(a.day),
       time: STAGGERED_TIMES[idx % STAGGERED_TIMES.length],
       status: 'planned',
       title: activity.title,
       description: String((richRaw as any)?.writingIntent ?? (richRaw as any)?.description ?? ''),
       sequence_index: idx + 1,
       total_distributions: totalDistributions,
+      isPrimary: a.execution_id === activity.execution_id,
     }));
 
     const weekActivities = activities.filter((a) => a.week_number === activity.week_number);

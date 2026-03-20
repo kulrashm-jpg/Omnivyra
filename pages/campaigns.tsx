@@ -230,7 +230,7 @@ export default function CampaignsList() {
           {[
             { id: 'all', label: 'All' },
             { id: 'planning', label: 'Planning' },
-            { id: 'twelve_week_plan', label: '12-Week Plan' },
+            { id: 'twelve_week_plan', label: 'Week Plan' },
             { id: 'daily_plan', label: 'Daily Plan' },
             { id: 'schedule', label: 'Schedule' },
           ].map((s) => (

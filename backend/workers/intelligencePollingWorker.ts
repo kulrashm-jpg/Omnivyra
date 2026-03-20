@@ -12,13 +12,17 @@ const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 
-function getConnection(): { host: string; port: number; password?: string } {
+function getConnection() {
   if (REDIS_URL && REDIS_URL.includes('://')) {
     const parsed = new URL(REDIS_URL);
+    const needsTls = parsed.hostname.includes('upstash.io');
     return {
       host: parsed.hostname || 'localhost',
       port: parseInt(parsed.port || '6379', 10),
       password: parsed.password || undefined,
+      ...(needsTls ? { tls: {} } : {}),
+      enableReadyCheck: false,
+      maxRetriesPerRequest: null,
     };
   }
   return { host: REDIS_HOST, port: REDIS_PORT, password: REDIS_PASSWORD };

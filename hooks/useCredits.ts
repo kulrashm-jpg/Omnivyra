@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '@/utils/supabaseClient';
 import type { CategoryUsage } from '@/components/ui/CreditMeter';
 
 export interface CreditsState {
@@ -105,11 +106,32 @@ export function useCredits(companyId: string | null | undefined): CreditsState &
   }, [companyId]);
 
   useEffect(() => {
+    if (!companyId) return;
     fetch();
-    // Refresh every 5 minutes
-    const id = setInterval(fetch, 5 * 60 * 1000);
-    return () => clearInterval(id);
-  }, [fetch]);
+
+    // Poll every 5 minutes as fallback
+    const pollId = setInterval(fetch, 5 * 60 * 1000);
+
+    // Realtime: refetch instantly whenever a credit transaction is inserted for this org
+    const channel = supabase
+      .channel(`credit_balance_${companyId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'credit_transactions',
+          filter: `organization_id=eq.${companyId}`,
+        },
+        () => { void fetch(); },
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(pollId);
+      void supabase.removeChannel(channel);
+    };
+  }, [companyId, fetch]);
 
   return { ...state, refetch: fetch };
 }

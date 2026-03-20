@@ -18,6 +18,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 
 const CREDIT_REWARDS: Record<string, number> = {
   invite_friend:  200,
@@ -36,11 +37,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { global: { headers: { Authorization: `Bearer ${token}` } } },
   );
 
   const { data: { user }, error: userErr } = await supabase.auth.getUser(token);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
+
+  // ── Domain eligibility gate ───────────────────────────────────────────────
+  if (user.email) {
+    const eligibility = await checkDomainEligibility(user.email, user.id);
+    if (eligibility.status === 'blocked') {
+      return res.status(403).json({ error: 'Your email domain is not eligible for free credits.' });
+    }
+  }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { category } = body as { category: string };
@@ -76,7 +86,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const orgId = membership?.company_id ?? null;
     if (orgId) {
-      await supabase.rpc('apply_credit_transaction', {
+      const { error: creditErr } = await supabase.rpc('apply_credit_transaction', {
         p_organization_id:  orgId,
         p_transaction_type: 'purchase',
         p_credits_delta:    credits,
@@ -86,6 +96,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         p_note:             `Free credits — ${category.replace(/_/g, ' ')}`,
         p_performed_by:     user.id,
       });
+      if (creditErr) {
+        console.error('[credits/claim-action] credit grant failed:', creditErr.message);
+        // Roll back the claim so the user can retry
+        await supabase.from('free_credit_claims').delete()
+          .eq('user_id', user.id).eq('category', category);
+        return res.status(500).json({ error: 'Credit grant failed. Please try again.' });
+      }
     }
 
     return res.status(200).json({ success: true, category, credits });

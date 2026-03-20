@@ -216,7 +216,7 @@ export function CalendarPlannerStep({
           <p className="text-xs mt-2">
             {canGeneratePreview && companyId
               ? 'Generate a preview or click Finalize to create your campaign.'
-              : 'Complete the idea spine and strategy steps (duration, platforms, posting frequency), then generate a preview or finalize.'}
+              : 'Complete the idea spine and strategy steps (platforms, posting frequency), then generate a preview or finalize.'}
           </p>
           {canGeneratePreview && companyId && (
             <button
@@ -231,16 +231,61 @@ export function CalendarPlannerStep({
         </div>
       ) : (
         <div className="space-y-4">
-          {weeks.slice(0, 12).map((week: { week?: number; theme?: string; phase_label?: string }, i: number) => {
+          {weeks.slice(0, 12).map((week: {
+            week?: number; theme?: string; phase_label?: string;
+            primary_objective?: string; summary?: string;
+            objectives?: string[]; cta_type?: string;
+          }, i: number) => {
             const weekNum = week?.week ?? i + 1;
-            const label = week?.phase_label ?? week?.theme ?? `Week ${weekNum}`;
+            const themeLabel = week?.theme ?? '';
+            const phaseLabel = week?.phase_label ?? '';
+            // Find matching strategic theme entry for rich metadata
+            const matchingTheme = (state.strategic_themes ?? []).find((t) => t.week === weekNum);
+            const objective = week?.primary_objective ?? matchingTheme?.objective ?? (week?.objectives?.[0] ?? '');
+            const contentFocus = matchingTheme?.content_focus ?? '';
+            const ctaFocus = week?.cta_type ?? matchingTheme?.cta_focus ?? '';
+            const WEEK_COLORS = [
+              'bg-indigo-50 border-indigo-200',
+              'bg-violet-50 border-violet-200',
+              'bg-sky-50 border-sky-200',
+              'bg-emerald-50 border-emerald-200',
+              'bg-amber-50 border-amber-200',
+              'bg-rose-50 border-rose-200',
+            ];
+            const colorClass = WEEK_COLORS[i % WEEK_COLORS.length];
             return (
               <div
                 key={weekNum}
-                className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+                className={`rounded-xl border p-4 shadow-sm ${colorClass}`}
               >
-                <div className="font-medium text-gray-900">Week {weekNum}</div>
-                <div className="text-sm text-gray-600 mt-1">{label}</div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">Week {weekNum}</span>
+                  {phaseLabel && (
+                    <span className="text-[10px] font-semibold text-gray-500 bg-white/70 border border-gray-200 px-2 py-0.5 rounded-full">
+                      {phaseLabel}
+                    </span>
+                  )}
+                </div>
+                {themeLabel && (
+                  <p className="text-sm font-semibold text-gray-900 leading-snug mb-2">{themeLabel}</p>
+                )}
+                {objective && (
+                  <p className="text-xs text-gray-600 leading-relaxed mb-1.5">{objective}</p>
+                )}
+                {(contentFocus || ctaFocus) && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {contentFocus && (
+                      <span className="text-[10px] text-gray-500 bg-white/60 border border-gray-200 rounded px-2 py-0.5">
+                        {contentFocus}
+                      </span>
+                    )}
+                    {ctaFocus && (
+                      <span className="text-[10px] font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-2 py-0.5">
+                        CTA: {ctaFocus}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

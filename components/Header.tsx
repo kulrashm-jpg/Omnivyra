@@ -8,12 +8,16 @@ import { supabase } from '../utils/supabaseClient';
 import { CreditMeter } from './ui/CreditMeter';
 import PlatformIcon from './ui/PlatformIcon';
 import { useCredits } from '@/hooks/useCredits';
+import { useTour } from './tour/TourContext';
+import { TourOverlay } from './tour/TourOverlay';
+import { NotificationBell } from './NotificationBell';
 
 const Header: React.FC = () => {
   const router = useRouter();
   const { userName, selectedCompanyId, userRole, isAuthenticated } = useCompanyContext();
+  const { startTour } = useTour();
   const { platforms: connectedPlatforms } = useCompanyIntegrations(selectedCompanyId || '');
-  const { totalCredits, remainingCredits, categories } = useCredits(isAuthenticated ? selectedCompanyId : null);
+  const { totalCredits, remainingCredits } = useCredits(isAuthenticated ? selectedCompanyId : null);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [noCompanyLabel, setNoCompanyLabel] = useState('No company selected');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -58,6 +62,7 @@ const Header: React.FC = () => {
   const isCompanyAdmin = (userRole || '').toString().toUpperCase() === 'COMPANY_ADMIN';
 
   return (
+    <>
     <div className="bg-gradient-to-br from-indigo-50 via-white to-purple-50 border-b border-gray-200/60 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
         {/* Top bar */}
@@ -84,6 +89,18 @@ const Header: React.FC = () => {
             {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={navBtnClass}>Usage</button>
             )}
+            {isAuthenticated && (
+              <button
+                onClick={() => { router.push('/dashboard').then(() => startTour()); }}
+                className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl font-semibold hover:bg-indigo-100 transition-colors text-sm"
+                title="Start the guided tour"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" />
+                </svg>
+                Start Help
+              </button>
+            )}
           </div>
 
           {/* Desktop: connected platforms + user info */}
@@ -103,6 +120,7 @@ const Header: React.FC = () => {
                   {roleDisplayLabel && <span className="text-xs text-gray-500">{roleDisplayLabel}</span>}
                 </div>
                 {!selectedCompanyId && <div className="text-gray-500 text-xs">{noCompanyLabel}</div>}
+                {isAuthenticated && <NotificationBell />}
                 <button onClick={handleLogout} disabled={isSigningOut} className={`${navBtnClass} disabled:opacity-50`}>
                   {isSigningOut ? 'Signing out...' : 'Logout'}
                 </button>
@@ -140,6 +158,17 @@ const Header: React.FC = () => {
             {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={mobileNavBtnClass}>Usage</button>
             )}
+            {isAuthenticated && (
+              <button
+                onClick={() => { setMobileMenuOpen(false); router.push('/dashboard').then(() => startTour()); }}
+                className="w-full text-left flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-4 py-3 rounded-xl font-semibold hover:bg-indigo-100 transition-colors text-sm"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" />
+                </svg>
+                Start Help
+              </button>
+            )}
             <div className="flex items-center justify-between px-4 py-3 bg-white rounded-xl border border-gray-100">
               <div>
                 <div className="text-sm font-medium text-gray-900">{displayName}</div>
@@ -173,6 +202,8 @@ const Header: React.FC = () => {
         )}
       </div>
     </div>
+    <TourOverlay />
+    </>
   );
 };
 

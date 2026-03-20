@@ -111,6 +111,13 @@ export async function generateContentForDailyPlans(
   const contentMap = new Map<string, string>();
   if (!campaignId || !Array.isArray(dailyPlans) || dailyPlans.length === 0) return contentMap;
 
+  // Resolve company_id for cost tracking — allows generation to proceed on paid plans
+  let campaignCompanyId: string | null = null;
+  try {
+    const { data: campaign } = await supabase.from('campaigns').select('company_id').eq('id', campaignId).maybeSingle();
+    campaignCompanyId = campaign?.company_id ?? null;
+  } catch { /* non-fatal; generation continues without company_id */ }
+
   const groups = groupPlansByTopicAndWeek(dailyPlans);
   const groupEntries = Array.from(groups.entries());
   let phaseCreatingFired = false;
@@ -128,15 +135,45 @@ export async function generateContentForDailyPlans(
     })).filter((t) => t.platform);
     if (platformTargets.length === 0) return [];
 
-    const item = buildItemFromEnriched(parsed, platformTargets);
-    const master = await generateMasterContentFromIntent(item);
-    (item as any).master_content = master;
+    const item = { ...buildItemFromEnriched(parsed, platformTargets), company_id: campaignCompanyId };
+
+    // Use existing generated_content as master if available — avoids a redundant LLM call
+    // and ensures repurposing is based on the actual stored content, not a regenerated draft.
+    const existingContent = String(parsed.generated_content ?? '').trim();
+    const isValidExisting =
+      existingContent.length > 0 &&
+      !existingContent.startsWith('[PLATFORM ADAPTATION FAILED]') &&
+      !existingContent.startsWith('[MASTER GENERATION FAILED') &&
+      !existingContent.startsWith('[MEDIA BLUEPRINT]') &&
+      !existingContent.startsWith('[MASTER CONTENT PLACEHOLDER]');
+
+    let master: { id: string; generated_at: string; content: string; generation_status: string; generation_source: 'ai' };
+    if (isValidExisting) {
+      const topicId = String(parsed.execution_id ?? parsed.id ?? first.id ?? 'topic').slice(0, 40);
+      master = {
+        id: `master-${topicId}`,
+        generated_at: new Date().toISOString(),
+        content: existingContent,
+        generation_status: 'generated',
+        generation_source: 'ai',
+      };
+    } else {
+      master = await generateMasterContentFromIntent(item);
+    }
+
     (item as any).master_content = { ...master, generation_status: 'generated' };
     const variants = await buildPlatformVariantsFromMaster(item);
     const variantByKey = new Map<string, string>();
     for (const v of variants) {
       const key = `${String(v.platform).toLowerCase()}::${String(v.content_type).toLowerCase()}`;
-      if (v.generated_content) variantByKey.set(key, v.generated_content);
+      // Skip failed/placeholder variants — don't store them in scheduled posts
+      if (
+        v.generated_content &&
+        !v.generated_content.startsWith('[PLATFORM ADAPTATION FAILED]') &&
+        !v.generated_content.startsWith('[PLATFORM MEDIA BLUEPRINT]')
+      ) {
+        variantByKey.set(key, v.generated_content);
+      }
     }
 
     const updates: { id: string; content: string }[] = [];
@@ -144,7 +181,8 @@ export async function generateContentForDailyPlans(
       const platform = String(row.platform || '').trim().toLowerCase();
       const contentType = String(row.content_type || 'post').trim().toLowerCase();
       const key = `${platform}::${contentType}`;
-      const content = variantByKey.get(key);
+      // Prefer the platform-adapted variant; fall back to existing content rather than leaving empty
+      const content = variantByKey.get(key) ?? (isValidExisting ? existingContent : undefined);
       if (content) {
         contentMap.set(row.id, content);
         const p = tryParseJson<Record<string, unknown>>(row.content);

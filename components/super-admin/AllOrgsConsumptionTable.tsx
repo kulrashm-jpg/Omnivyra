@@ -3,6 +3,7 @@
  * Shows per-organization LLM + API cost and credit balance.
  */
 import React, { useEffect, useState, useCallback } from 'react';
+import { supabase } from '../../utils/supabaseClient';
 import { RefreshCw, AlertCircle, Building2, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface OrgRow {
@@ -44,7 +45,11 @@ export default function AllOrgsConsumptionTable({ year, month, onSelectOrg }: Pr
     if (year) params.set('year', String(year));
     if (month) params.set('month', String(month));
     try {
-      const resp = await fetch(`/api/admin/consumption/llm?${params}`);
+      const { data: { session } } = await supabase.auth.getSession();
+      const resp = await fetch(`/api/admin/consumption/llm?${params}`, {
+        credentials: 'include',
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
       if (!resp.ok) throw new Error((await resp.json()).error ?? 'Failed');
       const json = await resp.json();
       setRows(Array.isArray(json.data) ? json.data : []);

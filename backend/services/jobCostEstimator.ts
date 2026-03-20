@@ -227,13 +227,15 @@ export async function evaluateJobCost(
   messages: Array<{ role: string; content: string }>,
   batchSize = 1,
 ): Promise<CostDecision> {
+  const UNKNOWN = '00000000-0000-0000-0000-000000000000';
   const id = orgId ?? '';
+  const isKnownOrg = !!id && id !== UNKNOWN;
   const { planKey, usedTokens, tokenLimit } = await resolveOrgPlan(id);
 
   const estimate = estimateCost(requestedModel, messages, operation, batchSize);
 
-  // 1. Block free/trial users from heavy operations
-  if (BLOCKED_OPS_FOR_FREE.has(operation) && (planKey === 'free' || planKey === 'trial')) {
+  // 1. Block free/trial users from heavy operations — only when org is positively identified
+  if (BLOCKED_OPS_FOR_FREE.has(operation) && isKnownOrg && (planKey === 'free' || planKey === 'trial')) {
     return {
       action: 'block',
       estimate,

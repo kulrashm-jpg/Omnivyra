@@ -114,6 +114,79 @@ export async function detectOpportunitySignals(signals: EngagementSignal[]): Pro
   return insights;
 }
 
+// ── Planning-loop engagement insights ────────────────────────────────────────
+
+export type PlanningEngagementInsights = {
+  account_id: string;
+  top_questions: string[];
+  objections: string[];
+  buying_signals: string[];
+  sentiment_trend: 'positive' | 'neutral' | 'negative' | 'mixed';
+  positive_pct: number;
+  negative_pct: number;
+  neutral_pct: number;
+  generated_at: string;
+};
+
+const QUESTION_PATTERNS  = [/\?$/, /\bhow\b/i, /\bwhy\b/i, /\bwhat\b/i, /\bwhen\b/i, /\bwhere\b/i];
+const OBJECTION_PATTERNS = [/\btoo expensive\b/i, /\bnot sure\b/i, /\bconcern\b/i, /\bwon'?t work\b/i, /\bworried\b/i];
+const BUYING_PATTERNS    = [/\bhow (do|can) I (buy|get|purchase|sign up|start)\b/i, /\bprice\b/i, /\bcost\b/i, /\binterested\b/i];
+
+/**
+ * Extract planning-loop signals from recent community engagement for an account.
+ * Injects into PlanningInput.engagement_insights before the next campaign cycle.
+ */
+export async function generateEngagementInsights(accountId: string): Promise<PlanningEngagementInsights> {
+  const now = new Date().toISOString();
+  const since = new Date(Date.now() - 30 * 24 * 3_600_000).toISOString();
+
+  const { data } = await supabase
+    .from('community_ai_actions')
+    .select('suggested_text, intent_classification, tone')
+    .eq('organization_id', accountId)
+    .gte('created_at', since)
+    .limit(500);
+
+  const empty: PlanningEngagementInsights = {
+    account_id: accountId, top_questions: [], objections: [], buying_signals: [],
+    sentiment_trend: 'neutral', positive_pct: 0, negative_pct: 0, neutral_pct: 0, generated_at: now,
+  };
+  if (!data?.length) return empty;
+
+  const questions: string[] = [], objections: string[] = [], buyingSignals: string[] = [];
+  let pos = 0, neg = 0, neu = 0;
+
+  for (const row of data as Array<{ suggested_text?: string | null; intent_classification?: Record<string, unknown> | null; tone?: string | null }>) {
+    const text = String(row.suggested_text ?? '').trim();
+    if (!text) continue;
+    const sentiment = String((row.intent_classification as any)?.sentiment ?? row.tone ?? 'neutral').toLowerCase();
+    if (sentiment === 'positive') pos++; else if (sentiment === 'negative') neg++; else neu++;
+    if (QUESTION_PATTERNS.some((p) => p.test(text)) && questions.length < 10) questions.push(text);
+    if (OBJECTION_PATTERNS.some((p) => p.test(text)) && objections.length < 10) objections.push(text);
+    if (BUYING_PATTERNS.some((p) => p.test(text)) && buyingSignals.length < 10) buyingSignals.push(text);
+  }
+
+  const total = pos + neg + neu || 1;
+  const posPct = Math.round((pos / total) * 100);
+  const negPct = Math.round((neg / total) * 100);
+  let trend: PlanningEngagementInsights['sentiment_trend'] = 'neutral';
+  if (posPct >= 60) trend = 'positive';
+  else if (negPct >= 40) trend = 'negative';
+  else if (Math.abs(posPct - negPct) <= 20 && (pos + neg) > 5) trend = 'mixed';
+
+  return {
+    account_id: accountId,
+    top_questions: questions.slice(0, 5),
+    objections: objections.slice(0, 5),
+    buying_signals: buyingSignals.slice(0, 5),
+    sentiment_trend: trend,
+    positive_pct: posPct,
+    negative_pct: negPct,
+    neutral_pct: 100 - posPct - negPct,
+    generated_at: now,
+  };
+}
+
 export async function storeInsightAsOpportunity(
   organizationId: string,
   insight: {

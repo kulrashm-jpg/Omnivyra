@@ -5,6 +5,7 @@
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import { RefreshCw, AlertCircle, CheckCircle, Pencil, X, Save } from 'lucide-react';
+import { supabase } from '../../utils/supabaseClient';
 
 interface Plan {
   id: string;
@@ -55,7 +56,9 @@ export default function PlansPricingPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/super-admin/plans/list');
+      const { data: { session } } = await supabase.auth.getSession();
+      const authHeader = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      const res = await fetch('/api/super-admin/plans/list', { credentials: 'include', headers: authHeader });
       if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to load plans');
       const json = await res.json();
       const fetched: PlanWithLimits[] = (json.plans ?? []).map((p: Plan) => ({
@@ -98,9 +101,14 @@ export default function PlansPricingPanel() {
     setError(null);
     setSuccess(null);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch('/api/super-admin/plans/create', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
         body: JSON.stringify({
           plan_key: plan.plan_key,
           name: editForm.name.trim() || plan.name,

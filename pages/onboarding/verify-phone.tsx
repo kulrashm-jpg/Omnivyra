@@ -31,24 +31,30 @@ export default function VerifyPhonePage() {
   const [phone, setPhone]             = useState('');
   const [maskedPhone, setMaskedPhone] = useState('');
   const [otp, setOtp]                 = useState('');
-  const [session, setSession]         = useState<any>(null);
   const [loading, setLoading]         = useState(false);
   const [errorMsg, setErrorMsg]       = useState<string | null>(null);
 
   const confirmationRef = useRef<ConfirmationResult | null>(null);
 
   // ── 1. Require session, then fetch stored phone ───────────────────────────
+  // Use onAuthStateChange rather than getSession() alone — the magic link PKCE
+  // code exchange is async. getSession() can return null before it completes,
+  // causing a premature redirect to /login (which then sees the session and
+  // wrongly skips to /dashboard, bypassing phone verification entirely).
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!data.session) {
+    let handled = false;
+
+    const handleSession = async (session: any) => {
+      if (handled) return;
+      handled = true;
+
+      if (!session) {
         router.replace('/login');
         return;
       }
-      setSession(data.session);
-
       try {
         const res = await fetch('/api/auth/get-stored-phone', {
-          headers: { Authorization: `Bearer ${data.session.access_token}` },
+          headers: { Authorization: `Bearer ${session.access_token}` },
         });
         const json = await res.json() as { phone: string | null; maskedPhone: string | null; error?: string };
 
@@ -67,9 +73,24 @@ export default function VerifyPhonePage() {
         setErrorMsg(err.message ?? 'Failed to load your account details.');
         setStep('error');
       }
+    };
+
+    // Listen for auth state changes — this fires after PKCE code exchange completes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+        void handleSession(session);
+      }
     });
 
-    return () => clearRecaptcha();
+    // Also check immediately in case session already exists (e.g. user refreshed the page)
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) void handleSession(data.session);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+      clearRecaptcha();
+    };
   }, [router]);
 
   // ── 2. Send Firebase OTP ──────────────────────────────────────────────────
@@ -96,7 +117,7 @@ export default function VerifyPhonePage() {
     setErrorMsg(null);
     try {
       await confirmationRef.current!.confirm(otp.trim());
-      router.replace('/onboarding/company');
+      router.replace('/dashboard');
     } catch (err: any) {
       setErrorMsg('Incorrect code. Please try again.');
       setLoading(false);

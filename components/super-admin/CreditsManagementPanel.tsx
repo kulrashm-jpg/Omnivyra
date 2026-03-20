@@ -4,6 +4,7 @@
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import { Coins, Plus, Settings, AlertCircle, RefreshCw, CheckCircle } from 'lucide-react';
+import { supabase } from '../../utils/supabaseClient';
 
 interface CreditTransaction {
   id: string;
@@ -51,7 +52,12 @@ export default function CreditsManagementPanel({ companyId, isSuperAdmin }: Prop
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch(`/api/admin/credits?companyId=${encodeURIComponent(companyId)}`);
+      const { data: { session } } = await supabase.auth.getSession();
+      const authHeader = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      const resp = await fetch(`/api/admin/credits?companyId=${encodeURIComponent(companyId)}`, {
+        credentials: 'include',
+        headers: authHeader,
+      });
       if (!resp.ok) throw new Error((await resp.json()).error ?? 'Failed');
       const json = await resp.json();
       setSummary(json.credits);
@@ -83,9 +89,14 @@ export default function CreditsManagementPanel({ companyId, isSuperAdmin }: Prop
     }
 
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const resp = await fetch('/api/admin/credits', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
         body: JSON.stringify(body),
       });
       const json = await resp.json();
