@@ -16,6 +16,7 @@ import { evaluateCampaignDecision } from './campaignDecisionEngine';
 import { getAutonomousSettings } from './autonomousCampaignAgent';
 import { logDecision } from './autonomousDecisionLogger';
 import { deductCredits } from './creditDeductionService';
+import { deductCreditsAwaited } from './creditExecutionService';
 import type { RiskTolerance } from './autonomousCampaignAgent';
 
 export type CampaignPortfolioItem = {
