@@ -112,6 +112,7 @@ const SMART_MODE_DEDUP_SECONDS: Partial<Record<CreditAction, number>> = {
 export interface DeductOptions {
   userId?: string;
   campaignId?: string;
+  referenceId?: string;
   note?: string;
   /** Override credit cost (e.g. voice = cost × minutes) */
   multiplier?: number;
@@ -120,9 +121,9 @@ export interface DeductOptions {
 }
 
 export type DeductResult =
-  | { success: true; creditsCharged: number; balanceAfter: number }
+  | { success: true; creditsCharged: number; balanceAfter: number; reason?: undefined; detail?: undefined }
   | { success: false; reason: 'insufficient_credits' | 'no_credit_account' | 'error'; detail?: string }
-  | { success: true; skipped: true; reason: 'smart_mode_dedup' };
+  | { success: true; skipped: true; reason: 'smart_mode_dedup'; detail?: undefined };
 
 // ── Core helpers ──────────────────────────────────────────────────────────────
 

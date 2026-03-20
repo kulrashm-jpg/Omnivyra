@@ -135,7 +135,7 @@ export async function generateContentForDailyPlans(
     })).filter((t) => t.platform);
     if (platformTargets.length === 0) return [];
 
-    const item = { ...buildItemFromEnriched(parsed, platformTargets), company_id: campaignCompanyId };
+    const item = { ...buildItemFromEnriched(parsed, platformTargets), company_id: campaignCompanyId } as unknown as Parameters<typeof generateMasterContentFromIntent>[0];
 
     // Use existing generated_content as master if available — avoids a redundant LLM call
     // and ensures repurposing is based on the actual stored content, not a regenerated draft.

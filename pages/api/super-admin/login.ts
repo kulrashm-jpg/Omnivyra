@@ -39,7 +39,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Look up the user by email via admin API
   const { data: usersPage } = await supabase.auth.admin.listUsers({ perPage: 1000 });
-  const matchedUser = usersPage?.users?.find(u => u.email?.toLowerCase() === email);
+  const matchedUser = (usersPage?.users ?? []).find((u: { email?: string }) =>
+    String(u.email ?? '').toLowerCase() === email,
+  );
 
   if (matchedUser) {
     const { data: profile } = await supabase

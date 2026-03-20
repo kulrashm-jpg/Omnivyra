@@ -20,7 +20,14 @@
 
 import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
-import { getCreditCost, type CreditAction } from './creditDeductionService';
+import {
+  deductCredits,
+  deductCreditsIfValue,
+  type CreditAction,
+  type DeductOptions,
+  type DeductResult,
+  getCreditCost,
+} from './creditDeductionService';
 import { resolveDeduction, type CategorySplit } from './creditPriorityService';
 import { trackUsage } from './usageTrackingService';
 
@@ -386,5 +393,67 @@ export async function createCredit(opts: CreateCreditOptions): Promise<void> {
   }
 }
 
+/**
+ * Deduct credits in a best-effort, non-blocking way.
+ *
+ * Used by high-level workflows where execution should continue regardless of credit status.
+ */
+export async function deductCreditsAwaited(
+  orgId: string,
+  action: CreditAction,
+  opts: DeductOptions = {},
+  smartMode = true,
+): Promise<DeductResult> {
+  try {
+    const result = await deductCredits(orgId, action, opts, smartMode);
+    if (!result.success) {
+      const reason = result.reason ?? 'unknown';
+      const detail = result.detail ? ` detail=${result.detail}` : '';
+      console.warn(
+        `[creditExecution] deductCreditsAwaited: org=${orgId} action=${action} reason=${reason}` + detail,
+      );
+    }
+    return result;
+  } catch (err: unknown) {
+    console.error('[creditExecution] deductCreditsAwaited unexpected error', err);
+    return { success: false, reason: 'error', detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Deduct credits when a value condition is true.
+ * If valueFound is false, deduction is skipped.
+ */
+export async function deductCreditsIfValueAwaited(
+  orgId: string,
+  action: CreditAction,
+  valueFound: boolean,
+  opts: DeductOptions = {},
+  smartMode = true,
+): Promise<DeductResult & { valueFound: boolean }> {
+  try {
+    if (!valueFound) {
+      return { success: true, skipped: true, reason: 'smart_mode_dedup', valueFound: false };
+    }
+    const result = await deductCreditsIfValue(orgId, action, valueFound, opts);
+    if (!result.success) {
+      const reason = result.reason ?? 'unknown';
+      const detail = result.detail ? ` detail=${result.detail}` : '';
+      console.warn(
+        `[creditExecution] deductCreditsIfValueAwaited: org=${orgId} action=${action} valueFound=${valueFound} reason=${reason}` + detail,
+      );
+    }
+    return { ...result, valueFound: true };
+  } catch (err: unknown) {
+    console.error('[creditExecution] deductCreditsIfValueAwaited unexpected error', err);
+    return {
+      success: false,
+      reason: 'error',
+      detail: err instanceof Error ? err.message : String(err),
+      valueFound,
+    };
+  }
+}
+
 // ── Re-exports for callers ─────────────────────────────────────────────────────
-export type { CreditAction };
+export type { CreditAction, DeductOptions, DeductResult };
