@@ -12,6 +12,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { supabase } from '../utils/supabaseClient';
+import { validateEmailDomain } from '../lib/auth/domainValidation';
 
 export default function CreateAccountPage() {
   const router = useRouter();
@@ -21,6 +22,7 @@ export default function CreateAccountPage() {
   const [sent, setSent]       = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
 
   // Already logged in → skip ahead to phone step
   useEffect(() => {
@@ -28,12 +30,22 @@ export default function CreateAccountPage() {
       if (data.session) {
         router.replace(`/onboarding/phone?goals=${goals}&team=${team}&challenge=${challenge}`);
       }
+      setCheckingSession(false);
     });
   }, [router, goals, team, challenge]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!email.trim()) { setError('Please enter your email.'); return; }
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed) { setError('Please enter your email.'); return; }
+    
+    // Validate domain
+    const domainCheck = validateEmailDomain(trimmed);
+    if (!domainCheck.valid) {
+      setError((domainCheck as { valid: false; reason: string }).reason);
+      return;
+    }
+    
     setLoading(true);
     setError(null);
 
@@ -119,10 +131,10 @@ export default function CreateAccountPage() {
 
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || checkingSession}
                     className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {loading ? 'Sending…' : 'Send sign-in link'}
+                    {loading || checkingSession ? 'Sending…' : 'Send sign-in link'}
                   </button>
                 </form>
 

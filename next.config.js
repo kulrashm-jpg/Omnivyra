@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Turbopack enabled with empty config - uses webpack fallback for compatibility
   turbopack: {},
   // Don't bundle bullmq/ioredis - they use Node built-ins. Let Node provide at runtime.
   serverExternalPackages: ['bullmq', 'ioredis'],

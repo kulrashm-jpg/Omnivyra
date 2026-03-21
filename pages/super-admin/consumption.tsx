@@ -19,6 +19,7 @@ import ApiConsumptionPanel from '../../components/super-admin/ApiConsumptionPane
 import CreditsManagementPanel from '../../components/super-admin/CreditsManagementPanel';
 import AllOrgsConsumptionTable from '../../components/super-admin/AllOrgsConsumptionTable';
 import PlansPricingPanel from '../../components/super-admin/PlansPricingPanel';
+import PlanAnalyticsPanel from '../../components/super-admin/PlanAnalyticsPanel';
 import InfraConsumptionPanel from '../../components/super-admin/InfraConsumptionPanel';
 
 type ActiveTab = 'overview' | 'llm' | 'apis' | 'credits' | 'external_apis' | 'plans' | 'infra';
@@ -52,7 +53,8 @@ export default function ConsumptionPage() {
   useEffect(() => {
     async function resolveTier() {
       try {
-        const res = await fetch('/api/super-admin/session', { credentials: 'include' });
+        // Check for super-admin session cookie via check-super-admin endpoint
+        const res = await fetch('/api/admin/check-super-admin', { credentials: 'include' });
         const json = await res.json();
         if (json.isSuperAdmin) {
           setTier('super_admin');
@@ -63,7 +65,9 @@ export default function ConsumptionPage() {
       } catch { /* ignore — fall through to userRole */ }
 
       // Don't resolve until CompanyContext has finished loading its auth state
-      if (ctxLoading) return;
+      if (ctxLoading) {
+        return;
+      }
 
       // No Supabase session and no super-admin cookie → redirect to login
       if (!isAuthenticated) {
@@ -85,7 +89,7 @@ export default function ConsumptionPage() {
       setTierResolved(true);
     }
     resolveTier();
-  }, [userRole, ctxLoading, isAuthenticated]);
+  }, [userRole, ctxLoading, isAuthenticated, router]);
 
   // Load org list for super admin org selector
   useEffect(() => {
@@ -143,10 +147,10 @@ export default function ConsumptionPage() {
         {/* Back link */}
         <div className="mb-6">
           <Link
-            href={tier === 'super_admin' ? '/super-admin' : '/dashboard'}
+            href={tier === 'super_admin' ? '/super-admin/dashboard' : '/dashboard'}
             className="inline-flex items-center gap-2 text-gray-400 hover:text-white text-sm transition-colors"
           >
-            <ArrowLeft className="w-4 h-4" /> {tier === 'super_admin' ? 'Super Admin' : 'Dashboard'}
+            <ArrowLeft className="w-4 h-4" /> {tier === 'super_admin' ? 'Super Admin Dashboard' : 'Dashboard'}
           </Link>
         </div>
 
@@ -264,7 +268,13 @@ export default function ConsumptionPage() {
           )}
 
           {activeTab === 'plans' && tier === 'super_admin' && (
-            <PlansPricingPanel />
+            <div className="space-y-8">
+              <PlanAnalyticsPanel />
+              <div className="border-t border-gray-800 pt-8">
+                <h3 className="text-lg font-semibold text-white mb-4">Manage Plans & Pricing</h3>
+                <PlansPricingPanel />
+              </div>
+            </div>
           )}
 
           {activeTab === 'infra' && tier === 'super_admin' && (

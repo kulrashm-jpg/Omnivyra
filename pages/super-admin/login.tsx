@@ -74,13 +74,15 @@ export default function SuperAdminLoginPage() {
           placeholder="Username"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
+          disabled={isSubmitting}
         />
         <input
-          type="password"
           className="border rounded-md px-3 py-2 w-full"
           placeholder="Password"
+          type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          disabled={isSubmitting}
         />
         <button
           onClick={handleLogin}

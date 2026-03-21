@@ -21,7 +21,7 @@ import { extractFeatures, type FeatureInput, type FeatureVector } from './predic
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 import { generatePerformanceInsights } from './performanceInsightGenerator';
 import { getPredictionConfig } from './configService';
-import { deductCreditsAwaited } from './creditExecutionService';
+import { deductCredits } from './creditDeductionService';
 import type { StrategyContext } from '../types/campaignPlanning';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ function optimizePlan(
 export async function predictCampaignOutcome(plan: CampaignPlanInput): Promise<CampaignPrediction> {
   // Non-blocking credit deduction — prediction runs regardless
   if (plan.company_id) {
-    await deductCreditsAwaited(plan.company_id, 'prediction', { referenceId: plan.campaign_id, note: 'Campaign outcome prediction' });
+    await deductCredits(plan.company_id, 'prediction', { referenceId: plan.campaign_id, note: 'Campaign outcome prediction' });
   }
 
   const cfg = await getPredictionConfig();

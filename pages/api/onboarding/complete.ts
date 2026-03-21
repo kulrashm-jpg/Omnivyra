@@ -2,20 +2,32 @@
  * POST /api/onboarding/complete
  *
  * Called after phone verification to:
+ *  0. Create user in database users table (if not exists)
  *  1. Create a free_credit_profiles row (idempotent)
  *  2. Grant 300 initial credits via apply_credit_transaction()
  *  3. Log the 'initial' claim in free_credit_claims
  *
  * Body:
  *  {
- *    phoneNumber:   string   -- E.164 format
- *    firebaseUid:   string   -- UID from Firebase phone auth
- *    intentGoals:   string[] -- Q1 answers
- *    intentTeam:    string   -- Q2 answer
- *    intentChallenges: string[] -- Q3 answers
+ *    phoneNumber:   string   -- E.164 format (required)
+ *    firebaseUid:   string   -- UID from Firebase phone auth (required)
+ *    firebaseIdToken: string -- Firebase ID token for verification (optional but recommended)
+ *    companyName:   string   -- Company name (optional, defaults to email prefix)
+ *    intentGoals:   string[] -- Q1 answers (optional)
+ *    intentTeam:    string   -- Q2 answer (optional)
+ *    intentChallenges: string[] -- Q3 answers (optional)
  *  }
  *
  * Auth: requires Supabase session (user must be logged in via email OTP first)
+ *
+ * User Flow:
+ *  1. User signs up via /create-account (created in Supabase auth only)
+ *  2. User verifies phone (Firebase SMS OTP)
+ *  3. This endpoint is called to:
+ *     - Create user record in database (for login lookup via /api/auth/check-user)
+ *     - Create free credit profile
+ *     - Grant 300 initial credits
+ *  4. User can now log in via /login (which checks database users table)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -84,6 +96,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     phoneNumber,
     firebaseUid,
     firebaseIdToken,
+    companyName      = '',
     intentGoals      = [],
     intentTeam       = '',
     intentChallenges = [],
@@ -91,6 +104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     phoneNumber: string;
     firebaseUid: string;
     firebaseIdToken?: string;
+    companyName?: string;
     intentGoals: string[];
     intentTeam: string;
     intentChallenges: string[];
@@ -98,6 +112,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!phoneNumber || !firebaseUid) {
     return res.status(400).json({ error: 'phoneNumber and firebaseUid are required' });
+  }
+
+  // Use provided company name or generate from email prefix
+  let finalCompanyName = companyName.trim();
+  if (!finalCompanyName) {
+    // Default: use email prefix before @
+    const emailParts = user.email?.split('@') || [];
+    finalCompanyName = emailParts[0] || 'Company';
   }
 
   // ── Domain eligibility gate ───────────────────────────────────────────────
@@ -128,6 +150,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    // ── 0a. Create user in database if not exists ────────────────────────────
+    // Ensure user exists in the users table (separate from Supabase auth)
+    if (user.email && user.id) {
+      const { error: userCheckErr } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', user.email.toLowerCase())
+        .limit(1)
+        .maybeSingle();
+
+      // Try to insert if user doesn't exist (ignore unique constraint errors)
+      if (!userCheckErr) {
+        await supabase.from('users').upsert({
+          id: user.id,
+          email: user.email.toLowerCase(),
+          name: user.user_metadata?.name || user.email.split('@')[0] || 'User',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'email' });
+      }
+    }
+
+    // ── 0. Create or retrieve company from company name ──────────────────────
+    let companyId: string | null = null;
+
+    // Check if company with this name already exists (case-insensitive)
+    const { data: existingCompanies, error: checkError } = await supabase
+      .from('companies')
+      .select('id')
+      .ilike('name', finalCompanyName)
+      .limit(1);
+
+    if (checkError) {
+      console.error('[onboarding/complete] company check failed:', checkError.message);
+      return res.status(500).json({ error: 'Could not verify company name availability' });
+    }
+
+    if (existingCompanies && existingCompanies.length > 0) {
+      companyId = existingCompanies[0].id;
+      console.log('[onboarding/complete] company already exists:', companyId);
+    } else {
+      // Create new company
+      const { data: newCompany, error: createError } = await supabase
+        .from('companies')
+        .insert({
+          name: finalCompanyName,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .select('id')
+        .single();
+
+      if (createError) {
+        console.error('[onboarding/complete] company creation failed:', createError.message);
+        return res.status(500).json({ error: 'Could not create company' });
+      }
+
+      companyId = newCompany.id;
+      console.log('[onboarding/complete] company created:', companyId);
+    }
+
     // ── 1. Upsert free_credit_profiles (idempotent) ─────────────────────────
     const expiryAt = new Date(Date.now() + EXPIRY_DAYS * 86400 * 1000).toISOString();
 
@@ -143,6 +226,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         phone_number:     phoneNumber,
         phone_verified_at: new Date().toISOString(),
         firebase_uid:     firebaseUid,
+        company_name:     finalCompanyName,
+        organization_id:  companyId,
         intent_goals:     intentGoals,
         intent_team:      intentTeam,
         intent_challenges: intentChallenges,
@@ -178,16 +263,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('user_id', user.id)
       .eq('role', 'SUPER_ADMIN');
 
+    // ── 3b. Create user_company_roles if user doesn't have one for this company ──
+    const { data: existingMembership } = await supabase
+      .from('user_company_roles')
+      .select('id, role')
+      .eq('user_id', user.id)
+      .eq('company_id', companyId)
+      .maybeSingle();
+
+    if (!existingMembership) {
+      const { error: roleErr } = await supabase.from('user_company_roles').insert({
+        user_id: user.id,
+        company_id: companyId,
+        role: 'COMPANY_ADMIN',
+        status: 'active',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      if (roleErr) {
+        console.error('[onboarding/complete] role creation failed:', roleErr.message);
+        // Non-fatal: try to proceed
+      }
+    }
+
     // ── 4. Get org_id from organization membership ───────────────────────────
     const { data: membership } = await supabase
       .from('user_company_roles')
       .select('company_id, role, id')
       .eq('user_id', user.id)
+      .eq('company_id', companyId)
       .eq('status', 'active')
       .limit(1)
       .maybeSingle();
 
-    const orgId: string | null = membership?.company_id ?? null;
+    const orgId: string = companyId; // Use the company we just created
 
     // Ensure role is a valid content role (fix any legacy 'ADMIN' values)
     const validRoles = ['COMPANY_ADMIN', 'CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY'];
@@ -198,7 +307,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq('id', membership.id);
     }
 
-    // ── 4. Grant credits via apply_credit_transaction RPC ────────────────────
+    // ── 4b. Grant credits via apply_credit_transaction RPC ────────────────────
     if (orgId) {
       const { error: creditErr } = await supabase.rpc('apply_credit_transaction', {
         p_organization_id: orgId,

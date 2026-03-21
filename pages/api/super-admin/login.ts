@@ -1,77 +1,80 @@
 /**
  * POST /api/super-admin/login
  *
- * Replaces the legacy plaintext username/password cookie flow.
+ * Super Admin authentication using environment variables
+ * (same pattern as Content Architect).
  *
- * NOW: Supabase email OTP — the super-admin signs in with their registered
- * Supabase account. After OTP confirmation the client holds a JWT.
- * `profiles.is_super_admin = true` is the authoritative gate (checked by
- * requireSuperAdmin middleware on every protected endpoint).
- *
- * This endpoint is kept ONLY to issue the magic-link email so the
- * super-admin login page has a backend entry point.  It does NOT set cookies.
- *
- * Body: { email: string }
- * Response: { success: true }  — always (prevents email enumeration)
+ * Validates username and password against SUPER_ADMIN_USERNAME and SUPER_ADMIN_PASSWORD env vars.
+ * On success, sets a session cookie and returns 200.
+ * 
+ * Body: { username: string, password: string }
+ * Response: { success: true } on success, or { error: string } on failure
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
 import { supabase } from '../../../backend/db/supabaseClient';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {});
-  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+  const { username, password } = req.body || {};
+  const u = String(username ?? '').trim();
+  const p = String(password ?? '').trim();
+  const expectedUser = (process.env.SUPER_ADMIN_USERNAME || '').trim();
+  const expectedPass = (process.env.SUPER_ADMIN_PASSWORD || '').trim();
 
-  if (!email) return res.status(400).json({ error: 'email is required' });
-
-  const ipAddress  = (req.headers['x-forwarded-for'] as string | undefined) ?? req.socket?.remoteAddress ?? null;
-  const userAgent  = req.headers['user-agent'] ?? null;
-
-  // Verify the email belongs to a confirmed super-admin before sending the link.
-  // This prevents the magic-link endpoint being used to send emails to arbitrary addresses.
-  const anonClient = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  );
-
-  // Look up the user by email via admin API
-  const { data: usersPage } = await supabase.auth.admin.listUsers({ perPage: 1000 });
-  const matchedUser = (usersPage?.users ?? []).find((u: { email?: string }) =>
-    String(u.email ?? '').toLowerCase() === email,
-  );
-
-  if (matchedUser) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('is_super_admin')
-      .eq('id', matchedUser.id)
-      .maybeSingle();
-
-    if (profile?.is_super_admin) {
-      // Send magic link — client exchanges it for a JWT session
-      await anonClient.auth.signInWithOtp({
-        email,
-        options: {
-          emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL ?? ''}/super-admin/auth-callback`,
-          shouldCreateUser: false,
-        },
-      });
-
-      await supabase.from('super_admin_audit_logs').insert({
-        user_id:    matchedUser.id,
-        action:     'login_otp_sent',
-        ip_address: ipAddress,
-        user_agent: userAgent,
-        created_at: new Date().toISOString(),
-      }).then(() => void 0); // non-fatal
-    }
-    // If NOT is_super_admin we intentionally fall through without error
-    // to prevent user enumeration
+  if (!expectedUser || !expectedPass) {
+    return res.status(500).json({
+      error: 'SUPER_ADMIN_USERNAME and SUPER_ADMIN_PASSWORD must be set in env',
+    });
   }
 
-  // Always respond identically to prevent email/account enumeration
-  return res.status(200).json({ success: true, message: 'If this email is registered, a sign-in link has been sent.' });
+  if (u !== expectedUser || p !== expectedPass) {
+    try {
+      await supabase.from('super_admin_audit_logs').insert({
+        username: u || 'unknown',
+        action: 'super_admin_failed_login',
+        ip_address:
+          (req.headers['x-forwarded-for'] as string) ||
+          req.socket?.remoteAddress ||
+          null,
+        user_agent: req.headers['user-agent'] || null,
+      });
+    } catch {
+      // ignore audit failure
+    }
+    return res.status(403).json({ error: 'INVALID_CREDENTIALS' });
+  }
+
+  try {
+    await supabase.from('super_admin_audit_logs').insert({
+      username: u || expectedUser,
+      action: 'super_admin_login',
+      ip_address:
+        (req.headers['x-forwarded-for'] as string) ||
+        req.socket?.remoteAddress ||
+        null,
+      user_agent: req.headers['user-agent'] || null,
+    });
+  } catch {
+    // ignore audit failure
+  }
+
+  const sessionCookie = [
+    'super_admin_session=1',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=86400',
+  ].join('; ');
+  const clearContentArchitect = [
+    'content_architect_session=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ].join('; ');
+  res.setHeader('Set-Cookie', [sessionCookie, clearContentArchitect]);
+  return res.status(200).json({ success: true });
 }
+

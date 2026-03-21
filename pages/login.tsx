@@ -15,6 +15,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { supabase } from '../utils/supabaseClient';
+import { validateEmailDomain } from '../lib/auth/domainValidation';
 
 type Stage = 'email' | 'sent' | 'not-found';
 
@@ -26,9 +27,11 @@ export default function LoginPage() {
   const [error, setError]     = useState<string | null>(null);
 
   // Skip login if already authenticated
+  const [checkingSession, setCheckingSession] = useState(true);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) router.replace('/dashboard');
+      setCheckingSession(false);
     });
   }, [router]);
 
@@ -36,6 +39,13 @@ export default function LoginPage() {
     e.preventDefault();
     const trimmed = email.trim().toLowerCase();
     if (!trimmed) { setError('Please enter your email address.'); return; }
+
+    // Validate domain (for public login flow)
+    const domainCheck = validateEmailDomain(trimmed);
+    if (!domainCheck.valid) {
+      setError((domainCheck as { valid: false; reason: string }).reason);
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -156,16 +166,16 @@ export default function LoginPage() {
 
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || checkingSession}
                     className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {loading ? (
+                    {loading || checkingSession ? (
                       <span className="flex items-center justify-center gap-2">
                         <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                         </svg>
-                        Checking…
+                        {checkingSession ? 'Checking session…' : 'Checking…'}
                       </span>
                     ) : 'Send sign-in link'}
                   </button>

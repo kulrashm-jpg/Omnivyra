@@ -872,7 +872,8 @@ export default function SuperAdminPanel() {
       });
       if (!response.ok) {
         const result = await response.json();
-        alert(result.error || 'Failed to update user status');
+        const errorMsg = result.details || result.error || 'Failed to update user status';
+        alert(`Error: ${errorMsg}`);
         return;
       }
       await loadSuperAdminData();
@@ -897,7 +898,8 @@ export default function SuperAdminPanel() {
       });
       if (!response.ok) {
         const result = await response.json();
-        alert(result.error || 'Failed to update user role');
+        const errorMsg = result.details || result.error || 'Failed to update user role';
+        alert(`Error: ${errorMsg}`);
         return;
       }
       await loadSuperAdminData();
@@ -910,6 +912,7 @@ export default function SuperAdminPanel() {
   };
 
   const handleDeleteUser = async (userId: string, companyId: string) => {
+    console.log('Delete user attempt:', { userId, companyId });
     if (!confirm('Remove this user from the company? This cannot be undone.')) {
       return;
     }
@@ -922,13 +925,15 @@ export default function SuperAdminPanel() {
       });
       if (!response.ok) {
         const result = await response.json();
-        alert(result.error || 'Failed to delete user');
+        const errorMsg = result.details || result.error || 'Failed to delete user';
+        console.error('Delete error response:', result);
+        alert(`Error: ${errorMsg}`);
         return;
       }
       await loadSuperAdminData();
     } catch (error) {
       console.error('Error deleting user:', error);
-      alert('Failed to delete user');
+      alert('Failed to delete user. Please check the console for details.');
     } finally {
       setIsLoading(false);
     }
@@ -1584,8 +1589,9 @@ export default function SuperAdminPanel() {
                                   (user.status || 'active') === 'active' ? 'inactive' : 'active'
                                 )
                               }
-                              className="text-yellow-600 hover:text-yellow-900 p-1 rounded hover:bg-yellow-50"
-                              title={(user.status || 'active') === 'active' ? 'Make Inactive' : 'Make Active'}
+                              disabled={!user.company_id}
+                              className="text-yellow-600 hover:text-yellow-900 p-1 rounded hover:bg-yellow-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title={user.company_id ? ((user.status || 'active') === 'active' ? 'Make Inactive' : 'Make Active') : 'User must be assigned to a company'}
                             >
                               {(user.status || 'active') === 'active' ? (
                                 <XCircle className="h-4 w-4" />
@@ -1595,8 +1601,9 @@ export default function SuperAdminPanel() {
                             </button>
                             <button
                               onClick={() => handleDeleteUser(user.user_id, user.company_id)}
-                              className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50"
-                              title="Delete User"
+                              disabled={!user.company_id}
+                              className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title={user.company_id ? 'Delete User' : 'User must be assigned to a company to delete'}
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>

@@ -16,7 +16,6 @@ import { evaluateCampaignDecision } from './campaignDecisionEngine';
 import { getAutonomousSettings } from './autonomousCampaignAgent';
 import { logDecision } from './autonomousDecisionLogger';
 import { deductCredits } from './creditDeductionService';
-import { deductCreditsAwaited } from './creditExecutionService';
 import type { RiskTolerance } from './autonomousCampaignAgent';
 
 export type CampaignPortfolioItem = {
@@ -186,7 +185,7 @@ export async function evaluatePortfolioDecision(companyId: string): Promise<Port
     },
   });
 
-  await deductCreditsAwaited(companyId, 'portfolio_decision', { note: `Portfolio rebalancing: ${rebalanceActions.length} actions` });
+  await deductCredits(companyId, 'portfolio_decision', { note: `Portfolio rebalancing: ${rebalanceActions.length} actions` });
 
   return {
     company_id:         companyId,

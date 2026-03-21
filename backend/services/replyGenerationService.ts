@@ -11,7 +11,7 @@
 
 import OpenAI from 'openai';
 import type { SentimentLabel } from './engagementIngestService';
-import { deductCreditsAwaited } from './creditExecutionService';
+import { deductCredits } from './creditDeductionService';
 
 const getClient = (): OpenAI => new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -105,7 +105,7 @@ Respond with JSON: {"reply":"<text>","confidence":<0-1>}`;
     const raw = response.choices[0]?.message?.content?.trim() ?? '{}';
     const parsed = JSON.parse(raw);
     if (input.company_id) {
-      await deductCreditsAwaited(input.company_id, 'reply_generation', { note: `Reply on ${platform}` });
+      await deductCredits(input.company_id, 'reply_generation', { note: `Reply on ${platform}` });
     }
     return {
       reply:      String(parsed.reply ?? '').trim(),

@@ -225,8 +225,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const { email, companyId, role } = req.body || {};
       console.log('[super-admin/users] request body', { email, companyId, role });
-      if (!email || !companyId) {
-        return res.status(400).json({ error: 'email and companyId are required' });
+      
+      // Validate required parameters
+      if (!email) {
+        return res.status(400).json({ 
+          error: 'MISSING_REQUIRED_PARAMETER',
+          details: 'email is required to invite a user',
+          required_fields: ['email', 'companyId']
+        });
+      }
+      if (!companyId) {
+        return res.status(400).json({ 
+          error: 'MISSING_REQUIRED_PARAMETER',
+          details: 'companyId is required to invite a user',
+          required_fields: ['email', 'companyId']
+        });
       }
 
       const normalizedEmail = String(email).trim().toLowerCase();
@@ -300,11 +313,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'PATCH') {
     const { userId, companyId, status, role } = req.body || {};
-    if (!userId || !companyId) {
-      return res.status(400).json({ error: 'userId and companyId are required' });
+    
+    // Validate required parameters
+    if (!userId) {
+      return res.status(400).json({ 
+        error: 'MISSING_REQUIRED_PARAMETER',
+        details: 'userId is required to update a user',
+        required_fields: ['userId', 'companyId']
+      });
+    }
+    if (!companyId) {
+      return res.status(400).json({ 
+        error: 'MISSING_REQUIRED_PARAMETER',
+        details: 'companyId is required to update a user',
+        required_fields: ['userId', 'companyId']
+      });
     }
     if (!status && !role) {
-      return res.status(400).json({ error: 'status or role is required' });
+      return res.status(400).json({ 
+        error: 'MISSING_UPDATE_FIELDS',
+        details: 'Either status or role must be provided',
+        acceptable_fields: ['status', 'role']
+      });
     }
 
     const updatePayload: Record<string, any> = {
@@ -359,28 +389,106 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'DELETE') {
     const { userId, companyId } = req.body || {};
-    if (!userId || !companyId) {
-      return res.status(400).json({ error: 'userId and companyId are required' });
+    console.log('[super-admin/users] DELETE request:', { userId, companyId, body: req.body });
+    
+    // Validate required parameter
+    if (!userId) {
+      console.log('[super-admin/users] DELETE - missing userId');
+      return res.status(400).json({ 
+        error: 'MISSING_REQUIRED_PARAMETER',
+        details: 'userId is required to delete a user',
+      });
     }
 
-    const { error } = await supabase
-      .from('user_company_roles')
-      .delete()
-      .eq('user_id', userId)
-      .eq('company_id', companyId);
+    // Route 1: Delete user from specific company
+    if (companyId) {
+      const { data, error } = await supabase
+        .from('user_company_roles')
+        .delete()
+        .eq('user_id', userId)
+        .eq('company_id', companyId)
+        .select('user_id, company_id');
 
-    if (error) {
-      return res.status(500).json({ error: 'FAILED_TO_DELETE_USER' });
+      console.log('[super-admin/users] DELETE from company result:', { userId, companyId, deletedRows: data?.length || 0, error: error?.message });
+
+      if (error) {
+        console.error('[super-admin/users] DELETE error:', { userId, companyId, error: error.message });
+        return res.status(500).json({ 
+          error: 'FAILED_TO_DELETE_USER',
+          details: error.message
+        });
+      }
+      
+      if (!data || data.length === 0) {
+        console.log('[super-admin/users] DELETE - user not found in company');
+        return res.status(404).json({ 
+          error: 'USER_NOT_FOUND',
+          details: `No user record found for userId: ${userId} in companyId: ${companyId}`,
+        });
+      }
+
+      await insertAuditLog({
+        actorUserId: null,
+        action: 'SUPER_ADMIN_USER_DELETE',
+        targetUserId: userId,
+        companyId,
+      });
+
+      return res.status(200).json({ success: true, message: 'User removed from company' });
     }
 
-    await insertAuditLog({
-      actorUserId: null,
-      action: 'SUPER_ADMIN_USER_DELETE',
-      targetUserId: userId,
-      companyId,
-    });
+    // Route 2: Delete unassigned user entirely from the system
+    // (user has no company role and is being removed completely)
+    try {
+      // Delete from users table
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', userId)
+        .select('id');
 
-    return res.status(200).json({ success: true });
+      console.log('[super-admin/users] DELETE unassigned user result:', { userId, deletedRows: userData?.length || 0, error: userError?.message });
+
+      if (userError) {
+        console.error('[super-admin/users] DELETE unassigned error:', { userId, error: userError.message });
+        return res.status(500).json({ 
+          error: 'FAILED_TO_DELETE_UNASSIGNED_USER',
+          details: userError.message
+        });
+      }
+
+      if (!userData || userData.length === 0) {
+        console.log('[super-admin/users] DELETE - unassigned user not found');
+        return res.status(404).json({ 
+          error: 'USER_NOT_FOUND',
+          details: `No unassigned user found with userId: ${userId}`,
+        });
+      }
+
+      // Also try to delete from Supabase Auth admin API if available
+      try {
+        const admin = ensureAuthAdmin();
+        await admin.deleteUser(userId);
+        console.log('[super-admin/users] DELETE - deleted from auth', { userId });
+      } catch (authError: any) {
+        console.warn('[super-admin/users] DELETE - could not delete from auth (may already be deleted):', authError.message);
+        // Not critical if auth deletion fails — user record is gone
+      }
+
+      await insertAuditLog({
+        actorUserId: null,
+        action: 'SUPER_ADMIN_USER_DELETE_UNASSIGNED',
+        targetUserId: userId,
+      });
+
+      return res.status(200).json({ success: true, message: 'Unassigned user deleted from system' });
+    } catch (err: any) {
+      console.error('[super-admin/users] DELETE unassigned exception:', { userId, error: err.message });
+      return res.status(500).json({ 
+        error: 'FAILED_TO_DELETE_UNASSIGNED_USER',
+        details: err.message
+      });
+    }
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
