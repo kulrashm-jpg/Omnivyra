@@ -25,6 +25,16 @@ import { generateCommunityThreads } from '../services/threadEngine';
 import { captureEngagementSignals } from '../services/engagementCaptureService';
 import { generateFeedbackInsights } from '../services/feedbackIntelligenceEngine';
 import { computeThemeRelevanceForCompany } from '../services/companyTrendRelevanceEngine';
+import {
+  getGlobalConfig,
+  getCompanyOverride,
+  resolveConfig,
+  getDailyJobCount,
+  getCompanyPriorityAdjustment,
+  logExecutionStart,
+  logExecutionEnd,
+  logSkipped,
+} from '../services/intelligenceConfigService';
 
 interface SchedulerResult {
   found: number; // Posts found that are due
@@ -332,129 +342,94 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
  * Run signal clustering on recent unclustered signals (last 6 hours).
  * Call every 30 minutes (e.g. from cron).
  */
-export async function runSignalClustering(): Promise<{
-  signals_processed: number;
-  clusters_created: number;
-  clusters_updated: number;
-}> {
-  const result = await clusterRecentSignals();
-  return {
-    signals_processed: result.signals_processed,
-    clusters_created: result.clusters_created,
-    clusters_updated: result.clusters_updated,
-  };
+export async function runSignalClustering() {
+  return runWithConfig('signal_clustering', null, async () => {
+    const result = await clusterRecentSignals();
+    return {
+      signals_processed: result.signals_processed,
+      clusters_created: result.clusters_created,
+      clusters_updated: result.clusters_updated,
+    };
+  });
 }
 
 /**
  * Run signal intelligence engine: convert clusters to actionable intelligence.
  * Call every hour (e.g. from cron).
  */
-export async function runSignalIntelligenceEngine(): Promise<{
-  clusters_processed: number;
-  records_upserted: number;
-}> {
-  return generateSignalIntelligence();
+export async function runSignalIntelligenceEngine() {
+  return runWithConfig('signal_intelligence', null, () => generateSignalIntelligence());
 }
 
 /**
  * Run strategic theme engine: convert eligible intelligence into theme cards.
  * Call every hour (e.g. from cron).
  */
-export async function runStrategicThemeEngine(): Promise<{
-  intelligence_eligible: number;
-  themes_created: number;
-  themes_skipped: number;
-}> {
-  return generateStrategicThemes();
+export async function runStrategicThemeEngine() {
+  return runWithConfig('strategic_themes', null, () => generateStrategicThemes());
 }
 
 /**
  * Run campaign opportunity engine: convert strategic themes into campaign opportunities.
  * Call every hour (e.g. from cron).
  */
-export async function runCampaignOpportunityEngine(): Promise<{
-  themes_processed: number;
-  opportunities_created: number;
-  opportunities_skipped: number;
-}> {
-  return generateCampaignOpportunities();
+export async function runCampaignOpportunityEngine() {
+  return runWithConfig('campaign_opportunities', null, () => generateCampaignOpportunities());
 }
 
 /**
  * Run content opportunity engine: convert strategic themes into content opportunities.
  * Call every 2 hours (e.g. from cron).
  */
-export async function runContentOpportunityEngine(): Promise<{
-  themes_processed: number;
-  opportunities_created: number;
-  opportunities_skipped: number;
-}> {
-  return generateContentOpportunities();
+export async function runContentOpportunityEngine() {
+  return runWithConfig('content_opportunities', null, () => generateContentOpportunities());
 }
 
 /**
  * Run narrative engine: convert content opportunities into campaign narratives.
  * Call every 4 hours (e.g. from cron).
  */
-export async function runNarrativeEngine(): Promise<{
-  opportunities_processed: number;
-  narratives_created: number;
-  narratives_skipped: number;
-}> {
-  return generateCampaignNarratives();
+export async function runNarrativeEngine() {
+  return runWithConfig('narrative_engine', null, () => generateCampaignNarratives());
 }
 
 /**
  * Run community post engine: convert campaign narratives into platform-ready posts.
  * Call every 3 hours (e.g. from cron).
  */
-export async function runCommunityPostEngine(): Promise<{
-  narratives_processed: number;
-  posts_created: number;
-  posts_skipped: number;
-}> {
-  return generateCommunityPosts();
+export async function runCommunityPostEngine() {
+  return runWithConfig('community_posts', null, () => generateCommunityPosts());
 }
 
 /**
  * Run thread engine: convert community posts into multi-part threads.
  * Call every 3 hours (e.g. from cron).
  */
-export async function runThreadEngine(): Promise<{
-  posts_processed: number;
-  threads_created: number;
-  threads_skipped: number;
-}> {
-  return generateCommunityThreads();
+export async function runThreadEngine() {
+  return runWithConfig('thread_engine', null, () => generateCommunityThreads());
 }
 
 /**
  * Run engagement capture: capture metrics from platform APIs into engagement_signals.
  * Call every 30 minutes (e.g. from cron).
  */
-export async function runEngagementCapture(): Promise<{
-  posts_processed: number;
-  signals_created: number;
-  signals_skipped: number;
-}> {
-  return captureEngagementSignals();
+export async function runEngagementCapture() {
+  return runWithConfig('engagement_capture', null, () => captureEngagementSignals());
 }
 
 /**
  * Run feedback intelligence engine: analyze engagement and generate insights.
  * Call every 6 hours (e.g. from cron).
  */
-export async function runFeedbackIntelligenceEngine(): Promise<{
-  signals_analyzed: number;
-  insights_created: number;
-  insights_skipped: number;
-}> {
-  return generateFeedbackInsights();
+export async function runFeedbackIntelligenceEngine() {
+  return runWithConfig('feedback_intelligence', null, () => generateFeedbackInsights());
 }
 
 /**
  * Run company trend relevance: score theme relevance per company (industry, keywords, competitors).
  * Call every 6 hours (e.g. from cron).
+ *
+ * Per-company job: checks resolved config (global + company override) for each company.
  */
 export async function runCompanyTrendRelevance(): Promise<{
   companies_processed: number;
@@ -475,11 +450,16 @@ export async function runCompanyTrendRelevance(): Promise<{
 
   for (const row of companies as { id: string }[]) {
     try {
-      const result = await computeThemeRelevanceForCompany(row.id);
+      const result = await runWithConfig(
+        'trend_relevance',
+        row.id,
+        () => computeThemeRelevanceForCompany(row.id),
+      );
+      if ('skipped' in result) continue;
       totalThemesScored += result.themes_scored;
       errors.push(...result.errors);
-    } catch (e: any) {
-      errors.push(`company ${row.id}: ${e?.message ?? String(e)}`);
+    } catch (e: unknown) {
+      errors.push(`company ${row.id}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -488,6 +468,79 @@ export async function runCompanyTrendRelevance(): Promise<{
     total_themes_scored: totalThemesScored,
     errors,
   };
+}
+
+// ── Intelligence config-aware runner ──────────────────────────────────────────
+
+/**
+ * Wraps an intelligence runner with:
+ * - Enabled check (global config + optional company override)
+ * - Execution budget guard (daily_job_limit per company)
+ * - Dynamic priority adjustment (new company → boost, inactive → deprioritise)
+ * - Full execution logging to intelligence_execution_log
+ *
+ * Returns the runner result, or `{ skipped: true, reason }` if the job is skipped.
+ */
+async function runWithConfig<T>(
+  jobType: string,
+  companyId: string | null,
+  runner: () => Promise<T>,
+  triggeredBy = 'scheduler',
+): Promise<T | { skipped: true; reason: string }> {
+  const global = await getGlobalConfig(jobType);
+  if (!global) {
+    console.warn(`[scheduler] ${jobType}: not found in intelligence_global_config — skipping`);
+    return { skipped: true, reason: 'job_type_not_found' };
+  }
+
+  const override = companyId ? await getCompanyOverride(companyId, jobType) : null;
+  const config   = resolveConfig(global, override);
+
+  // ── 1. Enabled check ──────────────────────────────────────────────────────
+  if (!config.enabled) {
+    console.log(`[scheduler] ${jobType} disabled${companyId ? ` (${companyId})` : ''}`);
+    await logSkipped(jobType, companyId, 'disabled', triggeredBy);
+    return { skipped: true, reason: 'disabled' };
+  }
+
+  // ── 2. Execution budget guard (per-company only) ───────────────────────────
+  if (companyId) {
+    const dailyLimit = override?.daily_job_limit ?? global.daily_job_limit;
+    const todayCount = await getDailyJobCount(companyId);
+    if (todayCount >= dailyLimit) {
+      console.log(`[scheduler] ${jobType} budget_exceeded for ${companyId} (${todayCount}/${dailyLimit} today)`);
+      await logSkipped(jobType, companyId, 'budget_exceeded', triggeredBy);
+      return { skipped: true, reason: 'budget_exceeded' };
+    }
+  }
+
+  // ── 3. Dynamic priority adjustment ────────────────────────────────────────
+  let effectivePriority = config.priority;
+  if (companyId) {
+    const adjustment = await getCompanyPriorityAdjustment(companyId);
+    if (adjustment === 'new') {
+      effectivePriority = Math.max(1, effectivePriority - 2);
+      console.log(`[scheduler] ${jobType} priority boosted: ${config.priority}→${effectivePriority} (new company)`);
+    } else if (adjustment === 'inactive') {
+      effectivePriority = Math.min(10, effectivePriority + 3);
+      console.log(`[scheduler] ${jobType} priority lowered: ${config.priority}→${effectivePriority} (inactive company)`);
+    }
+  }
+
+  // ── 4. Execute with logging ────────────────────────────────────────────────
+  const logId = await logExecutionStart(jobType, companyId, triggeredBy);
+  try {
+    const result = await runner();
+    await logExecutionEnd(logId, 'completed', {
+      ...(result as Record<string, unknown>),
+      effective_priority: effectivePriority,
+    });
+    return result;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await logExecutionEnd(logId, 'failed', { effective_priority: effectivePriority }, msg);
+    throw err;
+  }
 }
 
 /** Default platforms/regions for scheduled lead detection (07:00, 18:00). */

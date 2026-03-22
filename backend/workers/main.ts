@@ -19,8 +19,11 @@
 import { validateWorkerEnv } from '../utils/validateEnv';
 import { startHealthServer }  from './healthServer';
 
-// Fail fast if any required env var is missing — do this BEFORE any other import
-// that touches Redis or Supabase (they throw on missing vars)
+// Start health server immediately — before anything else so Railway healthchecks
+// always get a response even if Redis/workers fail to initialise.
+startHealthServer(parseInt(process.env.PORT ?? '8080', 10));
+
+// Fail fast if any required env var is missing
 validateWorkerEnv();
 
 import os from 'os';
@@ -89,9 +92,6 @@ campaignWorker.on('error', (err) => console.error('[campaign-worker] error:', er
 // ── Startup ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  // Health endpoint — Railway polls this to determine container liveness
-  startHealthServer(parseInt(process.env.PORT ?? '8080', 10));
-
   // Pre-warm template cache (zero GPT cost, improves first-job latency)
   await runCacheWarmup().catch((err) =>
     console.warn('[main] cache warmup failed (non-fatal):', err?.message));

@@ -20,7 +20,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { supabase } from '../../utils/supabaseClient';
 
-type Step = 'loading' | 'website' | 'details' | 'saving' | 'joined';
+type Step = 'loading' | 'website' | 'details' | 'saving' | 'joined' | 'company-exists' | 'request-sent';
 
 const INDUSTRIES = [
   'Technology & Software',
@@ -73,11 +73,20 @@ export default function CompanySetupPage() {
   const [errorMsg, setErrorMsg]     = useState<string | null>(null);
   const [joinedCompanyName, setJoinedCompanyName] = useState<string | null>(null);
 
+  // Company-exists / access-request state
+  const [existingCompanyId,   setExistingCompanyId]   = useState<string | null>(null);
+  const [existingCompanyName, setExistingCompanyName] = useState<string | null>(null);
+  const [reqFullName,   setReqFullName]   = useState('');
+  const [reqDepartment, setReqDepartment] = useState('');
+  const [reqEmail,      setReqEmail]      = useState('');
+  const [reqSubmitting, setReqSubmitting] = useState(false);
+
   // ── Check session + existing company ─────────────────────────────────────
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
       if (!data.session) { router.replace('/login'); return; }
       setSession(data.session);
+      setReqEmail(data.session.user.email ?? '');
 
       // Check if already has an active company
       const { data: role } = await supabase
@@ -134,10 +143,17 @@ export default function CompanySetupPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Failed to create company');
 
+      if (json.companyExists) {
+        // Company already exists — prompt user to request access
+        setExistingCompanyId(json.matchedCompanyId);
+        setExistingCompanyName(json.matchedCompanyName ?? companyName.trim());
+        setStep('company-exists');
+        return;
+      }
+
       if (json.selfJoined) {
         setJoinedCompanyName(json.matchedCompanyName ?? companyName.trim());
         setStep('joined');
-        // Auto-redirect to dashboard after 4 seconds
         setTimeout(() => router.replace('/dashboard'), 4000);
         return;
       }
@@ -146,6 +162,38 @@ export default function CompanySetupPage() {
     } catch (err: any) {
       setErrorMsg(err.message ?? 'Something went wrong. Please try again.');
       setStep('details');
+    }
+  }
+
+  // ── Access request submission ──────────────────────────────────────────────
+  async function handleAccessRequest(e: React.FormEvent) {
+    e.preventDefault();
+    if (!reqFullName.trim()) { setErrorMsg('Please enter your full name.'); return; }
+    if (!reqEmail.trim())    { setErrorMsg('Please enter your email.'); return; }
+    if (!existingCompanyId)  { setErrorMsg('Company not identified.'); return; }
+    setErrorMsg(null);
+    setReqSubmitting(true);
+    try {
+      const res = await fetch('/api/onboarding/request-company-access', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          companyId:  existingCompanyId,
+          fullName:   reqFullName.trim(),
+          department: reqDepartment.trim() || undefined,
+          email:      reqEmail.trim(),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Failed to send request');
+      setStep('request-sent');
+    } catch (err: any) {
+      setErrorMsg(err.message ?? 'Something went wrong. Please try again.');
+    } finally {
+      setReqSubmitting(false);
     }
   }
 
@@ -397,6 +445,130 @@ export default function CompanySetupPage() {
                     </p>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* ── Step: company already exists ────────────────────────── */}
+            {step === 'company-exists' && (
+              <div className="animate-fadeIn">
+                <div className="mb-8 text-center">
+                  <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-100 text-3xl">
+                    🏢
+                  </div>
+                  <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]">
+                    This company is already on Omnivyra
+                  </h1>
+                  <p className="mt-2 text-sm leading-relaxed text-[#6B7C93] max-w-sm mx-auto">
+                    <strong className="text-[#0B1F33]">{existingCompanyName}</strong> already has an account.
+                    To get access, you'll need approval from the company admin.
+                    Share your details below and we'll notify them right away.
+                  </p>
+                </div>
+
+                <form onSubmit={handleAccessRequest} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-[#0B1F33] mb-1.5">
+                      Full name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      autoFocus
+                      placeholder="Jane Smith"
+                      value={reqFullName}
+                      onChange={e => { setReqFullName(e.target.value); setErrorMsg(null); }}
+                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-[#0B1F33] mb-1.5">
+                      Work email <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="jane@company.com"
+                      value={reqEmail}
+                      onChange={e => { setReqEmail(e.target.value); setErrorMsg(null); }}
+                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-[#0B1F33] mb-1.5">
+                      Department <span className="text-xs text-[#6B7C93] font-normal">(optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Marketing, Sales, Product"
+                      value={reqDepartment}
+                      onChange={e => setReqDepartment(e.target.value)}
+                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
+                    />
+                  </div>
+
+                  {errorMsg && (
+                    <div className="flex items-start gap-2.5 rounded-xl bg-red-50 border border-red-200 px-4 py-3">
+                      <svg className="mt-0.5 h-4 w-4 shrink-0 text-red-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+                      </svg>
+                      <p className="text-sm text-red-600">{errorMsg}</p>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={reqSubmitting}
+                    className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {reqSubmitting ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Sending request…
+                      </span>
+                    ) : 'Send access request →'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setStep('details'); setErrorMsg(null); }}
+                    className="w-full text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors"
+                  >
+                    ← Back
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {/* ── Step: access request sent ────────────────────────────── */}
+            {step === 'request-sent' && (
+              <div className="animate-fadeIn text-center">
+                <div className="mb-6 inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] shadow-lg text-3xl">
+                  ✉️
+                </div>
+                <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]">
+                  Request sent!
+                </h1>
+                <p className="mt-3 text-sm leading-relaxed text-[#6B7C93] max-w-sm mx-auto">
+                  Your details have been sent to the admin at <strong className="text-[#0B1F33]">{existingCompanyName}</strong>.
+                  Once they approve your request, you'll receive an email and can log in to access your workspace.
+                </p>
+                <div className="mt-5 rounded-2xl border border-[#0A66C2]/15 bg-[#EBF3FD] px-5 py-4 text-left space-y-1.5">
+                  <p className="text-xs font-semibold text-[#0B1F33]">What you shared:</p>
+                  <p className="text-xs text-[#6B7C93]">Name: <span className="text-[#0B1F33]">{reqFullName}</span></p>
+                  <p className="text-xs text-[#6B7C93]">Email: <span className="text-[#0B1F33]">{reqEmail}</span></p>
+                  {reqDepartment && <p className="text-xs text-[#6B7C93]">Department: <span className="text-[#0B1F33]">{reqDepartment}</span></p>}
+                </div>
+                <p className="mt-6 text-xs text-[#6B7C93]">
+                  Wrong company?{' '}
+                  <button onClick={() => { setStep('website'); setErrorMsg(null); }} className="text-[#0A66C2] hover:underline">
+                    Start over
+                  </button>
+                </p>
               </div>
             )}
 

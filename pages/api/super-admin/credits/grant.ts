@@ -69,10 +69,11 @@ async function notifyOrgAdmin(
     .limit(1)
     .maybeSingle();
 
-  if (!adminRole?.user_id) return;
+  const role = adminRole as any;
+  if (!role?.user_id) return;
 
-  await sb.from('notifications').insert({
-    user_id:  adminRole.user_id,
+  await (sb as any).from('notifications').insert({
+    user_id:  role.user_id,
     type:     'credit_granted',
     title:    'Credits added to your account',
     message:  `You have received ${credits} credit${credits === 1 ? '' : 's'}. Reason: ${reason}`,
@@ -91,7 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
 
-  const adminId = await requireSuperAdmin(req, res, sb);
+  const adminId = await requireSuperAdmin(req, res, sb as any);
   if (!adminId) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -178,7 +179,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // ── STEP 6: Notify org admin (non-blocking) ────────────────────────────────
-  notifyOrgAdmin(sb, organization_id, credits, reason.trim(), grantId).catch(err =>
+  notifyOrgAdmin(sb as any, organization_id, credits, reason.trim(), grantId).catch(err =>
     console.warn('[credits/grant] notification failed (non-fatal):', err?.message),
   );
 

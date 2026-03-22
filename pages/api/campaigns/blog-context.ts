@@ -74,7 +74,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .eq('company_id', companyId)
       .eq('status', 'published')
       .order('updated_at', { ascending: false })
-      .limit(80);
+      .limit(50);
 
     for (const b of cBlogs ?? []) {
       const { key_insights, summary, h2_headings } = extractBlogContext(b.content_blocks);
@@ -101,7 +101,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .select('id, title, slug, tags, category, excerpt, content_blocks, views_count, likes_count')
     .eq('status', 'published')
     .order('published_at', { ascending: false })
-    .limit(80);
+    .limit(50);
 
   if (pError) return res.status(500).json({ error: pError.message });
 

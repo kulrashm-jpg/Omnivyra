@@ -12,6 +12,13 @@
 import { supabase } from '../db/supabaseClient';
 
 // ---------------------------------------------------------------------------
+// In-memory cache for getBlogsForTopic results (TTL: 5 minutes per key)
+// ---------------------------------------------------------------------------
+
+const _blogTopicCache = new Map<string, { result: BlogSignal[]; expiresAt: number }>();
+const BLOG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -172,6 +179,10 @@ async function getRelatedTopicsFromSignalGraph(topic: string): Promise<string[]>
 // ---------------------------------------------------------------------------
 
 export async function getBlogsForTopic(topic: string, limit = 5, companyId?: string | null): Promise<BlogSignal[]> {
+  const cacheKey = `${topic}::${limit}::${companyId ?? ''}`;
+  const cached = _blogTopicCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.result;
+
   const tokens = tokenize(topic);
   if (tokens.length === 0) return [];
 
@@ -202,7 +213,7 @@ export async function getBlogsForTopic(topic: string, limit = 5, companyId?: str
   if (allBlogs.length === 0) return [];
 
   const seen = new Set<string>();
-  return allBlogs
+  const ranked = allBlogs
     .map((b: any) => {
       const titleTokens = tokenize(b.title ?? '');
       const tagTokens = (b.tags ?? []).flatMap((t: string) => tokenize(t));
@@ -221,6 +232,9 @@ export async function getBlogsForTopic(topic: string, limit = 5, companyId?: str
     .filter((b) => b.similarity_score > 0.1 && !seen.has(b.id) && (seen.add(b.id), true))
     .sort((a, b) => b.similarity_score - a.similarity_score)
     .slice(0, limit);
+
+  _blogTopicCache.set(cacheKey, { result: ranked, expiresAt: Date.now() + BLOG_CACHE_TTL_MS });
+  return ranked;
 }
 
 // ---------------------------------------------------------------------------

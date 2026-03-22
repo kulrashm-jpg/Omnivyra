@@ -37,7 +37,8 @@ export default function ConsumptionPage() {
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [externalApis, setExternalApis] = useState<any[]>([]);
   const [loadingExternalApis, setLoadingExternalApis] = useState(false);
-  const [orgs, setOrgs] = useState<{ id: string; name: string }[]>([]);
+  const [orgs, setOrgs] = useState<{ id: string; name: string; website: string }[]>([]);
+  const [orgSearch, setOrgSearch] = useState('');
 
   // Period selector
   const now = new Date();
@@ -96,7 +97,7 @@ export default function ConsumptionPage() {
     if (tier !== 'super_admin') return;
     fetch('/api/super-admin/companies', { credentials: 'include' })
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.companies) setOrgs(d.companies.map((c: any) => ({ id: c.id, name: c.name }))); })
+      .then(d => { if (d?.companies) setOrgs(d.companies.map((c: any) => ({ id: c.id, name: c.name, website: c.website || '' }))); })
       .catch(() => {});
   }, [tier]);
 
@@ -188,16 +189,50 @@ export default function ConsumptionPage() {
           {tier === 'super_admin' && (
             <div className="flex items-center gap-2 ml-4">
               <Building2 className="w-4 h-4 text-gray-400" />
-              <select
-                value={selectedOrgId ?? ''}
-                onChange={e => setSelectedOrgId(e.target.value || null)}
-                className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-violet-500 max-w-[220px]"
-              >
-                <option value="">All organizations</option>
-                {orgs.map(o => (
-                  <option key={o.id} value={o.id}>{o.name}</option>
-                ))}
-              </select>
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Search by name or domain…"
+                  value={orgSearch || (selectedOrgId ? (orgs.find(o => o.id === selectedOrgId)?.name ?? '') : '')}
+                  onFocus={() => setOrgSearch('')}
+                  onChange={e => { setOrgSearch(e.target.value); setSelectedOrgId(null); }}
+                  className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-violet-500 w-[260px] placeholder-gray-500"
+                />
+                {orgSearch.length > 0 && (
+                  <div className="absolute top-full left-0 mt-1 w-full bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto">
+                    <div
+                      className="px-3 py-2 text-sm text-gray-400 hover:bg-gray-700 cursor-pointer"
+                      onClick={() => { setSelectedOrgId(null); setOrgSearch(''); }}
+                    >
+                      All organizations
+                    </div>
+                    {orgs
+                      .filter(o => {
+                        const q = orgSearch.toLowerCase();
+                        return o.name.toLowerCase().includes(q) || o.website.toLowerCase().includes(q);
+                      })
+                      .map(o => (
+                        <div
+                          key={o.id}
+                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer"
+                          onClick={() => { setSelectedOrgId(o.id); setOrgSearch(''); }}
+                        >
+                          <div className="text-sm text-white font-medium">{o.name}</div>
+                          {o.website && <div className="text-xs text-gray-400">{o.website}</div>}
+                        </div>
+                      ))}
+                    {orgs.filter(o => {
+                      const q = orgSearch.toLowerCase();
+                      return o.name.toLowerCase().includes(q) || o.website.toLowerCase().includes(q);
+                    }).length === 0 && (
+                      <div className="px-3 py-2 text-sm text-gray-500">No results</div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {selectedOrgId && (
+                <button onClick={() => { setSelectedOrgId(null); setOrgSearch(''); }} className="text-gray-400 hover:text-white text-xs">✕</button>
+              )}
             </div>
           )}
         </div>
@@ -259,12 +294,48 @@ export default function ConsumptionPage() {
             />
           )}
 
-          {activeTab === 'credits' && !effectiveCompanyId && (
-            <div className="text-gray-400 text-sm text-center py-12">
-              {tier === 'super_admin'
-                ? 'Select an organization from the All Orgs tab to manage its credits.'
-                : 'No organization context available.'}
+          {activeTab === 'credits' && !effectiveCompanyId && tier === 'super_admin' && (
+            <div className="py-12 flex flex-col items-center gap-4">
+              <p className="text-gray-400 text-sm mb-2">Search for a company to grant or adjust credits</p>
+              <div className="relative w-full max-w-sm">
+                <input
+                  type="text"
+                  placeholder="Search by company name or website domain…"
+                  value={orgSearch}
+                  onChange={e => setOrgSearch(e.target.value)}
+                  className="w-full bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-4 py-2.5 focus:outline-none focus:border-violet-500 placeholder-gray-500"
+                  autoFocus
+                />
+                {orgSearch.length > 0 && (
+                  <div className="absolute top-full left-0 mt-1 w-full bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto">
+                    {orgs
+                      .filter(o => {
+                        const q = orgSearch.toLowerCase();
+                        return o.name.toLowerCase().includes(q) || o.website.toLowerCase().includes(q);
+                      })
+                      .map(o => (
+                        <div
+                          key={o.id}
+                          className="px-4 py-3 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
+                          onClick={() => { setSelectedOrgId(o.id); setOrgSearch(''); }}
+                        >
+                          <div className="text-sm text-white font-medium">{o.name}</div>
+                          {o.website && <div className="text-xs text-gray-400 mt-0.5">{o.website}</div>}
+                        </div>
+                      ))}
+                    {orgs.filter(o => {
+                      const q = orgSearch.toLowerCase();
+                      return o.name.toLowerCase().includes(q) || o.website.toLowerCase().includes(q);
+                    }).length === 0 && (
+                      <div className="px-4 py-3 text-sm text-gray-500">No companies found</div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
+          )}
+          {activeTab === 'credits' && !effectiveCompanyId && tier !== 'super_admin' && (
+            <div className="text-gray-400 text-sm text-center py-12">No organization context available.</div>
           )}
 
           {activeTab === 'plans' && tier === 'super_admin' && (

@@ -158,7 +158,12 @@ export function CampaignAssistPanel({
   const customInsights  = selInsights.filter((i) => !avInsights.includes(i));
 
   const search = blogSearch.toLowerCase();
-  const activeList = blogTab === 'company' ? companyBlogs : omnivyraBlogs;
+
+  // Sorted lists: company by views desc, omnivyra by views+likes desc
+  const sortedCompany  = [...companyBlogs].sort((a, b) => (b.views_count) - (a.views_count));
+  const sortedOmnivyra = [...omnivyraBlogs].sort((a, b) => (b.views_count + b.likes_count) - (a.views_count + a.likes_count));
+
+  const activeList = blogTab === 'company' ? sortedCompany : sortedOmnivyra;
   const filteredBlogs = search
     ? activeList.filter(
         (b) =>
@@ -292,7 +297,7 @@ export function CampaignAssistPanel({
                     }`}
                   >
                     <Building2 className="h-3 w-3" />
-                    Your Content
+                    Company Blogs
                     {companyBlogs.length > 0 && (
                       <span className="rounded-full bg-[#0B5ED7]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#0B5ED7]">
                         {companyBlogs.length}
@@ -309,7 +314,7 @@ export function CampaignAssistPanel({
                     }`}
                   >
                     <Globe className="h-3 w-3" />
-                    Omnivyra Library
+                    Omnivyra Insights
                     {omnivyraBlogs.length > 0 && (
                       <span className="rounded-full bg-gray-200 px-1.5 py-0.5 text-[10px] font-semibold text-gray-600">
                         {omnivyraBlogs.length}
@@ -368,6 +373,12 @@ export function CampaignAssistPanel({
                   <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
                     {filteredBlogs.map((b) => {
                       const sel = selectedIds.has(b.id);
+                      const isNew = b.views_count === 0 && b.likes_count === 0;
+                      const popularity = b.source === 'company' ? b.views_count : b.views_count + b.likes_count;
+                      const sourceLabel = b.source === 'company' ? 'Company Blog' : 'Omnivyra Insight';
+                      const sourceLabelCls = b.source === 'company'
+                        ? 'bg-blue-50 text-[#0B5ED7]'
+                        : 'bg-purple-50 text-purple-600';
                       return (
                         <button
                           key={b.id}
@@ -378,7 +389,19 @@ export function CampaignAssistPanel({
                           }`}
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                                <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${sourceLabelCls}`}>
+                                  {sourceLabel}
+                                </span>
+                                {isNew ? (
+                                  <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-600">New</span>
+                                ) : popularity > 0 ? (
+                                  <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] text-gray-500">
+                                    {popularity.toLocaleString()} {b.source === 'company' ? 'views' : 'engagements'}
+                                  </span>
+                                ) : null}
+                              </div>
                               <p className="text-sm font-medium text-gray-900 leading-snug line-clamp-1">{b.title}</p>
                               <div className="mt-1 flex flex-wrap gap-1">
                                 {b.tags.slice(0, 3).map((t) => (

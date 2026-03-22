@@ -67,7 +67,7 @@ async function assertSuperAdmin(
     .eq('id', user.id)
     .maybeSingle();
 
-  return !!profile?.is_super_admin;
+  return !!(profile as any)?.is_super_admin;
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
 
-  if (!await assertSuperAdmin(req, supabase)) {
+  if (!await assertSuperAdmin(req, supabase as any)) {
     return res.status(403).json({ error: 'Super admin access required' });
   }
 

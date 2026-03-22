@@ -52,6 +52,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       source_blog_type: resolvedBoltBlogType,
     };
 
+    // ── Blog source integrity validation ────────────────────────────────────
+    if (payload.source_blog_id && payload.source_blog_type) {
+      const blogTable = payload.source_blog_type === 'company' ? 'blogs' : 'public_blogs';
+      const { data: blogRow, error: blogErr } = await supabase
+        .from(blogTable)
+        .select('id, company_id')
+        .eq('id', payload.source_blog_id)
+        .maybeSingle();
+      if (blogErr || !blogRow) {
+        return res.status(400).json({ error: 'Invalid source_blog_id: blog not found.' });
+      }
+      if (payload.source_blog_type === 'company' && (blogRow as any).company_id !== companyId) {
+        return res.status(403).json({ error: 'Cross-company blog access denied.' });
+      }
+    }
+
     if (!payload.sourceStrategicTheme || typeof payload.sourceStrategicTheme !== 'object') {
       return res.status(400).json({ error: 'sourceStrategicTheme is required and must be an object' });
     }

@@ -31,6 +31,8 @@ export interface Blog {
   published_at:         string | null;
   created_at:           string;
   updated_at:           string;
+  angle_type:           string | null;
+  hook_strength:        string | null;
 }
 
 export interface CreateBlogInput {
@@ -45,6 +47,8 @@ export interface CreateBlogInput {
   seo_meta_title?:      string | null;
   seo_meta_description?: string | null;
   is_featured?:         boolean;
+  angle_type?:          string | null;
+  hook_strength?:       string | null;
 }
 
 export interface UpdateBlogInput {
@@ -60,6 +64,8 @@ export interface UpdateBlogInput {
   seo_meta_description?: string | null;
   is_featured?:         boolean;
   status?:              BlogStatus;
+  angle_type?:          string | null;
+  hook_strength?:       string | null;
 }
 
 export interface PublishResult {
@@ -185,6 +191,8 @@ export async function createBlog(
       seo_meta_title:       input.seo_meta_title       ?? null,
       seo_meta_description: input.seo_meta_description ?? null,
       is_featured:          input.is_featured          ?? false,
+      angle_type:           input.angle_type           ?? null,
+      hook_strength:        input.hook_strength        ?? null,
       status:               'draft',
     })
     .select('*')
@@ -288,8 +296,19 @@ export async function publishBlogPost(
   let usedIntegrationId: string | null = null;
 
   if (integration) {
-    usedIntegrationId = integration.id;
-    result = await publishToExternal(integration, blog, htmlContent);
+    // Respect integration_config.blog_enabled — skip external publish if explicitly disabled.
+    const blogEnabled = integration.config?.blog_enabled;
+    if (blogEnabled === 'false') {
+      // Integration exists but blog publishing is disabled — publish internally.
+      result = {
+        success: true,
+        message: 'Published on your Virality platform (external publishing is disabled for this integration).',
+        hosted:  true,
+      };
+    } else {
+      usedIntegrationId = integration.id;
+      result = await publishToExternal(integration, blog, htmlContent);
+    }
   } else {
     result = {
       success: true,

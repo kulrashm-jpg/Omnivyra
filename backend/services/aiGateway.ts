@@ -61,6 +61,15 @@ const FEATURE_AREA_MAP: Record<string, string> = {
 
   // Insights
   generateContentIdeas:              'Insights',
+
+  // Blog Repurposing
+  blogRepurpose:                     'Blog Repurposing',
+
+  // Blog Analytics AI
+  blogAnalyticsInsight:              'Blog Analytics',
+
+  // Blog Generation
+  blogGeneration:                    'Blog Generation',
 };
 
 type GatewayMetadata = {

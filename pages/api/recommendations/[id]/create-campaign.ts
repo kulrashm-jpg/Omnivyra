@@ -137,6 +137,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const resolvedBlogType = source_blog_type === 'company' ? 'company' : 'public';
 
+    // ── Blog source integrity validation ────────────────────────────────────
+    if (source_blog_id) {
+      const blogTable = resolvedBlogType === 'company' ? 'blogs' : 'public_blogs';
+      const { data: blogRow, error: blogErr } = await supabase
+        .from(blogTable)
+        .select('id, company_id')
+        .eq('id', String(source_blog_id))
+        .maybeSingle();
+      if (blogErr || !blogRow) {
+        return res.status(400).json({ error: 'Invalid source_blog_id: blog not found.' });
+      }
+      if (resolvedBlogType === 'company' && (blogRow as any).company_id !== recommendation.company_id) {
+        return res.status(403).json({ error: 'Cross-company blog access denied.' });
+      }
+    }
+
     const { data: campaign, error: campaignError } = await supabase
       .from('campaigns')
       .insert({

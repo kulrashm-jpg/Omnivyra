@@ -2,15 +2,16 @@
  * POST /api/auth/check-user
  * Body: { email: string }
  *
- * Checks whether an email exists in the users table (database).
- * Returns { exists: boolean }.
+ * Checks whether an email is registered. Returns { exists: boolean }.
  *
- * Used by the login page to show "No account found" before sending a magic link.
- * This ensures only users with existing accounts can proceed with login.
+ * Strategy (fastest-first):
+ *  1. public.users  — covers all users who completed onboarding
+ *  2. Supabase Admin REST — covers super-admin accounts and users who signed up
+ *     outside the normal onboarding flow
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createClient } from '@supabase/supabase-js';
 
 export default async function handler(
   req: NextApiRequest,
@@ -24,27 +25,49 @@ export default async function handler(
   const normalised = email.trim().toLowerCase();
 
   try {
-    // Check database users table for the email
-    const { data, error } = await supabase
+    const adminClient = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    );
+
+    // ── 1. Check public.users (fast path) ────────────────────────────────────
+    const { data: publicUsers } = await adminClient
       .from('users')
-      .select('id, email')
+      .select('id')
       .ilike('email', normalised)
       .limit(1);
 
-    if (error) {
-      console.error('[check-user] Database error:', error);
-      // Fail open on database error — allow login to proceed
+    if (Array.isArray(publicUsers) && publicUsers.length > 0) {
       return res.status(200).json({ exists: true });
     }
 
-    // Check if exact match exists (ilike returns case-insensitive, so verify)
-    const exists = Array.isArray(data) && data.length > 0 && 
-      data.some(u => u.email?.toLowerCase() === normalised);
+    // ── 2. Fallback: query auth.users via Supabase Admin REST API ────────────
+    //    Uses email filter param supported by Supabase Auth Admin endpoint.
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const serviceKey  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    return res.status(200).json({ exists });
+    const authRes = await fetch(
+      `${supabaseUrl}/auth/v1/admin/users?filter=${encodeURIComponent(normalised)}`,
+      {
+        headers: {
+          apikey:        serviceKey,
+          Authorization: `Bearer ${serviceKey}`,
+        },
+      },
+    );
+
+    if (authRes.ok) {
+      const authJson = await authRes.json() as { users?: { email?: string }[] };
+      const found = authJson.users?.some(u => u.email?.toLowerCase() === normalised);
+      return res.status(200).json({ exists: !!found });
+    }
+
+    // Auth API failed — fail open so legitimate users aren't blocked
+    console.warn('[check-user] Auth admin API returned', authRes.status, '— failing open');
+    return res.status(200).json({ exists: true });
+
   } catch (err) {
     console.error('[check-user] Error:', err);
-    // Fail open on error — let the login page send OTP anyway
-    return res.status(200).json({ exists: true });
+    return res.status(200).json({ exists: true }); // fail open
   }
 }

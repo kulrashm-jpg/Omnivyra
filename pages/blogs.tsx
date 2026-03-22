@@ -3,9 +3,15 @@ import { useRouter } from 'next/router';
 import {
   FileText, Plus, Edit2, Trash2, Globe, Loader2, AlertCircle,
   CheckCircle2, ExternalLink, ChevronLeft, Bold, Italic, Underline,
-  List, ListOrdered, Quote, Heading1, Heading2, Link2, Undo2,
+  List, ListOrdered, Quote, Heading1, Heading2, Link2, Undo2, Search, X, Zap, Wand2,
 } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
+import { buildImageQuery, searchImages as searchStockImages, type ImageResult } from '../lib/media/imageService';
+import BlogIntelligenceWizard from '../components/blog/BlogIntelligenceWizard';
+import BlogAnalyticsPanel from '../components/blog/BlogAnalyticsPanel';
+import BlogGenerateModal from '../components/blog/BlogGenerateModal';
+import type { BlogGenerationOutput } from '../lib/blog/blogGenerationEngine';
+import type { HookAssessment } from './api/admin/blog/generate';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type BlogStatus = 'draft' | 'published' | 'failed';
@@ -16,6 +22,7 @@ interface Blog {
   slug: string | null; excerpt: string | null; featured_image_url: string | null;
   category: string | null; tags: string[]; seo_meta_title: string | null;
   seo_meta_description: string | null; is_featured: boolean;
+  angle_type?: string | null;
 }
 interface BlogIntegration { id: string; name: string; type: string; status: string }
 
@@ -130,6 +137,7 @@ export default function BlogsPage() {
   // Data
   const [blogs, setBlogs] = useState<Blog[]>([]);
   const [blogIntegrations, setBlogIntegrations] = useState<BlogIntegration[]>([]);
+  const [companyIndustry, setCompanyIndustry] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -149,9 +157,49 @@ export default function BlogsPage() {
   const [editorSeoTitle, setEditorSeoTitle] = useState('');
   const [editorSeoDesc, setEditorSeoDesc] = useState('');
   const [editorIsFeatured, setEditorIsFeatured] = useState(false);
+
+  // Featured image search
+  const [imgSearchOpen,    setImgSearchOpen]    = useState(false);
+  const [imgSearchQuery,   setImgSearchQuery]   = useState('');
+  const [imgSearchResults, setImgSearchResults] = useState<ImageResult[]>([]);
+  const [imgSearchLoading, setImgSearchLoading] = useState(false);
+
+  const runImgSearch = useCallback(async (q: string) => {
+    if (!q.trim()) return;
+    setImgSearchLoading(true);
+    const imgs = await searchStockImages({ query: q.trim(), perPage: 6 });
+    setImgSearchResults(imgs);
+    setImgSearchLoading(false);
+  }, []);
+
+  const openImgSearch = useCallback(() => {
+    const q = buildImageQuery({ title: editorTitle, excerpt: editorExcerpt, tags: editorTagsInput.split(',').map(t => t.trim()).filter(Boolean) });
+    setImgSearchQuery(q);
+    setImgSearchOpen(true);
+    setImgSearchResults([]);
+    if (q) runImgSearch(q);
+  }, [editorTitle, editorExcerpt, editorTagsInput, runImgSearch]);
+
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Blog Intelligence wizard
+  const [intelligenceWizardOpen, setIntelligenceWizardOpen] = useState(false);
+  const [intelligenceEnabled,    setIntelligenceEnabled]    = useState(false);
+
+  // Blog generation modal
+  const [generateModalOpen,    setGenerateModalOpen]    = useState(false);
+  const [generatedConfidence,  setGeneratedConfidence]  = useState<'high' | 'medium' | null>(null);
+  const [generatedAngleType,   setGeneratedAngleType]   = useState<string | null>(null);
+  const [generatedBlocks,      setGeneratedBlocks]      = useState<unknown[] | null>(null);
+  const [hookAssessment,       setHookAssessment]       = useState<HookAssessment | null>(null);
+  const [rewritingHook,        setRewritingHook]        = useState(false);
+  const [editorKey,            setEditorKey]            = useState(0);
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    setIntelligenceEnabled(!!localStorage.getItem(`blog_intelligence_enabled_${selectedCompanyId}`));
+  }, [selectedCompanyId]);
 
   // Dashboard filter
   const [filterTab, setFilterTab] = useState<'all' | 'draft' | 'published'>('all');
@@ -160,19 +208,79 @@ export default function BlogsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // ── Open editor pre-filled from AI generation ──────────────────────────────
+  function openGenerated(
+    output:     BlogGenerationOutput & { content_blocks?: unknown[] },
+    confidence: 'high' | 'medium',
+    hook:       HookAssessment,
+    angleType:  string | null,
+  ) {
+    setGenerateModalOpen(false);
+    setGeneratedConfidence(confidence);
+    setGeneratedAngleType(angleType);
+    setGeneratedBlocks(Array.isArray(output.content_blocks) ? output.content_blocks : null);
+    setHookAssessment(hook);
+    setEditingBlog(null);
+    setEditorTitle(output.title);
+    setEditorContent(output.content_html);
+    setEditorExcerpt(output.excerpt);
+    setEditorCategory(output.category);
+    setEditorTagsInput(output.tags.join(', '));
+    setEditorSeoTitle(output.seo_meta_title);
+    setEditorSeoDesc(output.seo_meta_description);
+    setEditorFeaturedImageUrl('');
+    setEditorSlug('');
+    setEditorIsFeatured(false);
+    setEditorIntegrationId('');
+    setSaveMsg(null);
+    setView('editor');
+  }
+
+  // ── Rewrite Hook ───────────────────────────────────────────────────────────
+  async function rewriteHook() {
+    if (!selectedCompanyId || !editorContent) return;
+    setRewritingHook(true);
+    try {
+      const resp = await fetch('/api/admin/blog/rewrite-hook', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          company_id:   selectedCompanyId,
+          content_html: editorContent,
+          topic:        editorTitle || editorExcerpt || 'Blog post',
+          angle_type:   generatedAngleType ?? undefined,
+        }),
+      });
+      if (resp.ok) {
+        const { new_hook } = await resp.json() as { new_hook: string };
+        if (new_hook) {
+          // Replace the first <p>…</p> in editorContent
+          const updated = editorContent.replace(/<p[^>]*>[\s\S]*?<\/p>/i, new_hook);
+          setEditorContent(updated);
+          setEditorKey(k => k + 1); // force RichEditor remount with new content
+          setHookAssessment(null);  // clear warning
+        }
+      }
+    } finally {
+      setRewritingHook(false);
+    }
+  }
+
   // ── Fetch ──────────────────────────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
     if (!selectedCompanyId) return;
     setLoading(true); setError('');
     try {
       const qs = `company_id=${selectedCompanyId}`;
-      const [blogsRes, wpRes, apiRes] = await Promise.all([
+      const [blogsRes, wpRes, apiRes, profileRes] = await Promise.all([
         fetch(`/api/blogs?${qs}`).then(r => r.json()),
         fetch(`/api/integrations?${qs}&type=wordpress`).then(r => r.json()),
         fetch(`/api/integrations?${qs}&type=custom_blog_api`).then(r => r.json()),
+        fetch(`/api/company-profile?company_id=${selectedCompanyId}`).then(r => r.ok ? r.json() : null).catch(() => null),
       ]);
       setBlogs(blogsRes.blogs || []);
       setBlogIntegrations([...(wpRes.integrations || []), ...(apiRes.integrations || [])]);
+      setCompanyIndustry(profileRes?.profile?.industry ?? profileRes?.industry ?? null);
     } catch { setError('Failed to load. Please refresh.'); }
     finally { setLoading(false); }
   }, [selectedCompanyId]);
@@ -192,6 +300,10 @@ export default function BlogsPage() {
   }
   function openNew() {
     setEditingBlog(null);
+    setGeneratedConfidence(null);
+    setGeneratedAngleType(null);
+    setGeneratedBlocks(null);
+    setHookAssessment(null);
     setEditorTitle('');
     setEditorContent('');
     setEditorIntegrationId('');
@@ -230,8 +342,27 @@ export default function BlogsPage() {
       ...(tags.length                    ? { tags }                                             : {}),
       ...(editorSeoTitle.trim()          ? { seo_meta_title: editorSeoTitle.trim() }           : {}),
       ...(editorSeoDesc.trim()           ? { seo_meta_description: editorSeoDesc.trim() }      : {}),
+      ...(generatedBlocks                ? { content_blocks: generatedBlocks }                 : {}),
+      ...(generatedAngleType             ? { angle_type: generatedAngleType }                  : {}),
+      ...(hookAssessment                 ? { hook_strength: hookAssessment.strength }           : {}),
       is_featured: editorIsFeatured,
     };
+  }
+
+  // ── Update angle×industry matrix after first save of a generated post ────────
+  function updateAngleIndustryMatrix(contentScore: number) {
+    if (!generatedAngleType || !companyIndustry || !selectedCompanyId) return;
+    // Fire-and-forget — non-blocking
+    fetch('/api/track/angle-industry-matrix', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        company_id:    selectedCompanyId,
+        industry:      companyIndustry,
+        angle_type:    generatedAngleType,
+        content_score: Math.min(100, Math.max(0, Math.round(contentScore))),
+      }),
+    }).catch(() => { /* ignore */ });
   }
 
   async function saveDraft() {
@@ -246,6 +377,12 @@ export default function BlogsPage() {
       if (!r.ok) { setSaveMsg({ ok: false, text: data.error || 'Save failed.' }); return; }
       setEditingBlog(data.blog);
       setSaveMsg({ ok: true, text: 'Draft saved.' });
+      // On first save of a generated post, record angle × industry performance signal
+      if (!editingBlog && generatedAngleType && companyIndustry) {
+        // Use hook strength as a proxy for initial content score (strong=80, moderate=60, weak=40)
+        const hookScore = hookAssessment?.strength === 'strong' ? 80 : hookAssessment?.strength === 'weak' ? 40 : 60;
+        updateAngleIndustryMatrix(hookScore);
+      }
       fetchAll();
     } catch { setSaveMsg({ ok: false, text: 'Network error.' }); }
     finally { setSaving(false); }
@@ -371,7 +508,7 @@ export default function BlogsPage() {
               className="w-full text-3xl sm:text-4xl font-bold text-gray-900 placeholder-gray-300 border-0 focus:outline-none mb-6 bg-transparent"
             />
             <RichEditor
-              key={editingBlog?.id || 'new'}
+              key={`${editingBlog?.id || 'new'}-${editorKey}`}
               initialContent={editorContent}
               onChange={setEditorContent}
             />
@@ -449,13 +586,86 @@ export default function BlogsPage() {
               </div>
 
               <div>
-                <label className="text-xs text-gray-500 mb-1 block">Featured image URL</label>
+                <label className="text-xs text-gray-500 mb-1 block">Featured image</label>
+                {/* Preview */}
+                {editorFeaturedImageUrl && (
+                  <div className="relative mb-2 rounded-lg overflow-hidden border border-gray-200">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={editorFeaturedImageUrl} alt="featured" className="w-full h-28 object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => setEditorFeaturedImageUrl('')}
+                      className="absolute top-1 right-1 rounded-full bg-black/50 p-0.5 text-white hover:bg-black/70"
+                      title="Remove image"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+                {/* URL input */}
                 <input
                   value={editorFeaturedImageUrl}
                   onChange={e => setEditorFeaturedImageUrl(e.target.value)}
-                  placeholder="https://..."
+                  placeholder="https://... or search below"
                   className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder-gray-300"
                 />
+                {/* Search toggle */}
+                <button
+                  type="button"
+                  onClick={() => imgSearchOpen ? setImgSearchOpen(false) : openImgSearch()}
+                  className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-800 font-medium"
+                >
+                  <Search className="h-3 w-3" />
+                  {imgSearchOpen ? 'Hide image search' : 'Search stock images'}
+                </button>
+                {/* Image search panel */}
+                {imgSearchOpen && (
+                  <div className="mt-2 rounded-lg border border-gray-200 bg-white p-3">
+                    <div className="flex gap-1.5 mb-2">
+                      <input
+                        type="text"
+                        value={imgSearchQuery}
+                        onChange={e => setImgSearchQuery(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && runImgSearch(imgSearchQuery)}
+                        placeholder="Search images…"
+                        className="flex-1 rounded border border-gray-200 px-2 py-1 text-xs bg-gray-50 focus:outline-none focus:border-indigo-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => runImgSearch(imgSearchQuery)}
+                        disabled={imgSearchLoading}
+                        className="px-2.5 py-1 rounded bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        {imgSearchLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Go'}
+                      </button>
+                    </div>
+                    {imgSearchResults.length > 0 ? (
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {imgSearchResults.map((img) => (
+                          <button
+                            key={img.id}
+                            type="button"
+                            onClick={() => { setEditorFeaturedImageUrl(img.full); setImgSearchOpen(false); }}
+                            className={`relative rounded overflow-hidden aspect-video focus:outline-none ${
+                              editorFeaturedImageUrl === img.full ? 'ring-2 ring-indigo-500' : 'hover:ring-2 hover:ring-gray-300'
+                            }`}
+                            title={img.attribution}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={img.thumb} alt={img.alt} className="w-full h-full object-cover" loading="lazy" />
+                          </button>
+                        ))}
+                      </div>
+                    ) : !imgSearchLoading ? (
+                      <p className="text-[11px] text-gray-400 text-center py-2">No results. Try different keywords.</p>
+                    ) : (
+                      <p className="text-[11px] text-gray-400 text-center py-2">Searching…</p>
+                    )}
+                    {imgSearchResults.length > 0 && (
+                      <p className="text-[9px] text-gray-400 mt-2">Images from Unsplash, Pexels, Pixabay. Attribution required when publishing.</p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -507,6 +717,70 @@ export default function BlogsPage() {
               </div>
             </div>
 
+            {/* Hook Strength Warning (only for AI-generated posts with weak/moderate hook) */}
+            {hookAssessment && hookAssessment.strength !== 'strong' && (
+              <div className={`rounded-xl border p-3 ${
+                hookAssessment.strength === 'weak'
+                  ? 'bg-red-50 border-red-200'
+                  : 'bg-amber-50 border-amber-200'
+              }`}>
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className={`mt-0.5 h-4 w-4 shrink-0 ${hookAssessment.strength === 'weak' ? 'text-red-500' : 'text-amber-500'}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-xs font-semibold ${hookAssessment.strength === 'weak' ? 'text-red-800' : 'text-amber-800'}`}>
+                      {hookAssessment.strength === 'weak' ? 'Weak Hook Detected' : 'Hook Could Be Stronger'}
+                    </p>
+                    {hookAssessment.note && (
+                      <p className={`text-[11px] mt-0.5 leading-relaxed ${hookAssessment.strength === 'weak' ? 'text-red-600' : 'text-amber-600'}`}>
+                        {hookAssessment.note}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={rewriteHook}
+                  disabled={rewritingHook}
+                  className={`mt-2 w-full flex items-center justify-center gap-1.5 text-[11px] font-semibold py-1.5 px-2 rounded-lg transition-colors ${
+                    hookAssessment.strength === 'weak'
+                      ? 'bg-red-100 hover:bg-red-200 text-red-700 disabled:opacity-50'
+                      : 'bg-amber-100 hover:bg-amber-200 text-amber-700 disabled:opacity-50'
+                  }`}
+                >
+                  {rewritingHook ? (
+                    <><Loader2 className="h-3 w-3 animate-spin" /> Rewriting…</>
+                  ) : (
+                    <><Wand2 className="h-3 w-3" /> Rewrite Hook</>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* Source Confidence Badge (only for AI-generated posts) */}
+            {generatedConfidence && (
+              <div className={`rounded-xl border p-3 flex items-start gap-2.5 ${
+                generatedConfidence === 'high'
+                  ? 'bg-emerald-50 border-emerald-200'
+                  : 'bg-amber-50 border-amber-200'
+              }`}>
+                <div className={`mt-0.5 shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-white text-[10px] font-bold ${
+                  generatedConfidence === 'high' ? 'bg-emerald-500' : 'bg-amber-500'
+                }`}>
+                  {generatedConfidence === 'high' ? '✓' : '~'}
+                </div>
+                <div>
+                  <p className={`text-xs font-semibold ${generatedConfidence === 'high' ? 'text-emerald-800' : 'text-amber-800'}`}>
+                    {generatedConfidence === 'high' ? 'High Confidence' : 'Medium Confidence'}
+                  </p>
+                  <p className={`text-[11px] mt-0.5 ${generatedConfidence === 'high' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                    {generatedConfidence === 'high'
+                      ? 'Strong signal — generated from clear topic context.'
+                      : 'Generated with some assumptions. Review closely before publishing.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Stats */}
             <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 space-y-2 text-xs text-gray-500">
               <div className="flex justify-between"><span>Words</span><span className="font-medium text-gray-700">{wc}</span></div>
@@ -544,11 +818,18 @@ export default function BlogsPage() {
               <ExternalLink className="h-4 w-4" /> Connect Website
             </button>
             {isAdmin && (
-              <button
-                onClick={openNew}
-                className="flex items-center gap-1.5 bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors">
-                <Plus className="h-4 w-4" /> Write Blog
-              </button>
+              <>
+                <button
+                  onClick={() => setGenerateModalOpen(true)}
+                  className="flex items-center gap-1.5 bg-violet-600 text-white px-3 py-2 rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors">
+                  <Wand2 className="h-4 w-4" /> Generate Blog
+                </button>
+                <button
+                  onClick={openNew}
+                  className="flex items-center gap-1.5 bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors">
+                  <Plus className="h-4 w-4" /> Write Blog
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -578,6 +859,43 @@ export default function BlogsPage() {
               <ExternalLink className="h-3.5 w-3.5" /> Connect Now
             </button>
           </div>
+        )}
+
+        {/* Blog Intelligence CTA */}
+        {intelligenceEnabled ? (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-green-800">Blog Intelligence Active</p>
+                <p className="text-xs text-green-600 mt-0.5">Tracking views, scroll depth &amp; engagement from your blog.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setIntelligenceWizardOpen(true)}
+              className="shrink-0 text-xs text-green-700 underline hover:text-green-900"
+            >
+              Manage
+            </button>
+          </div>
+        ) : (
+          <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-5 mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <p className="text-sm font-bold text-indigo-900">Turn your blog into a growth engine</p>
+              <p className="text-xs text-indigo-600 mt-0.5">Track views, scroll depth, and engagement — one script, any platform.</p>
+            </div>
+            <button
+              onClick={() => setIntelligenceWizardOpen(true)}
+              className="shrink-0 flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-indigo-700 transition-colors shadow-sm"
+            >
+              <Zap className="h-3.5 w-3.5" /> Enable Blog Intelligence
+            </button>
+          </div>
+        )}
+
+        {/* Analytics panel — shown when intelligence is enabled */}
+        {intelligenceEnabled && (
+          <BlogAnalyticsPanel accountId={selectedCompanyId} />
         )}
 
         {/* Tabs */}
@@ -647,6 +965,17 @@ export default function BlogsPage() {
                             <Globe className="h-3.5 w-3.5" /> Publish
                           </button>
                         )}
+                        {blog.status === 'published' && (
+                          <a
+                            href={`/company-blog/${blog.slug ?? blog.id}?company_id=${selectedCompanyId}#repurpose`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
+                            title="Repurpose into LinkedIn, Twitter & Email"
+                          >
+                            <Zap className="h-3.5 w-3.5" /> Campaign
+                          </a>
+                        )}
                         <button onClick={() => setDeleteConfirm({ id: blog.id, title: blog.title })} className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -659,6 +988,30 @@ export default function BlogsPage() {
           </div>
         )}
       </div>
+
+      {/* ── BLOG GENERATE MODAL ───────────────────────────────────────────── */}
+      {generateModalOpen && (
+        <BlogGenerateModal
+          companyId={selectedCompanyId}
+          industry={companyIndustry}
+          blogs={blogs.filter(b => b.status === 'published').map(b => ({ id: b.id, title: b.title, slug: b.slug, angle_type: b.angle_type ?? null }))}
+          onClose={() => setGenerateModalOpen(false)}
+          onGenerated={openGenerated}
+        />
+      )}
+
+      {/* ── BLOG INTELLIGENCE WIZARD ──────────────────────────────────────── */}
+      {intelligenceWizardOpen && (
+        <BlogIntelligenceWizard
+          accountId={selectedCompanyId}
+          onClose={() => setIntelligenceWizardOpen(false)}
+          onSuccess={() => {
+            localStorage.setItem(`blog_intelligence_enabled_${selectedCompanyId}`, '1');
+            setIntelligenceEnabled(true);
+            setIntelligenceWizardOpen(false);
+          }}
+        />
+      )}
 
       {/* ── DELETE CONFIRM ───────────────────────────────────────────────── */}
       {deleteConfirm && (

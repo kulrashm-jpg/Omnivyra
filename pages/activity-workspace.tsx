@@ -14,6 +14,7 @@ import { computeVariantIntelligence } from '@/lib/intelligence/executionIntellig
 import PlatformIcon from '@/components/ui/PlatformIcon';
 import ContentRenderer from '@/components/ContentRenderer';
 import RichTextEditor, { htmlToPlainText, markdownToHtml } from '@/components/RichTextEditor';
+import { buildImageQuery, searchImages as searchStockImages } from '@/lib/media/imageService';
 
 type ScheduleItem = {
   id: string;
@@ -87,29 +88,7 @@ function asObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** Build a compact image search query from topic + description. */
-function buildImageQuery(topic: string, description: string): string {
-  const STOPWORDS = new Set([
-    'the','a','an','is','are','was','were','be','been','being','have','has','had',
-    'do','does','did','will','would','could','should','may','might','shall','can',
-    'to','of','in','for','on','with','at','by','from','as','into','through',
-    'but','or','and','not','no','so','yet','if','while','when','where','who',
-    'which','how','this','that','these','those','i','me','my','we','our','you',
-    'your','he','she','it','they','them','their','its','we','about','just','also',
-    'than','then','so','up','out','more','very','what','there','their','all',
-  ]);
-
-  // Extract 2 meaningful keywords from description
-  const descWords = description
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length > 3 && !STOPWORDS.has(w));
-
-  const unique = [...new Set(descWords)].slice(0, 2);
-  const base = topic.trim().slice(0, 50);
-  return unique.length > 0 ? `${base} ${unique.join(' ')}` : base;
-}
+// buildImageQuery is imported from @/lib/media/imageService
 
 /**
  * Strip hashtag blocks baked into generated_content by older pipeline versions.
@@ -140,9 +119,9 @@ function ImagePicker({
   onSelect: (img: { url: string; thumb: string; attribution: string } | null) => void;
   selectedUrl?: string;
 }) {
-  const autoQuery = buildImageQuery(topic, description ?? '');
+  const autoQuery = buildImageQuery({ title: topic, excerpt: description });
   const [query, setQuery] = React.useState(autoQuery);
-  const [results, setResults] = React.useState<Array<{ id: string; thumb: string; full: string; alt: string; attribution: string }>>([]);
+  const [results, setResults] = React.useState<import('@/lib/media/imageService').ImageResult[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [searched, setSearched] = React.useState(false);
@@ -152,11 +131,10 @@ function ImagePicker({
     setLoading(true);
     setError(null);
     try {
-      const res = await apiFetch(`/api/images/search?q=${encodeURIComponent(q.trim())}&per_page=4`);
-      const data = await res.json();
-      if (!res.ok) { setError(data?.error ?? 'Search failed'); return; }
-      setResults(data.results ?? []);
+      const imgs = await searchStockImages({ query: q.trim(), perPage: 4 });
+      setResults(imgs);
       setSearched(true);
+      if (imgs.length === 0) setError(null); // clear stale errors
     } catch {
       setError('Failed to fetch images');
     } finally {

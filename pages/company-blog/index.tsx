@@ -30,24 +30,46 @@ function formatDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+const PAGE_SIZE = 12;
+
 export default function CompanyBlogIndex() {
   const router = useRouter();
   const { company_id } = router.query;
 
-  const [blogs,   setBlogs]   = useState<BlogListing[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState<string | null>(null);
+  const [blogs,    setBlogs]    = useState<BlogListing[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+  const [page,     setPage]     = useState(1);
+  const [hasMore,  setHasMore]  = useState(false);
+
+  const fetchPage = (cid: string, p: number, append: boolean) => {
+    if (p === 1) setLoading(true); else setLoadingMore(true);
+    fetch(`/api/blogs/public?company_id=${encodeURIComponent(cid)}&page=${p}`)
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error('Failed')))
+      .then((d) => {
+        const incoming = Array.isArray(d.blogs) ? d.blogs : [];
+        setBlogs((prev) => append ? [...prev, ...incoming] : incoming);
+        setHasMore(d.pagination?.has_more ?? false);
+      })
+      .catch(() => setError('Could not load blog posts.'))
+      .finally(() => { setLoading(false); setLoadingMore(false); });
+  };
 
   useEffect(() => {
     const cid = typeof company_id === 'string' ? company_id : null;
     if (!cid) return;
-    setLoading(true);
-    fetch(`/api/blogs/public?company_id=${encodeURIComponent(cid)}`)
-      .then((r) => r.ok ? r.json() : Promise.reject(new Error('Failed')))
-      .then((d) => setBlogs(Array.isArray(d.blogs) ? d.blogs : []))
-      .catch(() => setError('Could not load blog posts.'))
-      .finally(() => setLoading(false));
-  }, [company_id]);
+    setPage(1);
+    fetchPage(cid, 1, false);
+  }, [company_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadMore = () => {
+    const cid = typeof company_id === 'string' ? company_id : null;
+    if (!cid || loadingMore) return;
+    const next = page + 1;
+    setPage(next);
+    fetchPage(cid, next, true);
+  };
 
   const featured = blogs.find((b) => b.is_featured) ?? null;
   const rest     = blogs.filter((b) => !b.is_featured);
@@ -147,6 +169,7 @@ export default function CompanyBlogIndex() {
           {!loading && !error && rest.length > 0 && (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
               {rest.map((b) => (
+
                 <Link
                   key={b.id}
                   href={blogUrl(b)}
@@ -187,6 +210,20 @@ export default function CompanyBlogIndex() {
                   </div>
                 </Link>
               ))}
+            </div>
+          )}
+
+          {/* Load more */}
+          {!loading && !error && hasMore && (
+            <div className="mt-10 flex justify-center">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-6 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors shadow-sm"
+              >
+                {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {loadingMore ? 'Loading…' : 'Load more'}
+              </button>
             </div>
           )}
 

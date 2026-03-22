@@ -423,6 +423,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ── 4b. Grant credits via creditExecutionService (idempotent) ─────────────
     if (orgId) {
+      // Ensure organization_credits row exists — apply_credit_reservation raises
+      // 'no_credit_account' if the row is missing, so we upsert it first.
+      await supabase.from('organization_credits').upsert({
+        organization_id:   orgId,
+        free_balance:      0,
+        paid_balance:      0,
+        incentive_balance: 0,
+        lifetime_purchased: 0,
+        lifetime_consumed:  0,
+        credit_rate_usd:   0.001,
+      }, { onConflict: 'organization_id', ignoreDuplicates: true });
+
       try {
         await createCredit({
           orgId,

@@ -21,7 +21,7 @@ import { extractFeatures, type FeatureInput, type FeatureVector } from './predic
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 import { generatePerformanceInsights } from './performanceInsightGenerator';
 import { getPredictionConfig } from './configService';
-import { deductCredits } from './creditDeductionService';
+import { deductCreditsAwaited as deductCredits } from './creditExecutionService';
 import type { StrategyContext } from '../types/campaignPlanning';
 
 // ─────────────────────────────────────────────────────────────────────────────

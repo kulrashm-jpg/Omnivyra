@@ -442,7 +442,7 @@ async function runSchedulerCycle() {
     lastSignalClusteringRun = Date.now();
     try {
       const result = await runSignalClustering();
-      if (result.signals_processed > 0) {
+      if (!('skipped' in result) && result.signals_processed > 0) {
         console.log(
           `✅ Signal clustering: ${result.signals_processed} signals, ` +
             `${result.clusters_created} created, ${result.clusters_updated} updated`
@@ -458,7 +458,7 @@ async function runSchedulerCycle() {
     lastSignalIntelligenceRun = Date.now();
     try {
       const result = await runSignalIntelligenceEngine();
-      if (result.clusters_processed > 0) {
+      if (!('skipped' in result) && result.clusters_processed > 0) {
         console.log(
           `✅ Signal intelligence: ${result.clusters_processed} clusters, ${result.records_upserted} records`
         );
@@ -473,7 +473,7 @@ async function runSchedulerCycle() {
     lastStrategicThemeRun = Date.now();
     try {
       const result = await runStrategicThemeEngine();
-      if (result.themes_created > 0) {
+      if (!('skipped' in result) && result.themes_created > 0) {
         console.log(
           `✅ Strategic themes: ${result.themes_created} created, ${result.themes_skipped} skipped`
         );
@@ -488,7 +488,7 @@ async function runSchedulerCycle() {
     lastCampaignOpportunityRun = Date.now();
     try {
       const result = await runCampaignOpportunityEngine();
-      if (result.opportunities_created > 0) {
+      if (!('skipped' in result) && result.opportunities_created > 0) {
         console.log(
           `✅ Campaign opportunities: ${result.opportunities_created} created (${result.themes_processed} themes)`
         );
@@ -503,7 +503,7 @@ async function runSchedulerCycle() {
     lastContentOpportunityRun = Date.now();
     try {
       const result = await runContentOpportunityEngine();
-      if (result.opportunities_created > 0) {
+      if (!('skipped' in result) && result.opportunities_created > 0) {
         console.log(
           `✅ Content opportunities: ${result.opportunities_created} created (${result.themes_processed} themes)`
         );
@@ -518,7 +518,7 @@ async function runSchedulerCycle() {
     lastNarrativeEngineRun = Date.now();
     try {
       const result = await runNarrativeEngine();
-      if (result.narratives_created > 0) {
+      if (!('skipped' in result) && result.narratives_created > 0) {
         console.log(
           `✅ Campaign narratives: ${result.narratives_created} created (${result.opportunities_processed} opportunities)`
         );
@@ -533,7 +533,7 @@ async function runSchedulerCycle() {
     lastCommunityPostRun = Date.now();
     try {
       const result = await runCommunityPostEngine();
-      if (result.posts_created > 0) {
+      if (!('skipped' in result) && result.posts_created > 0) {
         console.log(
           `✅ Community posts: ${result.posts_created} created (${result.narratives_processed} narratives)`
         );
@@ -548,7 +548,7 @@ async function runSchedulerCycle() {
     lastThreadEngineRun = Date.now();
     try {
       const result = await runThreadEngine();
-      if (result.threads_created > 0) {
+      if (!('skipped' in result) && result.threads_created > 0) {
         console.log(
           `✅ Community threads: ${result.threads_created} created (${result.posts_processed} posts)`
         );
@@ -563,7 +563,7 @@ async function runSchedulerCycle() {
     lastEngagementCaptureRun = Date.now();
     try {
       const result = await runEngagementCapture();
-      if (result.signals_created > 0) {
+      if (!('skipped' in result) && result.signals_created > 0) {
         console.log(
           `✅ Engagement capture: ${result.signals_created} signals (${result.posts_processed} posts)`
         );
@@ -578,7 +578,7 @@ async function runSchedulerCycle() {
     lastFeedbackIntelligenceRun = Date.now();
     try {
       const result = await runFeedbackIntelligenceEngine();
-      if (result.insights_created > 0) {
+      if (!('skipped' in result) && result.insights_created > 0) {
         console.log(
           `✅ Feedback intelligence: ${result.insights_created} insights (${result.signals_analyzed} signals)`
         );

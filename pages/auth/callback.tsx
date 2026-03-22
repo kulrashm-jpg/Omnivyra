@@ -4,16 +4,32 @@
  * /auth/callback
  *
  * Handles Supabase magic-link PKCE code exchange.
- * The magic link redirects here with ?code=xxx.
- * We exchange it for a session then always forward to /onboarding/verify-phone.
+ * After exchanging the code for a session, asks the server where to route the user:
  *
- * This page is the single, reliable entry point for email magic links.
- * It must never redirect directly to /dashboard — phone verification is required.
+ *   existing user               → /dashboard  (email auth is sufficient)
+ *   new user / no phone         → /onboarding/phone
+ *   new user completing flow    → /onboarding/verify-phone
+ *   company admin (suspicious)  → /onboarding/verify-phone
+ *   has phone but no company    → /onboarding/company
  */
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { supabase } from '../../utils/supabaseClient';
+
+async function resolveRoute(accessToken: string): Promise<string> {
+  try {
+    const res = await fetch('/api/auth/post-login-route', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.ok) {
+      const { route } = await res.json() as { route: string };
+      return route ?? '/dashboard';
+    }
+  } catch { /* fall through */ }
+  // On any error, fall back to dashboard (session is valid, let the page guard handle it)
+  return '/dashboard';
+}
 
 export default function AuthCallback() {
   const router = useRouter();
@@ -22,20 +38,19 @@ export default function AuthCallback() {
     const code = new URLSearchParams(window.location.search).get('code');
 
     if (code) {
-      // Explicitly exchange the PKCE code — more reliable than waiting for
-      // onAuthStateChange which can miss the event on Fast Refresh or remount.
-      supabase.auth.exchangeCodeForSession(code).then(({ data, error }) => {
+      supabase.auth.exchangeCodeForSession(code).then(async ({ data, error }) => {
         if (error || !data.session) {
           router.replace('/login');
           return;
         }
-        router.replace('/onboarding/verify-phone');
+        const route = await resolveRoute(data.session.access_token);
+        router.replace(route);
       });
     } else {
-      // No code in URL — check if already signed in (e.g. navigated back)
-      supabase.auth.getSession().then(({ data }) => {
+      supabase.auth.getSession().then(async ({ data }) => {
         if (data.session) {
-          router.replace('/onboarding/verify-phone');
+          const route = await resolveRoute(data.session.access_token);
+          router.replace(route);
         } else {
           router.replace('/login');
         }

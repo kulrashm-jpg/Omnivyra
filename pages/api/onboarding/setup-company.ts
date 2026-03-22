@@ -23,6 +23,7 @@ import { createCredit, makeIdempotencyKey } from '../../../backend/services/cred
 
 type Result =
   | { companyId: string; selfJoined?: boolean; matchedCompanyName?: string }
+  | { companyExists: true; matchedCompanyId: string; matchedCompanyName: string }
   | { code: string; error: string; limit?: number; current?: number | null }
   | { error: string };
 
@@ -190,10 +191,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     });
 
     if (matched) {
-      // User's company already exists — add them as CONTENT_CREATOR (self-joined)
-      const now = new Date().toISOString();
+      // Company already exists — do NOT auto-join. Return a signal so the
+      // onboarding UI can prompt the user to request access from the admin.
 
-      // Idempotent: skip if already a member
+      // Idempotent: if the user is already a member just let them through
       const { data: existingRole } = await supabase
         .from('user_company_roles')
         .select('id')
@@ -201,42 +202,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         .eq('company_id', matched.company_id)
         .maybeSingle();
 
-      if (!existingRole) {
-        const { error: roleErr } = await supabase.from('user_company_roles').insert({
-          user_id:     user.id,
-          company_id:  matched.company_id,
-          role:        'CONTENT_CREATOR',
-          status:      'active',
-          join_source: 'self_joined',
-          created_at:  now,
-          updated_at:  now,
-          invited_at:  now,
-        });
-        if (roleErr) throw roleErr;
-      }
-
-      // Update free_credit_profiles with the org_id
-      await supabase
-        .from('free_credit_profiles')
-        .update({ organization_id: matched.company_id, updated_at: now })
-        .eq('user_id', user.id);
-
-      // Notify all company admins (non-fatal)
-      try {
-        await notifyCompanyAdminsOfSelfJoin({
-          companyId: matched.company_id,
-          companyName: matched.company_name,
-          newUserId: user.id,
-          newUserEmail: user.email ?? null,
-          matchType: matched.match_type,
-        });
-      } catch (notifyErr: any) {
-        console.warn('[setup-company] admin notification failed:', notifyErr?.message);
+      if (existingRole) {
+        // Already a member — go straight to dashboard
+        return res.status(200).json({ companyId: matched.company_id });
       }
 
       return res.status(200).json({
-        companyId: matched.company_id,
-        selfJoined: true,
+        companyExists:      true,
+        matchedCompanyId:   matched.company_id,
         matchedCompanyName: matched.company_name,
       });
     }

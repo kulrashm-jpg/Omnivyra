@@ -11,7 +11,7 @@
 
 import OpenAI from 'openai';
 import type { SentimentLabel } from './engagementIngestService';
-import { deductCredits } from './creditDeductionService';
+import { deductCreditsAwaited as deductCredits } from './creditExecutionService';
 
 const getClient = (): OpenAI => new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 

@@ -327,7 +327,7 @@ const GOAL_LABELS: Record<string, string> = {
 
 const PATTERN_TYPE_LABELS: Record<string, string> = {
   topic_strength: 'Topic Strength', goal_affinity: 'Goal Affinity',
-  volatility: 'Volatility', momentum: 'Momentum',
+  volatility: 'Volatility', momentum: 'Momentum', source_pattern: 'Content Source',
 };
 
 function scoreColour(s: number | null) {
@@ -614,9 +614,11 @@ function ContentPerformanceSection({ data }: { data: Snapshot['content_performan
 // ─────────────────────────────────────────────────────────────────────────────
 
 function StrategicIntelligenceSection({ data }: { data: Snapshot['strategic_intelligence'] }) {
-  const nonMomentum = data.patterns.filter((p) => p.type !== 'momentum');
-  const momentum    = data.patterns.find((p) => p.type === 'momentum');
-  const isUp        = momentum?.pattern.toLowerCase().includes('upward');
+  const nonMomentum    = data.patterns.filter((p) => p.type !== 'momentum' && p.type !== 'source_pattern');
+  const momentum       = data.patterns.find((p) => p.type === 'momentum');
+  const sourcePattern  = data.patterns.find((p) => p.type === 'source_pattern');
+  const isUp           = momentum?.pattern.toLowerCase().includes('upward');
+  const companyWins    = sourcePattern?.recommendation.toLowerCase().includes('proprietary');
 
   if (data.campaigns_analyzed === 0) {
     return <SectionCard sectionKey="strategic_intelligence" title="Strategic Intelligence"><p className="text-sm text-gray-400">Need at least 3 evaluated campaigns to surface patterns.</p></SectionCard>;
@@ -642,6 +644,22 @@ function StrategicIntelligenceSection({ data }: { data: Snapshot['strategic_inte
           </div>
         </div>
       )}
+      {/* Content Source Performance micro-section */}
+      {sourcePattern && (
+        <div className={`mb-4 rounded-xl border px-4 py-3 ${companyWins ? 'border-blue-100 bg-blue-50' : 'border-purple-100 bg-purple-50'}`}>
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className={`text-[10px] font-bold uppercase tracking-widest ${companyWins ? 'text-blue-500' : 'text-purple-500'}`}>
+              Content Source Performance
+            </span>
+            <span className={`ml-auto text-[10px] font-semibold ${sourcePattern.confidence === 'high' ? 'text-emerald-600' : 'text-blue-600'}`}>
+              {sourcePattern.confidence} confidence · {sourcePattern.evidence_count} campaigns
+            </span>
+          </div>
+          <p className={`text-xs font-medium leading-relaxed ${companyWins ? 'text-blue-800' : 'text-purple-800'}`}>{sourcePattern.pattern}</p>
+          <p className="mt-1 text-[11px] text-gray-500">→ {sourcePattern.recommendation}</p>
+        </div>
+      )}
+
       <div className="space-y-3">
         {nonMomentum.map((p, i) => (
           <div key={i} className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
@@ -655,7 +673,7 @@ function StrategicIntelligenceSection({ data }: { data: Snapshot['strategic_inte
             <p className="mt-1 text-[11px] text-gray-500">→ {p.recommendation}</p>
           </div>
         ))}
-        {nonMomentum.length === 0 && !momentum && (
+        {nonMomentum.length === 0 && !momentum && !sourcePattern && (
           <p className="text-sm text-gray-400">No patterns detected — more campaign data required.</p>
         )}
       </div>
@@ -790,6 +808,7 @@ function StrategicMemorySection({ data }: { data: Snapshot['strategic_memory'] }
   const bestGoalHref   = data.best_performing_goal
     ? `/recommendations?goal=${encodeURIComponent(data.best_performing_goal)}`
     : '/recommendations';
+  const sourceMemory   = data.patterns?.find((p) => p.type === 'source_pattern');
 
   return (
     <SectionCard
@@ -812,6 +831,13 @@ function StrategicMemorySection({ data }: { data: Snapshot['strategic_memory'] }
           <p className="text-[10px] text-gray-400">Best goal</p>
         </div>
       </div>
+
+      {sourceMemory && (
+        <div className="mb-5 rounded-xl border border-[#0A66C2]/20 bg-blue-50 px-4 py-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[#0A66C2] mb-1">Content Source Insight</p>
+          <p className="text-xs text-blue-800 leading-relaxed">{sourceMemory.pattern}</p>
+        </div>
+      )}
 
       {totalDecisions > 0 && (
         <div>

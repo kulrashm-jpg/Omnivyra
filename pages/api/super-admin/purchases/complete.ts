@@ -93,10 +93,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const result = await completePurchase(purchase_id, reference_id);
 
   if (!result.success) {
-    const statusCode = result.reason === 'not_found' ? 404
-                     : result.reason === 'already_failed' ? 409
+    const failResult = result as Extract<typeof result, { success: false }>;
+    const statusCode = failResult.reason === 'not_found' ? 404
+                     : failResult.reason === 'already_failed' ? 409
                      : 500;
-    return res.status(statusCode).json({ error: result.reason, detail: (result as any).detail });
+    return res.status(statusCode).json({ error: failResult.reason, detail: failResult.detail });
   }
 
   return res.status(200).json({
