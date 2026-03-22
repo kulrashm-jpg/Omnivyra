@@ -40,6 +40,11 @@ const NO_CACHE_OPS = new Set([
   'responseGeneration',
   'parseRefinedDay',
   'parsePlatformCustomization',
+  // Profile refinement is user-triggered — must always run fresh so changes
+  // to website, social profiles, or other digital assets are picked up.
+  'profileEnrichment',
+  'profileExtraction',
+  'refineProblemTransformation',
 ]);
 
 // ── Cache TTL (seconds) per operation ────────────────────────────────────────
@@ -61,9 +66,7 @@ const OPERATION_TTL: Record<string, number> = {
   generateCampaignRecommendations:   21_600,
   generateAdditionalStrategicThemes: 21_600,
   generateContentIdeas:              21_600,
-  profileEnrichment:                 86_400,
-  profileExtraction:                 86_400,
-  refineProblemTransformation:       86_400,
+  // profileEnrichment, profileExtraction, refineProblemTransformation are in NO_CACHE_OPS
 };
 
 const DEFAULT_TTL = 3_600;

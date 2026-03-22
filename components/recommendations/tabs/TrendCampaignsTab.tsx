@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom';
+import {
+  CampaignAssistPanel,
+  EMPTY_ASSIST_CONTEXT,
+  type AssistContext,
+} from '../../campaigns/CampaignAssistPanel';
 import { useRouter } from 'next/router';
 import { v4 as uuidv4 } from 'uuid';
 import type { OpportunityTabProps } from './types';
@@ -359,7 +364,7 @@ function StrategicFlowSummary(props: { state: StrategicFlowState }) {
 import type { StrategyStatusPayload } from '../../strategy/StrategyIntelligencePanel';
 
 export default function TrendCampaignsTab(props: OpportunityTabProps) {
-  const { companyId, regions, engineRecommendations, fetchWithAuth, strategicIntents, onStrategicIntentsChange, viewMode, campaignId } = props;
+  const { companyId, regions, engineRecommendations, fetchWithAuth, strategicIntents, onStrategicIntentsChange, viewMode, campaignId, initialBlogId } = props;
   const router = useRouter();
   const [hasRun, setHasRun] = useState(false);
   const [contextMode, setContextMode] = useState<ContextMode>('FULL');
@@ -425,6 +430,62 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [boltProgress, setBoltProgress] = useState<BOLTProgress | null>(null);
   /** Per-card error when "Start this campaign" / "Build Campaign Blueprint" fails (shown on the card, not near Generate Themes). */
   const [cardBuildError, setCardBuildError] = useState<Record<string, string>>({});
+
+  // ── Campaign Assist Panel ─────────────────────────────────────────────────
+  const [assistPanelOpen,  setAssistPanelOpen]  = useState(false);
+  const [assistTopic,      setAssistTopic]      = useState('');
+  // Resolver for the Promise returned by openAssistPanel()
+  const assistResolverRef  = useRef<((ctx: AssistContext) => void) | null>(null);
+  // Tracks whether the blog-prefill auto-open has already fired for the current initialBlogId
+  const blogPrefillFiredRef = useRef<string | null>(null);
+  // Context pre-set by the standalone (blog-flow) panel open — consumed by next openAssistPanel() call
+  const pendingAssistContextRef = useRef<AssistContext | null>(null);
+
+  // Auto-open assist panel when arriving from blog → campaign flow
+  useEffect(() => {
+    if (!initialBlogId || blogPrefillFiredRef.current === initialBlogId) return;
+    blogPrefillFiredRef.current = initialBlogId;
+    assistResolverRef.current = null; // standalone mode — no pending promise
+    setAssistTopic('');
+    setAssistPanelOpen(true);
+  }, [initialBlogId]);
+
+  /** Opens the assist panel and resolves with the user's context choice.
+   *  If the user pre-set context via the blog-flow panel, returns it immediately. */
+  const openAssistPanel = (topic: string): Promise<AssistContext> => {
+    if (pendingAssistContextRef.current) {
+      const ctx = pendingAssistContextRef.current;
+      pendingAssistContextRef.current = null;
+      return Promise.resolve(ctx);
+    }
+    return new Promise((resolve) => {
+      assistResolverRef.current = resolve;
+      setAssistTopic(topic);
+      setAssistPanelOpen(true);
+    });
+  };
+
+  const handleAssistConfirm = (ctx: AssistContext) => {
+    if (assistResolverRef.current) {
+      // Normal flow — resume the awaiting campaign action
+      assistResolverRef.current(ctx);
+      assistResolverRef.current = null;
+    } else {
+      // Standalone (blog-flow) mode — stash context for the next campaign action
+      pendingAssistContextRef.current = ctx;
+    }
+    setAssistPanelOpen(false);
+  };
+
+  /** "Skip for now" — resolve with empty context so existing flow proceeds unchanged. */
+  const handleAssistSkip = () => {
+    assistResolverRef.current?.(EMPTY_ASSIST_CONTEXT);
+    assistResolverRef.current = null;
+    pendingAssistContextRef.current = null;
+    setAssistPanelOpen(false);
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
   const isMountedRef = useRef(true);
   useEffect(() => {
     return () => {
@@ -2142,6 +2203,13 @@ Generate strategic campaign pillars to capture this demand.`;
                       setValidationError(null);
                       setCardBuildError((prev) => ({ ...prev, [card.id]: '' }));
                       const recommendation = card.recommendation ?? {};
+
+                      // ── Campaign Assist Panel interception ──────────────
+                      const recTopic =
+                        (typeof recommendation.polished_title === 'string' ? recommendation.polished_title : null) ??
+                        (typeof recommendation.topic === 'string' ? recommendation.topic : '');
+                      const assistCtx = await openAssistPanel(recTopic);
+                      // ────────────────────────────────────────────────────
                       const title =
                         (typeof recommendation.polished_title === 'string'
                           ? recommendation.polished_title
@@ -2230,6 +2298,11 @@ Generate strategic campaign pillars to capture this demand.`;
                                 source_recommendation_id: recId || null,
                                 source_strategic_theme: sourceStrategicTheme,
                                 execution_config: executionConfigPayload,
+                                // Campaign Assist context (null when user skipped)
+                                blog_context:    assistCtx.blog_context    ?? null,
+                                insight_context: assistCtx.insight_context ?? null,
+                                topic_context:   assistCtx.topic_context   ?? null,
+                                ai_assist:       assistCtx.ai_assist,
                               }),
                             }
                           );
@@ -2245,6 +2318,14 @@ Generate strategic campaign pillars to capture this demand.`;
                           const recIdForPlanner = recId || (typeof card.id === 'string' ? card.id : '');
                           const qs = new URLSearchParams({ companyId });
                           if (recIdForPlanner) qs.set('recommendationId', recIdForPlanner);
+                          // Persist assist context for campaign-planner to consume
+                          try {
+                            if (assistCtx.blog_context || assistCtx.insight_context || assistCtx.topic_context) {
+                              sessionStorage.setItem('campaign_assist_context', JSON.stringify(assistCtx));
+                            } else {
+                              sessionStorage.removeItem('campaign_assist_context');
+                            }
+                          } catch {}
                           router.push(`/campaign-planner?${qs.toString()}`);
                           return;
                         }
@@ -2271,6 +2352,15 @@ Generate strategic campaign pillars to capture this demand.`;
                         setValidationError('Select a company first.');
                         return;
                       }
+
+                      // ── Campaign Assist Panel interception ──────────────
+                      const boltRec = card.recommendation ?? {};
+                      const boltTopic =
+                        (typeof boltRec.polished_title === 'string' ? boltRec.polished_title : null) ??
+                        (typeof boltRec.topic === 'string' ? boltRec.topic : '');
+                      const assistCtx = await openAssistPanel(boltTopic);
+                      // ────────────────────────────────────────────────────
+
                       setValidationError(null);
                       setCardBuildError((prev) => ({ ...prev, [card.id]: '' }));
                       const recommendation = card.recommendation ?? {};
@@ -2368,6 +2458,11 @@ Generate strategic campaign pillars to capture this demand.`;
                               description,
                               sourceOpportunityId,
                               regionsFromCard,
+                              // Campaign Assist context (null when user skipped)
+                              blog_context:    assistCtx.blog_context    ?? null,
+                              insight_context: assistCtx.insight_context ?? null,
+                              topic_context:   assistCtx.topic_context   ?? null,
+                              ai_assist:       assistCtx.ai_assist,
                             }),
                           });
                         } finally {
@@ -2531,6 +2626,13 @@ Generate strategic campaign pillars to capture this demand.`;
             </div>
           )}
           <BOLTProgressModal open={fastLoadingCardId !== null} progress={boltProgress} />
+          <CampaignAssistPanel
+            open={assistPanelOpen}
+            onClose={handleAssistSkip}
+            onConfirm={handleAssistConfirm}
+            recommendationTopic={assistTopic}
+            initialBlogId={initialBlogId ?? undefined}
+          />
           {jobId && (
             <EngineJobStatusPanel
               createdAt={(polledJob as { created_at?: string } | null)?.created_at}

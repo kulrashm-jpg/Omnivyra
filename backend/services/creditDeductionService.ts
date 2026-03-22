@@ -1,20 +1,23 @@
 /**
- * Credit Deduction Service
+ * Credit Deduction Service — Utilities Only
  *
- * Core principle: credits reflect compute cost + perceived value, not raw tokens.
+ * This file provides:
+ *   - CreditAction type and CREDIT_COSTS map (hardcoded fallback)
+ *   - getCreditCost()       — DB-first cost lookup with hardcoded fallback
+ *   - hasEnoughCredits()    — balance pre-check (reads category wallets)
+ *   - wasRecentlyRun()      — smart-mode dedup window check
+ *   - estimateCreditCost()  — cost estimation for UI display
+ *   - getCreditCostTiers()  — grouped tier structure for pricing UI
+ *   - hasFreeCreditAccess() — domain eligibility gate
+ *   - SMART_MODE_DEDUP_SECONDS — per-action dedup windows
  *
- * Two modes:
- *  - deductCredits()         → immediate deduction (known-value actions)
- *  - deductCreditsIfValue()  → value-gated (background jobs: charge only when insight found)
- *
- * Smart Mode (default ON):
- *  - Skips redundant scans run within the dedup window
- *  - Batches multiple small actions where possible
- *  - Returns { skipped: true } so callers can reuse cached output
+ * ALL credit mutations go through creditExecutionService.
+ * This file MUST NOT call any credit-mutating RPC or insert any rows.
  */
 
 import { supabase } from '../db/supabaseClient';
 import { checkDomainEligibility } from './domainEligibilityService';
+import { getTotalAvailable } from './creditPriorityService';
 
 // ── Credit cost map ───────────────────────────────────────────────────────────
 
@@ -98,8 +101,9 @@ export async function getCreditCost(action: CreditAction): Promise<number> {
   return CREDIT_COSTS[action];
 }
 
-// Smart Mode dedup windows (seconds) — skip re-running same action within window
-const SMART_MODE_DEDUP_SECONDS: Partial<Record<CreditAction, number>> = {
+// ── Smart Mode dedup windows (seconds) ────────────────────────────────────────
+// Skip re-running the same background action within this window.
+export const SMART_MODE_DEDUP_SECONDS: Partial<Record<CreditAction, number>> = {
   daily_insight_scan:    86_400, // 24 h
   trend_analysis:        3_600,  // 1 h
   lead_detection:        21_600, // 6 h
@@ -125,55 +129,14 @@ export type DeductResult =
   | { success: false; reason: 'insufficient_credits' | 'no_credit_account' | 'error'; detail?: string }
   | { success: true; skipped: true; reason: 'smart_mode_dedup'; detail?: undefined };
 
-// ── Core helpers ──────────────────────────────────────────────────────────────
-
-async function getCreditBalance(orgId: string): Promise<number | null> {
-  const { data } = await supabase
-    .from('organization_credits')
-    .select('balance_credits')
-    .eq('organization_id', orgId)
-    .maybeSingle();
-  return data?.balance_credits ?? null;
-}
-
-async function applyDeduction(
-  orgId: string,
-  action: CreditAction,
-  credits: number,
-  opts: DeductOptions,
-): Promise<DeductResult> {
-  const balance = await getCreditBalance(orgId);
-
-  if (balance === null) {
-    return { success: false, reason: 'no_credit_account' };
-  }
-  if (balance < credits) {
-    return { success: false, reason: 'insufficient_credits', detail: `Need ${credits}, have ${balance}` };
-  }
-
-  const { error } = await supabase.rpc('apply_credit_transaction', {
-    p_organization_id:  orgId,
-    p_transaction_type: 'deduction',
-    p_credits_delta:    -credits,
-    p_usd_equivalent:   null,
-    p_reference_type:   action,
-    p_reference_id:     opts.campaignId ?? null,
-    p_note:             opts.note ?? action.replace(/_/g, ' '),
-    p_performed_by:     opts.userId ?? null,
-  });
-
-  if (error) {
-    console.error('[creditDeduction] rpc failed', error.message);
-    return { success: false, reason: 'error', detail: error.message };
-  }
-
-  const balanceAfter = balance - credits;
-  return { success: true, creditsCharged: credits, balanceAfter };
-}
-
 // ── Smart Mode dedup check ────────────────────────────────────────────────────
 
-async function wasRecentlyRun(
+/**
+ * Returns true if this action was charged (CONFIRM phase) for this org
+ * within the last `windowSeconds` seconds.
+ * Reads from credit_transactions — no writes.
+ */
+export async function wasRecentlyRun(
   orgId: string,
   action: CreditAction,
   windowSeconds: number,
@@ -184,76 +147,18 @@ async function wasRecentlyRun(
     .select('id')
     .eq('organization_id', orgId)
     .eq('reference_type', action)
+    .eq('execution_phase', 'confirm')
     .gt('created_at', since)
     .limit(1)
     .maybeSingle();
   return !!data;
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
-
-/**
- * Deduct credits for a known-value action immediately.
- * Respects Smart Mode dedup: if the same action ran recently, returns skipped.
- *
- * @param orgId         Organization ID
- * @param action        Credit action key
- * @param opts          Optional: userId, multiplier, note, metadata
- * @param smartMode     Default true — skip duplicate scans within window
- */
-export async function deductCredits(
-  orgId: string,
-  action: CreditAction,
-  opts: DeductOptions = {},
-  smartMode = true,
-): Promise<DeductResult> {
-  try {
-    // Smart Mode dedup
-    if (smartMode) {
-      const dedupWindow = SMART_MODE_DEDUP_SECONDS[action];
-      if (dedupWindow && await wasRecentlyRun(orgId, action, dedupWindow)) {
-        return { success: true, skipped: true, reason: 'smart_mode_dedup' };
-      }
-    }
-
-    const baseCost = CREDIT_COSTS[action];
-    const credits = Math.round(baseCost * (opts.multiplier ?? 1));
-
-    return applyDeduction(orgId, action, credits, opts);
-  } catch (err: any) {
-    console.error('[creditDeduction] unexpected error', err?.message);
-    return { success: false, reason: 'error', detail: err?.message };
-  }
-}
-
-/**
- * Value-gated deduction for background jobs.
- * Only charges credits when `valueFound` is true.
- *
- * Usage:
- *   const insights = await runDailyScan(org);
- *   const result = await deductCreditsIfValue(orgId, 'daily_insight_scan', insights.length > 0);
- *
- * @param orgId       Organization ID
- * @param action      Credit action key
- * @param valueFound  Only deduct if true (insight/lead/recommendation found)
- * @param opts        Optional metadata
- */
-export async function deductCreditsIfValue(
-  orgId: string,
-  action: CreditAction,
-  valueFound: boolean,
-  opts: DeductOptions = {},
-): Promise<DeductResult & { valueFound: boolean }> {
-  if (!valueFound) {
-    return { success: true, skipped: true, reason: 'smart_mode_dedup', valueFound: false };
-  }
-  const result = await deductCredits(orgId, action, opts, false); // no dedup for value-gated
-  return { ...result, valueFound: true };
-}
+// ── Balance check (no mutation) ───────────────────────────────────────────────
 
 /**
  * Check if an org has enough credits for an action without deducting.
+ * Reads category wallets (free + incentive + paid, minus reservations).
  * Use before starting expensive operations.
  */
 export async function hasEnoughCredits(
@@ -262,12 +167,15 @@ export async function hasEnoughCredits(
   multiplier = 1,
 ): Promise<{ sufficient: boolean; balance: number | null; required: number }> {
   const required = Math.round(CREDIT_COSTS[action] * multiplier);
-  const balance = await getCreditBalance(orgId);
+  const balance = await getTotalAvailable(orgId);
   return { sufficient: (balance ?? 0) >= required, balance, required };
 }
 
+// ── Cost estimation (pure, no DB) ─────────────────────────────────────────────
+
 /**
  * Calculate credit cost for display (e.g. voice: cost × minutes).
+ * Pure function — no DB access.
  */
 export function estimateCreditCost(action: CreditAction, multiplier = 1): number {
   return Math.round(CREDIT_COSTS[action] * multiplier);
@@ -275,6 +183,7 @@ export function estimateCreditCost(action: CreditAction, multiplier = 1): number
 
 /**
  * Returns all action costs grouped by tier for display in UI.
+ * Pure function — no DB access.
  */
 export function getCreditCostTiers() {
   return {
@@ -282,20 +191,20 @@ export function getCreditCostTiers() {
       label: 'Low — frequent actions',
       color: 'emerald',
       actions: [
-        { action: 'ai_reply'       as CreditAction, label: 'AI reply suggestion',   credits: CREDIT_COSTS.ai_reply },
-        { action: 'auto_post'      as CreditAction, label: 'Social auto-post',       credits: CREDIT_COSTS.auto_post },
-        { action: 'content_rewrite'as CreditAction, label: 'Content rewrite',        credits: CREDIT_COSTS.content_rewrite },
-        { action: 'content_basic'  as CreditAction, label: 'Basic content generation', credits: CREDIT_COSTS.content_basic },
+        { action: 'ai_reply'       as CreditAction, label: 'AI reply suggestion',      credits: CREDIT_COSTS.ai_reply },
+        { action: 'auto_post'      as CreditAction, label: 'Social auto-post',          credits: CREDIT_COSTS.auto_post },
+        { action: 'content_rewrite'as CreditAction, label: 'Content rewrite',           credits: CREDIT_COSTS.content_rewrite },
+        { action: 'content_basic'  as CreditAction, label: 'Basic content generation',  credits: CREDIT_COSTS.content_basic },
       ],
     },
     medium: {
       label: 'Medium — value actions',
       color: 'blue',
       actions: [
-        { action: 'trend_analysis'      as CreditAction, label: 'Trend analysis',           credits: CREDIT_COSTS.trend_analysis },
-        { action: 'market_insight_manual' as CreditAction, label: 'Market insight (manual)', credits: CREDIT_COSTS.market_insight_manual },
-        { action: 'campaign_creation'   as CreditAction, label: 'Campaign creation',         credits: CREDIT_COSTS.campaign_creation },
-        { action: 'website_audit'       as CreditAction, label: 'Website audit',             credits: CREDIT_COSTS.website_audit },
+        { action: 'trend_analysis'        as CreditAction, label: 'Trend analysis',            credits: CREDIT_COSTS.trend_analysis },
+        { action: 'market_insight_manual' as CreditAction, label: 'Market insight (manual)',   credits: CREDIT_COSTS.market_insight_manual },
+        { action: 'campaign_creation'     as CreditAction, label: 'Campaign creation',          credits: CREDIT_COSTS.campaign_creation },
+        { action: 'website_audit'         as CreditAction, label: 'Website audit',              credits: CREDIT_COSTS.website_audit },
       ],
     },
     high: {
@@ -303,18 +212,18 @@ export function getCreditCostTiers() {
       color: 'amber',
       note: 'Charged only when actionable output is found',
       actions: [
-        { action: 'lead_detection'       as CreditAction, label: 'Lead signal detection',       credits: CREDIT_COSTS.lead_detection },
-        { action: 'daily_insight_scan'   as CreditAction, label: 'Daily insight scan',          credits: CREDIT_COSTS.daily_insight_scan },
-        { action: 'campaign_optimization'as CreditAction, label: 'Campaign optimisation scan',  credits: CREDIT_COSTS.campaign_optimization },
+        { action: 'lead_detection'        as CreditAction, label: 'Lead signal detection',       credits: CREDIT_COSTS.lead_detection },
+        { action: 'daily_insight_scan'    as CreditAction, label: 'Daily insight scan',           credits: CREDIT_COSTS.daily_insight_scan },
+        { action: 'campaign_optimization' as CreditAction, label: 'Campaign optimisation scan',   credits: CREDIT_COSTS.campaign_optimization },
       ],
     },
     heavy: {
       label: 'Heavy — LLM / voice / multi-step',
       color: 'violet',
       actions: [
-        { action: 'voice_per_minute' as CreditAction, label: 'Voice interaction',          credits: CREDIT_COSTS.voice_per_minute, unit: '/min' },
-        { action: 'deep_analysis'    as CreditAction, label: 'Deep multi-step analysis',   credits: CREDIT_COSTS.deep_analysis },
-        { action: 'full_strategy'    as CreditAction, label: 'Full campaign strategy',     credits: CREDIT_COSTS.full_strategy },
+        { action: 'voice_per_minute' as CreditAction, label: 'Voice interaction',         credits: CREDIT_COSTS.voice_per_minute, unit: '/min' },
+        { action: 'deep_analysis'    as CreditAction, label: 'Deep multi-step analysis',  credits: CREDIT_COSTS.deep_analysis },
+        { action: 'full_strategy'    as CreditAction, label: 'Full campaign strategy',    credits: CREDIT_COSTS.full_strategy },
       ],
     },
   };
@@ -333,7 +242,6 @@ export async function hasFreeCreditAccess(userId: string): Promise<{
   status: 'eligible' | 'pending_review' | 'blocked';
   reason: string;
 }> {
-  // Fetch user email from Supabase auth
   const { data: { user }, error } = await supabase.auth.admin.getUserById(userId);
   if (error || !user?.email) {
     return { allowed: false, status: 'blocked', reason: 'user_not_found' };

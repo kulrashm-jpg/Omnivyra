@@ -53,6 +53,22 @@ export interface PlanningGenerationInput {
     performance_insights?: import('../lib/performance/performanceAnalyzer').PerformanceInsight | null;
     captured_at?: string | null;
   } | null;
+  /** Blog posts selected by user in Campaign Assist Panel — used to anchor narrative and topics. */
+  blog_context?: {
+    blogs: {
+      title: string;
+      summary: string;
+      key_insights: string[];
+      tags: string[];
+      headings: string[];
+    }[];
+  } | null;
+  /** Manual insights curated by user in Campaign Assist Panel. */
+  insight_context?: { insights: string[] } | null;
+  /** Topic seeds entered by user in Campaign Assist Panel. */
+  topic_context?: { topics: string[] } | null;
+  /** When false, AI must strictly follow provided context without creative expansion. */
+  ai_assist?: boolean | null;
 }
 
 export interface PlanningParseInput {

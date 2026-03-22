@@ -19,27 +19,29 @@ export default function AuthCallback() {
   const router = useRouter();
 
   useEffect(() => {
-    // supabase.auth.getSession() will trigger the code exchange automatically
-    // when detectSessionInUrl is true (the default). We just wait for it.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session) {
-        // Always go to phone verification — never skip to dashboard
-        router.replace('/onboarding/verify-phone');
-      } else if (event === 'SIGNED_OUT' || (!session && event !== 'INITIAL_SESSION')) {
-        router.replace('/login');
-      }
-    });
+    const code = new URLSearchParams(window.location.search).get('code');
 
-    // Also handle the case where the session is already established
-    // (e.g. implicit flow resolves before onAuthStateChange fires)
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
+    if (code) {
+      // Explicitly exchange the PKCE code — more reliable than waiting for
+      // onAuthStateChange which can miss the event on Fast Refresh or remount.
+      supabase.auth.exchangeCodeForSession(code).then(({ data, error }) => {
+        if (error || !data.session) {
+          router.replace('/login');
+          return;
+        }
         router.replace('/onboarding/verify-phone');
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [router]);
+      });
+    } else {
+      // No code in URL — check if already signed in (e.g. navigated back)
+      supabase.auth.getSession().then(({ data }) => {
+        if (data.session) {
+          router.replace('/onboarding/verify-phone');
+        } else {
+          router.replace('/login');
+        }
+      });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="min-h-screen bg-[#F5F9FF] flex items-center justify-center">

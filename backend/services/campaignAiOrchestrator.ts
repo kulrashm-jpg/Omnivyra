@@ -2697,6 +2697,13 @@ async function runWithContext(
     strategyLearningFromCache?: boolean;
     campaignContext?: CampaignContext | null;
     companyId?: string | null;
+    /** Context from Campaign Assist Panel — null when user skipped. */
+    assistContext?: {
+      blog_context?: { blogs: { title: string; summary: string; key_insights: string[]; tags: string[]; headings: string[] }[] } | null;
+      insight_context?: { insights: string[] } | null;
+      topic_context?: { topics: string[] } | null;
+      ai_assist?: boolean | null;
+    } | null;
   }
 ): Promise<CampaignAiPlanResult> {
   let didParseFail = false;
@@ -2943,6 +2950,10 @@ async function runWithContext(
     account_context: input.account_context || null,
     previous_performance_insights: input.previous_performance_insights ?? null,
     previous_campaign_context: input.previous_campaign_context ?? null,
+    blog_context: ctx.assistContext?.blog_context ?? null,
+    insight_context: ctx.assistContext?.insight_context ?? null,
+    topic_context: ctx.assistContext?.topic_context ?? null,
+    ai_assist: ctx.assistContext?.ai_assist ?? null,
   };
 
   // Refresh account context before planning so authority score and engagement trends are current
@@ -4278,6 +4289,44 @@ export async function runCampaignAiPlan(
   const explicitConversationDuration = toValidWeeks(fromConversation);
   const snapshot = versionRow?.campaign_snapshot as Record<string, unknown> | null | undefined;
   const execConfig = snapshot?.execution_config as Record<string, unknown> | null | undefined;
+
+  // Extract Campaign Assist Panel context from campaign_snapshot (null when user skipped panel).
+  let assistBlogContext = (snapshot?.blog_context ?? null) as { blogs: { title: string; summary: string; key_insights: string[]; tags: string[]; headings: string[] }[] } | null;
+  const assistInsightContext = (snapshot?.insight_context ?? null) as { insights: string[] } | null;
+  const assistTopicContext = (snapshot?.topic_context ?? null) as { topics: string[] } | null;
+  const assistAi = typeof snapshot?.ai_assist === 'boolean' ? snapshot.ai_assist : null;
+
+  // If user skipped the Assist Panel but a source_blog was anchored (e.g. from a recommendation),
+  // resolve it from the correct table and inject as blog_context so the AI has narrative anchoring.
+  if (!assistBlogContext) {
+    const sourceBlog = snapshot?.source_blog as { id: string; type: 'company' | 'public' } | null | undefined;
+    if (sourceBlog?.id) {
+      try {
+        const table = sourceBlog.type === 'company' ? 'blogs' : 'public_blogs';
+        const { data: blogRow } = await supabase
+          .from(table)
+          .select('title, content_blocks, tags, status')
+          .eq('id', sourceBlog.id)
+          .eq('status', 'published')
+          .maybeSingle();
+        if (blogRow) {
+          const { extractBlogContext } = await import('../../lib/blog/blockExtractor');
+          const extracted = extractBlogContext(blogRow.content_blocks);
+          assistBlogContext = {
+            blogs: [{
+              title:        blogRow.title ?? '',
+              summary:      extracted.summary,
+              key_insights: extracted.key_insights,
+              headings:     extracted.h2_headings,
+              tags:         Array.isArray(blogRow.tags) ? blogRow.tags : [],
+            }],
+          };
+        }
+      } catch (err) {
+        console.warn('[orchestrator] source_blog resolution failed:', (err as Error)?.message);
+      }
+    }
+  }
   const durationFromExecConfig =
     execConfig != null && typeof execConfig.campaign_duration === 'number'
       ? toValidWeeks(execConfig.campaign_duration)
@@ -5058,6 +5107,12 @@ export async function runCampaignAiPlan(
       campaignContext,
       distributionStrategy,
       distributionReason,
+      assistContext: {
+        blog_context: assistBlogContext,
+        insight_context: assistInsightContext,
+        topic_context: assistTopicContext,
+        ai_assist: assistAi,
+      },
       planSkeleton:
         input.mode === 'generate_plan' && !deterministicSkeleton
           ? buildDeterministicPlanSkeleton({

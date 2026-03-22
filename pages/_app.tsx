@@ -13,7 +13,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const { isAuthenticated, isLoading } = useCompanyContext();
 
-  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/get-free-credits', '/create-account', '/onboarding/phone', '/onboarding/verify-phone', '/onboarding/company', '/auth/callback'];
+  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/get-free-credits', '/create-account', '/onboarding/phone', '/onboarding/verify-phone', '/onboarding/company', '/onboarding/profile', '/auth/callback'];
   const isBlogRoute = router.pathname === '/blog' || router.pathname.startsWith('/blog/');
   const isAdminBlogRoute = router.pathname === '/admin/blog' || router.pathname.startsWith('/admin/blog/');
   const isSuperAdminRoute = router.pathname.startsWith('/super-admin');

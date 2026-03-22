@@ -49,8 +49,18 @@ export default function CreateAccountPage() {
     setLoading(true);
     setError(null);
 
-    // Build the redirect URL so after clicking the magic link the user lands on phone verification
-    const redirectTo = `${window.location.origin}/onboarding/phone?goals=${encodeURIComponent(goals)}&team=${encodeURIComponent(team)}&challenge=${encodeURIComponent(challenge)}`;
+    // Save intent params to sessionStorage so /onboarding/phone can read them
+    // after /auth/callback completes the PKCE exchange and routes here.
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('intent_goals',     goals);
+      sessionStorage.setItem('intent_team',      team);
+      sessionStorage.setItem('intent_challenge', challenge);
+    }
+
+    // Always redirect to /auth/callback — it's the only page that reliably
+    // handles the PKCE code exchange. It then routes new users (no phone) to
+    // /onboarding/phone automatically via /onboarding/verify-phone.
+    const redirectTo = `${window.location.origin}/auth/callback`;
 
     const { error: authErr } = await supabase.auth.signInWithOtp({
       email: email.trim(),

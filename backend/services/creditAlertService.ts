@@ -45,10 +45,12 @@ const DEDUP_HOURS = 24;
 async function getBalance(orgId: string): Promise<number | null> {
   const { data } = await supabase
     .from('organization_credits')
-    .select('balance_credits')
+    .select('free_balance, paid_balance, incentive_balance')
     .eq('organization_id', orgId)
     .maybeSingle();
-  return (data as any)?.balance_credits ?? null;
+  if (!data) return null;
+  const d = data as any;
+  return (d.free_balance ?? 0) + (d.paid_balance ?? 0) + (d.incentive_balance ?? 0);
 }
 
 async function wasAlertRecentlySent(orgId: string, alertType: AlertType): Promise<boolean> {

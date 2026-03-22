@@ -1,10 +1,49 @@
 'use client';
 
-import React, { useCallback, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import rehypeRaw from 'rehype-raw';
-import { Plus, X, Bold, Italic, Heading1, Heading2, Heading3, List, ListOrdered, Quote, Minus, Type } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { X, AlertTriangle, XCircle } from 'lucide-react';
+import { calculateQualityScore, getPublishBlockers } from '../../lib/blog/blogValidation';
+import type { ContentBlock, BlockType } from '../../lib/blog/blockTypes';
 import type { MediaBlockItem } from './BlogMediaBlock';
+import {
+  moveBlockUp,
+  moveBlockDown,
+  deleteBlock,
+  duplicateBlock,
+  insertBlockAfter,
+  syncHeadingAnchors,
+} from '../../lib/blog/blockUtils';
+import { migrateMarkdownToBlocks } from '../../lib/blog/blockMigration';
+import {
+  BlockWrapper,
+  BlockPicker,
+  ParagraphBlockEditor,
+  HeadingBlockEditor,
+  KeyInsightsBlockEditor,
+  CalloutBlockEditor,
+  QuoteBlockEditor,
+  ImageBlockEditor,
+  MediaBlockEditor,
+  DividerBlockEditor,
+  ListBlockEditor,
+  ReferencesBlockEditor,
+  InternalLinkBlockEditor,
+  SummaryBlockEditor,
+} from './blocks';
+import type {
+  ParagraphBlock,
+  HeadingBlock,
+  KeyInsightsBlock,
+  CalloutBlock,
+  QuoteBlock,
+  ImageBlock,
+  MediaBlock,
+  DividerBlock,
+  ListBlock,
+  ReferencesBlock,
+  InternalLinkBlock,
+  SummaryBlock,
+} from '../../lib/blog/blockTypes';
 
 const CATEGORY_OPTIONS = [
   'Marketing Intelligence',
@@ -29,18 +68,12 @@ const MARKETING_KEYWORD_SUGGESTIONS = [
   'marketing systems',
 ];
 
-const MEDIA_TYPES: { value: MediaBlockItem['type']; label: string }[] = [
-  { value: 'youtube', label: 'YouTube' },
-  { value: 'spotify_track', label: 'Spotify Track' },
-  { value: 'spotify_podcast', label: 'Spotify Podcast' },
-  { value: 'external_link', label: 'External Link' },
-];
-
 export type BlogFormState = {
   title: string;
   slug: string;
   excerpt: string;
   content_markdown: string;
+  content_blocks: ContentBlock[];
   featured_image_url: string;
   category: string;
   tags: string[];
@@ -57,6 +90,7 @@ const defaultState: BlogFormState = {
   slug: '',
   excerpt: '',
   content_markdown: '',
+  content_blocks: [],
   featured_image_url: '',
   category: '',
   tags: [],
@@ -82,7 +116,48 @@ type Props = {
   onCancel: () => void;
   submitLabel?: string;
   isSaving?: boolean;
+  /** Called whenever form state changes — use to drive an external quality panel */
+  onStateChange?: (state: BlogFormState) => void;
 };
+
+// ── Per-block editor dispatcher ───────────────────────────────────────────────
+
+function BlockEditor({
+  block,
+  onChange,
+}: {
+  block: ContentBlock;
+  onChange: (b: ContentBlock) => void;
+}) {
+  switch (block.type) {
+    case 'paragraph':
+      return <ParagraphBlockEditor block={block as ParagraphBlock} onChange={(b) => onChange(b)} />;
+    case 'heading':
+      return <HeadingBlockEditor block={block as HeadingBlock} onChange={(b) => onChange(b)} />;
+    case 'key_insights':
+      return <KeyInsightsBlockEditor block={block as KeyInsightsBlock} onChange={(b) => onChange(b)} />;
+    case 'callout':
+      return <CalloutBlockEditor block={block as CalloutBlock} onChange={(b) => onChange(b)} />;
+    case 'quote':
+      return <QuoteBlockEditor block={block as QuoteBlock} onChange={(b) => onChange(b)} />;
+    case 'image':
+      return <ImageBlockEditor block={block as ImageBlock} onChange={(b) => onChange(b)} />;
+    case 'media':
+      return <MediaBlockEditor block={block as MediaBlock} onChange={(b) => onChange(b)} />;
+    case 'divider':
+      return <DividerBlockEditor block={block as DividerBlock} onChange={(b) => onChange(b)} />;
+    case 'list':
+      return <ListBlockEditor block={block as ListBlock} onChange={(b) => onChange(b)} />;
+    case 'references':
+      return <ReferencesBlockEditor block={block as ReferencesBlock} onChange={(b) => onChange(b)} />;
+    case 'internal_link':
+      return <InternalLinkBlockEditor block={block as InternalLinkBlock} onChange={(b) => onChange(b)} />;
+    case 'summary':
+      return <SummaryBlockEditor block={block as SummaryBlock} onChange={(b) => onChange(b)} />;
+  }
+}
+
+// ── Main form ─────────────────────────────────────────────────────────────────
 
 export function BlogEditorForm({
   initial,
@@ -90,21 +165,34 @@ export function BlogEditorForm({
   onCancel,
   submitLabel = 'Save',
   isSaving = false,
+  onStateChange,
 }: Props) {
   const [state, setState] = useState<BlogFormState>({
     ...defaultState,
     ...initial,
   });
   const [tagInput, setTagInput] = useState('');
-  const [showPreview, setShowPreview] = useState(false);
-  const [newMediaType, setNewMediaType] = useState<MediaBlockItem['type']>('youtube');
-  const [newMediaUrl, setNewMediaUrl] = useState('');
-  const [showColorPicker, setShowColorPicker] = useState(false);
-  const contentRef = useRef<HTMLTextAreaElement>(null);
+  const [publishGate, setPublishGate] = useState<{ blockers: string[] } | null>(null);
+  const migrated = useRef(false);
+
+  // Lazy migration: convert legacy markdown→blocks on first mount
+  useEffect(() => {
+    if (migrated.current) return;
+    migrated.current = true;
+    if (state.content_blocks.length === 0 && state.content_markdown) {
+      const blocks = migrateMarkdownToBlocks(state.content_markdown, state.media_blocks);
+      setState((prev) => ({ ...prev, content_blocks: blocks }));
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const update = useCallback((updates: Partial<BlogFormState>) => {
     setState((prev) => ({ ...prev, ...updates }));
   }, []);
+
+  // Notify parent of state changes for external quality panel
+  useEffect(() => {
+    onStateChange?.(state);
+  }, [state, onStateChange]);
 
   const handleTitleChange = (title: string) => {
     update({ title });
@@ -125,96 +213,60 @@ export function BlogEditorForm({
     update({ tags: state.tags.filter((_, i) => i !== index) });
   };
 
-  const addMediaBlock = () => {
-    const url = newMediaUrl.trim();
-    if (!url) return;
-    update({ media_blocks: [...state.media_blocks, { type: newMediaType, url }] });
-    setNewMediaUrl('');
+  // ── Block operations ────────────────────────────────────────────────────────
+
+  const updateBlock = (index: number, block: ContentBlock) => {
+    const next = [...state.content_blocks];
+    next[index] = block;
+    update({ content_blocks: next });
   };
 
-  const removeMediaBlock = (index: number) => {
-    update({ media_blocks: state.media_blocks.filter((_, i) => i !== index) });
+  const handleMoveUp = (index: number) => {
+    update({ content_blocks: moveBlockUp(state.content_blocks, index) });
+  };
+
+  const handleMoveDown = (index: number) => {
+    update({ content_blocks: moveBlockDown(state.content_blocks, index) });
+  };
+
+  const handleDelete = (index: number) => {
+    update({ content_blocks: deleteBlock(state.content_blocks, index) });
+  };
+
+  const handleDuplicate = (index: number) => {
+    update({ content_blocks: duplicateBlock(state.content_blocks, index) });
+  };
+
+  const handleAddBlock = (afterIndex: number, type: BlockType) => {
+    update({ content_blocks: insertBlockAfter(state.content_blocks, afterIndex, type) });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(state);
-  };
 
-  const applyFormat = useCallback(
-    (
-      before: string,
-      after: string,
-      options?: { blockPrefix?: string; blockSuffix?: string; placeholder?: string }
-    ) => {
-      const ta = contentRef.current;
-      if (!ta) return;
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      const text = state.content_markdown;
-      const selected = text.slice(start, end);
-
-      if (options?.blockPrefix !== undefined) {
-        const lineStart = text.lastIndexOf('\n', start - 1) + 1;
-        const lineEnd = text.indexOf('\n', end) === -1 ? text.length : text.indexOf('\n', end);
-        const line = text.slice(lineStart, lineEnd);
-        const newLine = options.blockPrefix + line + (options.blockSuffix || '');
-        const newValue = text.slice(0, lineStart) + newLine + text.slice(lineEnd);
-        update({ content_markdown: newValue });
-        ta.focus();
-        requestAnimationFrame(() => {
-          ta.setSelectionRange(lineStart, lineStart + newLine.length);
-        });
+    // Enforce quality gate when publishing
+    if (state.status === 'published') {
+      const score = calculateQualityScore(state.content_blocks, {
+        title:                state.title,
+        excerpt:              state.excerpt,
+        seo_meta_title:       state.seo_meta_title,
+        seo_meta_description: state.seo_meta_description,
+        tags:                 state.tags,
+      });
+      const blockers = getPublishBlockers(score);
+      if (blockers.length > 0) {
+        setPublishGate({ blockers: blockers.map((b) => b.message) });
         return;
       }
+    }
 
-      const replacement = selected
-        ? `${before}${selected}${after}`
-        : `${before}${options?.placeholder || 'text'}${after}`;
-      const newValue = text.slice(0, start) + replacement + text.slice(end);
-      update({ content_markdown: newValue });
-      ta.focus();
-      requestAnimationFrame(() => {
-        const newStart = start + before.length;
-        const newEnd = selected
-          ? newStart + selected.length
-          : newStart + (options?.placeholder || 'text').length;
-        ta.setSelectionRange(newStart, newEnd);
-      });
-    },
-    [state.content_markdown, update]
-  );
-
-  const insertAtCursor = useCallback(
-    (insertion: string) => {
-      const ta = contentRef.current;
-      if (!ta) return;
-      const start = ta.selectionStart;
-      const text = state.content_markdown;
-      const newValue = text.slice(0, start) + insertion + text.slice(ta.selectionEnd);
-      update({ content_markdown: newValue });
-      ta.focus();
-      requestAnimationFrame(() => {
-        ta.setSelectionRange(start + insertion.length, start + insertion.length);
-      });
-    },
-    [state.content_markdown, update]
-  );
-
-  const COLORS = [
-    { name: 'Red', value: '#dc2626' },
-    { name: 'Orange', value: '#ea580c' },
-    { name: 'Amber', value: '#d97706' },
-    { name: 'Green', value: '#16a34a' },
-    { name: 'Blue', value: '#2563eb' },
-    { name: 'Indigo', value: '#4f46e5' },
-    { name: 'Purple', value: '#7c3aed' },
-    { name: 'Pink', value: '#db2777' },
-    { name: 'Gray', value: '#4b5563' },
-  ];
+    const synced = syncHeadingAnchors(state.content_blocks);
+    onSubmit({ ...state, content_blocks: synced });
+  };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8">
+      {/* ── Metadata ────────────────────────────────────────────────────────── */}
       <div>
         <label className="block text-sm font-medium text-gray-700">Title *</label>
         <input
@@ -277,7 +329,7 @@ export function BlogEditorForm({
       <div>
         <label className="block text-sm font-medium text-gray-700">Keywords / Tags</label>
         <p className="mt-0.5 text-xs text-gray-500">
-          Marketing content keywords for discoverability and SEO. Add your own or pick suggestions below.
+          Marketing content keywords for discoverability and SEO.
         </p>
         <div className="mt-2 flex flex-wrap gap-2">
           {state.tags.map((t, i) => (
@@ -297,7 +349,7 @@ export function BlogEditorForm({
             onChange={(e) => setTagInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
             className="min-w-[8rem] rounded border border-gray-300 px-2 py-1 text-sm"
-            placeholder="e.g. marketing content, campaign strategy"
+            placeholder="e.g. campaign strategy"
           />
           <button type="button" onClick={addTag} className="text-sm font-medium text-[#0B5ED7] hover:underline">
             Add
@@ -319,203 +371,37 @@ export function BlogEditorForm({
         </div>
       </div>
 
+      {/* ── Block editor ────────────────────────────────────────────────────── */}
       <div>
-        <div className="flex items-center justify-between">
-          <label className="block text-sm font-medium text-gray-700">Content (Markdown)</label>
-          <button
-            type="button"
-            onClick={() => setShowPreview(!showPreview)}
-            className="text-sm text-[#0B5ED7] hover:underline"
-          >
-            {showPreview ? 'Edit' : 'Preview'}
-          </button>
-        </div>
-        {showPreview ? (
-          <div className="mt-1 min-h-[200px] rounded-lg border border-gray-300 bg-gray-50 p-4 prose prose-sm max-w-none">
-            <ReactMarkdown rehypePlugins={[rehypeRaw]}>{state.content_markdown || '*No content*'}</ReactMarkdown>
-          </div>
-        ) : (
-          <>
-            <div className="mt-1 flex flex-wrap items-center gap-1 rounded-t-lg border-x border-t border-gray-300 bg-gray-100 px-2 py-1.5">
-              <button
-                type="button"
-                onClick={() => applyFormat('**', '**', { placeholder: 'bold text' })}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Bold"
-              >
-                <Bold className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat('*', '*', { placeholder: 'italic text' })}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Italic"
-              >
-                <Italic className="h-4 w-4" />
-              </button>
-              <span className="mx-1 h-4 w-px bg-gray-300" />
-              <button
-                type="button"
-                onClick={() => applyFormat('', '', { blockPrefix: '# ', blockSuffix: '' })}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Heading 1"
-              >
-                <Heading1 className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat('', '', { blockPrefix: '## ', blockSuffix: '' })}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Heading 2"
-              >
-                <Heading2 className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat('', '', { blockPrefix: '### ', blockSuffix: '' })}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Heading 3"
-              >
-                <Heading3 className="h-4 w-4" />
-              </button>
-              <span className="mx-1 h-4 w-px bg-gray-300" />
-              <button
-                type="button"
-                onClick={() => applyFormat('', '', { blockPrefix: '- ', blockSuffix: '' })}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Bullet list"
-              >
-                <List className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat('', '', { blockPrefix: '1. ', blockSuffix: '' })}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Numbered list"
-              >
-                <ListOrdered className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat('', '', { blockPrefix: '> ', blockSuffix: '' })}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Block quote"
-              >
-                <Quote className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => insertAtCursor('\n\n---\n\n')}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Horizontal rule (spacing)"
-              >
-                <Minus className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => insertAtCursor('\n\n')}
-                className="rounded p-1.5 hover:bg-gray-200"
-                title="Paragraph spacing"
-              >
-                <Type className="h-4 w-4" />
-              </button>
-              <span className="mx-1 h-4 w-px bg-gray-300" />
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowColorPicker(!showColorPicker)}
-                  className="flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200"
-                  title="Text color"
-                >
-                  <span className="inline-block h-4 w-4 rounded border border-gray-400" style={{ backgroundColor: '#dc2626' }} />
-                  Color
-                </button>
-                {showColorPicker && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-10"
-                      onClick={() => setShowColorPicker(false)}
-                      aria-hidden
-                    />
-                    <div className="absolute left-0 top-full z-20 mt-1 flex flex-wrap gap-1 rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
-                      {COLORS.map((c) => (
-                        <button
-                          key={c.value}
-                          type="button"
-                          onClick={() => {
-                            applyFormat(
-                              `<span style="color:${c.value}">`,
-                              '</span>',
-                              { placeholder: 'colored text' }
-                            );
-                            setShowColorPicker(false);
-                          }}
-                          className="rounded p-1 hover:bg-gray-100"
-                          title={c.name}
-                        >
-                          <span
-                            className="block h-6 w-6 rounded border border-gray-300"
-                            style={{ backgroundColor: c.value }}
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-            <textarea
-              ref={contentRef}
-              value={state.content_markdown}
-              onChange={(e) => update({ content_markdown: e.target.value })}
-              rows={14}
-              className="w-full rounded-b-lg border border-gray-300 px-3 py-2 font-mono text-sm"
-              placeholder="Write in Markdown... Select text and use the toolbar to format."
-            />
-          </>
+        <label className="block text-sm font-medium text-gray-700 mb-3">Content</label>
+
+        {/* First "Add block" picker when list is empty */}
+        {state.content_blocks.length === 0 && (
+          <BlockPicker onSelect={(type) => handleAddBlock(-1, type)} />
         )}
-      </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700">Media blocks</label>
-        <div className="mt-2 space-y-2">
-          {state.media_blocks.map((block, i) => (
-            <div key={i} className="flex items-center gap-2 rounded border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
-              <span className="font-medium text-gray-600">{block.type}</span>
-              <span className="truncate text-gray-500">{block.url}</span>
-              <button type="button" onClick={() => removeMediaBlock(i)} className="ml-auto text-red-600 hover:underline">
-                Remove
-              </button>
-            </div>
+        <div className="space-y-3">
+          {state.content_blocks.map((block, i) => (
+            <React.Fragment key={block.id}>
+              <BlockWrapper
+                block={block}
+                index={i}
+                total={state.content_blocks.length}
+                onMoveUp={() => handleMoveUp(i)}
+                onMoveDown={() => handleMoveDown(i)}
+                onDelete={() => handleDelete(i)}
+                onDuplicate={() => handleDuplicate(i)}
+              >
+                <BlockEditor block={block} onChange={(b) => updateBlock(i, b)} />
+              </BlockWrapper>
+              {/* "Add block" between / after each block */}
+              <BlockPicker onSelect={(type) => handleAddBlock(i, type)} />
+            </React.Fragment>
           ))}
-          <div className="flex flex-wrap items-end gap-2">
-            <select
-              value={newMediaType}
-              onChange={(e) => setNewMediaType(e.target.value as MediaBlockItem['type'])}
-              className="rounded border border-gray-300 px-2 py-1.5 text-sm"
-            >
-              {MEDIA_TYPES.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
-            <input
-              type="url"
-              value={newMediaUrl}
-              onChange={(e) => setNewMediaUrl(e.target.value)}
-              placeholder="URL"
-              className="w-72 rounded border border-gray-300 px-2 py-1.5 text-sm"
-            />
-            <button
-              type="button"
-              onClick={addMediaBlock}
-              className="inline-flex items-center gap-1 rounded bg-gray-200 px-3 py-1.5 text-sm hover:bg-gray-300"
-            >
-              <Plus className="h-4 w-4" /> Add
-            </button>
-          </div>
         </div>
       </div>
 
+      {/* ── SEO ─────────────────────────────────────────────────────────────── */}
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label className="block text-sm font-medium text-gray-700">SEO meta title</label>
@@ -539,6 +425,7 @@ export function BlogEditorForm({
         </div>
       </div>
 
+      {/* ── Publishing ───────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-6">
         <div>
           <label className="block text-sm font-medium text-gray-700">Status</label>
@@ -558,7 +445,9 @@ export function BlogEditorForm({
             <input
               type="datetime-local"
               value={state.published_at ? state.published_at.slice(0, 16) : ''}
-              onChange={(e) => update({ published_at: e.target.value ? new Date(e.target.value).toISOString() : '' })}
+              onChange={(e) =>
+                update({ published_at: e.target.value ? new Date(e.target.value).toISOString() : '' })
+              }
               className="mt-1 rounded-lg border border-gray-300 px-3 py-2"
             />
           </div>
@@ -571,10 +460,13 @@ export function BlogEditorForm({
             onChange={(e) => update({ is_featured: e.target.checked })}
             className="rounded border-gray-300"
           />
-          <label htmlFor="featured" className="text-sm font-medium text-gray-700">Feature on blog listing</label>
+          <label htmlFor="featured" className="text-sm font-medium text-gray-700">
+            Feature on blog listing
+          </label>
         </div>
       </div>
 
+      {/* ── Actions ──────────────────────────────────────────────────────────── */}
       <div className="flex gap-3 border-t pt-6">
         <button
           type="submit"
@@ -583,10 +475,65 @@ export function BlogEditorForm({
         >
           {isSaving ? 'Saving...' : submitLabel}
         </button>
-        <button type="button" onClick={onCancel} className="rounded-lg border border-gray-300 px-4 py-2.5 font-medium text-gray-700">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg border border-gray-300 px-4 py-2.5 font-medium text-gray-700"
+        >
           Cancel
         </button>
+        {state.status === 'published' && (
+          <p className="ml-auto self-center text-xs text-gray-400">
+            Quality check runs on publish
+          </p>
+        )}
       </div>
+
+      {/* ── Publish gate modal ───────────────────────────────────────────────── */}
+      {publishGate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center gap-3 border-b border-gray-100 px-6 py-4">
+              <XCircle className="h-5 w-5 shrink-0 text-red-500" />
+              <h3 className="text-base font-bold text-gray-900">Cannot publish — fix these issues first</h3>
+              <button
+                type="button"
+                onClick={() => setPublishGate(null)}
+                className="ml-auto text-gray-400 hover:text-gray-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <ul className="px-6 py-4 space-y-2">
+              {publishGate.blockers.map((msg, i) => (
+                <li key={i} className="flex items-start gap-2.5 text-sm text-red-700">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-red-500" />
+                  {msg}
+                </li>
+              ))}
+            </ul>
+            <div className="border-t border-gray-100 px-6 py-4 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setPublishGate(null)}
+                className="rounded-lg bg-[#0B5ED7] px-4 py-2 text-sm font-semibold text-white"
+              >
+                Fix issues
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPublishGate(null);
+                  update({ status: 'draft' });
+                }}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700"
+              >
+                Save as draft instead
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </form>
   );
 }

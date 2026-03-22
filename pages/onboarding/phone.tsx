@@ -3,8 +3,9 @@
 /**
  * /onboarding/phone
  * Step 2 of free-credits signup — lands here after magic link click.
- * Verifies phone via Firebase SMS OTP, then calls /api/onboarding/complete
- * to create free_credit_profiles and grant 300 credits.
+ * Collects company name, then verifies phone via Firebase SMS OTP,
+ * then calls /api/onboarding/complete to create free_credit_profiles
+ * and grant 300 credits.
  */
 
 import { useState, useEffect, useRef } from 'react';
@@ -15,15 +16,20 @@ import type { ConfirmationResult } from 'firebase/auth';
 import { supabase } from '../../utils/supabaseClient';
 import { setupRecaptcha, sendPhoneOtp, clearRecaptcha } from '../../lib/firebase';
 
-const INITIAL_CREDITS = 300;
-
-type Step = 'phone' | 'otp' | 'done' | 'error';
+type Step = 'company' | 'phone' | 'otp' | 'done' | 'error';
 
 export default function PhoneVerificationPage() {
   const router = useRouter();
-  const { goals = '', team = '', challenge = '' } = router.query as Record<string, string>;
+  const { goals: goalsParam = '', team: teamParam = '', challenge: challengeParam = '' } = router.query as Record<string, string>;
 
-  const [step, setStep]             = useState<Step>('phone');
+  // Intent params arrive as query params when coming from create-account directly,
+  // or from sessionStorage when routed here via /auth/callback → /onboarding/verify-phone.
+  const goals     = goalsParam     || (typeof window !== 'undefined' ? sessionStorage.getItem('intent_goals')     ?? '' : '');
+  const team      = teamParam      || (typeof window !== 'undefined' ? sessionStorage.getItem('intent_team')      ?? '' : '');
+  const challenge = challengeParam || (typeof window !== 'undefined' ? sessionStorage.getItem('intent_challenge') ?? '' : '');
+
+  const [step, setStep]             = useState<Step>('company');
+  const [companyName, setCompanyName] = useState('');
   const [phone, setPhone]           = useState('');
   const [otp, setOtp]               = useState('');
   const [session, setSession]       = useState<any>(null);
@@ -33,7 +39,9 @@ export default function PhoneVerificationPage() {
   const confirmationRef = useRef<ConfirmationResult | null>(null);
   const recaptchaContainerRef = useRef<HTMLDivElement>(null);
 
-  // ── Require Supabase session (must have clicked magic link) ────────────────
+  // ── Require Supabase session ────────────────────────────────────────────────
+  // The PKCE code exchange is handled upstream by /auth/callback before
+  // routing here, so a session is always present by the time this page loads.
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       if (!data.session) {
@@ -45,6 +53,14 @@ export default function PhoneVerificationPage() {
 
     return () => clearRecaptcha();
   }, [router]);
+
+  // ── Step 0: Company name ────────────────────────────────────────────────────
+  function handleCompanySubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!companyName.trim()) { setErrorMsg('Enter your company name.'); return; }
+    setErrorMsg(null);
+    setStep('phone');
+  }
 
   // ── Step 1: Send SMS ────────────────────────────────────────────────────────
   async function handleSendOtp(e: React.FormEvent) {
@@ -79,37 +95,16 @@ export default function PhoneVerificationPage() {
       // Get the Firebase ID token to let the server verify phone auth server-side
       const firebaseIdToken = await credential.user.getIdToken();
 
-      // Call our API to finalise onboarding
-      const resp = await fetch('/api/onboarding/complete', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          phoneNumber:      phone.trim(),
-          firebaseUid:      fbUid,
-          firebaseIdToken,
-          intentGoals:      goals ? goals.split(',') : [],
-          intentTeam:       team,
-          intentChallenges: challenge ? challenge.split(',') : [],
-        }),
-      });
-
-      const json = await resp.json();
-
-      if (!resp.ok) {
-        if (resp.status === 409) {
-          setErrorMsg(json.error);
-          setStep('error');
-          return;
-        }
-        throw new Error(json.error ?? 'Failed to complete onboarding');
+      // Store firebase data temporarily so profile page can call the complete API
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('onboarding_phone',           phone.trim());
+        sessionStorage.setItem('onboarding_firebase_uid',    fbUid);
+        sessionStorage.setItem('onboarding_firebase_token',  firebaseIdToken);
+        sessionStorage.setItem('onboarding_company_name',    companyName.trim());
       }
 
-      // Show done state briefly, then redirect to dashboard
-      setStep('done');
-      setTimeout(() => router.push('/dashboard'), 1200);
+      // Redirect to profile capture page
+      router.push('/onboarding/profile');
     } catch (err: any) {
       setErrorMsg(err.message ?? 'OTP verification failed. Try again.');
     } finally {
@@ -117,10 +112,21 @@ export default function PhoneVerificationPage() {
     }
   }
 
+  const progressWidth =
+    step === 'company' ? '33%' :
+    step === 'phone'   ? '66%' :
+    step === 'otp'     ? '100%' :
+    step === 'done'    ? '100%' : '33%';
+
+  const stepLabel =
+    step === 'company' ? 'Step 1 of 3' :
+    step === 'phone'   ? 'Step 2 of 3' :
+    step === 'otp'     ? 'Step 3 of 3' : '';
+
   return (
     <>
       <Head>
-        <title>Verify Phone | Omnivyra</title>
+        <title>Set Up Account | Omnivyra</title>
       </Head>
 
       {/* Invisible reCAPTCHA anchor */}
@@ -133,19 +139,15 @@ export default function PhoneVerificationPage() {
             <Link href="/">
               <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
             </Link>
-            {step !== 'done' && (
-              <span className="text-xs text-[#6B7C93]">
-                {step === 'phone' ? 'Step 1 of 2' : 'Step 2 of 2'}
-              </span>
+            {step !== 'done' && step !== 'error' && (
+              <span className="text-xs text-[#6B7C93]">{stepLabel}</span>
             )}
           </div>
           {/* Progress bar */}
           <div className="h-0.5 w-full bg-gray-100">
             <div
               className="h-0.5 bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] transition-all duration-500"
-              style={{ 
-                width: step === 'done' ? '100%' : step === 'otp' ? '100%' : '50%'
-              }}
+              style={{ width: progressWidth }}
             />
           </div>
         </header>
@@ -153,6 +155,56 @@ export default function PhoneVerificationPage() {
         <main className="flex flex-1 items-center justify-center px-6 py-12">
           <div className="w-full max-w-md">
 
+            {/* ── Company name ─────────────────────────────────────────── */}
+            {step === 'company' && (
+              <div className="animate-fadeIn">
+                <div className="mb-8 text-center">
+                  <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] text-2xl shadow-lg">
+                    🏢
+                  </div>
+                  <h1
+                    className="text-2xl font-bold tracking-tight text-[#0B1F33]"
+                    style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}
+                  >
+                    What&rsquo;s your company name?
+                  </h1>
+                  <p className="mt-2 text-sm leading-relaxed text-[#6B7C93]">
+                    This will be used to set up your workspace.
+                  </p>
+                </div>
+
+                <form onSubmit={handleCompanySubmit} className="space-y-4">
+                  <div>
+                    <label htmlFor="company" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
+                      Company name
+                    </label>
+                    <input
+                      id="company"
+                      type="text"
+                      autoFocus
+                      autoComplete="organization"
+                      placeholder="Acme Inc."
+                      value={companyName}
+                      onChange={e => setCompanyName(e.target.value)}
+                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
+                    />
+                  </div>
+
+                  {errorMsg && (
+                    <p className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">{errorMsg}</p>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95"
+                  >
+                    Continue
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {/* ── Phone number ─────────────────────────────────────────── */}
             {step === 'phone' && (
               <div className="animate-fadeIn">
                 <div className="mb-8 text-center">
@@ -199,6 +251,14 @@ export default function PhoneVerificationPage() {
                     className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {loading ? 'Sending SMS…' : 'Send verification code'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setStep('company'); setErrorMsg(null); }}
+                    className="w-full text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors"
+                  >
+                    ← Change company name
                   </button>
                 </form>
               </div>
@@ -261,7 +321,6 @@ export default function PhoneVerificationPage() {
             {/* ── Done / Credits granted ──────────────────────────────── */}
             {step === 'done' && (
               <div className="animate-fadeIn space-y-6 text-center">
-                {/* Credit card */}
                 <div
                   className="rounded-2xl p-8 text-white"
                   style={{ background: 'linear-gradient(135deg, #0A1F44 0%, #0A66C2 100%)' }}
@@ -273,8 +332,6 @@ export default function PhoneVerificationPage() {
                     Enough to audit your website, generate content, and plan campaigns.
                   </p>
                 </div>
-
-                {/* Status message */}
                 <div className="space-y-2">
                   <p className="text-sm text-[#6B7C93]">Redirecting to your dashboard…</p>
                   <div className="flex justify-center gap-1">

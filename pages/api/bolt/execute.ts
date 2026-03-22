@@ -31,6 +31,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!access) return;
 
+    const resolvedBoltBlogType =
+      body.source_blog_type === 'company' ? 'company'
+      : body.source_blog_type === 'omnivyra' ? 'public'
+      : null;
+
     const payload = {
       companyId,
       userId: access.userId,
@@ -43,6 +48,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       description: body.description ?? null,
       sourceOpportunityId: body.sourceOpportunityId ?? null,
       regionsFromCard: Array.isArray(body.regionsFromCard) ? body.regionsFromCard : [],
+      source_blog_id: typeof body.source_blog_id === 'string' ? body.source_blog_id : null,
+      source_blog_type: resolvedBoltBlogType,
     };
 
     if (!payload.sourceStrategicTheme || typeof payload.sourceStrategicTheme !== 'object') {

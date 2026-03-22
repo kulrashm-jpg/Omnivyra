@@ -214,7 +214,9 @@ export default function CompanyProfilePage() {
   const [notFound, setNotFound] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
+  const [refineStep, setRefineStep] = useState(0); // 0 = idle
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [overallProfileCompletion, setOverallProfileCompletion] = useState<number | null>(null);
   const [problemTransformationCompletion, setProblemTransformationCompletion] = useState<number | null>(null);
@@ -413,6 +415,9 @@ export default function CompanyProfilePage() {
         setProfile(data.profile || null);
         if (data.profile) {
           setDraftProfile(data.profile);
+          setIsEditing(false); // existing profile loads in view mode
+        } else {
+          setIsEditing(true); // no profile yet — start in edit mode
         }
         setOverallProfileCompletion(data.overall_profile_completion ?? null);
         setProblemTransformationCompletion(data.problem_transformation_completion ?? null);
@@ -497,15 +502,26 @@ export default function CompanyProfilePage() {
   };
 
   const handleChange = (field: keyof CompanyProfile, value: string) => {
+    if (!isEditing) return;
     updateActiveProfile({ ...activeProfile, [field]: value });
   };
 
+  const normalizeUrlField = (field: keyof CompanyProfile, value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      updateActiveProfile({ ...activeProfile, [field]: `https://${trimmed}` });
+    }
+  };
+
   const handleChangeArray = (field: 'pain_symptoms' | 'authority_domains', value: string) => {
+    if (!isEditing) return;
     const arr = splitToList(value);
     updateActiveProfile({ ...activeProfile, [field]: arr });
   };
 
   const updateOtherSocial = (index: number, field: 'label' | 'url', value: string) => {
+    if (!isEditing) return;
     const existing = Array.isArray(activeProfile.other_social_links)
       ? [...activeProfile.other_social_links]
       : [];
@@ -630,7 +646,8 @@ export default function CompanyProfilePage() {
         console.log('Profile loaded:', data.profile.company_id);
       }
       setNotFound(false);
-      setSuccessMessage('Company profile saved.');
+      setIsEditing(false);
+      setSuccessMessage('Profile saved.');
       notifyCompanyProfileUpdated(data.profile?.company_id || companyId);
     } catch (error) {
       console.error('Error saving company profile:', error);
@@ -640,12 +657,32 @@ export default function CompanyProfilePage() {
     }
   };
 
+  const REFINE_STEPS = [
+    'Crawling website…',
+    'Reading social profiles & digital assets…',
+    'Cleaning and analysing evidence…',
+    'Extracting profile fields with AI…',
+    'Saving updated profile…',
+  ];
+  // Advance through steps on a timer; actual API call may finish earlier or later
+  const REFINE_STEP_DELAYS = [0, 9000, 20000, 28000, 40000]; // ms from start
+
   const refineProfile = async () => {
     try {
       setIsRefining(true);
+      setRefineStep(1);
       setErrorMessage(null);
       setSuccessMessage(null);
+
+      // Schedule step advances based on typical timing
+      const timers: ReturnType<typeof setTimeout>[] = [];
+      REFINE_STEP_DELAYS.slice(1).forEach((delay, i) => {
+        timers.push(setTimeout(() => setRefineStep(i + 2), delay));
+      });
+      const clearTimers = () => timers.forEach(clearTimeout);
       if (!companyId) {
+        clearTimers();
+        setRefineStep(0);
         setErrorMessage('Select a company to continue.');
         return;
       }
@@ -690,8 +727,11 @@ export default function CompanyProfilePage() {
         setSelectedCompanyId(data.profile.company_id);
         console.log('Profile loaded:', data.profile.company_id);
       }
+      clearTimers();
+      setRefineStep(0);
       setNotFound(false);
-      setSuccessMessage('Company profile refined.');
+      setIsEditing(true); // AI updated fields — enter edit mode so user can review and save
+      setSuccessMessage('Profile enriched by AI. Review the changes and click Save Profile.');
       if (data?.refinement) {
         setLatestRefinement(data.refinement);
         setRefinementHistory((prev) => [data.refinement, ...prev]);
@@ -701,6 +741,7 @@ export default function CompanyProfilePage() {
       setErrorMessage('Failed to refine company profile.');
     } finally {
       setIsRefining(false);
+      setRefineStep(0);
     }
   };
 
@@ -1567,6 +1608,13 @@ export default function CompanyProfilePage() {
                   </div>
                 )}
               </div>
+              {/* View/Edit mode indicator */}
+              {!isEditing && (
+                <div className="col-span-full flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200 text-sm text-gray-500">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                  Viewing saved profile — click <strong className="text-gray-700 mx-1">Edit Profile</strong> below to make changes.
+                </div>
+              )}
               <div>
                 <label className="text-sm font-medium text-gray-700">Company Name</label>
                 <input
@@ -1602,11 +1650,12 @@ export default function CompanyProfilePage() {
                 <input
                   value={activeProfile.website_url || ''}
                   onChange={(e) => handleChange('website_url', e.target.value)}
-                  placeholder="https://example.com"
+                  onBlur={(e) => normalizeUrlField('website_url', e.target.value)}
+                  placeholder="example.com"
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  AI refinement can use this website to improve profile accuracy.
+                  AI refinement crawls this website, your social profiles, blog, and any additional profiles to enrich all fields below.
                 </p>
               </div>
               <div>
@@ -1696,15 +1745,18 @@ export default function CompanyProfilePage() {
 
             <div className="border rounded-lg p-4">
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-semibold text-gray-800">Additional Social Profiles</h3>
-                <button
-                  type="button"
-                  onClick={addOtherSocial}
-                  className="px-3 py-1 bg-gray-100 text-gray-800 rounded text-xs"
-                >
-                  + Add profile
-                </button>
+                <h3 className="text-sm font-semibold text-gray-800">Additional Digital Assets</h3>
+                {isEditing && (
+                  <button
+                    type="button"
+                    onClick={addOtherSocial}
+                    className="px-3 py-1 bg-gray-100 text-gray-800 rounded text-xs"
+                  >
+                    + Add
+                  </button>
+                )}
               </div>
+              <p className="text-xs text-gray-500 mb-2">Add any other digital presence — communities (Slack, Discord, Circle), profile pages (Crunchbase, G2, Clutch), newsletters, podcasts, or other links. Refine with AI will crawl these too.</p>
               {(activeProfile.other_social_links || []).length === 0 && (
                 <div className="text-xs text-gray-500">No additional profiles added.</div>
               )}
@@ -1723,13 +1775,15 @@ export default function CompanyProfilePage() {
                       placeholder="https://..."
                       className="md:col-span-3 border border-gray-300 rounded-lg px-3 py-2 text-sm"
                     />
-                    <button
-                      type="button"
-                      onClick={() => removeOtherSocial(index)}
-                      className="md:col-span-1 text-xs text-red-600"
-                    >
-                      Remove
-                    </button>
+                    {isEditing && (
+                      <button
+                        type="button"
+                        onClick={() => removeOtherSocial(index)}
+                        className="md:col-span-1 text-xs text-red-600"
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1817,6 +1871,39 @@ export default function CompanyProfilePage() {
               <div className="text-xs text-gray-500 mt-1">
                 Extracted: {joinList(activeProfile.content_themes_list, activeProfile.content_themes)}
               </div>
+            </div>
+
+            <div className="border-t pt-6 mt-6">
+              {isRefining ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
+                    <svg className="animate-spin h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                    {REFINE_STEPS[(refineStep - 1) % REFINE_STEPS.length]}
+                  </div>
+                  <div className="flex gap-1">
+                    {REFINE_STEPS.map((_, i) => (
+                      <div
+                        key={i}
+                        className={`h-1 flex-1 rounded-full transition-all duration-500 ${
+                          i < refineStep ? 'bg-indigo-500' : 'bg-gray-200'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500">Step {refineStep} of {REFINE_STEPS.length} — this usually takes 20–45 seconds</p>
+                </div>
+              ) : (
+                <button
+                  onClick={refineProfile}
+                  disabled={isSaving}
+                  className="px-4 py-2 bg-gray-100 text-gray-900 rounded-lg text-sm font-medium disabled:opacity-50"
+                >
+                  Refine with AI
+                </button>
+              )}
             </div>
 
             <div className="border-t pt-6 mt-6">
@@ -2252,21 +2339,38 @@ export default function CompanyProfilePage() {
               </div>
             )}
 
-            <div className="flex items-center gap-3 pt-2">
-              <button
-                onClick={saveProfile}
-                disabled={isSaving || isRefining}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
-              >
-                {isSaving ? 'Saving...' : 'Save Profile'}
-              </button>
-              <button
-                onClick={refineProfile}
-                disabled={isSaving || isRefining}
-                className="px-4 py-2 bg-gray-100 text-gray-900 rounded-lg text-sm font-medium disabled:opacity-50"
-              >
-                {isRefining ? 'Refining...' : 'Refine with AI'}
-              </button>
+            <div className="flex items-center gap-3 pt-2 border-t mt-6">
+              {isEditing ? (
+                <>
+                  <button
+                    onClick={saveProfile}
+                    disabled={isSaving || isRefining}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                  >
+                    {isSaving ? 'Saving...' : 'Save Profile'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditing(false);
+                      setDraftProfile(profile || activeProfile);
+                      updateActiveProfile(profile || activeProfile);
+                    }}
+                    disabled={isSaving}
+                    className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(true)}
+                  className="px-4 py-2 bg-gray-100 text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-200"
+                >
+                  Edit Profile
+                </button>
+              )}
             </div>
           </div>
         )}

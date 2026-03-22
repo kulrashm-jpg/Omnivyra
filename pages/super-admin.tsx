@@ -132,6 +132,9 @@ export default function SuperAdminPanel() {
     }
   }, [canShowExternalApisTab, userRole]);
   const [activeTab, setActiveTab] = useState('analytics');
+  const [analyticsSubTab, setAnalyticsSubTab] = useState<'overview' | 'campaign-health'>('overview');
+  const [companySubTab, setCompanySubTab] = useState<'users' | 'rbac'>('users');
+  const [plansSubTab, setPlansSubTab] = useState<'plans' | 'consumption'>('plans');
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
   const [analyticsSummary, setAnalyticsSummary] = useState<AnalyticsSummary | null>(null);
@@ -911,9 +914,12 @@ export default function SuperAdminPanel() {
     }
   };
 
-  const handleDeleteUser = async (userId: string, companyId: string) => {
+  const handleDeleteUser = async (userId: string, companyId: string | null) => {
     console.log('Delete user attempt:', { userId, companyId });
-    if (!confirm('Remove this user from the company? This cannot be undone.')) {
+    const confirmMsg = companyId
+      ? 'Remove this user from the company? This cannot be undone.'
+      : 'Permanently delete this unassigned user from the system? This cannot be undone.';
+    if (!confirm(confirmMsg)) {
       return;
     }
     setIsLoading(true);
@@ -1049,32 +1055,20 @@ export default function SuperAdminPanel() {
         {/* Navigation Tabs */}
         <div className="flex space-x-1 bg-gray-100 rounded-lg p-1 mb-8">
           {[
-            { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-            { id: 'campaign-health', label: 'Campaign Health', icon: TrendingUp },
-            { id: 'company-users', label: 'Companies & Users', icon: Users },
-            { id: 'plans', label: 'Pricing & Plans', icon: DollarSign },
-            { id: 'consumption', label: 'Consumption', icon: Coins },
-            { id: 'rbac', label: 'RBAC', icon: Key },
-            { id: 'community-ai', label: 'Engagement', icon: Activity },
-            { id: 'audit', label: 'Audit Logs', icon: Eye },
-            { id: 'social-platforms', label: 'APIs', icon: Globe },
-            { id: 'blog', label: 'Blog', icon: FileText },
+            { id: 'analytics',     label: 'Analytics',        icon: BarChart3  },
+            { id: 'company-users', label: 'Companies & Users', icon: Users      },
+            { id: 'plans',         label: 'Pricing & Plans',   icon: DollarSign },
+            { id: 'community-ai',  label: 'Engagement',        icon: Activity   },
+            { id: 'audit',         label: 'Audit Logs',        icon: Eye        },
+            { id: 'social-platforms', label: 'APIs',           icon: Globe      },
+            { id: 'blog',          label: 'Blog',              icon: FileText   },
           ].map((tab) => {
             const Icon = tab.icon;
-            const isBlog = tab.id === 'blog';
-            const isConsumption = tab.id === 'consumption';
             return (
               <button
                 key={tab.id}
                 onClick={() => {
-                  if (isBlog) {
-                    router.push('/admin/blog');
-                    return;
-                  }
-                  if (isConsumption) {
-                    router.push('/super-admin/consumption');
-                    return;
-                  }
+                  if (tab.id === 'blog') { router.push('/admin/blog'); return; }
                   setActiveTab(tab.id);
                   if (tab.id === 'social-platforms') loadSocialPlatforms();
                 }}
@@ -1094,7 +1088,20 @@ export default function SuperAdminPanel() {
         {/* Tab Content */}
         {activeTab === 'analytics' && (
           <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            {/* Analytics sub-tabs */}
+            <div className="flex space-x-1 bg-gray-100 rounded-lg p-1 w-fit">
+              {([{ id: 'overview', label: 'Overview' }, { id: 'campaign-health', label: 'Campaign Health' }] as const).map((sub) => (
+                <button
+                  key={sub.id}
+                  onClick={() => setAnalyticsSubTab(sub.id)}
+                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${analyticsSubTab === sub.id ? 'bg-white text-red-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+
+            {analyticsSubTab === 'overview' && <><div className="grid grid-cols-1 md:grid-cols-4 gap-6">
               <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
                 <div className="flex items-center gap-3">
                   <div className="p-3 bg-blue-100 rounded-lg">
@@ -1230,125 +1237,138 @@ export default function SuperAdminPanel() {
                 )}
               </div>
             </div>
-          </div>
-        )}
+            </>}
 
-        {activeTab === 'campaign-health' && (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-blue-100 rounded-lg">
-                    <BarChart3 className="h-6 w-6 text-blue-600" />
+            {analyticsSubTab === 'campaign-health' && <>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-blue-100 rounded-lg">
+                      <BarChart3 className="h-6 w-6 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Total Campaigns</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {isLoadingCampaignHealth ? '—' : (campaignHealth?.total_campaigns ?? 0).toLocaleString()}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Total Campaigns</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {isLoadingCampaignHealth ? '—' : (campaignHealth?.total_campaigns ?? 0).toLocaleString()}
-                    </p>
+                </div>
+
+                <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-green-100 rounded-lg">
+                      <Activity className="h-6 w-6 text-green-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Active Campaigns</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {isLoadingCampaignHealth ? '—' : (campaignHealth?.active_campaigns ?? 0).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-purple-100 rounded-lg">
+                      <CheckCircle className="h-6 w-6 text-purple-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Approved Strategies</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {isLoadingCampaignHealth ? '—' : (campaignHealth?.approved_strategies ?? 0).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-amber-100 rounded-lg">
+                      <AlertCircle className="h-6 w-6 text-amber-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Pending Re-Approval</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {isLoadingCampaignHealth ? '—' : (campaignHealth?.reapproval_required_count ?? 0).toLocaleString()}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-green-100 rounded-lg">
-                    <Activity className="h-6 w-6 text-green-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Active Campaigns</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {isLoadingCampaignHealth ? '—' : (campaignHealth?.active_campaigns ?? 0).toLocaleString()}
-                    </p>
-                  </div>
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+                <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+                  <h3 className="text-lg font-semibold text-gray-900">Campaigns by Company</h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Strategy approval health across tenants.
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                  {isLoadingCampaignHealth ? (
+                    <div className="px-6 py-8 text-sm text-gray-500">Loading campaign health…</div>
+                  ) : campaignHealth?.campaigns_by_company?.length ? (
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Company
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Campaign Count
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Active
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Re-Approval Required
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {campaignHealth.campaigns_by_company.map((row) => {
+                          const companyName =
+                            companies.find((company) => company.id === row.company_id)?.name ||
+                            row.company_id;
+                          return (
+                            <tr key={row.company_id}>
+                              <td className="px-6 py-4 text-sm text-gray-900">{companyName}</td>
+                              <td className="px-6 py-4 text-sm text-gray-900">{row.total_campaigns}</td>
+                              <td className="px-6 py-4 text-sm text-gray-900">{row.active_campaigns}</td>
+                              <td className="px-6 py-4 text-sm text-gray-900">{row.reapproval_required}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="px-6 py-8 text-sm text-gray-500">
+                      No campaign health data available yet.
+                    </div>
+                  )}
                 </div>
               </div>
-
-              <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-purple-100 rounded-lg">
-                    <CheckCircle className="h-6 w-6 text-purple-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Approved Strategies</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {isLoadingCampaignHealth ? '—' : (campaignHealth?.approved_strategies ?? 0).toLocaleString()}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-amber-100 rounded-lg">
-                    <AlertCircle className="h-6 w-6 text-amber-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Pending Re-Approval</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {isLoadingCampaignHealth ? '—' : (campaignHealth?.reapproval_required_count ?? 0).toLocaleString()}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
-                <h3 className="text-lg font-semibold text-gray-900">Campaigns by Company</h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  Strategy approval health across tenants.
-                </p>
-              </div>
-              <div className="overflow-x-auto">
-                {isLoadingCampaignHealth ? (
-                  <div className="px-6 py-8 text-sm text-gray-500">Loading campaign health…</div>
-                ) : campaignHealth?.campaigns_by_company?.length ? (
-                  <table className="w-full">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Company
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Campaign Count
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Active
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Re-Approval Required
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {campaignHealth.campaigns_by_company.map((row) => {
-                        const companyName =
-                          companies.find((company) => company.id === row.company_id)?.name ||
-                          row.company_id;
-                        return (
-                          <tr key={row.company_id}>
-                            <td className="px-6 py-4 text-sm text-gray-900">{companyName}</td>
-                            <td className="px-6 py-4 text-sm text-gray-900">{row.total_campaigns}</td>
-                            <td className="px-6 py-4 text-sm text-gray-900">{row.active_campaigns}</td>
-                            <td className="px-6 py-4 text-sm text-gray-900">{row.reapproval_required}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                ) : (
-                  <div className="px-6 py-8 text-sm text-gray-500">
-                    No campaign health data available yet.
-                  </div>
-                )}
-              </div>
-            </div>
+            </>}
           </div>
         )}
 
         {activeTab === 'company-users' && (
           <div className="space-y-6">
+            {/* Companies & Users sub-tabs */}
+            <div className="flex space-x-1 bg-gray-100 rounded-lg p-1 w-fit">
+              {([{ id: 'users', label: 'Companies & Users' }, { id: 'rbac', label: 'RBAC' }] as const).map((sub) => (
+                <button
+                  key={sub.id}
+                  onClick={() => setCompanySubTab(sub.id)}
+                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${companySubTab === sub.id ? 'bg-white text-red-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+
+            {companySubTab === 'users' && <>
             <div className="bg-white rounded-lg shadow-sm border border-gray-200">
               <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
                 <div>
@@ -1601,9 +1621,8 @@ export default function SuperAdminPanel() {
                             </button>
                             <button
                               onClick={() => handleDeleteUser(user.user_id, user.company_id)}
-                              disabled={!user.company_id}
-                              className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                              title={user.company_id ? 'Delete User' : 'User must be assigned to a company to delete'}
+                              className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50"
+                              title={user.company_id ? 'Remove from company' : 'Delete unassigned user'}
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
@@ -1622,11 +1641,206 @@ export default function SuperAdminPanel() {
                 </table>
               </div>
             </div>
+            </>}
+
+            {companySubTab === 'rbac' && <>
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+                <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+                  <h3 className="text-lg font-semibold text-gray-900">RBAC Configuration</h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Current role definitions and permission assignments for the platform.
+                  </p>
+                </div>
+                <div className="p-6 space-y-4">
+                  {rbacError && (
+                    <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                      {rbacError}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-gray-900 mb-2">Roles</div>
+                      <div className="flex flex-wrap gap-2">
+                        {displayRoles.map((role) => (
+                          <span
+                            key={role}
+                            className="px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-800"
+                          >
+                            {role}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-2">
+                        Roles are system-defined. Use permissions below to control access.
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleSaveRbac}
+                        disabled={!rbacDirty || isSavingRbac}
+                        className="px-3 py-2 text-sm bg-gray-900 text-white rounded-lg disabled:opacity-50"
+                      >
+                        {isSavingRbac ? 'Saving...' : 'Save Changes'}
+                      </button>
+                      <button
+                        onClick={handleResetRbac}
+                        disabled={!rbacDirty || isSavingRbac}
+                        className="px-3 py-2 text-sm border border-gray-300 text-gray-700 rounded-lg disabled:opacity-50"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+                  {rbacSaveError && (
+                    <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                      {rbacSaveError}
+                    </div>
+                  )}
+                  {rbacSaveSuccess && (
+                    <div className="rounded-md bg-green-50 border border-green-200 p-3 text-sm text-green-700">
+                      {rbacSaveSuccess}
+                    </div>
+                  )}
+                  <div className="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-3">
+                    <div className="text-sm font-medium text-gray-900">Add Permission</div>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div className="flex-1 min-w-[220px]">
+                        <label className="block text-xs text-gray-600 mb-1">Permission key</label>
+                        <input
+                          type="text"
+                          value={newPermissionKey}
+                          onChange={(e) => setNewPermissionKey(e.target.value)}
+                          placeholder="e.g. MANAGE_BILLING"
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-3">
+                        <label className="flex items-center gap-2 text-xs text-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={newPermissionRoles.includes('*')}
+                            onChange={() => toggleNewPermissionRole('*')}
+                          />
+                          All roles
+                        </label>
+                        {displayRoles.map((role) => (
+                          <label key={role} className="flex items-center gap-2 text-xs text-gray-700">
+                            <input
+                              type="checkbox"
+                              checked={newPermissionRoles.includes('*') || newPermissionRoles.includes(role)}
+                              disabled={newPermissionRoles.includes('*')}
+                              onChange={() => toggleNewPermissionRole(role)}
+                            />
+                            {role}
+                          </label>
+                        ))}
+                      </div>
+                      <button
+                        onClick={handleAddPermission}
+                        className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+                <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+                  <h3 className="text-lg font-semibold text-gray-900">Permissions Matrix</h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Permission
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Allowed Roles
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {permissionEntries.map(([permission, roles]) => {
+                        const isAllRoles = roles.includes('*');
+                        return (
+                          <tr key={permission} className="hover:bg-gray-50">
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                              {permission}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-600">
+                              <div className="flex flex-wrap gap-3">
+                                <label className="flex items-center gap-2 text-xs text-gray-700">
+                                  <input
+                                    type="checkbox"
+                                    checked={isAllRoles}
+                                    onChange={() => togglePermissionRole(permission, '*')}
+                                  />
+                                  All roles
+                                </label>
+                                {displayRoles.map((role) => (
+                                  <label
+                                    key={`${permission}-${role}`}
+                                    className="flex items-center gap-2 text-xs text-gray-700"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isAllRoles || roles.includes(role)}
+                                      disabled={isAllRoles}
+                                      onChange={() => togglePermissionRole(permission, role)}
+                                    />
+                                    {role}
+                                  </label>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-sm">
+                              <button
+                                onClick={() => handleRemovePermission(permission)}
+                                className="text-red-600 hover:text-red-900 text-xs font-medium"
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {permissionEntries.length === 0 && (
+                        <tr>
+                          <td colSpan={3} className="px-6 py-8 text-center text-sm text-gray-500">
+                            No permissions available.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>}
           </div>
         )}
 
         {activeTab === 'plans' && (
           <div className="space-y-6">
+            {/* Pricing & Plans sub-tabs */}
+            <div className="flex space-x-1 bg-gray-100 rounded-lg p-1 w-fit">
+              {([{ id: 'plans', label: 'Pricing & Plans' }, { id: 'consumption', label: 'Consumption' }] as const).map((sub) => (
+                <button
+                  key={sub.id}
+                  onClick={() => setPlansSubTab(sub.id)}
+                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${plansSubTab === sub.id ? 'bg-white text-red-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+
+            {plansSubTab === 'plans' && <>
             <div className="bg-white rounded-lg shadow-sm border border-gray-200">
               <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
                 <h3 className="text-lg font-semibold text-gray-900">Pricing & Plan Limits</h3>
@@ -1721,188 +1935,26 @@ export default function SuperAdminPanel() {
                 )}
               </div>
             </div>
-          </div>
-        )}
+            </>}
 
-        {activeTab === 'rbac' && (
-          <div className="space-y-6">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
-                <h3 className="text-lg font-semibold text-gray-900">RBAC Configuration</h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  Current role definitions and permission assignments for the platform.
-                </p>
-              </div>
-              <div className="p-6 space-y-4">
-                {rbacError && (
-                  <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-                    {rbacError}
-                  </div>
-                )}
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium text-gray-900 mb-2">Roles</div>
-                    <div className="flex flex-wrap gap-2">
-                      {displayRoles.map((role) => (
-                        <span
-                          key={role}
-                          className="px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-800"
-                        >
-                          {role}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="text-xs text-gray-500 mt-2">
-                      Roles are system-defined. Use permissions below to control access.
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleSaveRbac}
-                      disabled={!rbacDirty || isSavingRbac}
-                      className="px-3 py-2 text-sm bg-gray-900 text-white rounded-lg disabled:opacity-50"
-                    >
-                      {isSavingRbac ? 'Saving...' : 'Save Changes'}
-                    </button>
-                    <button
-                      onClick={handleResetRbac}
-                      disabled={!rbacDirty || isSavingRbac}
-                      className="px-3 py-2 text-sm border border-gray-300 text-gray-700 rounded-lg disabled:opacity-50"
-                    >
-                      Reset
-                    </button>
-                  </div>
+            {plansSubTab === 'consumption' && <>
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+                <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+                  <h3 className="text-lg font-semibold text-gray-900">Credit Consumption</h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Monitor credit usage across organizations.
+                  </p>
                 </div>
-                {rbacSaveError && (
-                  <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-                    {rbacSaveError}
-                  </div>
-                )}
-                {rbacSaveSuccess && (
-                  <div className="rounded-md bg-green-50 border border-green-200 p-3 text-sm text-green-700">
-                    {rbacSaveSuccess}
-                  </div>
-                )}
-                <div className="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-3">
-                  <div className="text-sm font-medium text-gray-900">Add Permission</div>
-                  <div className="flex flex-wrap items-end gap-3">
-                    <div className="flex-1 min-w-[220px]">
-                      <label className="block text-xs text-gray-600 mb-1">Permission key</label>
-                      <input
-                        type="text"
-                        value={newPermissionKey}
-                        onChange={(e) => setNewPermissionKey(e.target.value)}
-                        placeholder="e.g. MANAGE_BILLING"
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-3">
-                      <label className="flex items-center gap-2 text-xs text-gray-700">
-                        <input
-                          type="checkbox"
-                          checked={newPermissionRoles.includes('*')}
-                          onChange={() => toggleNewPermissionRole('*')}
-                        />
-                        All roles
-                      </label>
-                      {displayRoles.map((role) => (
-                        <label key={role} className="flex items-center gap-2 text-xs text-gray-700">
-                          <input
-                            type="checkbox"
-                            checked={newPermissionRoles.includes('*') || newPermissionRoles.includes(role)}
-                            disabled={newPermissionRoles.includes('*')}
-                            onChange={() => toggleNewPermissionRole(role)}
-                          />
-                          {role}
-                        </label>
-                      ))}
-                    </div>
-                    <button
-                      onClick={handleAddPermission}
-                      className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg"
-                    >
-                      Add
-                    </button>
-                  </div>
+                <div className="p-6">
+                  <button
+                    onClick={() => router.push('/super-admin/consumption')}
+                    className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium"
+                  >
+                    Open Consumption Dashboard
+                  </button>
                 </div>
               </div>
-            </div>
-
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
-                <h3 className="text-lg font-semibold text-gray-900">Permissions Matrix</h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Permission
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Allowed Roles
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {permissionEntries.map(([permission, roles]) => {
-                      const isAllRoles = roles.includes('*');
-                      return (
-                        <tr key={permission} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                            {permission}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            <div className="flex flex-wrap gap-3">
-                              <label className="flex items-center gap-2 text-xs text-gray-700">
-                                <input
-                                  type="checkbox"
-                                  checked={isAllRoles}
-                                  onChange={() => togglePermissionRole(permission, '*')}
-                                />
-                                All roles
-                              </label>
-                              {displayRoles.map((role) => (
-                                <label
-                                  key={`${permission}-${role}`}
-                                  className="flex items-center gap-2 text-xs text-gray-700"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={isAllRoles || roles.includes(role)}
-                                    disabled={isAllRoles}
-                                    onChange={() => togglePermissionRole(permission, role)}
-                                  />
-                                  {role}
-                                </label>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-sm">
-                            <button
-                              onClick={() => handleRemovePermission(permission)}
-                              className="text-red-600 hover:text-red-900 text-xs font-medium"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {permissionEntries.length === 0 && (
-                      <tr>
-                        <td colSpan={3} className="px-6 py-8 text-center text-sm text-gray-500">
-                          No permissions available.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            </>}
           </div>
         )}
 
@@ -2495,7 +2547,9 @@ export default function SuperAdminPanel() {
                             Redirect URI <span className="text-gray-400 font-normal">(register this exact URL in the platform developer console)</span>
                           </label>
                           {(() => {
-                            const base = (process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
+                            // Prefer window.location.origin so the displayed URL always matches
+                            // the domain the admin is actually on (avoids stale NEXT_PUBLIC_APP_URL).
+                            const base = (typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || '')).replace(/\/$/, '');
                             const uri = `${base}/api/auth/${p.platform_key}/callback`;
                             return (
                               <div className="flex items-center gap-2">

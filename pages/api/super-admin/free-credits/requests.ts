@@ -14,6 +14,7 @@ import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthServi
 import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { invalidateDomainCache } from '@/backend/services/domainEligibilityService';
+import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 
 const serviceSupabase = () => createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -83,16 +84,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       if (creditsToGrant > 0 && request.organization_id) {
-        await sb.rpc('apply_credit_transaction', {
-          p_organization_id:  request.organization_id,
-          p_transaction_type: 'purchase',
-          p_credits_delta:    creditsToGrant,
-          p_usd_equivalent:   null,
-          p_reference_type:   'free_credits',
-          p_reference_id:     requestId,
-          p_note:             `Domain access approved — ${creditsToGrant} credits`,
-          p_performed_by:     adminId === 'cookie' ? null : adminId,
-        });
+        const actor = adminId === 'cookie' ? request.organization_id : adminId;
+        try {
+          await createCredit({
+            orgId:          request.organization_id,
+            amount:         creditsToGrant,
+            category:       'free',
+            referenceType:  'domain_access_approval',
+            referenceId:    requestId,
+            note:           `Domain access approved — ${creditsToGrant} credits`,
+            performedBy:    actor,
+            idempotencyKey: makeIdempotencyKey(actor, 'domain_access_approval', requestId),
+          });
+        } catch (creditErr: any) {
+          console.error('[free-credits/requests] credit grant failed:', creditErr.message);
+        }
       }
 
       // Ensure the user has COMPANY_ADMIN role (never SUPER_ADMIN).

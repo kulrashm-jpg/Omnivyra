@@ -2,7 +2,7 @@
  * POST /api/super-admin/free-credits/grant
  *
  * Manually grant credits to any org (with optional user tagging).
- * Logs to manual_credit_grants + applies via apply_credit_transaction RPC.
+ * Logs to manual_credit_grants + applies via creditExecutionService.createCredit().
  *
  * Body: { organizationId, userId?, creditsAmount, category, reason, referenceId?, note? }
  */
@@ -12,6 +12,7 @@ import { createClient } from '@supabase/supabase-js';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
+import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 
 const serviceSupabase = () => createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -55,24 +56,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sb = serviceSupabase();
   const grantedBy = adminId === 'cookie' ? null : adminId;
 
-  // Apply the credit transaction
-  const { error: txErr } = await sb.rpc('apply_credit_transaction', {
-    p_organization_id:  organizationId,
-    p_transaction_type: 'purchase',
-    p_credits_delta:    creditsAmount,
-    p_usd_equivalent:   null,
-    p_reference_type:   'free_credits',
-    p_reference_id:     referenceId ?? null,
-    p_note:             `[${category}] ${reason}`,
-    p_performed_by:     grantedBy,
-  });
+  // ── 1. Log grant record FIRST — the grantId becomes the idempotency anchor ─
+  // If this endpoint is retried, the same grantId produces the same idempotency
+  // key → createCredit is a no-op → exactly-once credit guaranteed.
+  const { data: grant, error: logErr } = await sb.from('manual_credit_grants').insert({
+    organization_id: organizationId,
+    user_id:         userId ?? null,
+    granted_by:      grantedBy,
+    credits_amount:  creditsAmount,
+    category,
+    reason,
+    reference_id:    referenceId ?? null,
+    note:            note ?? null,
+  }).select('id').single();
 
-  if (txErr) {
-    console.error('[free-credits/grant] rpc failed:', txErr.message);
+  if (logErr || !grant?.id) {
+    console.error('[free-credits/grant] log failed:', logErr?.message);
+    return res.status(500).json({ error: 'Failed to record grant: ' + (logErr?.message ?? 'unknown') });
+  }
+
+  // ── 2. Apply credit via creditExecutionService (idempotent on grantId) ─────
+  try {
+    await createCredit({
+      orgId:          organizationId,
+      amount:         creditsAmount,
+      category:       'paid',
+      referenceType:  'manual_grant',
+      referenceId:    grant.id,
+      note:           `[${category}] ${reason}`,
+      performedBy:    grantedBy ?? organizationId,
+      idempotencyKey: makeIdempotencyKey(
+        grantedBy ?? organizationId,
+        `admin_grant:${category}`,
+        grant.id,
+      ),
+    });
+  } catch (txErr: any) {
+    console.error('[free-credits/grant] credit grant failed:', txErr.message);
     return res.status(500).json({ error: 'Credit transaction failed: ' + txErr.message });
   }
 
-  // If a specific user is tagged, ensure they are COMPANY_ADMIN (not SUPER_ADMIN)
+  // ── 3. If a specific user is tagged, ensure they are COMPANY_ADMIN ─────────
   if (userId) {
     const { data: existingRole } = await sb
       .from('user_company_roles')
@@ -95,22 +119,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // Log to manual_credit_grants
-  const { data: grant, error: logErr } = await sb.from('manual_credit_grants').insert({
-    organization_id: organizationId,
-    user_id:         userId ?? null,
-    granted_by:      grantedBy,
-    credits_amount:  creditsAmount,
-    category,
-    reason,
-    reference_id:    referenceId ?? null,
-    note:            note ?? null,
-  }).select('id').single();
-
-  if (logErr) {
-    console.error('[free-credits/grant] log failed:', logErr.message);
-    // Non-fatal — transaction already applied
-  }
-
-  return res.status(200).json({ success: true, grantId: grant?.id });
+  return res.status(200).json({ success: true, grantId: grant.id });
 }

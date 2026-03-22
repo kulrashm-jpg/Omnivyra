@@ -62,7 +62,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { durationWeeks } = req.body || {};
+    const { durationWeeks, blog_context, insight_context, topic_context, source_blog_id, source_blog_type } = req.body || {};
 
     const { data: recommendation, error: recError } = await supabase
       .from('recommendation_snapshots')
@@ -135,6 +135,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .maybeSingle();
     const opportunityAnalysis = opportunityRow?.metadata?.opportunity_analysis ?? null;
 
+    const resolvedBlogType = source_blog_type === 'company' ? 'company' : 'public';
+
     const { data: campaign, error: campaignError } = await supabase
       .from('campaigns')
       .insert({
@@ -142,6 +144,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         description: `Auto-generated from recommendation ${recommendation.id}`,
         status: 'draft',
         current_stage: 'planning',
+        ...(source_blog_type ? { source_blog_type: resolvedBlogType } : {}),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
@@ -168,6 +171,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       campaign_snapshot: {
         campaign,
         source_recommendation_id: recommendation.id,
+        // Campaign Assist context — null when user skipped the panel
+        ...(blog_context    != null ? { blog_context }    : {}),
+        ...(insight_context != null ? { insight_context } : {}),
+        ...(topic_context   != null ? { topic_context }   : {}),
+        // Source blog reference — which blog anchored this campaign
+        ...(source_blog_id ? { source_blog: { id: String(source_blog_id), type: resolvedBlogType } } : {}),
       },
       status: 'draft',
       version: 1,

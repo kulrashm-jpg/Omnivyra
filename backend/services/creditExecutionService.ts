@@ -1,5 +1,5 @@
 /**
- * Credit Execution Service — Production-grade Hold / Confirm / Release
+ * Credit Execution Service — SINGLE AUTHORITY for all credit mutations
  *
  * Architecture:
  *   ┌──────────────────────────────────────────────────────────────────────┐
@@ -16,20 +16,29 @@
  *   4. Usage is recorded in the CONFIRM step only — never before, never after
  *   5. Concurrent retries are safe — DB unique index de-duplicates all phases
  *   6. Admin grants go through createCredit() — never through the deduction path
+ *   7. ALL credit mutations flow through this service — no bypasses
  */
 
 import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import {
-  deductCredits,
-  deductCreditsIfValue,
   type CreditAction,
   type DeductOptions,
   type DeductResult,
   getCreditCost,
+  wasRecentlyRun,
+  SMART_MODE_DEDUP_SECONDS,
 } from './creditDeductionService';
 import { resolveDeduction, type CategorySplit } from './creditPriorityService';
 import { trackUsage } from './usageTrackingService';
+import { checkCreditAlerts } from './creditAlertService';
+
+/** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
+function fireAlerts(orgId: string): void {
+  checkCreditAlerts(orgId).catch(err =>
+    console.warn('[creditExecution] alert check failed (non-fatal):', err?.message),
+  );
+}
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
@@ -117,30 +126,30 @@ async function callReservation(p: ReservationParams): Promise<{
   transactionId: string | null;
 }> {
   const { error, data } = await supabase.rpc('apply_credit_reservation', {
-    p_org_id:          p.orgId,
-    p_phase:           p.phase,
-    p_free_amount:     p.split.free,
+    p_org_id:           p.orgId,
+    p_phase:            p.phase,
+    p_free_amount:      p.split.free,
     p_incentive_amount: p.split.incentive,
-    p_paid_amount:     p.split.paid,
-    p_idempotency_key: p.idempotencyKey,
-    p_reference_type:  p.referenceType,
-    p_reference_id:    p.referenceId ?? null,
-    p_note:            p.note,
-    p_performed_by:    p.performedBy,
-    p_parent_id:       p.parentId ?? null,
+    p_paid_amount:      p.split.paid,
+    p_idempotency_key:  p.idempotencyKey,
+    p_reference_type:   p.referenceType,
+    p_reference_id:     p.referenceId ?? null,
+    p_note:             p.note,
+    p_performed_by:     p.performedBy,
+    p_parent_id:        p.parentId ?? null,
   });
 
   const txId = (data as any)?.id ?? null;
   return { error: error as any, transactionId: txId };
 }
 
-async function findTransaction(key: string): Promise<{ id: string } | null> {
+async function findTransaction(key: string): Promise<{ id: string; execution_phase?: string } | null> {
   const { data } = await supabase
     .from('credit_transactions')
     .select('id, execution_phase')
     .eq('idempotency_key', key)
     .maybeSingle();
-  return data as { id: string } | null;
+  return data as { id: string; execution_phase?: string } | null;
 }
 
 async function loadHoldSplit(holdId: string): Promise<CategorySplit | null> {
@@ -245,6 +254,7 @@ export async function executeWithCredits<T>(
 
     if (!split || !available) {
       console.warn(`[creditExecution] insufficient_credits: need ${credits}, have ${available?.total ?? 0} for ${orgId}`);
+      fireAlerts(orgId);
       return {
         status: 'insufficient_credits',
         available: available?.total ?? 0,
@@ -268,6 +278,7 @@ export async function executeWithCredits<T>(
     if (holdErr) {
       const msg = (holdErr as any).message ?? '';
       if (msg.includes('insufficient')) {
+        fireAlerts(orgId);
         return { status: 'insufficient_credits', available: 0, required: credits };
       }
       if (msg.includes('no_credit_account')) {
@@ -345,7 +356,7 @@ export async function executeWithCredits<T>(
 // ── Admin grants ───────────────────────────────────────────────────────────────
 
 /**
- * Create a credit grant (admin operation).
+ * Create a credit grant (admin operation or onboarding).
  * Routes through apply_credit_reservation with phase='grant'.
  * Idempotency key is REQUIRED.
  *
@@ -355,15 +366,15 @@ export async function executeWithCredits<T>(
  *   orgId:          company.id,
  *   amount:         300,
  *   category:       'free',
- *   referenceType:  'onboarding',
- *   performedBy:    admin.id,
- *   idempotencyKey: makeIdempotencyKey(admin.id, 'onboarding_grant', company.id),
+ *   referenceType:  'free_credits',
+ *   performedBy:    user.id,
+ *   idempotencyKey: makeIdempotencyKey(user.id, 'onboarding_grant', company.id),
  * });
  * ```
  */
 export async function createCredit(opts: CreateCreditOptions): Promise<void> {
   if (!opts.idempotencyKey || opts.idempotencyKey.trim() === '') {
-    throw new Error('[createCredit] MISSING idempotencyKey — admin grants require deterministic keys');
+    throw new Error('[createCredit] MISSING idempotencyKey — credit grants require deterministic keys');
   }
 
   const split: CategorySplit = {
@@ -393,10 +404,53 @@ export async function createCredit(opts: CreateCreditOptions): Promise<void> {
   }
 }
 
+// ── Best-effort deduction wrappers ────────────────────────────────────────────
+//
+// These wrappers use executeWithCredits internally, ensuring ALL deductions
+// go through the HOLD → EXECUTE → CONFIRM/RELEASE path.
+//
+// Idempotency key strategy for best-effort callers:
+//   - Use opts.referenceId or opts.campaignId when available (most precise)
+//   - Fall back to a time-bucket salt sized to the action's smart-mode window
+//     (e.g. 1-hour bucket for trend_analysis, 24-hour bucket for website_audit)
+//   This ensures: same org+action within the dedup window = idempotent;
+//   different work items with distinct referenceIds = separate charges.
+
+function buildBestEffortKey(
+  orgId:  string,
+  action: CreditAction,
+  opts:   DeductOptions,
+): { idempotencyKey: string; referenceId: string } {
+  const actorId    = opts.userId ?? orgId;
+  const refId      = opts.referenceId ?? opts.campaignId;
+
+  if (refId) {
+    return {
+      idempotencyKey: makeIdempotencyKey(actorId, action, refId),
+      referenceId:    refId,
+    };
+  }
+
+  // No referenceId — bucket by the action's dedup window (or 1 h default)
+  const windowSec  = SMART_MODE_DEDUP_SECONDS[action] ?? 3_600;
+  const bucketMs   = windowSec * 1000;
+  const bucket     = Math.floor(Date.now() / bucketMs).toString();
+
+  return {
+    idempotencyKey: makeIdempotencyKey(actorId, action, `${orgId}:${bucket}`),
+    referenceId:    `${orgId}:${bucket}`,
+  };
+}
+
 /**
  * Deduct credits in a best-effort, non-blocking way.
  *
- * Used by high-level workflows where execution should continue regardless of credit status.
+ * Used by high-level workflows where execution should continue regardless of
+ * credit status. All deductions are routed through executeWithCredits (HOLD →
+ * no-op executor → CONFIRM/RELEASE), ensuring full atomicity and idempotency.
+ *
+ * Callers should pass opts.referenceId (campaignId, contentId, etc.) for the
+ * most precise idempotency. Without it, a time-bucket key is generated.
  */
 export async function deductCreditsAwaited(
   orgId: string,
@@ -405,24 +459,60 @@ export async function deductCreditsAwaited(
   smartMode = true,
 ): Promise<DeductResult> {
   try {
-    const result = await deductCredits(orgId, action, opts, smartMode);
-    if (!result.success) {
-      const reason = result.reason ?? 'unknown';
-      const detail = result.detail ? ` detail=${result.detail}` : '';
-      console.warn(
-        `[creditExecution] deductCreditsAwaited: org=${orgId} action=${action} reason=${reason}` + detail,
-      );
+    // Smart Mode dedup — skip charge if same action ran recently
+    if (smartMode) {
+      const dedupWindow = SMART_MODE_DEDUP_SECONDS[action];
+      if (dedupWindow && await wasRecentlyRun(orgId, action, dedupWindow)) {
+        return { success: true, skipped: true, reason: 'smart_mode_dedup' };
+      }
     }
-    return result;
+
+    const credits = Math.round((await getCreditCost(action)) * (opts.multiplier ?? 1));
+    const { idempotencyKey, referenceId } = buildBestEffortKey(orgId, action, opts);
+
+    const result = await executeWithCredits({
+      userId:         opts.userId ?? orgId,
+      orgId,
+      action,
+      referenceType:  action,
+      referenceId,
+      idempotencyKey,
+      amountOverride: credits,
+      note:           opts.note,
+      executor:       async () => { /* best-effort: work already done by caller */ },
+    });
+
+    if (result.status === 'executed' || result.status === 'already_confirmed') {
+      return { success: true, creditsCharged: credits, balanceAfter: 0 };
+    }
+    if (result.status === 'already_released') {
+      return { success: true, skipped: true, reason: 'smart_mode_dedup' };
+    }
+    if (result.status === 'insufficient_credits') {
+      return {
+        success: false,
+        reason:  'insufficient_credits',
+        detail:  `Need ${result.required}, have ${result.available}`,
+      };
+    }
+    if (result.status === 'no_credit_account') {
+      return { success: false, reason: 'no_credit_account' };
+    }
+    return { success: false, reason: 'error' };
   } catch (err: unknown) {
     console.error('[creditExecution] deductCreditsAwaited unexpected error', err);
-    return { success: false, reason: 'error', detail: err instanceof Error ? err.message : String(err) };
+    return {
+      success: false,
+      reason:  'error',
+      detail:  err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
 /**
  * Deduct credits when a value condition is true.
- * If valueFound is false, deduction is skipped.
+ * If valueFound is false, deduction is skipped entirely (no hold placed).
+ * If valueFound is true, routes through executeWithCredits like deductCreditsAwaited.
  */
 export async function deductCreditsIfValueAwaited(
   orgId: string,
@@ -435,7 +525,7 @@ export async function deductCreditsIfValueAwaited(
     if (!valueFound) {
       return { success: true, skipped: true, reason: 'smart_mode_dedup', valueFound: false };
     }
-    const result = await deductCreditsIfValue(orgId, action, valueFound, opts);
+    const result = await deductCreditsAwaited(orgId, action, opts, smartMode);
     if (!result.success) {
       const reason = result.reason ?? 'unknown';
       const detail = result.detail ? ` detail=${result.detail}` : '';
@@ -448,8 +538,8 @@ export async function deductCreditsIfValueAwaited(
     console.error('[creditExecution] deductCreditsIfValueAwaited unexpected error', err);
     return {
       success: false,
-      reason: 'error',
-      detail: err instanceof Error ? err.message : String(err),
+      reason:  'error',
+      detail:  err instanceof Error ? err.message : String(err),
       valueFound,
     };
   }

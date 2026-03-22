@@ -91,13 +91,13 @@ const PLAN_COST_LIMITS: Record<string, number> = {
 
 const DEFAULT_PLAN_COST_LIMIT = 0.050; // growth equivalent
 
-// Operations that free/trial users are never allowed to run (too expensive)
+// Operations that free/trial users are never allowed to run (too expensive or
+// reserved for paid plans). Profile enrichment/extraction are intentionally
+// NOT blocked — they are the core value demo for new free-credit users.
 const BLOCKED_OPS_FOR_FREE: Set<string> = new Set([
   'generateCampaignPlan',
   'parsePlanToWeeks',
   'generateDailyDistributionPlan',
-  'profileEnrichment',
-  'profileExtraction',
 ]);
 
 // ── Types ─────────────────────────────────────────────────────────────────────

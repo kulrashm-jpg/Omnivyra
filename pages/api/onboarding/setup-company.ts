@@ -19,9 +19,11 @@ import {
   isFreeEmailDomain,
 } from '../../../backend/services/companyMatchService';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
+import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
 
 type Result =
   | { companyId: string; selfJoined?: boolean; matchedCompanyName?: string }
+  | { code: string; error: string; limit?: number; current?: number | null }
   | { error: string };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
@@ -67,6 +69,95 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const eligibility = await checkDomainEligibility(user.email, user.id);
     if (eligibility.status === 'blocked') {
       return res.status(403).json({ error: 'Your email domain is not eligible for free credits.' });
+    }
+
+    // Public email domain — allowed only via invite or approved access request.
+    // Cannot create a company or receive free credits.
+    if (eligibility.reason === 'public_provider') {
+      // ── Path A: team invite ──────────────────────────────────────────────
+      const { data: invite } = await supabase
+        .from('user_company_roles')
+        .select('id, company_id, role')
+        .eq('user_id', user.id)
+        .eq('status', 'invited')
+        .limit(1)
+        .maybeSingle();
+
+      // ── Path B: approved access request ─────────────────────────────────
+      const { data: accessRequest } = user.email
+        ? await supabase
+            .from('access_requests')
+            .select('id, organization_id')
+            .eq('email', user.email.toLowerCase())
+            .eq('status', 'approved')
+            .not('organization_id', 'is', null)
+            .limit(1)
+            .maybeSingle()
+        : { data: null };
+
+      if (!invite && !accessRequest) {
+        return res.status(403).json({
+          code:  'INVITE_REQUIRED',
+          error: 'You can only join via an organization invite',
+        });
+      }
+
+      // ── Org join limit for public-email users ────────────────────────────
+      // Configurable via PUBLIC_EMAIL_MAX_ORGS env var (default: 2).
+      // Counts only active memberships — invited/inactive rows don't count.
+      const maxOrgs = parseInt(process.env.PUBLIC_EMAIL_MAX_ORGS ?? '2', 10);
+      const { count: activeOrgCount } = await supabase
+        .from('user_company_roles')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('status', 'active');
+
+      if ((activeOrgCount ?? 0) >= maxOrgs) {
+        return res.status(403).json({
+          code:      'ORG_LIMIT_REACHED',
+          error:     `Public email accounts may belong to at most ${maxOrgs} organization${maxOrgs === 1 ? '' : 's'}.`,
+          limit:     maxOrgs,
+          current:   activeOrgCount,
+        });
+      }
+
+      const now = new Date().toISOString();
+
+      if (invite) {
+        // Accept the team invite: move 'invited' → 'active'
+        await supabase
+          .from('user_company_roles')
+          .update({ status: 'active', accepted_at: now, updated_at: now })
+          .eq('id', invite.id);
+
+        return res.status(200).json({ companyId: invite.company_id });
+      }
+
+      // Approved access request: attach user to the pre-created company as COMPANY_ADMIN
+      const orgId = accessRequest!.organization_id as string;
+
+      // Idempotent: only insert if not already a member
+      const { data: existingRole } = await supabase
+        .from('user_company_roles')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('company_id', orgId)
+        .maybeSingle();
+
+      if (!existingRole) {
+        await supabase.from('user_company_roles').insert({
+          user_id:     user.id,
+          company_id:  orgId,
+          role:        'COMPANY_ADMIN',
+          status:      'active',
+          join_source: 'invited',           // approved via access request = effectively invited
+          accepted_at: now,
+          created_at:  now,
+          updated_at:  now,
+        });
+      }
+
+      return res.status(200).json({ companyId: orgId });
     }
   }
 
@@ -167,6 +258,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return d && !isFreeEmailDomain(d) ? d : null;
     })();
 
+    // ── STEP 1: Domain-first lookup — prevent duplicate companies per domain ──
+    // If a company already exists for this admin email domain, route to self-join
+    // instead of creating a second company. Handles both the pre-check (common
+    // path) and the post-insert race (rare path via unique violation below).
+    if (adminEmailDomain) {
+      const { data: domainCompany } = await supabase
+        .from('companies')
+        .select('id, name')
+        .eq('admin_email_domain', adminEmailDomain)
+        .maybeSingle();
+
+      if (domainCompany) {
+        // Domain is already claimed — join the existing company instead
+        const domainNow = new Date().toISOString();
+        const { data: existingRole } = await supabase
+          .from('user_company_roles')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('company_id', domainCompany.id)
+          .maybeSingle();
+
+        if (!existingRole) {
+          await supabase.from('user_company_roles').insert({
+            user_id:     user.id,
+            company_id:  domainCompany.id,
+            role:        'CONTENT_CREATOR',
+            status:      'active',
+            join_source: 'self_joined',
+            created_at:  domainNow,
+            updated_at:  domainNow,
+            invited_at:  domainNow,
+          });
+        }
+
+        await supabase
+          .from('free_credit_profiles')
+          .update({ organization_id: domainCompany.id, updated_at: domainNow })
+          .eq('user_id', user.id);
+
+        try {
+          await notifyCompanyAdminsOfSelfJoin({
+            companyId:    domainCompany.id,
+            companyName:  domainCompany.name,
+            newUserId:    user.id,
+            newUserEmail: user.email ?? null,
+            matchType:    'admin_email_domain',
+          });
+        } catch (notifyErr: any) {
+          console.warn('[setup-company] domain self-join notification failed:', notifyErr?.message);
+        }
+
+        return res.status(200).json({
+          companyId:          domainCompany.id,
+          selfJoined:         true,
+          matchedCompanyName: domainCompany.name,
+        });
+      }
+    }
+
     const { error: companyErr } = await supabase.from('companies').insert({
       id:                 companyId,
       name:               companyName.trim(),
@@ -175,8 +325,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       status:             'active',
       website_domain:     websiteDomain,
       admin_email_domain: adminEmailDomain,
+      domain_claimed_at:  adminEmailDomain ? now : null, // STEP 5
       created_at:         now,
     });
+
+    // ── Race condition: another request won the domain UNIQUE race ────────────
+    if (companyErr?.code === '23505' && adminEmailDomain) {
+      const { data: raceWinner } = await supabase
+        .from('companies')
+        .select('id, name')
+        .eq('admin_email_domain', adminEmailDomain)
+        .maybeSingle();
+
+      if (raceWinner) {
+        const raceNow = new Date().toISOString();
+        const { data: existingRole } = await supabase
+          .from('user_company_roles')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('company_id', raceWinner.id)
+          .maybeSingle();
+
+        if (!existingRole) {
+          await supabase.from('user_company_roles').insert({
+            user_id:     user.id,
+            company_id:  raceWinner.id,
+            role:        'CONTENT_CREATOR',
+            status:      'active',
+            join_source: 'self_joined',
+            created_at:  raceNow,
+            updated_at:  raceNow,
+            invited_at:  raceNow,
+          });
+        }
+
+        await supabase
+          .from('free_credit_profiles')
+          .update({ organization_id: raceWinner.id, updated_at: raceNow })
+          .eq('user_id', user.id);
+
+        return res.status(200).json({
+          companyId:          raceWinner.id,
+          selfJoined:         true,
+          matchedCompanyName: raceWinner.name,
+        });
+      }
+    }
+
     if (companyErr) throw companyErr;
 
     // ── 4. Create user_company_roles row (company admin) ─────────────────────
@@ -220,6 +415,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       .maybeSingle();
 
     if (pendingProfile?.initial_credits) {
+      // ── STEP 2: One free credit grant per domain ──────────────────────────
+      // Block the grant if any other org on the same admin_email_domain has
+      // already received an initial credit grant.
+      let domainAlreadyClaimed = false;
+      if (adminEmailDomain) {
+        const { data: domainSiblings } = await supabase
+          .from('companies')
+          .select('id')
+          .eq('admin_email_domain', adminEmailDomain)
+          .neq('id', companyId);
+
+        const siblingIds = (domainSiblings ?? []).map((r: any) => r.id);
+        if (siblingIds.length > 0) {
+          const { data: siblingClaim } = await supabase
+            .from('free_credit_claims')
+            .select('id')
+            .eq('category', 'initial')
+            .in('organization_id', siblingIds)
+            .limit(1)
+            .maybeSingle();
+          domainAlreadyClaimed = !!siblingClaim;
+        }
+      }
+
       const { data: existingClaim } = await supabase
         .from('free_credit_claims')
         .select('id, organization_id')
@@ -227,53 +446,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         .eq('category', 'initial')
         .maybeSingle();
 
-      if (!existingClaim) {
-        // First time — grant credits and log claim
-        const expiryNote = pendingProfile.credit_expiry_at
-          ? ` (expires ${(pendingProfile.credit_expiry_at as string).slice(0, 10)})`
-          : '';
-        const { error: creditErr } = await supabase.rpc('apply_credit_transaction', {
-          p_organization_id: companyId,
-          p_transaction_type: 'purchase',
-          p_credits_delta: pendingProfile.initial_credits,
-          p_usd_equivalent: null,
-          p_reference_type: 'free_credits',
-          p_reference_id: null,
-          p_note: `Free credits — onboarding${expiryNote}`,
-          p_performed_by: user.id,
-        });
-        if (creditErr) {
-          console.error('[setup-company] credit grant failed:', creditErr.message);
-          // Non-fatal — company is still created
-        } else {
+      if (!existingClaim && !domainAlreadyClaimed) {
+        // ── STEP 4: Read initial credit amount from config with fallback ──
+        const { data: config } = await supabase
+          .from('free_credit_config')
+          .select('credits, expiry_days')
+          .eq('category', 'initial')
+          .eq('is_active', true)
+          .maybeSingle();
+        const creditAmount  = (config as any)?.credits   ?? pendingProfile.initial_credits;
+        const expiryDays    = (config as any)?.expiry_days ?? 14;
+        const expiryAt      = new Date(Date.now() + expiryDays * 86400 * 1000).toISOString();
+        const expiryNote    = ` (expires ${expiryAt.slice(0, 10)})`;
+
+        try {
+          await createCredit({
+            orgId:          companyId,
+            amount:         creditAmount,
+            category:       'free',
+            referenceType:  'free_credits',
+            referenceId:    companyId,                       // STEP 3: org-scoped referenceId
+            note:           `Free credits — onboarding${expiryNote}`,
+            performedBy:    user.id,
+            // STEP 3: org-scoped idempotency key — same key regardless of which
+            // user triggers the grant for this org.
+            idempotencyKey: makeIdempotencyKey(companyId, 'initial_free_credit', companyId),
+          });
           await supabase.from('free_credit_claims').insert({
             user_id:         user.id,
             organization_id: companyId,
             category:        'initial',
-            credits_granted: pendingProfile.initial_credits,
+            credits_granted: creditAmount,
+            domain:          adminEmailDomain,   // domain-level UNIQUE enforcement
           });
+        } catch (creditErr: any) {
+          console.error('[setup-company] credit grant failed:', creditErr.message);
+          // Non-fatal — company is still created
         }
-      } else if (!existingClaim.organization_id) {
-        // Claim was logged without an org — backfill the org reference
+      } else if (existingClaim && !existingClaim.organization_id) {
+        // Claim was logged without an org — backfill the org reference and domain
         await supabase
           .from('free_credit_claims')
-          .update({ organization_id: companyId })
+          .update({ organization_id: companyId, domain: adminEmailDomain })
           .eq('user_id', user.id)
           .eq('category', 'initial');
-        // Also grant the credits since they were skipped (orgId was null)
-        const expiryNote = pendingProfile.credit_expiry_at
-          ? ` (expires ${(pendingProfile.credit_expiry_at as string).slice(0, 10)})`
-          : '';
-        await supabase.rpc('apply_credit_transaction', {
-          p_organization_id: companyId,
-          p_transaction_type: 'purchase',
-          p_credits_delta: pendingProfile.initial_credits,
-          p_usd_equivalent: null,
-          p_reference_type: 'free_credits',
-          p_reference_id: null,
-          p_note: `Free credits — onboarding retroactive${expiryNote}`,
-          p_performed_by: user.id,
-        });
+        // Grant credits (skipped earlier because orgId was null); idempotent if already granted
+        try {
+          await createCredit({
+            orgId:          companyId,
+            amount:         pendingProfile.initial_credits,
+            category:       'free',
+            referenceType:  'free_credits',
+            referenceId:    companyId,
+            note:           `Free credits — onboarding retroactive`,
+            performedBy:    user.id,
+            idempotencyKey: makeIdempotencyKey(companyId, 'initial_free_credit', companyId),
+          });
+        } catch (creditErr: any) {
+          console.error('[setup-company] retroactive credit grant failed:', creditErr.message);
+        }
       }
     }
 

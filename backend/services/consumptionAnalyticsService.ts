@@ -8,6 +8,8 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { createCredit, makeIdempotencyKey, executeWithCredits } from './creditExecutionService';
+import type { CreditAction } from './creditDeductionService';
 
 export type ConsumptionTier = 'super_admin' | 'company_admin' | 'user';
 
@@ -459,11 +461,11 @@ export async function getAllOrgsConsumption(
     // Fetch credit balances
     const { data: credits } = await supabase
       .from('organization_credits')
-      .select('organization_id, balance_credits')
+      .select('organization_id, free_balance, paid_balance, incentive_balance')
       .in('organization_id', orgIds);
-    for (const c of (credits ?? []) as Array<{ organization_id: string; balance_credits: number }>) {
+    for (const c of (credits ?? []) as Array<{ organization_id: string; free_balance: number; paid_balance: number; incentive_balance: number }>) {
       const row = orgMap.get(c.organization_id);
-      if (row) row.credit_balance = c.balance_credits;
+      if (row) row.credit_balance = (c.free_balance ?? 0) + (c.paid_balance ?? 0) + (c.incentive_balance ?? 0);
     }
   }
 
@@ -475,7 +477,7 @@ export async function getAllOrgsConsumption(
 export async function getOrgCreditSummary(organizationId: string): Promise<OrgCreditSummary | null> {
   const { data: credit } = await supabase
     .from('organization_credits')
-    .select('*')
+    .select('free_balance, paid_balance, incentive_balance, lifetime_purchased, lifetime_consumed, credit_rate_usd')
     .eq('organization_id', organizationId)
     .maybeSingle();
 
@@ -489,19 +491,23 @@ export async function getOrgCreditSummary(organizationId: string): Promise<OrgCr
     .limit(20);
 
   const c = credit as {
-    balance_credits: number;
+    free_balance: number;
+    paid_balance: number;
+    incentive_balance: number;
     lifetime_purchased: number;
     lifetime_consumed: number;
     credit_rate_usd: number;
   };
 
+  const totalBalance = (c.free_balance ?? 0) + (c.paid_balance ?? 0) + (c.incentive_balance ?? 0);
+
   return {
     organization_id: organizationId,
-    balance_credits: c.balance_credits,
+    balance_credits: totalBalance,
     lifetime_purchased: c.lifetime_purchased,
     lifetime_consumed: c.lifetime_consumed,
     credit_rate_usd: c.credit_rate_usd,
-    balance_usd_equivalent: c.balance_credits * c.credit_rate_usd,
+    balance_usd_equivalent: totalBalance * c.credit_rate_usd,
     recent_transactions: (txRows ?? []) as CreditTransaction[],
   };
 }
@@ -513,38 +519,74 @@ export async function grantCredits(params: {
   note?: string;
   performedBy: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  const { error } = await supabase.rpc('apply_credit_transaction', {
-    p_organization_id: params.organizationId,
-    p_transaction_type: 'purchase',
-    p_credits_delta: params.credits,
-    p_usd_equivalent: params.usdEquivalent ?? null,
-    p_reference_type: 'manual_grant',
-    p_reference_id: null,
-    p_note: params.note ?? null,
-    p_performed_by: params.performedBy,
-  });
-  if (error) return { ok: false, error: error.message };
-  return { ok: true };
+  // Time-bucketed idempotency key (minute precision) — allows multiple distinct
+  // grants per org per admin, while making retries within 1 minute safe.
+  const minuteBucket = new Date().toISOString().slice(0, 16); // 'YYYY-MM-DDTHH:MM'
+  try {
+    await createCredit({
+      orgId:          params.organizationId,
+      amount:         params.credits,
+      category:       'paid',
+      referenceType:  'manual_grant',
+      referenceId:    `${params.organizationId}:${minuteBucket}`,
+      note:           params.note ?? undefined,
+      performedBy:    params.performedBy,
+      idempotencyKey: makeIdempotencyKey(
+        params.performedBy,
+        'manual_grant',
+        `${params.organizationId}:${minuteBucket}`,
+      ),
+    });
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
 }
 
 export async function adjustCredits(params: {
   organizationId: string;
-  credits: number;  // positive = add, negative = deduct
+  credits: number;  // positive = add credit, negative = deduct credit
   note: string;
   performedBy: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  const { error } = await supabase.rpc('apply_credit_transaction', {
-    p_organization_id: params.organizationId,
-    p_transaction_type: 'adjustment',
-    p_credits_delta: params.credits,
-    p_usd_equivalent: null,
-    p_reference_type: 'manual_adjustment',
-    p_reference_id: null,
-    p_note: params.note,
-    p_performed_by: params.performedBy,
-  });
-  if (error) return { ok: false, error: error.message };
-  return { ok: true };
+  const minuteBucket = new Date().toISOString().slice(0, 16);
+  const refId = `adj:${params.organizationId}:${minuteBucket}`;
+
+  if (params.credits > 0) {
+    // Positive adjustment — grant path
+    try {
+      await createCredit({
+        orgId:          params.organizationId,
+        amount:         params.credits,
+        category:       'paid',
+        referenceType:  'manual_adjustment',
+        referenceId:    refId,
+        note:           params.note,
+        performedBy:    params.performedBy,
+        idempotencyKey: makeIdempotencyKey(params.performedBy, 'manual_adjustment', refId),
+      });
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  } else if (params.credits < 0) {
+    // Negative adjustment — deduction path via executeWithCredits with no-op executor
+    const result = await executeWithCredits({
+      userId:         params.performedBy,
+      orgId:          params.organizationId,
+      action:         'content_basic' as CreditAction, // smallest valid action key
+      referenceType:  'manual_adjustment',
+      referenceId:    refId,
+      idempotencyKey: makeIdempotencyKey(params.performedBy, 'manual_adjustment', refId),
+      amountOverride: Math.abs(params.credits),
+      note:           params.note,
+      executor:       async () => {},
+    });
+    if (result.status === 'executed' || result.status === 'already_confirmed') return { ok: true };
+    return { ok: false, error: `adjustment failed: ${result.status}` };
+  }
+
+  return { ok: true }; // zero credits — no-op
 }
 
 export async function updateOrgCreditRate(params: {

@@ -12,6 +12,7 @@ import {
   shouldShowNoveltyWarning,
 } from '../backend/services/recommendationUiExplainability';
 import TrendCampaignsTab from '../components/recommendations/tabs/TrendCampaignsTab';
+import NextStrategicDirection from '../components/campaigns/NextStrategicDirection';
 import { useRecommendationViewMode } from '../components/recommendations/hooks/useRecommendationViewMode';
 import ActiveLeadsTab from '../components/recommendations/tabs/ActiveLeadsTab';
 import MarketPulseTab from '../components/recommendations/tabs/MarketPulseTab';
@@ -250,6 +251,7 @@ export default function RecommendationsPage() {
     | 'reliability'
   >('reach');
   const [activeOpportunityTab, setActiveOpportunityTab] = useState<string>('TREND');
+  const [prefillBlogId, setPrefillBlogId] = useState<string | null>(null);
   const [opportunityRegions, setOpportunityRegions] = useState<string>('');
   const [trendStrategicIntents, setTrendStrategicIntents] = useState<string[]>([]);
   const [engineOverrides, setEngineOverrides] = useState<Record<string, string>>({});
@@ -319,6 +321,7 @@ export default function RecommendationsPage() {
     const queryCompanyId = typeof query.companyId === 'string' ? query.companyId.trim() : '';
     const queryTab = typeof query.tab === 'string' ? query.tab.toUpperCase() : '';
     const queryCampaignId = typeof query.campaignId === 'string' ? query.campaignId.trim() : '';
+    const queryBlogId = typeof query.blog_id === 'string' ? query.blog_id.trim() : '';
     if (queryCompanyId && selectedCompanyId !== queryCompanyId) {
       setSelectedCompanyId(queryCompanyId);
       if (typeof window !== 'undefined') {
@@ -336,7 +339,12 @@ export default function RecommendationsPage() {
         window.localStorage.setItem('selected_campaign_id', queryCampaignId);
       }
     }
-  }, [router.isReady, router.query.companyId, router.query.tab, router.query.campaignId]);
+    // Blog → Campaign flow: pre-fill assist panel with the originating blog
+    if (queryBlogId) {
+      setPrefillBlogId(queryBlogId);
+      setActiveOpportunityTab('TREND');
+    }
+  }, [router.isReady, router.query.companyId, router.query.tab, router.query.campaignId, router.query.blog_id]);
 
   useEffect(() => {
     if (!selectedCompanyId) {
@@ -1307,6 +1315,13 @@ export default function RecommendationsPage() {
           {selectedCompanyId && (
             <aside className="lg:w-56 shrink-0 order-first">
               <StrategySignalsWidget companyId={selectedCompanyId} fetchWithAuth={fetchWithAuth} />
+              {selectedCampaignId && (
+                <NextStrategicDirection
+                  campaignId={selectedCampaignId}
+                  campaignName={selectedCampaignName || undefined}
+                  className="mt-4"
+                />
+              )}
             </aside>
           )}
           <div className="flex-1 min-w-0">
@@ -1351,6 +1366,7 @@ export default function RecommendationsPage() {
                 onStrategicIntentsChange={setTrendStrategicIntents}
                 viewMode={viewMode}
                 campaignId={selectedCampaignId || null}
+                initialBlogId={prefillBlogId}
               />
             )}
             {activeOpportunityTab === 'LEAD' && (

@@ -87,6 +87,9 @@ const Header: React.FC = () => {
             <button onClick={() => router.push('/community-ai')} className={navBtnClass}>Engagement Center</button>
             <button onClick={() => router.push('/blogs')} className={navBtnClass}>Blog</button>
             {isCompanyAdmin && (
+              <button onClick={() => router.push('/marketing-intelligence')} className={navBtnClass}>Intelligence</button>
+            )}
+            {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={navBtnClass}>Usage</button>
             )}
             {isAuthenticated && (
@@ -155,6 +158,9 @@ const Header: React.FC = () => {
             <button onClick={() => router.push('/campaign-proposals')} className={mobileNavBtnClass}>Campaign Proposals</button>
             <button onClick={() => router.push('/community-ai')} className={mobileNavBtnClass}>Engagement Center</button>
             <button onClick={() => router.push('/blogs')} className={mobileNavBtnClass}>Blog</button>
+            {isCompanyAdmin && (
+              <button onClick={() => router.push('/marketing-intelligence')} className={mobileNavBtnClass}>Intelligence</button>
+            )}
             {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={mobileNavBtnClass}>Usage</button>
             )}

@@ -13,8 +13,15 @@ import { BlogLikeButton } from '../../components/blog/BlogLikeButton';
 import { BlogComments } from '../../components/blog/BlogComments';
 import { ReadNextSection } from '../../components/blog/ReadNextSection';
 import { ReadingProgressBar } from '../../components/blog/ReadingProgressBar';
+import { BlogSeriesWidget } from '../../components/blog/BlogSeriesWidget';
+import { BlogPerformanceTracker } from '../../components/blog/BlogPerformanceTracker';
 import { TTSPlayer } from '../../components/blog/TTSPlayer';
-import { ArrowLeft, Loader2, Calendar, Clock, Eye } from 'lucide-react';
+import { ArrowLeft, Loader2, Calendar, Clock, Eye, Megaphone } from 'lucide-react';
+import type { ContentBlock } from '../../lib/blog/blockTypes';
+import { extractTextFromBlocks, estimateReadTimeFromBlocks } from '../../lib/blog/blockUtils';
+import { BlockRenderer } from '../../components/blog/BlockRenderer';
+import { useCompanyContext } from '../../components/CompanyContext';
+import { CampaignPerformanceSignal } from '../../components/blog/CampaignPerformanceSignal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -77,26 +84,30 @@ function SoftProductInsert() {
 function ArticleBody({
   post,
 }: {
-  post: { content_html: string | null; content_markdown: string; media_blocks: MediaBlockItem[] | null };
+  post: {
+    content_html: string | null;
+    content_markdown: string;
+    media_blocks: MediaBlockItem[] | null;
+    content_blocks: ContentBlock[] | null;
+  };
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [injected, setInjected] = useState(false);
 
-  // After render, find the ~60% mark in the DOM and inject the product insert
-  // We use a data attribute approach — render a sentinel span into the markdown
-  // and replace it client-side. Simpler: render body in two halves.
-  // Since content is arbitrary HTML, we split at the paragraph nearest 60%.
-  const [firstHalf, secondHalf] = React.useMemo(() => {
-    const html = post.content_html || '';
-    if (!html) return ['', ''];
+  // ── Structured blocks path ────────────────────────────────────────────────
+  if (post.content_blocks && post.content_blocks.length > 0) {
+    const insertAfter = Math.floor(post.content_blocks.length * 0.6) - 1;
+    return (
+      <div ref={containerRef}>
+        <BlockRenderer
+          blocks={post.content_blocks}
+          productInsertAfterIndex={insertAfter}
+          ProductInsert={<SoftProductInsert />}
+        />
+      </div>
+    );
+  }
 
-    // Split on </p> boundaries
-    const parts = html.split(/(?<=<\/p>)/);
-    const splitAt = Math.floor(parts.length * 0.6);
-    if (splitAt <= 0 || splitAt >= parts.length) return [html, ''];
-    return [parts.slice(0, splitAt).join(''), parts.slice(splitAt).join('')];
-  }, [post.content_html]);
-
+  // ── Legacy HTML path ──────────────────────────────────────────────────────
   const proseClass = `prose prose-lg prose-slate max-w-none
     prose-headings:font-bold prose-headings:tracking-tight prose-headings:text-[#0B1F33]
     prose-h2:mt-14 prose-h2:mb-6 prose-h2:border-b prose-h2:border-gray-100 prose-h2:pb-3 prose-h2:text-2xl
@@ -114,7 +125,14 @@ function ArticleBody({
     prose-code:text-slate-800 prose-code:before:content-none prose-code:after:content-none`;
 
   if (post.content_html) {
-    if (!firstHalf && !secondHalf) {
+    const parts = post.content_html.split(/(?<=<\/p>)/);
+    const splitAt = Math.floor(parts.length * 0.6);
+    const [firstHalf, secondHalf] =
+      splitAt > 0 && splitAt < parts.length
+        ? [parts.slice(0, splitAt).join(''), parts.slice(splitAt).join('')]
+        : [post.content_html, ''];
+
+    if (!secondHalf) {
       return (
         <div ref={containerRef} className={proseClass}>
           <div dangerouslySetInnerHTML={{ __html: post.content_html }} />
@@ -137,7 +155,7 @@ function ArticleBody({
     );
   }
 
-  // Markdown fallback — inject boxes around the middle
+  // Markdown fallback
   return (
     <div ref={containerRef}>
       <div className={proseClass}>
@@ -168,8 +186,11 @@ function categoryClass(cat: string) {
 export default function BlogDetailPage() {
   const router = useRouter();
   const slug = router.query.slug as string | undefined;
+  const { userRole } = useCompanyContext();
+  const isSuperAdmin = (userRole || '').toUpperCase() === 'SUPER_ADMIN';
 
   const [post, setPost] = useState<{
+    id: string;
     title: string;
     slug: string;
     excerpt: string | null;
@@ -179,6 +200,7 @@ export default function BlogDetailPage() {
     category: string | null;
     tags: string[] | null;
     media_blocks: MediaBlockItem[] | null;
+    content_blocks: ContentBlock[] | null;
     seo_meta_title: string | null;
     seo_meta_description: string | null;
     published_at: string | null;
@@ -226,16 +248,20 @@ export default function BlogDetailPage() {
   }
 
   // ── Derived values ────────────────────────────────────────────────────────
-  const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://app.omnivyra.com';
+  const siteUrl = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://www.omnivyra.com');
   const canonical = `${siteUrl}/blog/${encodeURIComponent(post.slug)}`;
   const metaTitle = post.seo_meta_title || post.title;
   const metaDesc = post.seo_meta_description || post.excerpt || post.title;
-  const readTime = estimateReadTimeMarkdown(post.content_markdown);
+  const readTime = post.content_blocks && post.content_blocks.length > 0
+    ? estimateReadTimeFromBlocks(post.content_blocks)
+    : estimateReadTimeMarkdown(post.content_markdown);
   const publishedDate = post.published_at
     ? new Date(post.published_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     : '';
 
-  const contentHtml = getContentHtml(post);
+  const contentHtml = post.content_blocks && post.content_blocks.length > 0
+    ? `<p>${extractTextFromBlocks(post.content_blocks)}</p>`
+    : getContentHtml(post);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -325,6 +351,15 @@ export default function BlogDetailPage() {
                   {post.views_count.toLocaleString()} views
                 </span>
               )}
+              {isSuperAdmin && (
+                <button
+                  onClick={() => router.push(`/recommendations?blog_id=${encodeURIComponent(post.id)}`)}
+                  className="ml-auto flex items-center gap-1.5 rounded-lg bg-[#0A66C2] px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-[#0A1F44] transition-colors"
+                >
+                  <Megaphone className="h-3.5 w-3.5" />
+                  Build Campaign
+                </button>
+              )}
             </div>
 
             {/* Tags */}
@@ -358,6 +393,8 @@ export default function BlogDetailPage() {
           {/* ── ARTICLE BODY ──────────────────────────────────────────────── */}
           <div className="mt-10">
             <ArticleBody post={post} />
+            {/* Sentinel for completion detection */}
+            <div id="article-bottom-sentinel" aria-hidden />
           </div>
 
           {/* ── DIVIDER ───────────────────────────────────────────────────── */}
@@ -372,6 +409,14 @@ export default function BlogDetailPage() {
             <BlogShareButtons url={canonical} title={post.title} excerpt={post.excerpt} />
             <BlogLikeButton slug={post.slug} initialCount={post.likes_count ?? 0} />
           </section>
+
+          {/* ── SERIES WIDGET ─────────────────────────────────────────────── */}
+          <BlogSeriesWidget currentSlug={post.slug} className="mt-10" />
+
+          {/* ── CAMPAIGN PERFORMANCE SIGNAL (super admin only) ─────────────── */}
+          {isSuperAdmin && (
+            <CampaignPerformanceSignal slug={post.slug} className="mt-10" />
+          )}
 
           {/* ── COMMENTS ──────────────────────────────────────────────────── */}
           <BlogComments slug={post.slug} className="mt-12" />
@@ -413,6 +458,9 @@ export default function BlogDetailPage() {
 
       {/* ── TTS PLAYER (sticky bottom) ────────────────────────────────────── */}
       <TTSPlayer title={post.title} contentHtml={contentHtml} />
+
+      {/* ── Performance tracker (invisible) ────────────────────────────────── */}
+      <BlogPerformanceTracker slug={post.slug} />
     </>
   );
 }

@@ -221,10 +221,23 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
             company_id: profile.company_id,
             name: profile.name || 'Unnamed company',
           }));
+
+          // Fallback: company_profiles missing — read name directly from companies
+          if (nextCompanies.length === 0) {
+            const { data: companies } = await supabase
+              .from('companies')
+              .select('id, name')
+              .in('id', companyIds);
+            nextCompanies = (companies || []).map((c) => ({
+              company_id: c.id,
+              name: c.name || 'My Company',
+            }));
+          }
+
           if (nextCompanies.length === 0) {
             nextCompanies = companyIds.map((companyId) => ({
               company_id: companyId,
-              name: 'Unnamed company',
+              name: 'My Company',
             }));
           }
         }

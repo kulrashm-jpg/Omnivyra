@@ -24,6 +24,8 @@ export type OpportunityTabProps = {
   viewMode?: 'FULL' | 'MINIMAL';
   /** Optional campaign ID for strategy intelligence panel (fetches strategy-status when set). */
   campaignId?: string | null;
+  /** When set, the Assist Panel opens automatically with this blog pre-selected (from blog → campaign flow). */
+  initialBlogId?: string | null;
 };
 
 /**

@@ -13,6 +13,9 @@ interface Blog {
   id: string; company_id: string; title: string; content: string;
   status: BlogStatus; integration_id: string | null; external_id: string | null;
   published_at: string | null; created_at: string; updated_at: string;
+  slug: string | null; excerpt: string | null; featured_image_url: string | null;
+  category: string | null; tags: string[]; seo_meta_title: string | null;
+  seo_meta_description: string | null; is_featured: boolean;
 }
 interface BlogIntegration { id: string; name: string; type: string; status: string }
 
@@ -138,6 +141,14 @@ export default function BlogsPage() {
   const [editorTitle, setEditorTitle] = useState('');
   const [editorContent, setEditorContent] = useState('');
   const [editorIntegrationId, setEditorIntegrationId] = useState('');
+  const [editorSlug, setEditorSlug] = useState('');
+  const [editorExcerpt, setEditorExcerpt] = useState('');
+  const [editorFeaturedImageUrl, setEditorFeaturedImageUrl] = useState('');
+  const [editorCategory, setEditorCategory] = useState('');
+  const [editorTagsInput, setEditorTagsInput] = useState('');
+  const [editorSeoTitle, setEditorSeoTitle] = useState('');
+  const [editorSeoDesc, setEditorSeoDesc] = useState('');
+  const [editorIsFeatured, setEditorIsFeatured] = useState(false);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -169,11 +180,22 @@ export default function BlogsPage() {
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   // ── Open editor ────────────────────────────────────────────────────────────
+  function clearEditorMeta() {
+    setEditorSlug('');
+    setEditorExcerpt('');
+    setEditorFeaturedImageUrl('');
+    setEditorCategory('');
+    setEditorTagsInput('');
+    setEditorSeoTitle('');
+    setEditorSeoDesc('');
+    setEditorIsFeatured(false);
+  }
   function openNew() {
     setEditingBlog(null);
     setEditorTitle('');
     setEditorContent('');
     setEditorIntegrationId('');
+    clearEditorMeta();
     setSaveMsg(null);
     setView('editor');
   }
@@ -182,16 +204,41 @@ export default function BlogsPage() {
     setEditorTitle(blog.title);
     setEditorContent(blog.content);
     setEditorIntegrationId(blog.integration_id || '');
+    setEditorSlug(blog.slug || '');
+    setEditorExcerpt(blog.excerpt || '');
+    setEditorFeaturedImageUrl(blog.featured_image_url || '');
+    setEditorCategory(blog.category || '');
+    setEditorTagsInput((blog.tags || []).join(', '));
+    setEditorSeoTitle(blog.seo_meta_title || '');
+    setEditorSeoDesc(blog.seo_meta_description || '');
+    setEditorIsFeatured(blog.is_featured || false);
     setSaveMsg(null);
     setView('editor');
   }
 
   // ── Save draft ─────────────────────────────────────────────────────────────
+  function buildBlogPayload() {
+    const tags = editorTagsInput.split(',').map(t => t.trim()).filter(Boolean);
+    return {
+      company_id: selectedCompanyId,
+      title: editorTitle,
+      content: editorContent,
+      ...(editorSlug.trim()              ? { slug: editorSlug.trim() }                         : {}),
+      ...(editorExcerpt.trim()           ? { excerpt: editorExcerpt.trim() }                   : {}),
+      ...(editorFeaturedImageUrl.trim()  ? { featured_image_url: editorFeaturedImageUrl.trim() } : {}),
+      ...(editorCategory.trim()          ? { category: editorCategory.trim() }                 : {}),
+      ...(tags.length                    ? { tags }                                             : {}),
+      ...(editorSeoTitle.trim()          ? { seo_meta_title: editorSeoTitle.trim() }           : {}),
+      ...(editorSeoDesc.trim()           ? { seo_meta_description: editorSeoDesc.trim() }      : {}),
+      is_featured: editorIsFeatured,
+    };
+  }
+
   async function saveDraft() {
     if (!editorTitle.trim()) { setSaveMsg({ ok: false, text: 'Add a title first.' }); return; }
     setSaving(true); setSaveMsg(null);
     try {
-      const body = { company_id: selectedCompanyId, title: editorTitle, content: editorContent };
+      const body = buildBlogPayload();
       const url = editingBlog ? `/api/blogs/${editingBlog.id}` : '/api/blogs';
       const method = editingBlog ? 'PUT' : 'POST';
       const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -212,7 +259,7 @@ export default function BlogsPage() {
     // Save latest content first
     let blogId = editingBlog?.id;
     try {
-      const body = { company_id: selectedCompanyId, title: editorTitle, content: editorContent };
+      const body = buildBlogPayload();
       if (!blogId) {
         const r = await fetch('/api/blogs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const data = await r.json();
@@ -366,6 +413,99 @@ export default function BlogsPage() {
                 )}
               </div>
             )}
+
+            {/* Metadata */}
+            <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 space-y-3">
+              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Post Settings</p>
+
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Slug (URL)</label>
+                <input
+                  value={editorSlug}
+                  onChange={e => setEditorSlug(e.target.value)}
+                  placeholder="auto-generated from title"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder-gray-300"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Category</label>
+                <input
+                  value={editorCategory}
+                  onChange={e => setEditorCategory(e.target.value)}
+                  placeholder="e.g. Marketing"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder-gray-300"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Tags (comma-separated)</label>
+                <input
+                  value={editorTagsInput}
+                  onChange={e => setEditorTagsInput(e.target.value)}
+                  placeholder="e.g. seo, growth"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder-gray-300"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Featured image URL</label>
+                <input
+                  value={editorFeaturedImageUrl}
+                  onChange={e => setEditorFeaturedImageUrl(e.target.value)}
+                  placeholder="https://..."
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder-gray-300"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Excerpt</label>
+                <textarea
+                  value={editorExcerpt}
+                  onChange={e => setEditorExcerpt(e.target.value)}
+                  placeholder="Short summary shown in listings…"
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder-gray-300 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-gray-500">Feature this post</label>
+                <button
+                  type="button"
+                  onClick={() => setEditorIsFeatured(v => !v)}
+                  className={`w-9 h-5 rounded-full transition-colors ${editorIsFeatured ? 'bg-indigo-600' : 'bg-gray-300'} relative`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${editorIsFeatured ? 'translate-x-4' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* SEO */}
+            <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 space-y-3">
+              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">SEO</p>
+
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Meta title</label>
+                <input
+                  value={editorSeoTitle}
+                  onChange={e => setEditorSeoTitle(e.target.value)}
+                  placeholder="Defaults to post title"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder-gray-300"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Meta description</label>
+                <textarea
+                  value={editorSeoDesc}
+                  onChange={e => setEditorSeoDesc(e.target.value)}
+                  placeholder="Defaults to excerpt"
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder-gray-300 resize-none"
+                />
+              </div>
+            </div>
 
             {/* Stats */}
             <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 space-y-2 text-xs text-gray-500">

@@ -54,7 +54,24 @@
       "Bash(cat /c/virality/logs/*.log)",
       "Bash(pm2 logs:*)",
       "Bash(find /c/virality -name *.log -newer /c/virality/package.json)",
-      "Bash(grep -r \"duration_weeks\\\\|theme.*week\\\\|strategic_theme\" /c/virality/components/planner/*.tsx --include=\"*.tsx\")"
+      "Bash(grep -r \"duration_weeks\\\\|theme.*week\\\\|strategic_theme\" /c/virality/components/planner/*.tsx --include=\"*.tsx\")",
+      "Bash(find /c/virality -name middleware* -type f)",
+      "Bash(find /c/virality -name .env* -type f)",
+      "Bash(find /c/virality/database -name *campaign* -type f)",
+      "Bash(grep -l campaign /c/virality/database/*.sql)",
+      "Bash(find /c/virality/backend/db -name *campaign* -o -name *Store*)",
+      "Bash(find /c/virality/components -name *theme* -o -name *card*)",
+      "Bash(grep -r \"StrategicTheme\\\\|strategic.*theme\" /c/virality/components --include=*.tsx --include=*.ts)",
+      "Bash(grep -r 'CREATE TABLE.*campaign' /c/virality/database --include=*.sql)",
+      "Bash(grep -l \"campaigns\\\\|recommendation_snapshots\\\\|campaign_versions\" /c/virality/database/*.sql)",
+      "Bash(npx supabase:*)",
+      "Bash(PGPASSWORD='jkylt5N%' psql \"postgresql://postgres@db.klkiseupptzbecbxwrky.supabase.co:5432/postgres\" -c \"\\\\d companies\")",
+      "Bash(find /c/virality/pages/api -name *company* -type f)",
+      "Bash(grep -r mode=list /c/virality/pages/api --include=*.ts)",
+      "Bash(find /c/virality -path */.next -prune -o -type f -name *company-profile* -print)"
+    ],
+    "additionalDirectories": [
+      "c:\\virality\\pages\\api\\blog\\[slug]"
     ]
   },
   "enabledMcpjsonServers": [

@@ -212,6 +212,34 @@ function buildContextBlock(input: PlanningGenerationInput, platformContentGuide:
     parts.push(`\nPlatform content-type compatibility (DO NOT assign incompatible types):\n${platformGuideLines.join('\n')}`);
   }
 
+  // --- Campaign Assist Panel context (user-curated — highest narrative priority) ---
+  const blogCtx = input.blog_context;
+  if (blogCtx?.blogs && blogCtx.blogs.length > 0) {
+    const blogLines: string[] = [];
+    blogCtx.blogs.forEach((b, i) => {
+      blogLines.push(`  Blog ${i + 1}: "${b.title}"`);
+      if (b.summary) blogLines.push(`    Summary: ${b.summary}`);
+      if (b.key_insights.length > 0) blogLines.push(`    Key insights: ${b.key_insights.slice(0, 4).join(' | ')}`);
+      if (b.headings.length > 0) blogLines.push(`    Topics covered: ${b.headings.slice(0, 4).join(', ')}`);
+      if (b.tags.length > 0) blogLines.push(`    Tags: ${b.tags.slice(0, 6).join(', ')}`);
+    });
+    parts.push(`\n[BLOG CONTEXT] (use these posts as primary narrative source — derive topics, angles, and content ideas from them):\n${blogLines.join('\n')}`);
+  }
+
+  const insightCtx = input.insight_context;
+  if (insightCtx?.insights && insightCtx.insights.length > 0) {
+    parts.push(`\n[INSIGHT CONTEXT] (prioritize these insights as talking points across the campaign):\n${insightCtx.insights.map((ins) => `  - ${ins}`).join('\n')}`);
+  }
+
+  const topicCtx = input.topic_context;
+  if (topicCtx?.topics && topicCtx.topics.length > 0) {
+    parts.push(`\n[TOPIC CONTEXT] (these topics MUST appear in the campaign — distribute them across weeks):\n${topicCtx.topics.map((t) => `  - ${t}`).join('\n')}`);
+  }
+
+  if (input.ai_assist === false) {
+    parts.push(`\n[AI BEHAVIOR] STRICT MODE: Do NOT invent topics or angles outside the provided blog, insight, and topic context. Expand only within those boundaries.`);
+  }
+
   return parts.join('\n');
 }
 
@@ -269,6 +297,10 @@ HARD RULES (never violate):
     - NEW accounts (low scores): Focus on awareness-building, engagement, and community growth. Use simpler content, educational topics, and soft CTAs.
     - GROWING accounts (medium scores): Balance awareness with conversion opportunities. Include thought leadership and product education.
     - MATURE accounts (high scores): Optimize for conversions, retention, and high-value actions. Use advanced content and direct CTAs.
+11. When [BLOG CONTEXT] is provided, treat those posts as the primary narrative source. Derive topics, angles, and content ideas from them before inventing new ones. Each blog post should inform at least one content piece in the plan.
+12. When [INSIGHT CONTEXT] is provided, these insights are the user's curated talking points. They MUST appear as topics or sub-points in relevant weeks — do not discard them.
+13. When [TOPIC CONTEXT] is provided, every listed topic MUST appear in the plan at least once, distributed across weeks. Do not drop any topic from this list.
+14. When STRICT MODE is active (ai_assist=false), you MUST NOT create topics or angles beyond those directly derivable from the provided blog, insight, and topic context. Stay within the user's chosen material.
 
 OUTPUT FORMAT:
 Output ONLY the plan wrapped in BEGIN_12WEEK_PLAN and END_12WEEK_PLAN.

@@ -119,12 +119,20 @@ export default function AdminBlogListPage() {
               <h1 className="text-2xl font-bold text-gray-900">Blog CMS</h1>
               <p className="text-sm text-gray-600">Create and manage thought leadership posts.</p>
             </div>
-            <Link
-              href="/admin/blog/new"
-              className="inline-flex items-center gap-2 rounded-lg bg-[#0B5ED7] px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90"
-            >
-              <Plus className="h-4 w-4" /> New Post
-            </Link>
+            <div className="flex items-center gap-3">
+              <Link
+                href="/admin/blog/intelligence"
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:border-[#0B5ED7] hover:text-[#0B5ED7]"
+              >
+                Blog Intelligence
+              </Link>
+              <Link
+                href="/admin/blog/new"
+                className="inline-flex items-center gap-2 rounded-lg bg-[#0B5ED7] px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+              >
+                <Plus className="h-4 w-4" /> New Post
+              </Link>
+            </div>
           </div>
 
           {error && (

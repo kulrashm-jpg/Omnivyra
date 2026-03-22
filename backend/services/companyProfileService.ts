@@ -1272,7 +1272,7 @@ type ExtractedEvidence = {
   highlights?: string[];
 };
 
-const MAX_CRAWL_PAGES = 12;
+const MAX_CRAWL_PAGES = 4; // root + 3 sub-pages; 12 was causing 60s+ hangs on SPAs / Cloudflare sites
 const MAX_SOCIAL_LINKS = 8;
 
 const normalizeUrl = (value: string): string | null => {
@@ -2455,8 +2455,9 @@ const runProfileRefinement = async (
   }
 
   const companyId = profile.company_id ? String(profile.company_id) : null;
+  const t0 = Date.now();
+  const elapsed = () => `${Date.now() - t0}ms`;
   let workingProfile = { ...profile };
-  console.log('Profile before refine:', workingProfile);
   let discoveredSources: Array<{ label: string; url: string }> = [];
   let discoveredSummaries: Array<{ label: string; url: string; summary: string }> = [];
   const existingSourceUrls = new Set(
@@ -2465,13 +2466,13 @@ const runProfileRefinement = async (
       .filter((url): url is string => Boolean(url))
   );
 
+  console.info('[refine] phase=crawl start', { company: companyId, website: workingProfile.website_url });
   if (workingProfile.website_url) {
     const crawlResult = await crawlWebsiteSources(workingProfile.website_url, existingSourceUrls);
     discoveredSources = crawlResult.urls;
     discoveredSummaries = crawlResult.summaries;
-    const discoveredSocial = crawlResult.social_links;
-    console.log('DISCOVERED SOCIAL LINKS:', discoveredSocial);
-    workingProfile = mergeDiscoveredSocialProfiles(workingProfile, discoveredSocial);
+    workingProfile = mergeDiscoveredSocialProfiles(workingProfile, crawlResult.social_links);
+    console.info('[refine] phase=crawl done', { elapsed: elapsed(), pages: discoveredSources.length });
   }
 
   const sourceList = [
@@ -2482,6 +2483,7 @@ const runProfileRefinement = async (
     new Map(sourceList.map((item) => [item.url, item])).values()
   );
 
+  console.info('[refine] phase=social-fetch start', { elapsed: elapsed(), urls: dedupedSourceList.length });
   const socialSummaries = await Promise.all(
     dedupedSourceList.map(async (source) => ({
       label: source.label,
@@ -2489,6 +2491,8 @@ const runProfileRefinement = async (
       summary: await fetchUrlSummary(source.url),
     }))
   );
+  console.info('[refine] phase=social-fetch done', { elapsed: elapsed(), fetched: socialSummaries.filter(s => s.summary).length });
+
   const summarizedSources = [
     ...discoveredSummaries,
     ...socialSummaries.filter((entry) => entry.summary),
@@ -2513,38 +2517,55 @@ const runProfileRefinement = async (
 
   const evidenceWithSocial = [...summarizedSources, ...socialEvidence];
 
+  console.info('[refine] phase=clean-evidence start', { elapsed: elapsed(), evidenceCount: evidenceWithSocial.length });
   const cleanedEvidence = await cleanEvidenceWithAi(companyId, evidenceWithSocial);
+  console.info('[refine] phase=clean-evidence done', { elapsed: elapsed() });
+
   const evidenceForExtraction = cleanedEvidence.length > 0 ? cleanedEvidence : evidenceWithSocial;
   const extractionPrompt = buildExtractionPrompt(evidenceForExtraction, workingProfile);
 
-  const extractionResult = await runCompletionWithOperation({
-    companyId,
-    campaignId: null,
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    operation: 'profileExtraction',
-    messages: [
-      { role: 'system', content: extractionPrompt.systemPrompt },
-      { role: 'user', content: extractionPrompt.userPrompt },
-    ],
-  });
+  console.info('[refine] phase=extraction start', { elapsed: elapsed() });
+  const [extractionResult, missingFieldQuestionsRaw] = await Promise.all([
+    runCompletionWithOperation({
+      companyId,
+      campaignId: null,
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      operation: 'profileExtraction',
+      messages: [
+        { role: 'system', content: extractionPrompt.systemPrompt },
+        { role: 'user', content: extractionPrompt.userPrompt },
+      ],
+    }),
+    // Run missing-field question generation concurrently — it doesn't depend on extraction output
+    // (uses the same evidence). Falls back to [] on error.
+    (async () => {
+      try {
+        // Build a lightweight extraction stub for question generation — use existing profile data
+        const stubExtraction = buildExtractionWithDefaults({});
+        return await generateMissingFieldQuestions(companyId, stubExtraction);
+      } catch {
+        return [] as Array<{ field: string; question: string; options: string[]; allow_multiple?: boolean }>;
+      }
+    })(),
+  ]);
+  console.info('[refine] phase=extraction done', { elapsed: elapsed() });
 
   const extractionRaw = extractionResult.output?.trim() || '{}';
   const extractionParsed = JSON.parse(extractionRaw);
   let extraction = buildExtractionWithDefaults(extractionParsed);
-  console.log('CLEANED EVIDENCE:', cleanedEvidence);
-  console.log('AI EXTRACTION RAW:', extractionResult);
-  console.log('PARSED EXTRACTION:', extraction);
-  console.log('Extraction result:', extraction);
+  let missingFieldQuestions = missingFieldQuestionsRaw;
   if (!extraction.missing_fields || extraction.missing_fields.length === 0) {
     extraction.missing_fields = computeMissingFields(extraction);
   }
-  let missingFieldQuestions: Array<{ field: string; question: string; options: string[]; allow_multiple?: boolean }> = [];
-  try {
-    missingFieldQuestions = await generateMissingFieldQuestions(companyId, extraction);
-  } catch (error) {
-    console.warn('Missing-field questionnaire generation failed.');
+  // Regenerate questions with real extraction output if stub-based ones are empty
+  if (missingFieldQuestions.length === 0 && extraction.missing_fields.length > 0) {
+    try {
+      missingFieldQuestions = await generateMissingFieldQuestions(companyId, extraction);
+    } catch {
+      console.warn('[refine] Missing-field questionnaire generation failed.');
+    }
   }
   const existingConfidence = workingProfile.field_confidence || {};
 

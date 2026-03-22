@@ -36,10 +36,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!(await requireSuperAdmin(req, res))) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
-  const planKey = body.plan_key ?? body.planKey;
-  const name = body.name;
-  const description = body.description ?? null;
-  const monthlyPrice = body.monthly_price ?? body.monthlyPrice ?? null;
+  const planKey        = body.plan_key ?? body.planKey;
+  const name           = body.name;
+  const description    = body.description ?? null;
+  const monthlyPrice   = body.monthly_price ?? body.monthlyPrice ?? null;
+  const creditsIncluded = body.credits_included ?? body.creditsIncluded ?? 0;
+  const validityDays   = body.validity_days ?? body.validityDays ?? null;
   const limits = body.limits && typeof body.limits === 'object' ? body.limits : {};
 
   if (!planKey || !name) {
@@ -63,22 +65,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .update({
           name,
           description,
-          monthly_price: monthlyPrice,
-          updated_at: now,
+          monthly_price:    monthlyPrice,
+          credits_included: creditsIncluded,
+          validity_days:    validityDays,
+          updated_at:       now,
         })
         .eq('id', planId);
     } else {
       const { data: inserted, error: insertErr } = await supabase
         .from('pricing_plans')
         .insert({
-          plan_key: planKey,
+          plan_key:         planKey,
           name,
           description,
-          monthly_price: monthlyPrice,
-          currency: 'USD',
-          is_active: true,
-          created_at: now,
-          updated_at: now,
+          monthly_price:    monthlyPrice,
+          credits_included: creditsIncluded,
+          validity_days:    validityDays,
+          currency:         'USD',
+          is_active:        true,
+          created_at:       now,
+          updated_at:       now,
         })
         .select('id')
         .single();

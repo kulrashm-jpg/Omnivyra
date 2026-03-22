@@ -19,8 +19,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
+import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
 
-const CREDIT_REWARDS: Record<string, number> = {
+// Fallback rewards used when free_credit_config DB rows are missing or inactive
+const CREDIT_REWARDS_DEFAULT: Record<string, number> = {
   invite_friend:  200,
   feedback:       100,
   setup:          100,
@@ -55,6 +57,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { category } = body as { category: string };
 
+  // ── STEP 4: Load active reward amounts from DB with fallback ─────────────
+  const serviceSb = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  );
+  const { data: configRows } = await serviceSb
+    .from('free_credit_config')
+    .select('category, credits')
+    .eq('is_active', true)
+    .in('category', Object.keys(CREDIT_REWARDS_DEFAULT));
+
+  const CREDIT_REWARDS: Record<string, number> = { ...CREDIT_REWARDS_DEFAULT };
+  for (const row of (configRows ?? []) as Array<{ category: string; credits: number }>) {
+    CREDIT_REWARDS[row.category] = row.credits;
+  }
+
   if (!category || !(category in CREDIT_REWARDS)) {
     return res.status(400).json({ error: `Unknown category "${category}". Valid: ${Object.keys(CREDIT_REWARDS).join(', ')}` });
   }
@@ -86,17 +104,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const orgId = membership?.company_id ?? null;
     if (orgId) {
-      const { error: creditErr } = await supabase.rpc('apply_credit_transaction', {
-        p_organization_id:  orgId,
-        p_transaction_type: 'purchase',
-        p_credits_delta:    credits,
-        p_usd_equivalent:   null,
-        p_reference_type:   'free_credits_earn',
-        p_reference_id:     null,
-        p_note:             `Free credits — ${category.replace(/_/g, ' ')}`,
-        p_performed_by:     user.id,
-      });
-      if (creditErr) {
+      try {
+        await createCredit({
+          orgId,
+          amount:         credits,
+          category:       'incentive',
+          referenceType:  'free_credits_earn',
+          referenceId:    `${user.id}:${category}`,
+          note:           `Free credits — ${category.replace(/_/g, ' ')}`,
+          performedBy:    user.id,
+          // Permanently unique per user+category — mirrors the DB UNIQUE constraint
+          idempotencyKey: makeIdempotencyKey(user.id, `earn:${category}`, orgId),
+        });
+      } catch (creditErr: any) {
         console.error('[credits/claim-action] credit grant failed:', creditErr.message);
         // Roll back the claim so the user can retry
         await supabase.from('free_credit_claims').delete()

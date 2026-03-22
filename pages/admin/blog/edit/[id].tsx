@@ -5,8 +5,10 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../../../components/blog/BlogEditorForm';
+import { BlogQualityPanel } from '../../../../components/blog/BlogQualityPanel';
 import { Loader2 } from 'lucide-react';
 import type { MediaBlockItem } from '../../../../components/blog/BlogMediaBlock';
+import type { ContentBlock } from '../../../../lib/blog/blockTypes';
 
 function useBlogAccess() {
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -26,6 +28,7 @@ export default function AdminBlogEditPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [liveState, setLiveState] = useState<BlogFormState | null>(null);
 
   useEffect(() => {
     if (!id || !allowed) return;
@@ -48,20 +51,21 @@ export default function AdminBlogEditPage() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title: state.title,
-          slug: state.slug || undefined,
-          excerpt: state.excerpt || undefined,
-          content_markdown: state.content_markdown,
-          content_html: undefined,
-          featured_image_url: state.featured_image_url || undefined,
-          category: state.category || undefined,
-          tags: state.tags,
-          media_blocks: state.media_blocks.length ? state.media_blocks : undefined,
-          seo_meta_title: state.seo_meta_title || undefined,
+          title:                state.title,
+          slug:                 state.slug || undefined,
+          excerpt:              state.excerpt || undefined,
+          content_markdown:     state.content_markdown,
+          content_html:         undefined,
+          content_blocks:       state.content_blocks.length ? state.content_blocks : null,
+          featured_image_url:   state.featured_image_url || undefined,
+          category:             state.category || undefined,
+          tags:                 state.tags,
+          media_blocks:         state.media_blocks.length ? state.media_blocks : undefined,
+          seo_meta_title:       state.seo_meta_title || undefined,
           seo_meta_description: state.seo_meta_description || undefined,
-          status: state.status,
-          is_featured: state.is_featured,
-          published_at: state.status === 'published' ? (post?.published_at || new Date().toISOString()) : state.published_at || undefined,
+          status:               state.status,
+          is_featured:          state.is_featured,
+          published_at:         state.status === 'published' ? (post?.published_at || new Date().toISOString()) : state.published_at || undefined,
         }),
       });
       const data = await res.json();
@@ -111,19 +115,20 @@ export default function AdminBlogEditPage() {
   }
 
   const initial: Partial<BlogFormState> = {
-    title: (post?.title as string) ?? '',
-    slug: (post?.slug as string) ?? '',
-    excerpt: (post?.excerpt as string) ?? '',
-    content_markdown: (post?.content_markdown as string) ?? '',
-    featured_image_url: (post?.featured_image_url as string) ?? '',
-    category: (post?.category as string) ?? '',
-    tags: Array.isArray(post?.tags) ? (post.tags as string[]) : [],
-    media_blocks: Array.isArray(post?.media_blocks) ? (post.media_blocks as MediaBlockItem[]) : [],
-    seo_meta_title: (post?.seo_meta_title as string) ?? '',
+    title:                (post?.title as string) ?? '',
+    slug:                 (post?.slug as string) ?? '',
+    excerpt:              (post?.excerpt as string) ?? '',
+    content_markdown:     (post?.content_markdown as string) ?? '',
+    content_blocks:       Array.isArray(post?.content_blocks) ? (post.content_blocks as ContentBlock[]) : [],
+    featured_image_url:   (post?.featured_image_url as string) ?? '',
+    category:             (post?.category as string) ?? '',
+    tags:                 Array.isArray(post?.tags) ? (post.tags as string[]) : [],
+    media_blocks:         Array.isArray(post?.media_blocks) ? (post.media_blocks as MediaBlockItem[]) : [],
+    seo_meta_title:       (post?.seo_meta_title as string) ?? '',
     seo_meta_description: (post?.seo_meta_description as string) ?? '',
-    status: (post?.status as BlogFormState['status']) ?? 'draft',
-    is_featured: !!post?.is_featured,
-    published_at: post?.published_at ? new Date(post.published_at as string).toISOString() : '',
+    status:               (post?.status as BlogFormState['status']) ?? 'draft',
+    is_featured:          !!post?.is_featured,
+    published_at:         post?.published_at ? new Date(post.published_at as string).toISOString() : '',
   };
 
   return (
@@ -133,7 +138,7 @@ export default function AdminBlogEditPage() {
       </Head>
       <div className="min-h-screen bg-gray-50">
         <div className="border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
-          <div className="mx-auto flex max-w-5xl items-center justify-between">
+          <div className="mx-auto flex max-w-[1200px] items-center justify-between">
             <Link href="/dashboard" className="flex shrink-0 items-center" aria-label="Home">
               <img src="/logo.png" alt="Omnivera" width={100} height={40} className="h-10 w-auto object-contain sm:h-11" />
             </Link>
@@ -142,21 +147,43 @@ export default function AdminBlogEditPage() {
             </Link>
           </div>
         </div>
-        <div className="mx-auto max-w-3xl p-6">
+
+        <div className="mx-auto max-w-[1200px] p-6">
           <h1 className="mb-6 text-2xl font-bold text-gray-900">Edit post</h1>
           {error && (
             <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
           )}
-          <div className="rounded-lg border border-gray-200 bg-white p-6 shadow">
-            <BlogEditorForm
-              initial={initial}
-              onSubmit={handleSubmit}
-              onCancel={() => router.push('/admin/blog')}
-              submitLabel="Save changes"
-              isSaving={isSaving}
-            />
+
+          <div className="flex gap-6 items-start">
+            {/* ── Editor ─────────────────────────────────────────────────── */}
+            <div className="flex-1 min-w-0 rounded-lg border border-gray-200 bg-white p-6 shadow">
+              <BlogEditorForm
+                initial={initial}
+                onSubmit={handleSubmit}
+                onCancel={() => router.push('/admin/blog')}
+                submitLabel="Save changes"
+                isSaving={isSaving}
+                onStateChange={setLiveState}
+              />
+            </div>
+
+            {/* ── Quality panel (sticky right sidebar) ────────────────────── */}
+            <div className="hidden xl:block w-[280px] shrink-0 sticky top-6 self-start">
+              {liveState && (
+                <BlogQualityPanel
+                  blocks={liveState.content_blocks}
+                  formState={{
+                    title:                liveState.title,
+                    excerpt:              liveState.excerpt,
+                    seo_meta_title:       liveState.seo_meta_title,
+                    seo_meta_description: liveState.seo_meta_description,
+                    tags:                 liveState.tags,
+                  }}
+                />
+              )}
+            </div>
           </div>
         </div>
       </div>

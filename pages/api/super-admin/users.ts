@@ -138,7 +138,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const rows = data || [];
-    const userIds = Array.from(new Set(rows.map((row) => row.user_id).filter(Boolean)));
     const companyIds = Array.from(new Set(rows.map((row) => row.company_id).filter(Boolean)));
 
     const [usersResult, companiesResult, profilesResult] = await Promise.all([
@@ -437,42 +436,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ success: true, message: 'User removed from company' });
     }
 
-    // Route 2: Delete unassigned user entirely from the system
-    // (user has no company role and is being removed completely)
+    // Route 2: Delete unassigned user entirely from the system.
+    // Users may exist in auth.users without a row in the users table (auth-only
+    // accounts that never completed onboarding). We attempt both deletions
+    // independently and succeed if at least one actually removed a record.
     try {
-      // Delete from users table
+      // Step A: remove from users table (may legitimately be absent)
       const { data: userData, error: userError } = await supabase
         .from('users')
         .delete()
         .eq('id', userId)
         .select('id');
 
-      console.log('[super-admin/users] DELETE unassigned user result:', { userId, deletedRows: userData?.length || 0, error: userError?.message });
-
+      const deletedFromTable = !userError && userData && userData.length > 0;
       if (userError) {
-        console.error('[super-admin/users] DELETE unassigned error:', { userId, error: userError.message });
-        return res.status(500).json({ 
-          error: 'FAILED_TO_DELETE_UNASSIGNED_USER',
-          details: userError.message
-        });
+        console.warn('[super-admin/users] DELETE users table error (continuing to auth):', userError.message);
       }
 
-      if (!userData || userData.length === 0) {
-        console.log('[super-admin/users] DELETE - unassigned user not found');
-        return res.status(404).json({ 
-          error: 'USER_NOT_FOUND',
-          details: `No unassigned user found with userId: ${userId}`,
-        });
-      }
-
-      // Also try to delete from Supabase Auth admin API if available
+      // Step B: remove from Supabase Auth — always attempt, even if table row was absent
+      let deletedFromAuth = false;
       try {
         const admin = ensureAuthAdmin();
         await admin.deleteUser(userId);
+        deletedFromAuth = true;
         console.log('[super-admin/users] DELETE - deleted from auth', { userId });
       } catch (authError: any) {
-        console.warn('[super-admin/users] DELETE - could not delete from auth (may already be deleted):', authError.message);
-        // Not critical if auth deletion fails — user record is gone
+        console.warn('[super-admin/users] DELETE - auth deletion failed:', authError.message);
+      }
+
+      if (!deletedFromTable && !deletedFromAuth) {
+        return res.status(404).json({
+          error: 'USER_NOT_FOUND',
+          details: `User ${userId} not found in users table or auth`,
+        });
       }
 
       await insertAuditLog({
@@ -484,7 +480,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ success: true, message: 'Unassigned user deleted from system' });
     } catch (err: any) {
       console.error('[super-admin/users] DELETE unassigned exception:', { userId, error: err.message });
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: 'FAILED_TO_DELETE_UNASSIGNED_USER',
         details: err.message
       });

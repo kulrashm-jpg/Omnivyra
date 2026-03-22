@@ -54,10 +54,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : refined.profile;
     return res.status(200).json({ profile: responseProfile, refinement: refined.details });
   } catch (error: any) {
-    console.error('Error refining company profile:', error);
+    console.error('Error refining company profile:', error?.message, error?.stack);
     return res.status(500).json({
-      error: 'Failed to refine company profile',
-      details: error?.message || null,
+      error: error?.message || 'Failed to refine company profile',
+      details: error?.cause?.message || error?.stack?.split('\n')[1] || null,
     });
   }
 }

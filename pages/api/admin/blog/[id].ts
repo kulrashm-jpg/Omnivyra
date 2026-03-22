@@ -49,6 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (body.category !== undefined) updates.category = body.category?.trim() || null;
     if (body.tags !== undefined) updates.tags = Array.isArray(body.tags) ? body.tags : body.tags ? [body.tags] : [];
     if (body.media_blocks !== undefined) updates.media_blocks = body.media_blocks;
+    if (body.content_blocks !== undefined) updates.content_blocks = body.content_blocks ?? null;
     if (body.seo_meta_title !== undefined) updates.seo_meta_title = body.seo_meta_title?.trim() || null;
     if (body.seo_meta_description !== undefined) updates.seo_meta_description = body.seo_meta_description?.trim() || null;
     if (body.status !== undefined && ['draft', 'scheduled', 'published'].includes(body.status)) {

@@ -54,6 +54,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const category = body.category?.trim() || null;
       const tags = Array.isArray(body.tags) ? body.tags : (body.tags ? [body.tags] : []);
       const media_blocks = body.media_blocks ?? null;
+      const content_blocks = body.content_blocks ?? null;
       const seo_meta_title = body.seo_meta_title?.trim() || null;
       const seo_meta_description = body.seo_meta_description?.trim() || null;
       const status = ['draft', 'scheduled', 'published'].includes(body.status) ? body.status : 'draft';
@@ -72,6 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           category,
           tags,
           media_blocks,
+          content_blocks,
           seo_meta_title,
           seo_meta_description,
           status,

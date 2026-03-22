@@ -122,13 +122,16 @@ export async function prioritizeActions(
   const [balanceRes, discount] = await Promise.all([
     supabase
       .from('organization_credits')
-      .select('balance_credits')
+      .select('free_balance, paid_balance, incentive_balance')
       .eq('organization_id', orgId)
       .maybeSingle(),
     getEfficiencyDiscount(orgId),
   ]);
 
-  const balance: number | null = (balanceRes.data as any)?.balance_credits ?? null;
+  const bd = (balanceRes.data as any) ?? {};
+  const balance: number | null = balanceRes.data
+    ? (bd.free_balance ?? 0) + (bd.paid_balance ?? 0) + (bd.incentive_balance ?? 0)
+    : null;
   const availableBalance = balance ?? 0;
 
   const actionsToEvaluate: CreditAction[] = candidateActions ?? (
