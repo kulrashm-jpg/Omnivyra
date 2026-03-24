@@ -84,30 +84,69 @@ const ensureCompanyAdminAccess = async (
   return { userId: access.userId, role: access.role };
 };
 
-const ensureAuthAdmin = () => {
-  const admin = supabase.auth?.admin;
-  if (!admin) {
-    throw new Error('AUTH_ADMIN_UNAVAILABLE');
-  }
-  return admin;
+/**
+ * Find an existing user row by email, or create a stub row.
+ * No supabase.auth calls — users table is the authoritative identity store.
+ * firebase_uid will be populated when the user completes their first Firebase sign-in.
+ */
+const findExistingUserByEmail = async (email: string) => {
+  const { data } = await supabase
+    .from('users')
+    .select('id, email, firebase_uid, is_deleted, created_at')
+    .eq('email', email.toLowerCase())
+    .maybeSingle();
+  if (!data) return null;
+  // Treat soft-deleted rows as non-existent for invite purposes
+  if ((data as any).is_deleted) return null;
+  return data;
 };
 
-const findExistingUserByEmail = async (email: string) => {
-  const admin = ensureAuthAdmin();
-  if (typeof (admin as any).getUserByEmail === 'function') {
-    const { data, error } = await (admin as any).getUserByEmail(email);
-    if (error) {
-      throw new Error(error.message);
+const findOrCreateUserByEmail = async (email: string): Promise<{ id: string; error: string | null }> => {
+  // Check for a soft-deleted user BEFORE attempting to create (unique constraint on email).
+  const { data: existing, error: selectErr } = await supabase
+    .from('users')
+    .select('id, is_deleted')
+    .eq('email', email.toLowerCase())
+    .maybeSingle();
+
+  if (selectErr) return { id: '', error: selectErr.message };
+
+  if (existing) {
+    // Block re-invite of deleted accounts — the admin must contact support to restore.
+    if ((existing as any).is_deleted) {
+      return { id: '', error: 'ACCOUNT_DELETED' };
     }
-    if (data?.user) {
-      return data.user;
+    return { id: (existing as any).id, error: null };
+  }
+
+  const { data: created, error: insertErr } = await supabase
+    .from('users')
+    .insert({
+      email:              email.toLowerCase(),
+      name:               email.split('@')[0] || 'User',
+      is_email_verified:  false,
+      is_phone_verified:  false,
+      created_at:         new Date().toISOString(),
+    })
+    .select('id')
+    .single();
+
+  if (insertErr) {
+    if (insertErr.code === '23505') {
+      // Race condition — re-fetch (and re-check is_deleted)
+      const { data: retry } = await supabase
+        .from('users')
+        .select('id, is_deleted')
+        .eq('email', email.toLowerCase())
+        .maybeSingle();
+      if (retry) {
+        if ((retry as any).is_deleted) return { id: '', error: 'ACCOUNT_DELETED' };
+        return { id: (retry as any).id, error: null };
+      }
     }
+    return { id: '', error: insertErr.message };
   }
-  const { data: users, error } = await admin.listUsers();
-  if (error) {
-    throw new Error(error.message);
-  }
-  return users?.users?.find((user: { email?: string }) => user.email?.toLowerCase() === email.toLowerCase()) || null;
+  return { id: (created as any).id, error: null };
 };
 
 const normalizeInviteRole = (role: string) => {
@@ -272,31 +311,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: 'FAILED_TO_LIST_USERS', details: error.message });
     }
 
-    const admin = ensureAuthAdmin();
     const userIds = (data || [])
       .map((row: any) => row.user_id)
       .filter(Boolean);
     const emailById = new Map<string, string>();
     if (userIds.length > 0) {
-      if (typeof (admin as any).getUserById === 'function') {
-        await Promise.all(
-          userIds.map(async (id: string) => {
-            const { data: userData, error: userError } = await (admin as any).getUserById(id);
-            if (!userError && userData?.user?.email) {
-              emailById.set(id, userData.user.email);
-            }
-          })
-        );
-      } else {
-        const { data: userList, error: listError } = await admin.listUsers();
-        if (!listError && userList?.users?.length) {
-          userList.users.forEach((user: { id?: string; email?: string }) => {
-            if (user?.id && user.email) {
-              emailById.set(user.id, user.email);
-            }
-          });
-        }
-      }
+      const { data: usersData } = await supabase
+        .from('users')
+        .select('id, email')
+        .in('id', userIds);
+      (usersData || []).forEach((u: any) => {
+        if (u.id && u.email) emailById.set(u.id, u.email);
+      });
     }
 
     const users = (data || []).map((row: any) => {
@@ -339,131 +365,89 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-      const existingUser = await findExistingUserByEmail(normalizedEmail);
-      if (existingUser && !existingUser.email_confirmed_at) {
-        const { error } = await supabase.auth.admin.inviteUserByEmail(normalizedEmail, {
-          redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard`,
-        });
-        if (error?.status === 429) {
-          return res.status(200).json({
-            message: 'Invite already sent recently. Please wait before retrying.',
+      // 1. Domain enforcement: COMPANY_ADMIN must use the company's work email domain.
+      //    SUPER_ADMIN callers are exempt.
+      if (desiredRole === Role.COMPANY_ADMIN && access.role !== Role.SUPER_ADMIN) {
+        const { data: companyRow } = await supabase
+          .from('companies')
+          .select('admin_email_domain, website_domain')
+          .eq('id', companyId)
+          .maybeSingle();
+
+        const emailDomain = normalizedEmail.split('@')[1] ?? '';
+        const allowedDomain =
+          (companyRow as any)?.admin_email_domain ||
+          (companyRow as any)?.website_domain ||
+          null;
+
+        if (allowedDomain && emailDomain !== allowedDomain) {
+          return res.status(400).json({
+            error: 'INVALID_WORK_EMAIL_DOMAIN',
+            details: `A company admin must use a ${allowedDomain} email address.`,
           });
         }
-        if (error) {
-          if (error.message?.toLowerCase().includes('expired')) {
-            await supabase
-              .from('user_company_roles')
-              .update({ status: 'expired', updated_at: new Date().toISOString() })
-              .eq('user_id', existingUser.id)
-              .eq('company_id', companyId);
-          }
-          await insertAuditLog({
-            actorUserId: access.userId,
-            action: 'INVITE_FAILED',
-            targetUserId: existingUser.id,
-            companyId,
-            metadata: { error: error.message, status: error.status, code: error.code },
-          });
-          return res.status(400).json({ error: error.message });
-        }
-        const { error: roleUpdateError } = await supabase
-          .from('user_company_roles')
-          .update({
-            status: 'invited',
-            invited_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            name: displayName || null,
-          })
-          .eq('user_id', existingUser.id)
-          .eq('company_id', companyId);
-        if (roleUpdateError) {
-          return res.status(500).json({ error: 'FAILED_TO_UPDATE_INVITE', details: roleUpdateError.message });
-        }
-        await insertAuditLog({
-          actorUserId: access.userId,
-          action: 'INVITE_USER',
-          targetUserId: existingUser.id,
-          companyId,
-          metadata: { reinvite: true },
-        });
-        return res.status(200).json({ message: 'Reinvite sent' });
       }
-      if (existingUser && existingUser.email_confirmed_at) {
+
+      // 2. Find or create user row by email (no supabase.auth — Firebase-only)
+      const { id: invitedUserId, error: userErr } = await findOrCreateUserByEmail(normalizedEmail);
+      if (userErr === 'ACCOUNT_DELETED') {
+        return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' } as any);
+      }
+      if (userErr || !invitedUserId) {
+        return res.status(500).json({ error: 'FAILED_TO_SAVE_USER', details: userErr } as any);
+      }
+
+      // 4. Check if user already has an active role in this company
+      const existingUser = await findExistingUserByEmail(normalizedEmail);
+      if (existingUser && (existingUser as any).firebase_uid) {
+        // User has signed in before — add directly without invite flow
         const result = await addExistingUserToCompany({
-          userId: existingUser.id,
+          userId: invitedUserId,
           companyId,
           role: desiredRole,
           name: displayName,
           actorUserId: access.userId,
         });
-        if (result.error) {
-          return res.status(500).json(result);
-        }
-        return res.status(200).json({ message: 'User already registered. Added to team.' });
+        if (result.error) return res.status(500).json(result);
+        return res.status(200).json({ message: 'User added to team.' });
       }
 
-      const { data, error } = await supabase.auth.admin.inviteUserByEmail(normalizedEmail, {
-        redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard`,
+      // 5. User exists in DB but has not signed in yet — create/update role + send invite
+      const { error: upsertError } = await upsertUserCompanyRole(
+        invitedUserId,
+        companyId,
+        desiredRole,
+        displayName
+      );
+      if (upsertError) {
+        return res.status(500).json({ error: 'FAILED_TO_ASSIGN_ROLE', details: upsertError });
+      }
+
+      // 4. Issue invitation token and send email
+      const { randomBytes, createHash } = await import('crypto');
+      const rawToken = randomBytes(32).toString('hex');
+      const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+      const expiresAt = new Date(Date.now() + 7 * 86_400 * 1_000).toISOString();
+
+      await supabase.from('invitations').upsert(
+        { email: normalizedEmail, company_id: companyId, role: desiredRole, token_hash: tokenHash,
+          invited_by: access.userId, expires_at: expiresAt, accepted_at: null, revoked_at: null },
+        { onConflict: 'token_hash' }
+      );
+
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? '';
+      const inviteLink = `${baseUrl}/auth/accept-invite?token=${rawToken}`;
+      // TODO: send email via your mailer (Resend / SendGrid / SES)
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[DEV] Invite link for ${normalizedEmail}: ${inviteLink}`);
+      }
+
+      await insertAuditLog({
+        actorUserId: access.userId,
+        action: 'INVITE_USER',
+        targetUserId: invitedUserId,
+        companyId,
       });
-
-      if (error?.status === 429) {
-        return res.status(200).json({
-          message: 'Invite already sent recently. Please wait before retrying.',
-        });
-      }
-      if (error) {
-        const message = error.message?.toLowerCase() || '';
-        const alreadyRegistered =
-          message.includes('already been registered') ||
-          message.includes('already registered') ||
-          error.code === 'email_exists';
-        if (alreadyRegistered) {
-          const confirmedUser = await findExistingUserByEmail(normalizedEmail);
-          if (confirmedUser?.id) {
-            const result = await addExistingUserToCompany({
-              userId: confirmedUser.id,
-              companyId,
-              role: desiredRole,
-              name: displayName,
-              actorUserId: access.userId,
-            });
-            if (result.error) {
-              return res.status(500).json(result);
-            }
-            return res.status(200).json({ message: 'User already registered. Added to team.' });
-          }
-        }
-        await insertAuditLog({
-          actorUserId: access.userId,
-          action: 'INVITE_FAILED',
-          companyId,
-          metadata: { error: error.message, status: error.status, code: error.code },
-        });
-        return res.status(400).json({ error: error.message });
-      }
-
-      let invitedUserId = data?.user?.id;
-      if (!invitedUserId) {
-        const newlyFound = await findExistingUserByEmail(normalizedEmail);
-        invitedUserId = newlyFound?.id || null;
-      }
-      if (invitedUserId) {
-        const { error: upsertError } = await upsertUserCompanyRole(
-          invitedUserId,
-          companyId,
-          desiredRole,
-          displayName
-        );
-        if (upsertError) {
-          return res.status(500).json({ error: 'FAILED_TO_ASSIGN_ROLE', details: upsertError });
-        }
-        await insertAuditLog({
-          actorUserId: access.userId,
-          action: 'INVITE_USER',
-          targetUserId: invitedUserId,
-          companyId,
-        });
-      }
 
       return res.status(201).json({ success: true });
     } catch (error: any) {

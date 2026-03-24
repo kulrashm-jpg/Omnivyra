@@ -1,16 +1,17 @@
 /**
- * Authenticated client-side fetch — adds Supabase Bearer token so
- * proxy.ts middleware lets the request through on all /api/* routes.
- * Safe to call from any browser context (returns plain fetch on SSR/no-session).
+ * Authenticated client-side fetch.
+ * Adds Firebase Bearer token so API routes can verify identity.
+ * Safe to call from any browser context — returns plain fetch on SSR/no-session.
  */
+import { getAuthToken } from '../utils/getAuthToken';
+
 export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
   let token: string | undefined;
   try {
-    const { supabase } = await import('../utils/supabaseClient');
-    const { data } = await supabase.auth.getSession();
-    token = data.session?.access_token ?? undefined;
+    const t = await getAuthToken();
+    if (t) token = t;
   } catch {
-    // Supabase unavailable (SSR, test) — fall through without token
+    // Unauthenticated — proceed without Authorization header
   }
   return fetch(input, {
     ...init,

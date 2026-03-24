@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
-import { supabase } from '../utils/supabaseClient';
+import { getAuthToken } from '../utils/getAuthToken';
 
 type KeyValuePair = { key: string; value: string };
 
@@ -290,8 +290,7 @@ export default function ExternalApisPage() {
   const companyContextId = isPlatformCatalogMode ? (platformCompanyId || null) : selectedCompanyId;
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    const token = await getAuthToken();
     return fetch(input, {
       ...init,
       credentials: 'include',

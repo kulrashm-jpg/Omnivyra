@@ -14,6 +14,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
 interface PlanAnalytics {
   plan_id: string;
@@ -47,17 +48,9 @@ async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
     return true;
   }
 
-  // Check Supabase user role
+  // Check Firebase user role
   try {
-    const authHeader = req.headers.authorization ?? '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!token) return false;
-
-    const anonClient = require('@supabase/supabase-js').createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    );
-    const { data: { user }, error } = await anonClient.auth.getUser(token);
+    const { user, error } = await getSupabaseUserFromRequest(req);
     if (error || !user) return false;
 
     const { data: profile } = await supabase

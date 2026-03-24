@@ -18,6 +18,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 // ── Response type ─────────────────────────────────────────────────────────────
 
@@ -61,16 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // ── Auth ──────────────────────────────────────────────────────────────────
   const isSuperAdminCookie = req.cookies?.super_admin_session === '1';
   if (!isSuperAdminCookie) {
-    const authHeader = req.headers.authorization ?? '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!token) return res.status(401).json({ error: 'Missing auth token' });
-
-    const anonClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { global: { headers: { Authorization: `Bearer ${token}` } } },
-    );
-    const { data: { user }, error: userErr } = await anonClient.auth.getUser(token);
+    const { user, error: userErr } = await getSupabaseUserFromRequest(req);
     if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
   }
 

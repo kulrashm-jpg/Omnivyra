@@ -18,6 +18,7 @@ import { gzip, gunzip } from 'zlib';
 import { promisify } from 'util';
 import { recordCacheExactHit, recordCacheNearHit, recordCacheMiss } from './metricsCollector';
 import { hotGet, hotSet, recordAccess as hotRecordAccess } from './hotKeyCache';
+import { createInstrumentedClient } from '../../lib/redis/instrumentation';
 
 const gzipAsync   = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -79,15 +80,16 @@ function getClient(): IORedis | null {
   if (_client) return _client;
   const url = process.env.REDIS_URL || 'redis://localhost:6379';
   try {
-    _client = new IORedis(url, {
+    const raw = new IORedis(url, {
       enableReadyCheck: false,
       maxRetriesPerRequest: 1,
       retryStrategy: () => null,
       lazyConnect: true,
     });
-    _client.on('connect', () => { _available = true; });
-    _client.on('error', () => { _available = false; });
-    _client.connect().catch(() => {});
+    raw.on('connect', () => { _available = true; });
+    raw.on('error', () => { _available = false; });
+    raw.connect().catch(() => {});
+    _client = createInstrumentedClient(raw, 'ai_cache') as IORedis;
     return _client;
   } catch {
     return null;

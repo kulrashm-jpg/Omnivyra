@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { supabase } from '../utils/supabaseClient';
+import { getFirebaseAuth } from '../lib/firebase';
+import { sendEmailLink } from '../lib/auth/emailLink';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -10,11 +11,8 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
-        router.replace('/dashboard');
-      }
-    });
+    const fbUser = getFirebaseAuth().currentUser;
+    if (fbUser) router.replace('/dashboard');
   }, [router]);
 
   const handleSignup = async () => {
@@ -24,24 +22,19 @@ export default function SignupPage() {
       setError('Email is required.');
       return;
     }
-    const { error: authError } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-    if (authError) {
-      setError(authError.message);
-      return;
+    try {
+      await sendEmailLink(email.trim().toLowerCase());
+      setStatus('Check your email to complete signup.');
+    } catch (err: any) {
+      setError(err.message ?? 'Failed to send sign-in link.');
     }
-    setStatus('Check your email to complete signup.');
   };
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
       <div className="bg-white rounded-lg shadow p-6 max-w-md w-full space-y-4">
         <h1 className="text-2xl font-bold text-gray-900">Sign Up</h1>
-        <p className="text-sm text-gray-600">Create your account with email OTP.</p>
+        <p className="text-sm text-gray-600">Create your account with a sign-in link.</p>
         <input
           className="border rounded-md px-3 py-2 w-full"
           placeholder="Email"
@@ -52,7 +45,7 @@ export default function SignupPage() {
           onClick={handleSignup}
           className="bg-indigo-600 text-white rounded-md px-4 py-2 w-full"
         >
-          Send OTP
+          Send Sign-In Link
         </button>
         {status && <div className="text-sm text-green-600">{status}</div>}
         {error && <div className="text-sm text-red-600">{error}</div>}

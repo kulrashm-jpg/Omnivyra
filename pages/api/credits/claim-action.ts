@@ -19,6 +19,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
 
 // Fallback rewards used when free_credit_config DB rows are missing or inactive
@@ -33,17 +34,7 @@ const CREDIT_REWARDS_DEFAULT: Record<string, number> = {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing auth token' });
-
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } },
-  );
-
-  const { data: { user }, error: userErr } = await supabase.auth.getUser(token);
+  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
   // ── Domain eligibility gate ───────────────────────────────────────────────

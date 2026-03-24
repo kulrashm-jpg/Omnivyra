@@ -27,6 +27,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 // ── Response shape ────────────────────────────────────────────────────────────
 
@@ -54,11 +55,7 @@ async function assertSuperAdmin(
 ): Promise<boolean> {
   if (req.cookies?.super_admin_session === '1') return true;
 
-  const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return false;
-
-  const { data: { user }, error } = await supabase.auth.getUser(token);
+  const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) return false;
 
   const { data: profile } = await supabase

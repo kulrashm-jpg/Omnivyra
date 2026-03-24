@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, X, CheckCheck, Users } from 'lucide-react';
-import { supabase } from '../utils/supabaseClient';
+import { getAuthToken } from '../utils/getAuthToken';
 
 type AppNotification = {
   id: string;
@@ -41,11 +41,11 @@ export function NotificationBell() {
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
   const fetchNotifications = useCallback(async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) return;
+    const token = await getAuthToken();
+    if (!token) return;
     try {
       const res = await fetch('/api/notifications', {
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) return;
       const json = await res.json();
@@ -75,14 +75,14 @@ export function NotificationBell() {
   }, [open]);
 
   async function markRead(id?: string) {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) return;
+    const token = await getAuthToken();
+    if (!token) return;
     setLoading(true);
     try {
       const url = id ? `/api/notifications?id=${id}` : '/api/notifications';
       await fetch(url, {
         method: 'PATCH',
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
       setNotifications((prev) =>
         prev.map((n) => (!id || n.id === id) ? { ...n, is_read: true } : n)

@@ -22,12 +22,9 @@ function isSuperAdmin(req: NextApiRequest): boolean {
 }
 
 async function resolveUser(req: NextApiRequest): Promise<string> {
-  const token = (req.headers.authorization ?? '').replace('Bearer ', '');
-  if (!token) return 'super_admin';
-  try {
-    const { data: { user } } = await supabase.auth.getUser(token);
-    return user?.email ?? user?.id ?? 'super_admin';
-  } catch { return 'super_admin'; }
+  const { getSupabaseUserFromRequest } = await import('../../../../backend/services/supabaseAuthService');
+  const { user } = await getSupabaseUserFromRequest(req);
+  return user?.email ?? user?.id ?? 'super_admin';
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

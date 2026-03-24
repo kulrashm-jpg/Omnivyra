@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { supabase } from '../../utils/supabaseClient';
+import { getAuthToken } from '../../utils/getAuthToken';
 
 type PolicyWeights = {
   trend_score: number;
@@ -70,8 +70,7 @@ export default function RecommendationPolicyPage() {
   const [prefilledFromAudit, setPrefilledFromAudit] = useState(false);
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    const token = await getAuthToken();
     if (!token) {
       throw new Error('Not authenticated');
     }

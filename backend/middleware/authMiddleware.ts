@@ -1,14 +1,13 @@
 /**
  * Centralised auth middleware for Next.js API routes.
  *
- * Replaces ad-hoc token checks spread across every endpoint.
- * Every function returns { user } on success or throws NextApiResponse-shaped errors
- * that the caller must respond with.
+ * ALL authentication is via Firebase ID tokens (RS256, verified by Admin SDK).
+ * Supabase is database-only — no supabase.auth.* calls exist here.
  *
  * Usage:
  *
  *   const { user } = await requireAuth(req, res);
- *   if (!user) return;   // response already sent
+ *   if (!user) return;   // 401 already sent
  *
  *   await requireCompanyAccess(user.id, companyId, res);
  *   if (res.writableEnded) return;
@@ -18,48 +17,65 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient, type User } from '@supabase/supabase-js';
 import { supabase } from '../db/supabaseClient';
+import { verifyAuthHeader } from '../../lib/auth/serverValidation';
 
-// ── Supabase anon client factory ───────────────────────────────────────────────
+// ── Resolved auth identity ────────────────────────────────────────────────────
 
-function makeAnonClient(token: string) {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } }
-  );
+export interface AuthUser {
+  /** Internal users.id (UUID from our DB, NOT the Firebase UID) */
+  id: string;
+  /** Firebase UID — primary identity from Firebase */
+  firebaseUid: string;
+  email: string;
 }
 
 // ── 1. requireAuth ─────────────────────────────────────────────────────────────
+
 /**
- * Validates the Bearer token in the Authorization header.
- * Returns the authenticated Supabase User or sends 401 and returns null.
+ * Validates the Firebase Bearer token in the Authorization header.
+ * Resolves the internal users.id from the firebase_uid.
+ * Returns the authenticated user or sends 401 and returns null.
  */
 export async function requireAuth(
   req: NextApiRequest,
   res: NextApiResponse,
-): Promise<{ user: User } | null> {
-  const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+): Promise<{ user: AuthUser } | null> {
+  let firebaseUid: string;
+  let email: string;
 
-  if (!token) {
+  try {
+    const verified = await verifyAuthHeader(req.headers.authorization);
+    firebaseUid = verified.uid;
+    email = verified.email;
+  } catch {
     res.status(401).json({ error: 'Authorization required' });
     return null;
   }
 
-  const anonClient = makeAnonClient(token);
-  const { data: { user }, error } = await anonClient.auth.getUser();
+  // Resolve internal DB user id
+  const { data: userRow } = await supabase
+    .from('users')
+    .select('id, email')
+    .eq('firebase_uid', firebaseUid)
+    .maybeSingle();
 
-  if (error || !user) {
-    res.status(401).json({ error: 'Invalid or expired session' });
+  if (!userRow) {
+    res.status(401).json({ error: 'User not found — please complete sign-in' });
     return null;
   }
 
-  return { user };
+  return {
+    user: {
+      id: (userRow as any).id,
+      firebaseUid,
+      email: (userRow as any).email ?? email,
+    },
+  };
 }
 
 // ── 2. requireCompanyAccess ────────────────────────────────────────────────────
+
 /**
  * Verifies the authenticated user has an active role in the given company.
  * SUPER_ADMIN role bypasses the company membership check.
@@ -76,7 +92,7 @@ export async function requireCompanyAccess(
     return false;
   }
 
-  // SUPER_ADMIN in any company → full access (platform admin)
+  // SUPER_ADMIN in any company → full platform access
   const { data: superAdminRow } = await supabase
     .from('user_company_roles')
     .select('id')
@@ -88,7 +104,6 @@ export async function requireCompanyAccess(
 
   if (superAdminRow) return true;
 
-  // Check membership in the specific company
   const { data: membership } = await supabase
     .from('user_company_roles')
     .select('id, role')
@@ -107,38 +122,22 @@ export async function requireCompanyAccess(
 }
 
 // ── 3. requireSuperAdmin ───────────────────────────────────────────────────────
+
 /**
  * Verifies the caller is a platform super-admin.
- *
- * Accepts two paths (in priority order):
- *  1. Bearer JWT with `profiles.is_super_admin = true`
- *  2. `user_company_roles.role = 'SUPER_ADMIN'` for the authenticated user
- *
- * NOTE: The legacy `super_admin_session=1` cookie is intentionally NOT checked here.
- * That flow is being deprecated. Endpoints migrated to this middleware no longer
- * accept the unsigned cookie.
+ * Checks user_company_roles.role = 'SUPER_ADMIN' for the Firebase-authenticated user.
  *
  * Returns { user } on success, sends 401/403 and returns null otherwise.
  */
 export async function requireSuperAdmin(
   req: NextApiRequest,
   res: NextApiResponse,
-): Promise<{ user: User } | null> {
+): Promise<{ user: AuthUser } | null> {
   const authResult = await requireAuth(req, res);
   if (!authResult) return null;
 
   const { user } = authResult;
 
-  // Check profiles.is_super_admin
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('is_super_admin')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (profile?.is_super_admin) return { user };
-
-  // Fallback: role-based check
   const { data: roleRow } = await supabase
     .from('user_company_roles')
     .select('id')
@@ -155,20 +154,20 @@ export async function requireSuperAdmin(
 }
 
 // ── 4. resolveActorId ──────────────────────────────────────────────────────────
+
 /**
- * Extracts the authenticated user.id from the Bearer token.
+ * Extracts the authenticated internal user.id from the Bearer token.
  * Returns null if no valid token — does NOT send a response.
- * Use for audit logging where identity is needed but auth is already checked.
  */
 export async function resolveActorId(req: NextApiRequest): Promise<string | null> {
-  const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-  if (!token) return null;
-
   try {
-    const anonClient = makeAnonClient(token);
-    const { data: { user } } = await anonClient.auth.getUser();
-    return user?.id ?? null;
+    const verified = await verifyAuthHeader(req.headers.authorization);
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('id')
+      .eq('firebase_uid', verified.uid)
+      .maybeSingle();
+    return (userRow as any)?.id ?? null;
   } catch {
     return null;
   }

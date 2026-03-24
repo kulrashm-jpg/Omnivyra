@@ -22,6 +22,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -42,16 +43,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Resolve admin identity (Bearer or cookie session)
   let adminUserId: string | null = null;
   if (!isSuperAdminCookie) {
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    const { data: { user }, error: userErr } = await supabase.auth.getUser(token!);
+    const { user, error: userErr } = await getSupabaseUserFromRequest(req);
     if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('is_super_admin')
-      .eq('id', user.id)
-      .maybeSingle();
-    if (!profile?.is_super_admin) return res.status(403).json({ error: 'Forbidden' });
+    adminUserId = user.id;
 
     adminUserId = user.id;
   }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Brain, AlertCircle, ChevronDown, ChevronUp, RefreshCw, Layers, AlertTriangle } from 'lucide-react';
-import { supabase } from '../../utils/supabaseClient';
+import { getAuthToken } from '../../utils/getAuthToken';
 
 // 1 credit = $0.01 USD (platform default credit rate)
 const CREDIT_RATE = 0.01;
@@ -111,10 +111,10 @@ export default function LLMConsumptionPanel({ tier, companyId, year, month }: Pr
     if (year) params.set('year', String(year));
     if (month) params.set('month', String(month));
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const token = await getAuthToken();
       const resp = await fetch(`/api/admin/consumption/llm?${params}`, {
         credentials: 'include',
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!resp.ok) throw new Error((await resp.json()).error ?? 'Failed');
       const json = await resp.json();

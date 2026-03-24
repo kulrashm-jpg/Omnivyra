@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Header from '../components/Header';
-import { supabase } from '../utils/supabaseClient';
+import { getFirebaseAuth } from '../lib/firebase';
 
 type StrategyTemplate = {
   id: string;
@@ -55,12 +55,9 @@ export default function StrategyTemplatesPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    const loadUser = async () => {
-      const { data } = await supabase.auth.getSession();
-      const sessionUserId = data.session?.user?.id || '';
-      setUserId(sessionUserId);
-    };
-    loadUser();
+    const auth = getFirebaseAuth();
+    const uid = auth.currentUser?.uid || '';
+    setUserId(uid);
   }, []);
 
   const loadTemplates = async () => {

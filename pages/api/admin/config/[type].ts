@@ -11,6 +11,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import {
   updateConfig,
   rollbackConfig,
@@ -32,15 +33,8 @@ function isSuperAdmin(req: NextApiRequest): boolean {
 }
 
 async function resolveChangedBy(req: NextApiRequest): Promise<string> {
-  const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return 'super_admin';
-  try {
-    const { data: { user } } = await supabase.auth.getUser(token);
-    return user?.email ?? user?.id ?? 'super_admin';
-  } catch {
-    return 'super_admin';
-  }
+  const { user } = await getSupabaseUserFromRequest(req);
+  return user?.email ?? user?.id ?? 'super_admin';
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

@@ -11,14 +11,20 @@ import { useState, useEffect } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { supabase } from '../utils/supabaseClient';
+import { getFirebaseAuth } from '../lib/firebase';
+import { sendEmailLink } from '../lib/auth/emailLink';
 import { validateEmailDomain } from '../lib/auth/domainValidation';
 
 export default function CreateAccountPage() {
   const router = useRouter();
-  const { goals = '', team = '', challenge = '' } = router.query as Record<string, string>;
+  const { goals = '', team = '', challenge = '', email: emailParam = '' } = router.query as Record<string, string>;
 
   const [email, setEmail]     = useState('');
+
+  // Pre-fill email from query param (e.g. redirected from login "no account found")
+  useEffect(() => {
+    if (emailParam) setEmail(emailParam);
+  }, [emailParam]);
   const [sent, setSent]       = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
@@ -26,12 +32,12 @@ export default function CreateAccountPage() {
 
   // Already logged in → skip ahead to phone step
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
-        router.replace(`/onboarding/phone?goals=${goals}&team=${team}&challenge=${challenge}`);
-      }
+    const fbUser = getFirebaseAuth().currentUser;
+    if (fbUser) {
+      router.replace(`/onboarding/phone?goals=${goals}&team=${team}&challenge=${challenge}`);
+    } else {
       setCheckingSession(false);
-    });
+    }
   }, [router, goals, team, challenge]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -57,19 +63,13 @@ export default function CreateAccountPage() {
       sessionStorage.setItem('intent_challenge', challenge);
     }
 
-    // Always redirect to /auth/callback — it's the only page that reliably
-    // handles the PKCE code exchange. It then routes new users (no phone) to
-    // /onboarding/phone automatically via /onboarding/verify-phone.
-    const redirectTo = `${window.location.origin}/auth/callback`;
-
-    const { error: authErr } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { emailRedirectTo: redirectTo, shouldCreateUser: true },
-    });
-
+    try {
+      await sendEmailLink(email.trim().toLowerCase());
+      setSent(true);
+    } catch (err: any) {
+      setError(err.message ?? 'Failed to send sign-in link. Please try again.');
+    }
     setLoading(false);
-    if (authErr) { setError(authErr.message); return; }
-    setSent(true);
   }
 
   return (

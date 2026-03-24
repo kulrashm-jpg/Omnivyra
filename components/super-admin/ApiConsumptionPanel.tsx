@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Zap, AlertCircle, RefreshCw } from 'lucide-react';
-import { supabase } from '../../utils/supabaseClient';
+import { getAuthToken } from '../../utils/getAuthToken';
 
 // 1 credit = $0.01 USD; Starter plan = $29/mo = 1,000 credits/mo
 const CREDIT_RATE = 0.01;
@@ -56,10 +56,10 @@ export default function ApiConsumptionPanel({ tier, companyId, year, month }: Pr
     if (year) params.set('year', String(year));
     if (month) params.set('month', String(month));
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const token = await getAuthToken();
       const resp = await fetch(`/api/admin/consumption/apis?${params}`, {
         credentials: 'include',
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!resp.ok) throw new Error((await resp.json()).error ?? 'Failed');
       const json = await resp.json();

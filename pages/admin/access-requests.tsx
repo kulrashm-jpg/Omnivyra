@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
-import { supabase } from '@/utils/supabaseClient';
+import { getAuthToken } from '@/utils/getAuthToken';
 import { CheckCircle, XCircle, Trash2, RefreshCw, Search } from 'lucide-react';
 
 type RequestStatus = 'pending' | 'approved' | 'rejected' | 'deleted' | 'all';
@@ -60,8 +60,8 @@ export default function AccessRequestsPage() {
 
   const fetchRequests = useCallback(async () => {
     setLoading(true);
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) { router.push('/login'); return; }
+    const token = await getAuthToken();
+    if (!token) { router.push('/login'); return; }
 
     const params = new URLSearchParams({ status: statusFilter, limit: '100' });
     const res = await fetch(`/api/admin/access-requests/list?${params}`, {
@@ -77,8 +77,8 @@ export default function AccessRequestsPage() {
   useEffect(() => { void fetchRequests(); }, [fetchRequests]);
 
   async function authHeader() {
-    const { data: { session } } = await supabase.auth.getSession();
-    return { Authorization: `Bearer ${session?.access_token ?? ''}` };
+    const token = await getAuthToken();
+    return { Authorization: `Bearer ${token ?? ''}` };
   }
 
   function closeModal() { setSelected(null); setModal(null); setAdminNote(''); setRejectReason(''); }

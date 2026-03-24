@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabase } from '../../utils/supabaseClient';
+import { getAuthToken } from '../../utils/getAuthToken';
 
 export type OpportunityItemForCard = {
   id: string;
@@ -18,8 +18,7 @@ type OpportunityCardProps = {
 };
 
 async function fetchWithAuth(input: RequestInfo, init?: RequestInit): Promise<Response> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = await getAuthToken();
   if (!token) throw new Error('Not authenticated');
   return fetch(input, {
     ...init,

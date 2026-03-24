@@ -104,7 +104,19 @@
       "Bash(railway variables:*)",
       "Bash(find /c/virality/pages/api/super-admin -name companies*)",
       "Bash(find /c/virality/pages -name *.tsx -path */auth/* -o -name callback*)",
-      "Bash(find /c/virality/pages -name verify-phone* -o -name phone*)"
+      "Bash(find /c/virality/pages -name verify-phone* -o -name phone*)",
+      "Bash(node -e \"require\\(''''firebase-admin''''\\)\")",
+      "Bash(psql \"postgresql://postgres:jkylt5N%25@db.klkiseupptzbecbxwrky.supabase.co:5432/postgres\" -f supabase/migrations/20260331_auth_columns.sql)",
+      "Bash(where psql:*)",
+      "Bash(where pg_dump)",
+      "Bash(node -e \"require\\(''''pg''''\\)\")",
+      "Bash(npm list:*)",
+      "Bash(find pages/ -name settings* -o -name *settings*)",
+      "Bash(tasklist /fi 'imagename eq node.exe')",
+      "Bash(find pages/api -name login*)",
+      "Bash(find /c/virality -type f -name *schema* -o -name *migration*)",
+      "Bash(find /c/virality/database -name \"*.sql\" -type f -exec grep -l \"pricing_plan\\\\|subscription\\\\|plan_feature\" {})",
+      "mcp__ide__getDiagnostics"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]"

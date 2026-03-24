@@ -242,12 +242,16 @@ export async function hasFreeCreditAccess(userId: string): Promise<{
   status: 'eligible' | 'pending_review' | 'blocked';
   reason: string;
 }> {
-  const { data: { user }, error } = await supabase.auth.admin.getUserById(userId);
-  if (error || !user?.email) {
+  const { data: userRow, error } = await supabase
+    .from('users')
+    .select('email')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error || !(userRow as any)?.email) {
     return { allowed: false, status: 'blocked', reason: 'user_not_found' };
   }
 
-  const result = await checkDomainEligibility(user.email, userId);
+  const result = await checkDomainEligibility((userRow as any).email, userId);
 
   return {
     allowed: result.status === 'eligible',

@@ -199,8 +199,12 @@ export async function getCompanyAdmins(companyId: string): Promise<CompanyAdmin[
   const admins: CompanyAdmin[] = [];
   for (const row of roles) {
     try {
-      const { data } = await supabase.auth.admin.getUserById(row.user_id);
-      admins.push({ user_id: row.user_id, email: data?.user?.email ?? null });
+      const { data: userData } = await supabase
+        .from('users')
+        .select('email')
+        .eq('id', row.user_id)
+        .maybeSingle();
+      admins.push({ user_id: row.user_id, email: (userData as any)?.email ?? null });
     } catch {
       admins.push({ user_id: row.user_id, email: null });
     }

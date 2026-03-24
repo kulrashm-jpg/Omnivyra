@@ -1,14 +1,17 @@
 import { NextApiRequest, NextApiResponse } from 'next';
+import { randomBytes, createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { Role, ALL_ROLES } from '../../../backend/services/rbacService';
+import { getFirebaseAdmin } from '../../../lib/firebaseAdmin';
+import { logAuthEvent } from '../../../lib/auth/auditLog';
 
 const requireSuperAdminAccess = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> => {
-  // Legacy super-admin login: cookie takes precedence when user also has a Supabase session
+  // Legacy super-admin login: cookie takes precedence
   const hasSession = req.cookies?.super_admin_session === '1';
   if (hasSession) {
     console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
@@ -27,40 +30,155 @@ const requireSuperAdminAccess = async (
   return false;
 };
 
-const ensureAuthAdmin = () => {
-  const admin = supabase.auth?.admin;
-  if (!admin) {
-    throw new Error('AUTH_ADMIN_UNAVAILABLE');
-  }
-  return admin;
-};
-
 const allowedRoles = ALL_ROLES.filter((role) => role !== Role.SUPER_ADMIN);
 const isAllowedRole = (value?: string | null) => {
   if (!value) return false;
   return (allowedRoles as readonly string[]).includes(value.toUpperCase());
 };
 
-const getOrInviteUser = async (email: string) => {
-  const admin = ensureAuthAdmin();
-  const { data: invited, error: inviteError } = await admin.inviteUserByEmail(email, {
-    redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard`,
-  });
-  if (!inviteError && invited?.user) {
-    return { user: invited.user, error: null };
+/**
+ * Find or create a users row by email.
+ * Never calls supabase.auth — identity is established by Firebase on first sign-in.
+ * Returns the internal users.id.
+ *
+ * Design note — schema resilience:
+ *   Columns added by later migrations (is_deleted, is_email_verified, is_phone_verified)
+ *   are checked / inserted conditionally so this function works regardless of which
+ *   migrations have been applied to the live database.
+ */
+const findOrCreateUserByEmail = async (email: string): Promise<{ id: string; error: string | null }> => {
+  // 1. Look up by email — select only the stable primary-key column so the query
+  //    never fails due to a missing column from a later migration.
+  const { data: existing, error: selectErr } = await supabase
+    .from('users')
+    .select('id')
+    .eq('email', email)
+    .maybeSingle();
+
+  if (selectErr) {
+    console.error('[findOrCreateUserByEmail] select error:', selectErr.message);
+    return { id: '', error: selectErr.message };
   }
-  if (inviteError?.message?.toLowerCase().includes('already')) {
-    const { data: existing, error: existingError } = await (admin as any).listUsers({ email });
-    if (existingError) {
-      return { user: null, error: existingError.message };
+
+  if (existing) {
+    const existingId = (existing as any).id as string;
+
+    // Check soft-delete status — column added in migration 20260323_user_soft_delete.
+    // If that migration hasn't been applied the query will return an error; we treat
+    // the missing column as "not deleted" (safe: no rows can be soft-deleted yet).
+    const { data: softRow, error: softErr } = await supabase
+      .from('users')
+      .select('is_deleted')
+      .eq('id', existingId)
+      .maybeSingle();
+
+    if (!softErr && (softRow as any)?.is_deleted === true) {
+      return { id: '', error: 'ACCOUNT_DELETED' };
     }
-    const existingUser = existing?.users?.[0] || null;
-    if (existingUser) {
-      return { user: existingUser, error: null };
-    }
+
+    return { id: existingId, error: null };
   }
-  return { user: null, error: inviteError?.message || 'FAILED_TO_INVITE_USER' };
+
+  // 2. Create a stub row — firebase_uid and phone will be filled on first sign-in.
+  //    Only include columns that we know exist (email, name, created_at are always
+  //    present). is_email_verified / is_phone_verified were added by migration
+  //    20260331_auth_columns with NOT NULL DEFAULT false, so we include them but
+  //    fall back gracefully if PostgREST rejects them.
+  const basePayload = {
+    email,
+    name:       email.split('@')[0] || 'User',
+    created_at: new Date().toISOString(),
+  };
+
+  const { data: created, error: insertErr } = await supabase
+    .from('users')
+    .insert({ ...basePayload, is_email_verified: false, is_phone_verified: false })
+    .select('id')
+    .single();
+
+  if (insertErr) {
+    // 23505 = unique_violation — race: another request created the row first
+    if (insertErr.code === '23505') {
+      const { data: retry } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', email)
+        .maybeSingle();
+      if (retry) return { id: (retry as any).id, error: null };
+    }
+
+    // PGRST204 = column not found — is_email_verified / is_phone_verified not in schema yet.
+    // Retry without them; the columns will be back-filled when the migration runs.
+    if (
+      insertErr.code === 'PGRST204' ||
+      insertErr.message?.includes('is_email_verified') ||
+      insertErr.message?.includes('is_phone_verified')
+    ) {
+      const { data: fb, error: fbErr } = await supabase
+        .from('users')
+        .insert(basePayload)
+        .select('id')
+        .single();
+
+      if (fbErr) {
+        if (fbErr.code === '23505') {
+          const { data: retry2 } = await supabase
+            .from('users')
+            .select('id')
+            .eq('email', email)
+            .maybeSingle();
+          if (retry2) return { id: (retry2 as any).id, error: null };
+        }
+        console.error('[findOrCreateUserByEmail] fallback insert error:', fbErr.message);
+        return { id: '', error: fbErr.message };
+      }
+
+      return { id: (fb as any).id, error: null };
+    }
+
+    console.error('[findOrCreateUserByEmail] insert error:', insertErr.message, '| code:', insertErr.code);
+    return { id: '', error: insertErr.message };
+  }
+
+  return { id: (created as any).id, error: null };
 };
+
+/**
+ * Create an invitation record and return the raw token to embed in the email link.
+ * Stores only the SHA-256 hash in DB — raw token never persisted.
+ */
+const createInvitationToken = async (params: {
+  email: string;
+  companyId: string;
+  role: string;
+  invitedBy: string | null;
+}): Promise<{ rawToken: string; error: string | null }> => {
+  const rawToken = randomBytes(32).toString('hex');
+  const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 7 * 86_400 * 1_000).toISOString();
+
+  const { error } = await supabase.from('invitations').upsert(
+    {
+      email:      params.email,
+      company_id: params.companyId,
+      role:       params.role,
+      token_hash: tokenHash,
+      invited_by: params.invitedBy,
+      expires_at: expiresAt,
+      // Clear previous accepted/revoked state on re-invite
+      accepted_at: null,
+      revoked_at:  null,
+    },
+    { onConflict: 'token_hash' }
+  );
+
+  if (error) return { rawToken: '', error: error.message };
+  return { rawToken, error: null };
+};
+
+// Columns added by later migrations — included only when they exist.
+// If PostgREST rejects them (PGRST204) we retry without them.
+const optionalRoleColumns = (extra: Record<string, unknown> = {}) => extra;
 
 const upsertUserCompanyRole = async (userId: string, companyId: string, role: string) => {
   const { data: existing } = await supabase
@@ -70,30 +188,68 @@ const upsertUserCompanyRole = async (userId: string, companyId: string, role: st
     .eq('company_id', companyId)
     .limit(1);
 
+  const now = new Date().toISOString();
+
   if (existing && existing.length > 0) {
     const row = existing[0];
-    if (row.role !== role) {
-      const { error } = await supabase
-        .from('user_company_roles')
-        .update({ role, updated_at: new Date().toISOString() })
-        .eq('id', row.id);
-      if (error) {
-        return { ok: false, error: error.message };
+    // Always reset status to 'invited' — covers re-inviting a deactivated user
+    // as well as changing role on an already-active user.
+    const updatePayload = optionalRoleColumns({
+      role,
+      status:         'invited',
+      updated_at:     now,
+      // Optional columns — silently absent in older schema versions
+      invited_at:     now,
+      deactivated_at: null,
+    });
+
+    const { error } = await supabase
+      .from('user_company_roles')
+      .update(updatePayload)
+      .eq('id', row.id);
+
+    if (error) {
+      // PGRST204: a column in the payload doesn't exist yet — retry with minimal payload
+      if (error.code === 'PGRST204' || error.message?.includes('invited_at') || error.message?.includes('deactivated_at')) {
+        const { error: retryErr } = await supabase
+          .from('user_company_roles')
+          .update({ role, status: 'invited', updated_at: now })
+          .eq('id', row.id);
+        if (retryErr) return { ok: false, error: retryErr.message };
+        return { ok: true };
       }
+      return { ok: false, error: error.message };
     }
     return { ok: true };
   }
 
-  const { error } = await supabase.from('user_company_roles').insert({
-    user_id: userId,
+  // No existing row — insert fresh
+  const insertPayload = optionalRoleColumns({
+    user_id:    userId,
     company_id: companyId,
     role,
-    created_at: new Date().toISOString(),
-    status: 'invited',
-    invited_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: now,
+    status:     'invited',
+    updated_at: now,
+    // Optional columns
+    invited_at: now,
   });
+
+  const { error } = await supabase.from('user_company_roles').insert(insertPayload);
+
   if (error) {
+    if (error.code === 'PGRST204' || error.message?.includes('invited_at')) {
+      const { error: retryErr } = await supabase.from('user_company_roles').insert({
+        user_id:    userId,
+        company_id: companyId,
+        role,
+        created_at: now,
+        status:     'invited',
+        updated_at: now,
+      });
+      if (retryErr) return { ok: false, error: retryErr.message };
+      return { ok: true };
+    }
     return { ok: false, error: error.message };
   }
   return { ok: true };
@@ -157,19 +313,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: 'FAILED_TO_LIST_COMPANIES', details: companiesResult.error.message });
     }
 
-    let authFallbackUsers: Array<{ id: string; email: string; created_at?: string | null }> = [];
-    if ((!usersResult.data || usersResult.data.length === 0) && supabase.auth?.admin) {
-      try {
-        const { data: authUsers } = await supabase.auth.admin.listUsers();
-        authFallbackUsers = (authUsers?.users || []).map((user) => ({
-          id: user.id,
-          email: user.email || '',
-          created_at: user.created_at,
-        }));
-      } catch (authError) {
-        console.warn('FAILED_TO_LOAD_AUTH_USERS', authError);
-      }
-    }
+    // No Supabase auth.admin.listUsers() fallback — users table is the authoritative source
+    const authFallbackUsers: Array<{ id: string; email: string; created_at?: string | null }> = [];
 
     const emailByUserId = [...(usersResult.data || []), ...authFallbackUsers].reduce<Record<string, string>>(
       (acc, user) => {
@@ -247,56 +392,82 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
       }
 
-      const inviteResult = await getOrInviteUser(normalizedEmail);
-      console.log('[super-admin/users] invite result', {
-        userId: inviteResult.user?.id || null,
-        email: inviteResult.user?.email || null,
-        error: inviteResult.error,
-      });
-      if (inviteResult.error || !inviteResult.user) {
-        return res.status(500).json({ error: inviteResult.error || 'FAILED_TO_INVITE_USER' });
+      // 1. Find or create user row by email (no Supabase auth.admin)
+      const { id: userId, error: userErr } = await findOrCreateUserByEmail(normalizedEmail);
+      if (userErr === 'ACCOUNT_DELETED') {
+        return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
       }
-
-      const { error: userInsertError } = await supabase.from('users').upsert(
-        {
-          id: inviteResult.user.id,
-          email: inviteResult.user.email || normalizedEmail,
-          name: normalizedEmail.split('@')[0] || 'User',
-          created_at: new Date().toISOString(),
-        },
-        { onConflict: 'id' }
-      );
-      console.log('[super-admin/users] users upsert', {
-        userId: inviteResult.user.id,
-        userInsertError,
-      });
-      if (userInsertError) {
-        return res.status(500).json({ error: 'FAILED_TO_SAVE_USER', details: userInsertError.message });
+      if (userErr || !userId) {
+        return res.status(500).json({ error: 'FAILED_TO_SAVE_USER', details: userErr });
       }
+      console.log('[super-admin/users] user resolved', { userId, email: normalizedEmail });
 
-      const roleResult = await upsertUserCompanyRole(inviteResult.user.id, companyId, desiredRole);
-      console.log('[super-admin/users] role upsert', {
-        userId: inviteResult.user.id,
-        companyId,
-        role: desiredRole,
-        error: roleResult.ok ? null : roleResult.error,
-      });
+      // 2. Create/update company role
+      const roleResult = await upsertUserCompanyRole(userId, companyId, desiredRole);
       if (!roleResult.ok) {
         return res.status(500).json({ error: 'FAILED_TO_ASSIGN_ROLE', details: roleResult.error });
+      }
+
+      // 3. Issue invitation token and send email link
+      const { rawToken, error: invErr } = await createInvitationToken({
+        email:      normalizedEmail,
+        companyId,
+        role:       desiredRole,
+        invitedBy:  null, // super-admin context — no calling user row
+      });
+      if (invErr) {
+        console.warn('[super-admin/users] invitation insert failed:', invErr);
+        // Non-fatal: user row and role are created; email will need resend
+      }
+
+      // Send sign-in link email via Firebase (same mechanism as the login page).
+      // Firebase handles email delivery — no third-party mailer needed.
+      try {
+        const firebaseApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+        const reqHost = req.headers.host ?? '';
+        const isLocal = reqHost.startsWith('localhost') || reqHost.startsWith('127.');
+        const appUrl = isLocal
+          ? `http://${reqHost}`
+          : (process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.omnivyra.com').replace(/\/$/, '');
+        if (firebaseApiKey) {
+          const fbRes = await fetch(
+            `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${firebaseApiKey}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                requestType: 'EMAIL_SIGNIN',
+                email: normalizedEmail,
+                continueUrl: `${appUrl}/auth/verify`,
+                canHandleCodeInApp: true,
+              }),
+            },
+          );
+          if (!fbRes.ok) {
+            const fbErr = await fbRes.json().catch(() => ({}));
+            console.warn('[super-admin/users] Firebase email send failed:', fbErr);
+          } else {
+            console.log(`[super-admin/users] Sign-in link sent to ${normalizedEmail}`);
+          }
+        } else {
+          console.warn('[super-admin/users] NEXT_PUBLIC_FIREBASE_API_KEY not set — skipping email');
+        }
+      } catch (emailErr) {
+        console.warn('[super-admin/users] Failed to send invitation email:', emailErr);
       }
 
       await insertAuditLog({
         actorUserId: null,
         action: 'SUPER_ADMIN_INVITE',
-        targetUserId: inviteResult.user.id,
+        targetUserId: userId,
         companyId,
         metadata: { role: desiredRole },
       });
 
       return res.status(201).json({
         user: {
-          id: inviteResult.user.id,
-          email: inviteResult.user.email || normalizedEmail,
+          id: userId,
+          email: normalizedEmail,
           company_id: companyId,
           role: desiredRole,
         },
@@ -382,6 +553,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...(updatePayload.role ? { role: updatePayload.role } : {}),
       },
     });
+    if (updatePayload.role) {
+      void logAuthEvent('role_changed', {
+        userId,
+        metadata: { new_role: updatePayload.role, company_id: companyId, changed_by: 'super_admin' },
+      });
+    }
 
     return res.status(200).json({ user: data });
   }
@@ -437,38 +614,90 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Route 2: Delete unassigned user entirely from the system.
-    // Users may exist in auth.users without a row in the users table (auth-only
-    // accounts that never completed onboarding). We attempt both deletions
-    // independently and succeed if at least one actually removed a record.
+    // Order of operations is critical for consistency:
+    //   1. Look up firebase_uid from DB
+    //   2. Delete from Firebase Auth first (abort if it fails — prevents ghost sessions)
+    //   3. Delete from users table
     try {
-      // Step A: remove from users table (may legitimately be absent)
+      // Step A: look up the user row to get firebase_uid
+      const { data: userRecord, error: lookupError } = await supabase
+        .from('users')
+        .select('id, firebase_uid')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (lookupError) {
+        console.error('[super-admin/users] DELETE lookup error:', lookupError.message);
+        return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: lookupError.message });
+      }
+
+      const firebaseUid: string | null = (userRecord as any)?.firebase_uid ?? null;
+
+      // Step B: revoke refresh tokens + delete from Firebase Auth.
+      //
+      //   revokeRefreshTokens() is called FIRST so that post-login-route (which uses
+      //   checkRevoked=true) immediately rejects this user's tokens — no 1-hour window.
+      //   deleteUser() removes the Firebase account entirely.
+      //   Both calls tolerate auth/user-not-found (idempotent — already gone).
+      //   Any other Firebase error aborts the entire flow to avoid ghost sessions.
+      if (firebaseUid) {
+        try {
+          await getFirebaseAdmin().auth().revokeRefreshTokens(firebaseUid);
+          await getFirebaseAdmin().auth().deleteUser(firebaseUid);
+          console.log('[super-admin/users] DELETE - revoked + deleted Firebase Auth user', { userId, firebaseUid });
+        } catch (authError: any) {
+          if (authError.code !== 'auth/user-not-found') {
+            console.error('[super-admin/users] DELETE - Firebase Auth operation failed:', authError.message);
+            return res.status(500).json({
+              error: 'FAILED_TO_DELETE_FROM_AUTH',
+              details: authError.message,
+            });
+          }
+          // auth/user-not-found: already absent from Firebase — safe to continue.
+          console.warn('[super-admin/users] DELETE - Firebase user not found, continuing', { firebaseUid });
+        }
+      }
+
+      // Step C: soft-delete the users row (preserves audit trail, blocks re-signup)
+      const now = new Date().toISOString();
       const { data: userData, error: userError } = await supabase
         .from('users')
-        .delete()
+        .update({ is_deleted: true, deleted_at: now })
         .eq('id', userId)
         .select('id');
 
-      const deletedFromTable = !userError && userData && userData.length > 0;
+      const updatedInTable = !userError && userData && userData.length > 0;
       if (userError) {
-        console.warn('[super-admin/users] DELETE users table error (continuing to auth):', userError.message);
+        // CRITICAL: Firebase Auth user was deleted/revoked but the DB soft-delete failed.
+        // The user cannot sign in (Firebase account gone), but the DB row still appears active.
+        // This row must be manually soft-deleted to restore data consistency.
+        console.error(JSON.stringify({
+          level:   'CRITICAL',
+          event:   'firebase_deleted_db_softdelete_failed',
+          userId,
+          firebaseUid,
+          error:   userError.message,
+          action:  `Manual fix: UPDATE users SET is_deleted=true, deleted_at=now() WHERE id='${userId}'`,
+        }));
+        return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: userError.message });
       }
 
-      // Step B: remove from Supabase Auth — always attempt, even if table row was absent
-      let deletedFromAuth = false;
-      try {
-        const admin = ensureAuthAdmin();
-        await admin.deleteUser(userId);
-        deletedFromAuth = true;
-        console.log('[super-admin/users] DELETE - deleted from auth', { userId });
-      } catch (authError: any) {
-        console.warn('[super-admin/users] DELETE - auth deletion failed:', authError.message);
-      }
-
-      if (!deletedFromTable && !deletedFromAuth) {
+      if (!updatedInTable && !firebaseUid) {
         return res.status(404).json({
           error: 'USER_NOT_FOUND',
-          details: `User ${userId} not found in users table or auth`,
+          details: `User ${userId} not found in users table or Firebase Auth`,
         });
+      }
+
+      // Step D: deactivate all company roles so the user loses access to every company
+      const { error: rolesError } = await supabase
+        .from('user_company_roles')
+        .update({ status: 'inactive', deactivated_at: now, updated_at: now })
+        .eq('user_id', userId);
+
+      if (rolesError) {
+        // Non-fatal: Firebase + users row are already handled; log and continue.
+        console.warn('[super-admin/users] DELETE - failed to deactivate roles:', rolesError.message);
       }
 
       await insertAuditLog({
@@ -476,13 +705,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         action: 'SUPER_ADMIN_USER_DELETE_UNASSIGNED',
         targetUserId: userId,
       });
+      void logAuthEvent('user_deleted', {
+        userId,
+        firebaseUid: firebaseUid ?? undefined,
+        metadata: { deleted_by: 'super_admin', firebase_deleted: !!firebaseUid },
+      });
 
-      return res.status(200).json({ success: true, message: 'Unassigned user deleted from system' });
+      return res.status(200).json({ success: true, message: 'User deleted from system' });
     } catch (err: any) {
       console.error('[super-admin/users] DELETE unassigned exception:', { userId, error: err.message });
       return res.status(500).json({
         error: 'FAILED_TO_DELETE_UNASSIGNED_USER',
-        details: err.message
+        details: err.message,
       });
     }
   }

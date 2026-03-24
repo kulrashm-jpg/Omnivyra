@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import { RefreshCw, AlertCircle, CheckCircle, Pencil, X, Save } from 'lucide-react';
-import { supabase } from '../../utils/supabaseClient';
+import { getAuthToken } from '../../utils/getAuthToken';
 
 interface Plan {
   id: string;
@@ -56,8 +56,8 @@ export default function PlansPricingPanel() {
     setLoading(true);
     setError(null);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const authHeader = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      const token = await getAuthToken();
+      const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
       const res = await fetch('/api/super-admin/plans/list', { credentials: 'include', headers: authHeader });
       if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to load plans');
       const json = await res.json();
@@ -101,13 +101,13 @@ export default function PlansPricingPanel() {
     setError(null);
     setSuccess(null);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const token = await getAuthToken();
       const res = await fetch('/api/super-admin/plans/create', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           plan_key: plan.plan_key,

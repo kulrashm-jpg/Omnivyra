@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
-import { supabase } from '../utils/supabaseClient';
+import { getAuthToken } from '../utils/getAuthToken';
 import {
   ArrowLeft,
   BarChart3,
@@ -216,8 +216,7 @@ export default function SuperAdminPanel() {
     role: 'COMPANY_ADMIN',
   });
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    const token = await getAuthToken();
     return fetch(input, {
       ...init,
       credentials: 'include', // always send cookies (super_admin_session) alongside Bearer token
@@ -1061,6 +1060,7 @@ export default function SuperAdminPanel() {
             { id: 'community-ai',  label: 'Engagement',        icon: Activity   },
             { id: 'audit',         label: 'Audit Logs',        icon: Eye        },
             { id: 'social-platforms', label: 'APIs',           icon: Globe      },
+            { id: 'system-health', label: 'System Health',     icon: TrendingUp },
             { id: 'blog',          label: 'Blog',              icon: FileText   },
           ].map((tab) => {
             const Icon = tab.icon;
@@ -1069,6 +1069,7 @@ export default function SuperAdminPanel() {
                 key={tab.id}
                 onClick={() => {
                   if (tab.id === 'blog') { router.push('/admin/blog'); return; }
+                  if (tab.id === 'system-health') { router.push('/super-admin/system-health'); return; }
                   setActiveTab(tab.id);
                   if (tab.id === 'social-platforms') loadSocialPlatforms();
                 }}

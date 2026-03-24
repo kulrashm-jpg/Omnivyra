@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { Role } from '../../../backend/services/rbacService';
 import { extractBlogContext } from '../../../lib/blog/blockExtractor';
 
@@ -51,7 +52,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const search = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
 
   // Resolve companyId from RBAC-enriched request or session
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getSupabaseUserFromRequest(req);
   let companyId: string | null = (req as any).companyId ?? null;
 
   if (!companyId && user) {

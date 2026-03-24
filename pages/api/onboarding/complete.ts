@@ -34,6 +34,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
+import { verifyFirebaseIdToken as verifyFirebaseAdmin } from '../../../lib/firebaseAdmin';
+import { checkRateLimit, ONBOARDING_COMPLETE_LIMIT, ONBOARDING_UID_LIMIT } from '../../../lib/auth/rateLimit';
 
 // Fallback constants — overridden by free_credit_config DB row at runtime
 const INITIAL_CREDITS_DEFAULT = 300;
@@ -72,26 +74,73 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // ── Auth: get user from Authorization header (Bearer <access_token>) ───────
+  // ── Rate limiting ─────────────────────────────────────────────────────────
+  const ip = String(
+    req.headers['x-forwarded-for'] ?? (req.socket as any)?.remoteAddress ?? 'unknown'
+  ).split(',')[0].trim();
+  const rl = await checkRateLimit(ip, ONBOARDING_COMPLETE_LIMIT);
+  if (!rl.allowed) {
+    return res.status(429).json({ error: 'Too many onboarding attempts. Please try again later.' });
+  }
+
+  // ── Auth: verify Firebase ID token from Authorization header ─────────────
   const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing auth token' });
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  if (!idToken) return res.status(401).json({ error: 'Missing auth token' });
 
-  // Verify the user token with the anon client
-  const anonClient = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } },
-  );
-  const { data: { user }, error: userErr } = await anonClient.auth.getUser(token);
-  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
+  let firebaseEmail: string;
+  let firebaseUidFromToken: string;
+  try {
+    const decoded = await verifyFirebaseAdmin(idToken);
+    if (!decoded.email) throw new Error('Token has no email');
+    firebaseEmail = decoded.email;
+    firebaseUidFromToken = decoded.uid;
+  } catch {
+    return res.status(401).json({ error: 'Invalid Firebase token' });
+  }
 
-  // Use service role for all table writes — free_credit_profiles and
-  // free_credit_claims have RLS that blocks anon/user inserts.
-  const supabase = createClient(
+  // ── Post-auth UID rate limit ──────────────────────────────────────────────
+  // Second pass keyed by Firebase UID — blocks rotating-proxy abuse where a
+  // single identity uses many IPs to bypass the IP-based pre-auth check above.
+  const rlUid = await checkRateLimit(firebaseUidFromToken, ONBOARDING_UID_LIMIT);
+  if (!rlUid.allowed) {
+    return res.status(429).json({ error: 'Too many onboarding attempts. Please try again later.' });
+  }
+
+  // Look up or create the internal users row
+  const supabaseAdmin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } },
   );
+  const { data: userDbRow } = await supabaseAdmin
+    .from('users')
+    .select('id, email, is_deleted')
+    .eq('firebase_uid', firebaseUidFromToken)
+    .maybeSingle();
+
+  // Block soft-deleted users from re-onboarding even with a valid Firebase token.
+  // sync-firebase-user already enforces this during login, but onboarding/complete
+  // is an independent endpoint and must enforce it independently (defence-in-depth).
+  if (userDbRow && (userDbRow as any).is_deleted) {
+    console.warn('[onboarding/complete] ghost_session_detected', {
+      event:  'ghost_session_detected',
+      uid:    firebaseUidFromToken,
+      reason: 'user_is_soft_deleted',
+    });
+    return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
+  }
+
+  // Build a synthetic user object compatible with the rest of this handler
+  const user = {
+    id:    userDbRow ? (userDbRow as any).id : null,
+    email: firebaseEmail,
+    // firebase_uid is used for DB writes
+    firebase_uid: firebaseUidFromToken,
+  };
+
+  // Service-role client for all table writes (reuse supabaseAdmin created above)
+  const supabase = supabaseAdmin;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const {
@@ -230,14 +279,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }, { onConflict: 'email' });
     }
 
-    // Store name + job title in Supabase auth user_metadata
-    if (fullName) {
-      await supabase.auth.admin.updateUserById(user.id, {
-        user_metadata: {
-          full_name: fullName,
-          job_title: jobTitle || undefined,
-        },
-      });
+    // Store name + job title in users table (no Supabase auth.admin call needed)
+    if (user.id) {
+      await supabase.from('users').update({
+        ...(fullName ? { name: fullName, job_title: jobTitle || null } : {}),
+        is_phone_verified: true,
+        updated_at: new Date().toISOString(),
+      }).eq('id', user.id);
     }
 
     // ── 0. Create or retrieve company from company name ──────────────────────

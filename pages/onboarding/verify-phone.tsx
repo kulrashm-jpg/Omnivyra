@@ -19,8 +19,8 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import type { ConfirmationResult } from 'firebase/auth';
-import { supabase } from '../../utils/supabaseClient';
-import { setupRecaptcha, sendPhoneOtp, clearRecaptcha } from '../../lib/firebase';
+import { getFirebaseAuth, setupRecaptcha, sendPhoneOtp, clearRecaptcha } from '../../lib/firebase';
+import { getAuthToken } from '../../utils/getAuthToken';
 
 type Step = 'loading' | 'send' | 'otp' | 'error';
 
@@ -36,32 +36,28 @@ export default function VerifyPhonePage() {
 
   const confirmationRef = useRef<ConfirmationResult | null>(null);
 
-  // ── 1. Require session, then fetch stored phone ───────────────────────────
-  // Use onAuthStateChange rather than getSession() alone — the magic link PKCE
-  // code exchange is async. getSession() can return null before it completes,
-  // causing a premature redirect to /login (which then sees the session and
-  // wrongly skips to /dashboard, bypassing phone verification entirely).
+  // ── 1. Require Firebase auth, then fetch stored phone ────────────────────
   useEffect(() => {
-    let handled = false;
-
-    const handleSession = async (session: any) => {
-      if (handled) return;
-      handled = true;
-
-      if (!session) {
+    const init = async () => {
+      const fbUser = getFirebaseAuth().currentUser;
+      if (!fbUser) {
+        router.replace('/login');
+        return;
+      }
+      const token = await getAuthToken();
+      if (!token) {
         router.replace('/login');
         return;
       }
       try {
         const res = await fetch('/api/auth/get-stored-phone', {
-          headers: { Authorization: `Bearer ${session.access_token}` },
+          headers: { Authorization: `Bearer ${token}` },
         });
         const json = await res.json() as { phone: string | null; maskedPhone: string | null; error?: string };
 
         if (!res.ok || json.error) throw new Error(json.error ?? 'Could not load phone');
 
         if (!json.phone) {
-          // Account exists but phone was never registered — send to phone setup
           router.replace('/onboarding/phone');
           return;
         }
@@ -75,22 +71,8 @@ export default function VerifyPhonePage() {
       }
     };
 
-    // Listen for auth state changes — this fires after PKCE code exchange completes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
-        void handleSession(session);
-      }
-    });
-
-    // Also check immediately in case session already exists (e.g. user refreshed the page)
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) void handleSession(data.session);
-    });
-
-    return () => {
-      subscription.unsubscribe();
-      clearRecaptcha();
-    };
+    void init();
+    return () => clearRecaptcha();
   }, [router]);
 
   // ── 2. Send Firebase OTP ──────────────────────────────────────────────────

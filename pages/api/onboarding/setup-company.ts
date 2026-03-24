@@ -12,9 +12,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
   findMatchingCompany,
-  notifyCompanyAdminsOfSelfJoin,
   extractDomain,
   isFreeEmailDomain,
 } from '../../../backend/services/companyMatchService';
@@ -23,24 +23,43 @@ import { createCredit, makeIdempotencyKey } from '../../../backend/services/cred
 
 type Result =
   | { companyId: string; selfJoined?: boolean; matchedCompanyName?: string }
-  | { companyExists: true; matchedCompanyId: string; matchedCompanyName: string }
+  | { companyExists: true; matchedCompanyId: string; matchedCompanyName: string; adminName: string | null }
   | { code: string; error: string; limit?: number; current?: number | null }
   | { error: string };
+
+/** Returns the display name of the first active COMPANY_ADMIN for a company. */
+async function fetchAdminName(
+  supabase: ReturnType<typeof import('@supabase/supabase-js').createClient>,
+  companyId: string,
+): Promise<string | null> {
+  const { data: roleRow } = await supabase
+    .from('user_company_roles')
+    .select('user_id')
+    .eq('company_id', companyId)
+    .eq('role', 'COMPANY_ADMIN')
+    .eq('status', 'active')
+    .limit(1)
+    .maybeSingle();
+
+  if (!roleRow?.user_id) return null;
+
+  const { data: adminUser } = await supabase
+    .from('users')
+    .select('name, email')
+    .eq('id', roleRow.user_id)
+    .maybeSingle();
+
+  return (
+    (adminUser as any)?.name?.trim() ||
+    ((adminUser as any)?.email as string | undefined)?.split('@')[0] ||
+    null
+  );
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing auth token' });
-
-  // Verify token with anon client, then use service role for table writes
-  const anonClient = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } },
-  );
-  const { data: { user }, error: userErr } = await anonClient.auth.getUser(token);
+  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
   // Service role bypasses RLS — required for inserts into companies,
@@ -207,10 +226,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         return res.status(200).json({ companyId: matched.company_id });
       }
 
+      const adminName = await fetchAdminName(supabase, matched.company_id);
       return res.status(200).json({
         companyExists:      true,
         matchedCompanyId:   matched.company_id,
         matchedCompanyName: matched.company_name,
+        adminName,
       });
     }
 
@@ -243,8 +264,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         .maybeSingle();
 
       if (domainCompany) {
-        // Domain is already claimed — join the existing company instead
-        const domainNow = new Date().toISOString();
+        // Domain is already claimed by an existing company.
+        // Check if this user is already a member — if so, just return the company.
         const { data: existingRole } = await supabase
           .from('user_company_roles')
           .select('id')
@@ -252,40 +273,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           .eq('company_id', domainCompany.id)
           .maybeSingle();
 
-        if (!existingRole) {
-          await supabase.from('user_company_roles').insert({
-            user_id:     user.id,
-            company_id:  domainCompany.id,
-            role:        'CONTENT_CREATOR',
-            status:      'active',
-            join_source: 'self_joined',
-            created_at:  domainNow,
-            updated_at:  domainNow,
-            invited_at:  domainNow,
-          });
+        if (existingRole) {
+          return res.status(200).json({ companyId: domainCompany.id });
         }
 
-        await supabase
-          .from('free_credit_profiles')
-          .update({ organization_id: domainCompany.id, updated_at: domainNow })
-          .eq('user_id', user.id);
-
-        try {
-          await notifyCompanyAdminsOfSelfJoin({
-            companyId:    domainCompany.id,
-            companyName:  domainCompany.name,
-            newUserId:    user.id,
-            newUserEmail: user.email ?? null,
-            matchType:    'admin_email_domain',
-          });
-        } catch (notifyErr: any) {
-          console.warn('[setup-company] domain self-join notification failed:', notifyErr?.message);
-        }
-
+        // Not a member — do NOT auto-join. Only the first user creates the
+        // company; everyone else must be invited by the company admin.
+        const adminName = await fetchAdminName(supabase, domainCompany.id);
         return res.status(200).json({
-          companyId:          domainCompany.id,
-          selfJoined:         true,
+          companyExists:      true,
+          matchedCompanyId:   domainCompany.id,
           matchedCompanyName: domainCompany.name,
+          adminName,
         });
       }
     }
@@ -311,7 +310,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         .maybeSingle();
 
       if (raceWinner) {
-        const raceNow = new Date().toISOString();
+        // Another concurrent request won the INSERT race for this domain.
+        // Check if this user already has a membership (e.g. the winning request
+        // was from the same user session) — if so, let them through.
         const { data: existingRole } = await supabase
           .from('user_company_roles')
           .select('id')
@@ -319,28 +320,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           .eq('company_id', raceWinner.id)
           .maybeSingle();
 
-        if (!existingRole) {
-          await supabase.from('user_company_roles').insert({
-            user_id:     user.id,
-            company_id:  raceWinner.id,
-            role:        'CONTENT_CREATOR',
-            status:      'active',
-            join_source: 'self_joined',
-            created_at:  raceNow,
-            updated_at:  raceNow,
-            invited_at:  raceNow,
-          });
+        if (existingRole) {
+          return res.status(200).json({ companyId: raceWinner.id });
         }
 
-        await supabase
-          .from('free_credit_profiles')
-          .update({ organization_id: raceWinner.id, updated_at: raceNow })
-          .eq('user_id', user.id);
-
+        // Different user won the race — treat as existing company.
+        const adminName = await fetchAdminName(supabase, raceWinner.id);
         return res.status(200).json({
-          companyId:          raceWinner.id,
-          selfJoined:         true,
+          companyExists:      true,
+          matchedCompanyId:   raceWinner.id,
           matchedCompanyName: raceWinner.name,
+          adminName,
         });
       }
     }

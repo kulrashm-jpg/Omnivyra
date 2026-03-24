@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import ContentRenderer, { CarouselContent, PLATFORM_HIGHLIGHT } from './ContentRenderer';
 import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical, Send } from 'lucide-react';
@@ -6,7 +6,7 @@ import PlatformIcon from './ui/PlatformIcon';
 import { getPlatformLabel } from '../utils/platformIcons';
 import { useCompanyContext } from './CompanyContext';
 import Header from './Header';
-import { supabase } from '../utils/supabaseClient';
+import { getAuthToken } from '../utils/getAuthToken';
 import { getStageLabelWithDuration } from '../backend/types/CampaignStage';
 import { navigateToCampaign, buildResumeUrl, loadCampaignResume } from '../lib/campaignResumeStore';
 import FloatingChatPanel, { type CollaborationMessage } from './collaboration/FloatingChatPanel';
@@ -81,7 +81,34 @@ function isActivityEvent(item: CalendarDayItem): item is ActivityEvent {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { selectedCompanyId, isAdmin, isLoading, hasPermission, userRole, user } = useCompanyContext();
+  const { selectedCompanyId, isAdmin, isLoading, authChecked, isAuthenticated, companies, hasPermission, userRole, user } = useCompanyContext();
+
+  // ── Redirect to onboarding when authenticated but not yet assigned to a company ──
+  const onboardingRedirectRef = useRef(false);
+  useEffect(() => {
+    if (isLoading || !authChecked || !isAuthenticated) return;
+    if (companies.length > 0) return; // has company — nothing to do
+    if (onboardingRedirectRef.current) return;
+    onboardingRedirectRef.current = true;
+
+    // Ask the server which onboarding step is next (phone, company setup, etc.)
+    getAuthToken().then(async (token) => {
+      if (!token) { router.replace('/login'); return; }
+      try {
+        const res = await fetch('/api/auth/post-login-route', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const { route } = await res.json() as { route: string };
+          router.replace(route ?? '/onboarding/company');
+        } else {
+          router.replace('/onboarding/company');
+        }
+      } catch {
+        router.replace('/onboarding/company');
+      }
+    });
+  }, [isLoading, authChecked, isAuthenticated, companies.length, router]);
   const canCreateCampaign = hasPermission('CREATE_CAMPAIGN');
   const canScheduleContent = hasPermission('SCHEDULE_CONTENT');
   const [activeTab, setActiveTab] = useState('overview');
@@ -147,8 +174,7 @@ export default function DashboardPage() {
     : campaigns.filter((c) => (c.current_stage || c.status) === stageFilter);
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    const token = await getAuthToken();
     return fetch(input, {
       ...init,
       headers: {
@@ -853,8 +879,8 @@ export default function DashboardPage() {
       return;
     }
     try {
-      const { data } = await supabase.auth.getSession();
-      if (!data?.session?.access_token) {
+      const token = await getAuthToken();
+      if (!token) {
         notify('error', 'Your session may have expired. Please refresh the page and try again.');
         return;
       }
@@ -940,9 +966,14 @@ export default function DashboardPage() {
   }
 
   if (!selectedCompanyId) {
+    // Still loading or mid-redirect to onboarding — show a spinner rather than
+    // a confusing "select a company" placeholder.
     return (
-      <div className="p-6 text-gray-500">
-        Please select a company to view dashboard data.
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <svg className="h-8 w-8 animate-spin text-[#0A66C2]" viewBox="0 0 24 24" fill="none">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
       </div>
     );
   }
@@ -2851,8 +2882,7 @@ const CampaignProgress: React.FC<{ campaignId: string; companyId?: string | null
         }
         const progressUrl = `/api/campaigns/${campaignId}/progress?companyId=${companyId}`;
         console.log('DASHBOARD_API_CALL', progressUrl);
-        const { data } = await supabase.auth.getSession();
-        const token = data.session?.access_token;
+        const token = await getAuthToken();
         const response = await fetch(progressUrl, {
           headers: {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),

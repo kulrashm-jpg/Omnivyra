@@ -1,87 +1,122 @@
 /**
  * GET /api/auth/post-login-route
  *
- * Called by /auth/callback immediately after a magic-link session is established.
- * Returns the correct route for the user:
+ * Called by /auth/verify immediately after Firebase email-link verification.
+ * Returns the correct next route for the user:
  *
- *   /dashboard          — existing user, email auth is sufficient
- *   /onboarding/phone   — new user, no phone registered yet
- *   /onboarding/verify-phone — phone verification required (new user finishing
- *                              onboarding, OR company admin flagged as suspicious)
- *   /onboarding/company — authenticated but has no company yet
+ *   /onboarding/phone   — no phone on record yet (new user)
+ *   /onboarding/company — has phone but no company yet
+ *   /onboarding/verify-phone — company admin, hasn't logged in for 30+ days
+ *   /dashboard          — existing user, all checks pass
  *
- * Suspicious-login criteria (company admins only):
- *   • Haven't logged in for more than 30 days
- *
- * Auth: Bearer token
+ * Auth: Firebase ID token in Authorization: Bearer <idToken>
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { verifyAuthHeader } from '../../../lib/auth/serverValidation';
+import { logAuthEvent } from '../../../lib/auth/auditLog';
+import { recordAnomalyEvent } from '../../../lib/auth/anomalyDetector';
 
 type RouteResponse = { route: string };
+type ErrorResponse = { error: string; code?: string };
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<RouteResponse | { error: string }>,
+  res: NextApiResponse<RouteResponse | ErrorResponse>,
 ) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const token = (req.headers.authorization ?? '').replace('Bearer ', '').trim();
-  if (!token) return res.status(401).json({ error: 'Missing token' });
+  // ── 1. Verify Firebase ID token — checkRevoked=true so tokens explicitly
+  //    revoked via revokeRefreshTokens() (called on user deletion) are rejected
+  //    immediately rather than remaining valid for up to 1 hour.
+  let firebaseUid: string;
+  try {
+    const verified = await verifyAuthHeader(req.headers.authorization, true);
+    firebaseUid = verified.uid;
+  } catch {
+    return res.status(401).json({ error: 'Invalid or missing Firebase token' });
+  }
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } },
   );
 
-  const { data: { user }, error: userErr } = await supabase.auth.getUser(token);
-  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-
-  // ── 1. Check if user has a phone registered ─────────────────────────────────
-  const { data: creditProfile } = await supabase
-    .from('free_credit_profiles')
-    .select('phone_number')
-    .eq('user_id', user.id)
+  // ── 2. Look up user row by firebase_uid ───────────────────────────────────
+  const { data: userRow } = await supabase
+    .from('users')
+    .select('id, is_phone_verified, company_id, last_sign_in_at, is_deleted')
+    .eq('firebase_uid', firebaseUid)
     .maybeSingle();
 
-  const hasPhone = !!(creditProfile as any)?.phone_number;
+  if (!userRow) {
+    // Ghost session: valid Firebase token but no matching DB row.
+    console.warn('[post-login-route] ghost_session_detected', {
+      event:  'ghost_session_detected',
+      uid:    firebaseUid,
+      reason: 'user_not_found_in_db',
+    });
+    recordAnomalyEvent('ghost_session_detected');
+    void logAuthEvent('ghost_session_detected', {
+      firebaseUid,
+      metadata: { reason: 'user_not_found_in_db', endpoint: 'post-login-route' },
+    });
+    return res.status(401).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
+  }
 
-  if (!hasPhone) {
-    // New user or account without phone — needs phone setup
+  if ((userRow as any).is_deleted) {
+    // Soft-deleted user: account was explicitly removed. Block re-access.
+    console.warn('[post-login-route] ghost_session_detected', {
+      event:  'ghost_session_detected',
+      uid:    firebaseUid,
+      reason: 'user_is_soft_deleted',
+    });
+    recordAnomalyEvent('ghost_session_detected');
+    void logAuthEvent('ghost_session_detected', {
+      userId:     (userRow as any).id,
+      firebaseUid,
+      metadata: { reason: 'user_is_soft_deleted', endpoint: 'post-login-route' },
+    });
+    return res.status(401).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
+  }
+
+  const userId: string = (userRow as any).id;
+
+  // ── 3. Check phone verification ────────────────────────────────────────────
+  if (!(userRow as any).is_phone_verified) {
     return res.status(200).json({ route: '/onboarding/phone' });
   }
 
-  // ── 2. Check if user has an active company membership ──────────────────────
-  const { data: role } = await supabase
+  // ── 4. Check company membership ───────────────────────────────────────────
+  const { data: roleRow } = await supabase
     .from('user_company_roles')
     .select('role, company_id')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .eq('status', 'active')
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (!role) {
-    // Authenticated + has phone but no company → still in onboarding
+  if (!roleRow) {
     return res.status(200).json({ route: '/onboarding/company' });
   }
 
-  const isCompanyAdmin = (role as any).role === 'COMPANY_ADMIN';
-
-  // ── 3. Suspicious-login check (company admins only) ──────────────────────
+  // ── 5. Suspicious-login check (company admins only) ───────────────────────
+  const isCompanyAdmin = (roleRow as any).role === 'COMPANY_ADMIN';
   if (isCompanyAdmin) {
-    const lastSignIn = user.last_sign_in_at ? new Date(user.last_sign_in_at) : null;
-    const daysSinceLastLogin = lastSignIn
+    const lastSignIn = (userRow as any).last_sign_in_at
+      ? new Date((userRow as any).last_sign_in_at)
+      : null;
+    const daysSince = lastSignIn
       ? (Date.now() - lastSignIn.getTime()) / (1000 * 60 * 60 * 24)
       : Infinity;
 
-    if (daysSinceLastLogin > 30) {
-      // Admin hasn't logged in for 30+ days — require phone verification
+    if (daysSince > 30) {
       return res.status(200).json({ route: '/onboarding/verify-phone' });
     }
   }
 
-  // ── 4. Existing user, no red flags — go straight to dashboard ─────────────
   return res.status(200).json({ route: '/dashboard' });
 }

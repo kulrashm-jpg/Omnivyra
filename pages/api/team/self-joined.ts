@@ -15,6 +15,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -22,14 +23,7 @@ const supabaseAdmin = createClient(
 );
 
 async function getRequestingUser(req: NextApiRequest) {
-  const token = (req.headers.authorization ?? '').replace('Bearer ', '').trim();
-  if (!token) return null;
-  const anonClient = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } },
-  );
-  const { data: { user } } = await anonClient.auth.getUser(token);
+  const { user } = await getSupabaseUserFromRequest(req);
   return user ?? null;
 }
 

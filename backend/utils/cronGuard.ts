@@ -21,8 +21,12 @@
  */
 
 import IORedis from 'ioredis';
+import { createInstrumentedClient } from '../../lib/redis/instrumentation';
 
-const REDIS_KEY = 'omnivyra:cron:last_run_state';
+const REDIS_KEY  = 'omnivyra:cron:last_run_state';
+const LOCK_KEY   = 'omnivyra:cron:lock';
+const LOCK_TTL_S = 90;   // seconds — auto-expire if process dies mid-cycle
+
 const STATE_TTL_SECONDS = 8 * 24 * 3600; // 8 days
 
 export class CronGuard {
@@ -32,15 +36,16 @@ export class CronGuard {
   constructor() {
     const url = process.env.REDIS_URL || 'redis://localhost:6379';
     try {
-      this.client = new IORedis(url, {
+      const raw = new IORedis(url, {
         enableReadyCheck: false,
         maxRetriesPerRequest: 1,
         retryStrategy: () => null,
         lazyConnect: true,
       });
-      this.client.on('connect', () => { this.available = true; });
-      this.client.on('error', () => { this.available = false; });
-      this.client.connect().catch(() => {});
+      raw.on('connect', () => { this.available = true; });
+      raw.on('error', () => { this.available = false; });
+      raw.connect().catch(() => {});
+      this.client = createInstrumentedClient(raw, 'cron') as IORedis;
     } catch {
       this.client = null;
     }
@@ -78,5 +83,39 @@ export class CronGuard {
     } catch (err: any) {
       console.warn('[cron-guard] save failed:', err?.message);
     }
+  }
+
+  /**
+   * Acquire distributed cycle lock via SET NX EX.
+   * Returns true if lock acquired (this instance should proceed).
+   * Returns false if another instance already holds the lock.
+   *
+   * Stores instanceId as value so releaseLock() can safely delete only its own lock.
+   */
+  async tryAcquireLock(instanceId: string): Promise<boolean> {
+    if (!this.client || !this.available) return true; // Redis down → allow (single-instance safe)
+    try {
+      const result = await this.client.set(LOCK_KEY, instanceId, 'EX', LOCK_TTL_S, 'NX');
+      return result === 'OK';
+    } catch {
+      return true; // Redis error → allow rather than block all cron work
+    }
+  }
+
+  /**
+   * Release the cycle lock, but only if it still belongs to this instance.
+   * Uses a Lua script for atomic check-and-delete.
+   */
+  async releaseLock(instanceId: string): Promise<void> {
+    if (!this.client || !this.available) return;
+    try {
+      // Lua: if value matches instanceId, delete; otherwise no-op
+      await (this.client as IORedis).eval(
+        `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`,
+        1,
+        LOCK_KEY,
+        instanceId,
+      );
+    } catch { /* ignore — lock will expire via TTL */ }
   }
 }

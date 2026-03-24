@@ -28,35 +28,35 @@ const requireUserAdminAccess = async (
   return { ok: true, scope: 'admin' };
 };
 
-const ensureAuthAdmin = () => {
-  const admin = supabase.auth?.admin;
-  if (!admin) {
-    throw new Error('AUTH_ADMIN_UNAVAILABLE');
-  }
-  return admin;
-};
-
 type AuthUser = { id: string; email?: string };
 const getOrCreateUserByEmail = async (email: string): Promise<AuthUser> => {
-  const admin = ensureAuthAdmin();
-  let existing: { user?: AuthUser } | null = null;
-  try {
-    const res = await (admin as any).getUserByEmail?.(email);
-    if (res?.data?.user) existing = { user: res.data.user };
-  } catch {
-    existing = null;
-  }
-  if (existing?.user) {
-    return existing.user;
-  }
-  const { data: created, error: createError } = await admin.createUser({
-    email,
-    email_confirm: true,
-  });
-  if (createError || !created?.user) {
+  const normalizedEmail = email.toLowerCase().trim();
+
+  // Look up existing user row by email (DB is the authoritative identity store)
+  const { data: existing } = await supabase
+    .from('users')
+    .select('id, email')
+    .eq('email', normalizedEmail)
+    .maybeSingle();
+
+  if (existing) return { id: (existing as any).id, email: (existing as any).email };
+
+  // Create a stub row — firebase_uid will be populated on first sign-in
+  const { data: created, error: createError } = await supabase
+    .from('users')
+    .insert({ email: normalizedEmail, name: normalizedEmail.split('@')[0] || 'User', created_at: new Date().toISOString() })
+    .select('id, email')
+    .single();
+
+  if (createError || !created) {
+    // Handle race condition
+    if (createError?.code === '23505') {
+      const { data: retry } = await supabase.from('users').select('id, email').eq('email', normalizedEmail).maybeSingle();
+      if (retry) return { id: (retry as any).id, email: (retry as any).email };
+    }
     throw new Error(createError?.message || 'Failed to create user');
   }
-  return created.user as AuthUser;
+  return { id: (created as any).id, email: (created as any).email };
 };
 
 export const inviteUser = async (
@@ -117,23 +117,26 @@ export const listUsers = async (companyId: string, requester: UserContext) => {
     return { ok: false, status: 500, error: 'FAILED_TO_LIST_USERS' };
   }
   const ids = Array.from(new Set((roles || []).map((row: { user_id: string }) => row.user_id)));
-  const admin = ensureAuthAdmin();
-  const users = await Promise.all(
-    ids.map(async (userId: string) => {
-      const { data } = await admin.getUserById(userId);
-      return { user_id: userId, email: data?.user?.email || null };
-    })
-  );
+  const emailById: Record<string, string> = {};
+  if (ids.length > 0) {
+    const { data: usersData } = await supabase
+      .from('users')
+      .select('id, email')
+      .in('id', ids);
+    (usersData || []).forEach((u: any) => {
+      if (u.id && u.email) emailById[u.id] = u.email;
+    });
+  }
   const roleMap = (roles || []).reduce((acc: Record<string, string>, row: { user_id: string; role: string }) => {
     acc[row.user_id] = row.role;
     return acc;
   }, {} as Record<string, string>);
   return {
     ok: true,
-    users: users.map((user) => ({
-      user_id: user.user_id,
-      email: user.email,
-      role: roleMap[user.user_id] || null,
+    users: ids.map((userId: string) => ({
+      user_id: userId,
+      email: emailById[userId] || null,
+      role: roleMap[userId] || null,
     })),
   };
 };

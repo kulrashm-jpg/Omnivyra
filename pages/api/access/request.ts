@@ -12,6 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 import { checkDomainEligibility } from '@/backend/services/domainEligibilityService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 const RATE_LIMIT_MAX = 3;
 const RATE_LIMIT_WINDOW_HOURS = 24;
@@ -23,17 +24,13 @@ function hashIp(ip: string): string {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing auth token' });
+  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
+  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
-
-  const { data: { user }, error: userErr } = await supabase.auth.getUser(token);
-  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
   // ── Rate limit by IP ────────────────────────────────────────────────────────
   const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket.remoteAddress ?? 'unknown';

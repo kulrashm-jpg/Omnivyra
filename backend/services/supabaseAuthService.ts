@@ -1,5 +1,13 @@
 import type { NextApiRequest } from 'next';
-import { supabase } from '../db/supabaseClient';
+import { createClient } from '@supabase/supabase-js';
+import { verifyFirebaseIdToken } from '../../lib/firebaseAdmin';
+
+// Database-only client — no auth calls
+const db = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false, autoRefreshToken: false } },
+);
 
 export const extractAccessToken = (req: NextApiRequest): string | null => {
   const authHeader = req.headers.authorization || '';
@@ -7,43 +15,6 @@ export const extractAccessToken = (req: NextApiRequest): string | null => {
     const token = authHeader.slice('Bearer '.length).trim();
     if (token) return token;
   }
-  const directToken = req.cookies?.['sb-access-token'];
-  if (directToken) return String(directToken);
-
-  const cookieEntries = Object.entries(req.cookies || {});
-
-  // 1. Try unchunked Supabase cookie: sb-{ref}-auth-token
-  for (const [name, value] of cookieEntries) {
-    if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
-    try {
-      const parsed = JSON.parse(value);
-      if (parsed?.access_token) return String(parsed.access_token);
-    } catch {
-      // ignore malformed cookie
-    }
-  }
-
-  // 2. Try chunked Supabase v2 cookies: sb-{ref}-auth-token.0, .1, ...
-  //    Chunks are concatenated in ascending index order to form the full JSON.
-  const chunkMap: Record<string, [number, string][]> = {};
-  for (const [name, value] of cookieEntries) {
-    const m = name.match(/^(sb-.+-auth-token)\.(\d+)$/);
-    if (!m) continue;
-    const base = m[1];
-    const idx = parseInt(m[2], 10);
-    if (!chunkMap[base]) chunkMap[base] = [];
-    chunkMap[base].push([idx, value || '']);
-  }
-  for (const chunks of Object.values(chunkMap)) {
-    const joined = chunks.sort((a, b) => a[0] - b[0]).map(([, v]) => v).join('');
-    try {
-      const parsed = JSON.parse(joined);
-      if (parsed?.access_token) return String(parsed.access_token);
-    } catch {
-      // ignore malformed
-    }
-  }
-
   return null;
 };
 
@@ -55,9 +26,58 @@ export const getSupabaseUserFromRequest = async (
     return { user: null, error: 'MISSING_AUTH' };
   }
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data?.user) {
+  // ── Verify Firebase ID token ──────────────────────────────────────────────
+  let firebaseUid: string | null = null;
+  let firebaseEmail: string | null = null;
+
+  try {
+    const decoded = await verifyFirebaseIdToken(token);
+    firebaseUid = decoded.uid;
+    firebaseEmail = decoded.email ?? null;
+  } catch {
     return { user: null, error: 'INVALID_AUTH' };
   }
-  return { user: { id: data.user.id, email: data.user.email }, error: null };
+
+  if (!firebaseUid) {
+    return { user: null, error: 'INVALID_AUTH' };
+  }
+
+  // ── Look up user row by firebase_uid ──────────────────────────────────────
+  const { data: uidRow } = await db
+    .from('users')
+    .select('id, email, is_deleted')
+    .eq('firebase_uid', firebaseUid)
+    .maybeSingle();
+
+  if (uidRow) {
+    if ((uidRow as any).is_deleted) {
+      // User was soft-deleted — treat as non-existent to prevent ghost access.
+      return { user: null, error: 'ACCOUNT_DELETED' };
+    }
+    return { user: { id: (uidRow as any).id, email: (uidRow as any).email }, error: null };
+  }
+
+  // ── Email fallback — firebase_uid not yet written (race on first login) ───
+  if (firebaseEmail) {
+    const { data: emailRow } = await db
+      .from('users')
+      .select('id, email, is_deleted')
+      .eq('email', firebaseEmail)
+      .maybeSingle();
+
+    if (emailRow) {
+      if ((emailRow as any).is_deleted) {
+        return { user: null, error: 'ACCOUNT_DELETED' };
+      }
+      // Back-fill firebase_uid so future calls hit the fast path
+      await db
+        .from('users')
+        .update({ firebase_uid: firebaseUid })
+        .eq('id', (emailRow as any).id);
+
+      return { user: { id: (emailRow as any).id, email: (emailRow as any).email }, error: null };
+    }
+  }
+
+  return { user: null, error: 'INVALID_AUTH' };
 };

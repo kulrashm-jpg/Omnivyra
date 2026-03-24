@@ -42,16 +42,20 @@ export interface QueuedSignal {
   thread_depth?: number;
 }
 
+const MAX_SIGNALS = 500;
+
 export async function enqueueEngagementSignals(signals: QueuedSignal[]): Promise<number> {
   if (signals.length === 0) return 0;
-  const queue = getEngagementSignalQueue();
-  let enqueued = 0;
-  for (let i = 0; i < signals.length; i += BATCH_SIZE) {
-    const batch = signals.slice(i, i + BATCH_SIZE);
-    await queue.add('process-batch', { signals: batch }, { jobId: `sig-${Date.now()}-${i}` });
-    enqueued += batch.length;
+  const capped = signals.length > MAX_SIGNALS ? signals.slice(0, MAX_SIGNALS) : signals;
+  const queue  = getEngagementSignalQueue();
+
+  const jobs = [];
+  for (let i = 0; i < capped.length; i += BATCH_SIZE) {
+    const batch = capped.slice(i, i + BATCH_SIZE);
+    jobs.push({ name: 'process-batch', data: { signals: batch }, opts: { jobId: `sig-${Date.now()}-${i}` } });
   }
-  return enqueued;
+  await queue.addBulk(jobs);
+  return capped.length;
 }
 
 export async function processEngagementSignalBatch(signals: QueuedSignal[]): Promise<number> {

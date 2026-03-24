@@ -15,6 +15,7 @@
 import IORedis from 'ioredis';
 import { createHash } from 'crypto';
 import type { CampaignStrategy } from './campaignStrategyEngine';
+import { createInstrumentedClient } from '../../lib/redis/instrumentation';
 
 const REDIS_URL      = process.env.REDIS_URL || 'redis://localhost:6379';
 const PREFIX         = 'omnivyra:strategy_idx:v1';
@@ -29,13 +30,14 @@ let _client: IORedis | null = null;
 function getClient(): IORedis | null {
   if (_client) return _client;
   try {
-    _client = new IORedis(REDIS_URL, {
+    const raw = new IORedis(REDIS_URL, {
       enableReadyCheck: false,
       maxRetriesPerRequest: 1,
       retryStrategy: () => null,
       lazyConnect: true,
     });
-    _client.connect().catch(() => {});
+    raw.connect().catch(() => {});
+    _client = createInstrumentedClient(raw, 'strategy_index') as IORedis;
     return _client;
   } catch {
     return null;

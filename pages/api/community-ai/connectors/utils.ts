@@ -1,8 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { hasCommunityAiCapability } from '../../../../backend/services/rbac/communityAiCapabilities';
-import { extractAccessToken } from '../../../../backend/services/supabaseAuthService';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
 /**
  * Returns the OAuth callback URL for a Community AI connector.
@@ -26,17 +25,12 @@ export const requireManageConnectors = async (
   res: NextApiResponse,
   companyId: string
 ): Promise<{ userId: string; role: string } | null> => {
-  const token = extractAccessToken(req);
-  if (!token) {
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (error || !user?.id) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
     return null;
   }
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data?.user?.id) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
-  }
-  const { role, error: roleError } = await getUserRole(data.user.id, companyId);
+  const { role, error: roleError } = await getUserRole(user.id, companyId);
   if (roleError || !role) {
     const err = roleError === 'COMPANY_ACCESS_DENIED' ? 'COMPANY_ACCESS_DENIED' : 'FORBIDDEN_ROLE';
     res.status(403).json({ error: err });

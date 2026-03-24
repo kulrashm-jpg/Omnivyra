@@ -4,7 +4,8 @@ import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../CompanyContext';
-import { supabase } from '../../utils/supabaseClient';
+import { getFirebaseAuth } from '../../lib/firebase';
+import { signOut } from 'firebase/auth';
 import { useCredits } from '../../hooks/useCredits';
 import { ChevronDown, LayoutDashboard, LogOut, User, Menu, X, Coins } from 'lucide-react';
 
@@ -45,7 +46,10 @@ export default function LandingNavbar() {
 
   const handleLogout = async () => {
     setIsSigningOut(true);
-    await supabase.auth.signOut();
+    try { await signOut(getFirebaseAuth()); } catch { /* already signed out */ }
+    Object.keys(localStorage).forEach((k) => {
+      if (k.startsWith('sb-') || k.startsWith('supabase')) localStorage.removeItem(k);
+    });
     window.location.href = '/login';
   };
 

@@ -11,7 +11,7 @@ import { useState, useEffect } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { supabase } from '../../utils/supabaseClient';
+import { getFirebaseAuth } from '../../lib/firebase';
 
 const INDUSTRIES = [
   'Technology', 'Marketing & Advertising', 'E-commerce & Retail',
@@ -32,15 +32,14 @@ export default function ProfilePage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [session, setSession]   = useState<any>(null);
 
-  // Require session
+  // Require Firebase auth
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (!data.session) {
-        router.replace('/create-account');
-        return;
-      }
-      setSession(data.session);
-    });
+    const fbUser = getFirebaseAuth().currentUser;
+    if (!fbUser) {
+      router.replace('/create-account');
+      return;
+    }
+    setSession(fbUser);
   }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -66,11 +65,19 @@ export default function ProfilePage() {
     }
 
     try {
+      // After phone OTP, getFirebaseAuth().currentUser is the phone-auth user (no email claim).
+      // The email-link user's token was saved to sessionStorage by verify.tsx.
+      const firebaseToken = sessionStorage.getItem('emailFirebaseToken');
+      if (!firebaseToken) {
+        setErrorMsg('Session expired. Please start the verification process again.');
+        setLoading(false);
+        return;
+      }
       const resp = await fetch('/api/onboarding/complete', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${firebaseToken}`,
         },
         body: JSON.stringify({
           phoneNumber,

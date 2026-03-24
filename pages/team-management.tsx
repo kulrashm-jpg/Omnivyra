@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { ArrowLeft, Shield, UserPlus, Users, RefreshCw } from 'lucide-react';
-import { supabase } from '../utils/supabaseClient';
+import { getAuthToken } from '../utils/getAuthToken';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 
@@ -44,8 +44,7 @@ export default function TeamManagement() {
     userRole === 'ADMIN';
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    const token = await getAuthToken();
     if (!token) {
       throw new Error('Not authenticated');
     }

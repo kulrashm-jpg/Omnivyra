@@ -7,7 +7,7 @@
  */
 
 import { useState } from 'react';
-import { supabase } from '@/utils/supabaseClient';
+import { getAuthToken } from '@/utils/getAuthToken';
 import { Building2, Briefcase, FileText, Globe, CheckCircle, Clock } from 'lucide-react';
 
 interface Props {
@@ -38,14 +38,14 @@ export default function RequestAccessForm({ email, domain, domainReason, onSubmi
     setLoading(true);
     setError(null);
 
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) { setError('Session expired. Please sign in again.'); setLoading(false); return; }
+    const token = await getAuthToken();
+    if (!token) { setError('Session expired. Please sign in again.'); setLoading(false); return; }
 
     const res = await fetch('/api/access/request', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ companyName, jobTitle, useCase, websiteUrl: websiteUrl || undefined }),
     });

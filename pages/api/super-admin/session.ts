@@ -11,20 +11,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { supabase as adminSupabase } from '../../../backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return res.status(200).json({ isSuperAdmin: false });
-
-  // Verify the JWT with the anon client
-  const anonClient = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  );
-  const { data: { user }, error } = await anonClient.auth.getUser(token);
+  const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) return res.status(200).json({ isSuperAdmin: false });
 
   // Check profiles.is_super_admin via service role (bypasses RLS)

@@ -6,16 +6,15 @@
  * Auth flow:
  * 1. User enters email.
  * 2. We check /api/auth/check-user — if not found, show "No account" message.
- * 3. If found: send Supabase magic link → redirect to /onboarding/verify-phone.
- * 4. User clicks link → /onboarding/verify-phone requires phone OTP to grant access.
+ * 3. If found: send Firebase Email Link → user clicks → /auth/verify handles it.
  */
 
 import React, { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { supabase } from '../utils/supabaseClient';
 import { validateEmailDomain } from '../lib/auth/domainValidation';
+import { sendEmailLink, getCurrentFirebaseUser } from '../lib/auth/emailLink';
 
 type Stage = 'email' | 'sent' | 'not-found';
 
@@ -26,21 +25,29 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
 
-  // Skip login if already authenticated
+  // Skip login if already authenticated (Firebase only)
   const [checkingSession, setCheckingSession] = useState(true);
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) router.replace('/dashboard');
-      setCheckingSession(false);
-    });
+    getCurrentFirebaseUser()
+      .then((fbUser) => {
+        if (fbUser) { router.replace('/dashboard'); return; }
+        setCheckingSession(false);
+      })
+      .catch(() => setCheckingSession(false));
   }, [router]);
+
+  // Prevent flicker while session is being resolved
+  if (checkingSession) return <div className="min-h-screen bg-[#F5F9FF]" />;
+
+  const { reason } = router.query;
+  const showExpiredBanner = reason === 'expired';
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = email.trim().toLowerCase();
     if (!trimmed) { setError('Please enter your email address.'); return; }
 
-    // Validate domain (for public login flow)
+    // Validate domain
     const domainCheck = validateEmailDomain(trimmed);
     if (!domainCheck.valid) {
       setError((domainCheck as { valid: false; reason: string }).reason);
@@ -51,7 +58,7 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      // ── Step 1: check user exists ───────────────────────────────────────────
+      // ── Step 1: check user exists ─────────────────────────────────────────
       const checkRes = await fetch('/api/auth/check-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -65,27 +72,12 @@ export default function LoginPage() {
         return;
       }
 
-      // ── Step 2: send magic link → redirect through auth callback ──────────
-      // /auth/callback handles the PKCE code exchange then forwards to verify-phone.
-      // Never redirect straight to verify-phone — session won't be ready yet.
-      const redirectTo = `${window.location.origin}/auth/callback`;
-      const { error: authErr } = await supabase.auth.signInWithOtp({
-        email: trimmed,
-        options: {
-          emailRedirectTo: redirectTo,
-          shouldCreateUser: false, // never create new users via login
-        },
-      });
-
-      if (authErr) {
-        setError(authErr.message);
-        setLoading(false);
-        return;
-      }
-
+      // ── Step 2: send Firebase Email Link ─────────────────────────────────
+      await sendEmailLink(trimmed);
       setStage('sent');
-    } catch {
-      setError('Something went wrong. Please try again.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -119,6 +111,19 @@ export default function LoginPage() {
         <main className="flex flex-1 items-center justify-center px-6 py-12">
           <div className="w-full max-w-md">
 
+            {/* ── Expired-link banner ───────────────────────────────────── */}
+            {showExpiredBanner && stage === 'email' && (
+              <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <svg className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+                </svg>
+                <p className="text-sm text-amber-800">
+                  Your sign-in link has expired or was opened in a different browser.
+                  Please request a new one below.
+                </p>
+              </div>
+            )}
+
             {/* ── Stage: email entry ─────────────────────────────────────── */}
             {stage === 'email' && (
               <div className="animate-fadeIn">
@@ -132,8 +137,7 @@ export default function LoginPage() {
                     Welcome back
                   </h1>
                   <p className="mt-2 text-sm leading-relaxed text-[#6B7C93]">
-                    Enter your email — we'll send a secure sign-in link.<br />
-                    You'll then verify your phone to access your account.
+                    Enter your email — we'll send a secure sign-in link.
                   </p>
                 </div>
 
@@ -166,37 +170,20 @@ export default function LoginPage() {
 
                   <button
                     type="submit"
-                    disabled={loading || checkingSession}
+                    disabled={loading}
                     className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {loading || checkingSession ? (
+                    {loading ? (
                       <span className="flex items-center justify-center gap-2">
                         <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                         </svg>
-                        {checkingSession ? 'Checking session…' : 'Checking…'}
+                        Sending…
                       </span>
                     ) : 'Send sign-in link'}
                   </button>
                 </form>
-
-                {/* Security notice */}
-                <div className="mt-6 rounded-2xl border border-[#0A66C2]/15 bg-[#EBF3FD] px-5 py-4">
-                  <div className="flex items-start gap-3">
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#0A66C2]/10">
-                      <svg className="h-4 w-4 text-[#0A66C2]" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
-                      </svg>
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold text-[#0A66C2]">Two-step verification</p>
-                      <p className="mt-0.5 text-xs leading-relaxed text-[#6B7C93]">
-                        After clicking your email link, you'll verify your phone via SMS. Both steps are required to access your account.
-                      </p>
-                    </div>
-                  </div>
-                </div>
 
                 <p className="mt-6 text-center text-xs text-[#6B7C93]">
                   Don't have an account?{' '}
@@ -219,26 +206,8 @@ export default function LoginPage() {
                 <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-[#6B7C93]">
                   We sent a sign-in link to{' '}
                   <strong className="text-[#0B1F33]">{email}</strong>.
-                  Click it to continue — you'll then verify your phone number to access your account.
+                  Click it from the same browser to sign in.
                 </p>
-
-                {/* Steps reminder */}
-                <div className="mx-auto mt-8 max-w-xs space-y-3">
-                  {[
-                    { step: '1', label: 'Click the link in your email', done: true },
-                    { step: '2', label: 'Enter the SMS code sent to your phone', done: false },
-                    { step: '3', label: 'Access your dashboard', done: false },
-                  ].map((s) => (
-                    <div key={s.step} className="flex items-center gap-3 text-left">
-                      <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                        s.done ? 'bg-emerald-500 text-white' : 'bg-[#0A66C2]/10 text-[#0A66C2]'
-                      }`}>
-                        {s.done ? '✓' : s.step}
-                      </div>
-                      <span className="text-sm text-[#0B1F33]">{s.label}</span>
-                    </div>
-                  ))}
-                </div>
 
                 <p className="mt-8 text-xs text-[#6B7C93]">
                   Wrong email?{' '}
@@ -269,7 +238,7 @@ export default function LoginPage() {
 
                 <div className="mt-8 space-y-3">
                   <Link
-                    href="/get-free-credits"
+                    href={`/create-account?email=${encodeURIComponent(email)}`}
                     className="block w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-center text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95"
                   >
                     Create account — it's free

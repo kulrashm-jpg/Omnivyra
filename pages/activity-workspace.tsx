@@ -1877,8 +1877,8 @@ export default function ActivityWorkspacePage() {
                 activityId={queryExecutionId || payload.activityId || ''}
                 currentUserId={user?.userId ?? ''}
                 fetchWithAuth={async (input, init) => {
-                  const { data } = await (await import('../utils/supabaseClient')).supabase.auth.getSession();
-                  const token = data.session?.access_token;
+                  const { getAuthToken } = await import('../utils/getAuthToken');
+                  const token = await getAuthToken();
                   return fetch(input, { ...init, headers: { ...(init?.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
                 }}
               />

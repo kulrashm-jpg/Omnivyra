@@ -5,7 +5,7 @@ import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import ChatVoiceButton from '../components/ChatVoiceButton';
 import AIGenerationProgress from '../components/AIGenerationProgress';
-import { supabase } from '../utils/supabaseClient';
+import { getAuthToken } from '../utils/getAuthToken';
 
 type CompanyProfile = {
   company_id?: string;
@@ -477,12 +477,7 @@ export default function CompanyProfilePage() {
   };
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const { data } = await supabase.auth.getSession();
-    let token = data.session?.access_token;
-    if (!token) {
-      const refreshed = await supabase.auth.refreshSession();
-      token = refreshed.data.session?.access_token;
-    }
+    const token = await getAuthToken();
     if (!token) {
       // Content Architect uses cookie auth; send request with credentials so cookies are included
       return fetch(input, {

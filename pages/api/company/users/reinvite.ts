@@ -1,61 +1,102 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { getUserRole, isSuperAdmin, Role } from '../../../../backend/services/rbacService';
+import { createClient } from '@supabase/supabase-js';
+import { verifyAuthHeader } from '../../../../lib/auth/serverValidation';
+import { randomBytes, createHash } from 'crypto';
 
-const ensureCompanyAdminAccess = async (
-  req: NextApiRequest,
-  res: NextApiResponse,
-  companyId: string
-): Promise<{ userId: string } | null> => {
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false, autoRefreshToken: false } },
+);
+
+async function getActorUserId(req: NextApiRequest): Promise<string | null> {
+  try {
+    const verified = await verifyAuthHeader(req.headers.authorization);
+    const { data } = await supabaseAdmin
+      .from('users')
+      .select('id')
+      .eq('firebase_uid', verified.uid)
+      .maybeSingle();
+    return (data as any)?.id ?? null;
+  } catch {
     return null;
   }
+}
 
-  const superAdmin = await isSuperAdmin(user.id);
-  if (superAdmin) {
-    return { userId: user.id };
-  }
+async function isActorAuthorized(actorId: string, companyId: string): Promise<boolean> {
+  // Check super admin
+  const { data: superRole } = await supabaseAdmin
+    .from('user_company_roles')
+    .select('role')
+    .eq('user_id', actorId)
+    .eq('role', 'SUPER_ADMIN')
+    .eq('status', 'active')
+    .maybeSingle();
+  if (superRole) return true;
 
-  const { role, error: roleError } = await getUserRole(user.id, companyId);
-  if (roleError || !role) {
-    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    return null;
-  }
-  if (role !== Role.ADMIN) {
-    res.status(403).json({ error: 'NOT_AUTHORIZED' });
-    return null;
-  }
-  return { userId: user.id };
-};
+  // Check company admin
+  const { data: companyRole } = await supabaseAdmin
+    .from('user_company_roles')
+    .select('role')
+    .eq('user_id', actorId)
+    .eq('company_id', companyId)
+    .in('role', ['COMPANY_ADMIN', 'ADMIN'])
+    .eq('status', 'active')
+    .maybeSingle();
+  return !!companyRole;
+}
 
-const sendInvite = async (email: string) => {
-  const admin = supabase.auth?.admin;
-  if (!admin) {
-    throw new Error('AUTH_ADMIN_UNAVAILABLE');
-  }
-  const { data: inviteData, error: inviteError } = await admin.inviteUserByEmail(email, {
-    redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard`,
+async function findOrCreateUserByEmail(email: string): Promise<{ id: string; isNew: boolean }> {
+  const { data: existing } = await supabaseAdmin
+    .from('users')
+    .select('id')
+    .eq('email', email)
+    .maybeSingle();
+
+  if (existing) return { id: (existing as any).id, isNew: false };
+
+  const { data: created, error } = await supabaseAdmin
+    .from('users')
+    .insert({ email, created_at: new Date().toISOString() })
+    .select('id')
+    .single();
+
+  if (error || !created) throw new Error('Failed to create user record');
+  return { id: (created as any).id, isNew: true };
+}
+
+async function createInvitationToken(
+  userId: string,
+  email: string,
+  companyId: string,
+  actorId: string,
+): Promise<string> {
+  // Revoke any existing active invitations for this email+company
+  await supabaseAdmin
+    .from('invitations')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('email', email)
+    .eq('company_id', companyId)
+    .is('accepted_at', null)
+    .is('revoked_at', null);
+
+  const rawToken = randomBytes(32).toString('hex');
+  const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { error } = await supabaseAdmin.from('invitations').insert({
+    token_hash: tokenHash,
+    email,
+    company_id: companyId,
+    invited_by: actorId,
+    user_id: userId,
+    expires_at: expiresAt,
+    created_at: new Date().toISOString(),
   });
-  if (inviteError) {
-    throw new Error(inviteError.message);
-  }
-  return inviteData?.user || null;
-};
 
-const findExistingUserByEmail = async (email: string) => {
-  const admin = supabase.auth?.admin;
-  if (!admin) {
-    throw new Error('AUTH_ADMIN_UNAVAILABLE');
-  }
-  const { data: existingUsers, error } = await admin.listUsers();
-  if (error) {
-    throw new Error(error.message);
-  }
-  return existingUsers?.users?.find((user: { email?: string }) => user.email?.toLowerCase() === email.toLowerCase()) || null;
-};
+  if (error) throw new Error('Failed to create invitation token');
+  return rawToken;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -67,46 +108,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'email and companyId are required' });
   }
 
-  const access = await ensureCompanyAdminAccess(req, res, companyId);
-  if (!access) return;
+  const actorId = await getActorUserId(req);
+  if (!actorId) return res.status(401).json({ error: 'UNAUTHORIZED' });
+
+  const authorized = await isActorAuthorized(actorId, companyId);
+  if (!authorized) return res.status(403).json({ error: 'FORBIDDEN' });
 
   const normalizedEmail = String(email).trim().toLowerCase();
 
   try {
-    const existingUser = await findExistingUserByEmail(normalizedEmail);
-    let userId = existingUser?.id || null;
-    let role = 'CONTENT_CREATOR';
+    const { id: userId } = await findOrCreateUserByEmail(normalizedEmail);
 
-    if (userId) {
-      const { data: existingRoleRows } = await supabase
-        .from('user_company_roles')
-        .select('role')
-        .eq('user_id', userId)
-        .eq('company_id', companyId)
-        .limit(1);
-      if (existingRoleRows && existingRoleRows.length > 0) {
-        role = existingRoleRows[0].role || role;
-      }
+    // Preserve existing role if any
+    const { data: existingRoleRow } = await supabaseAdmin
+      .from('user_company_roles')
+      .select('role')
+      .eq('user_id', userId)
+      .eq('company_id', companyId)
+      .limit(1)
+      .maybeSingle();
 
-      await supabase.from('user_company_roles').delete().eq('user_id', userId).eq('company_id', companyId);
-    }
+    const role = (existingRoleRow as any)?.role || 'CONTENT_CREATOR';
 
-    const invitedUser = await sendInvite(normalizedEmail);
-    if (invitedUser?.id) {
-      userId = invitedUser.id;
-    }
+    // Reset role to invited state
+    await supabaseAdmin
+      .from('user_company_roles')
+      .delete()
+      .eq('user_id', userId)
+      .eq('company_id', companyId);
 
-    if (!userId) {
-      return res.status(400).json({ error: 'FAILED_TO_INVITE_USER' });
-    }
-
-    await supabase.from('user_company_roles').insert({
+    await supabaseAdmin.from('user_company_roles').insert({
       user_id: userId,
       company_id: companyId,
       role,
       status: 'invited',
       created_at: new Date().toISOString(),
     });
+
+    const rawToken = await createInvitationToken(userId, normalizedEmail, companyId, actorId);
+    const inviteUrl = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invite?token=${rawToken}`;
+
+    // TODO: send invite email via Resend/SendGrid/SES
+    console.info('[reinvite] invitation link for', normalizedEmail, ':', inviteUrl);
 
     return res.status(200).json({ success: true });
   } catch (error: any) {

@@ -240,17 +240,22 @@ async function main() {
   workers.stdout?.on('data', (d) => process.stdout.write(`[workers] ${d}`));
   workers.stderr?.on('data', (d) => process.stderr.write(`[workers] ${d}`));
 
-  // 3. Start cron
-  console.log('3️⃣  Starting cron scheduler...');
-  const cron = spawnProcess(
-    'cron',
-    process.execPath,
-    [tsNodeBin, '--transpile-only', 'backend/scheduler/cron.ts'],
-    { stdio: ['ignore', 'pipe', 'pipe'] }
-  );
-  children.push(cron);
-  cron.stdout?.on('data', (d) => process.stdout.write(`[cron] ${d}`));
-  cron.stderr?.on('data', (d) => process.stderr.write(`[cron] ${d}`));
+  // 3. Start cron (skipped when ENABLE_AUTO_WORKERS=0)
+  const enableCron = process.env.ENABLE_AUTO_WORKERS !== '0';
+  if (enableCron) {
+    console.log('3️⃣  Starting cron scheduler...');
+    const cron = spawnProcess(
+      'cron',
+      process.execPath,
+      [tsNodeBin, '--transpile-only', 'backend/scheduler/cron.ts'],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    children.push(cron);
+    cron.stdout?.on('data', (d) => process.stdout.write(`[cron] ${d}`));
+    cron.stderr?.on('data', (d) => process.stderr.write(`[cron] ${d}`));
+  } else {
+    console.log('3️⃣  Cron scheduler skipped (ENABLE_AUTO_WORKERS=0)');
+  }
 
   // Brief delay so workers/cron initialize
   await new Promise((r) => setTimeout(r, 2000));

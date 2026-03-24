@@ -11,18 +11,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
-import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag, Server } from 'lucide-react';
+import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag, Server, Database } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
-import { supabase } from '../../utils/supabaseClient';
+import { getAuthToken } from '../../utils/getAuthToken';
 import LLMConsumptionPanel from '../../components/super-admin/LLMConsumptionPanel';
 import ApiConsumptionPanel from '../../components/super-admin/ApiConsumptionPanel';
 import CreditsManagementPanel from '../../components/super-admin/CreditsManagementPanel';
 import AllOrgsConsumptionTable from '../../components/super-admin/AllOrgsConsumptionTable';
 import PlansPricingPanel from '../../components/super-admin/PlansPricingPanel';
 import PlanAnalyticsPanel from '../../components/super-admin/PlanAnalyticsPanel';
-import InfraConsumptionPanel from '../../components/super-admin/InfraConsumptionPanel';
+import InfraConsumptionPanel    from '../../components/super-admin/InfraConsumptionPanel';
+import RedisEfficiencyPanel    from '../../components/super-admin/RedisEfficiencyPanel';
 
-type ActiveTab = 'overview' | 'llm' | 'apis' | 'credits' | 'external_apis' | 'plans' | 'infra';
+type ActiveTab = 'overview' | 'llm' | 'apis' | 'credits' | 'external_apis' | 'plans' | 'infra' | 'redis';
 type Tier = 'super_admin' | 'company_admin' | 'user';
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -47,6 +48,10 @@ export default function ConsumptionPage() {
 
   // Super admin org drill-down
   const [orgSearchMode, setOrgSearchMode] = useState(false);
+
+  // Shared infra cost state — InfraConsumptionPanel emits this, AllOrgsConsumptionTable consumes it
+  const [infraTotal, setInfraTotal] = useState(0);
+  const [infraOrgCount, setInfraOrgCount] = useState(0);
 
   // Detect tier: check super_admin_session cookie (HttpOnly — must ask server),
   // then fall back to Supabase userRole for regular users.
@@ -107,8 +112,7 @@ export default function ConsumptionPage() {
     if (!effectiveCompanyId) return;
     setLoadingExternalApis(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const token = await getAuthToken();
       const res = await fetch(`/api/external-apis?companyId=${effectiveCompanyId}`, {
         credentials: 'include',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -129,7 +133,8 @@ export default function ConsumptionPage() {
     { key: 'credits' as ActiveTab,       label: 'Credits',       icon: <Coins className="w-4 h-4" /> },
     { key: 'external_apis' as ActiveTab, label: 'External APIs', icon: <Globe2 className="w-4 h-4" /> },
     { key: 'plans' as ActiveTab,         label: 'Plans & Pricing', icon: <Tag className="w-4 h-4" />, superAdminOnly: true },
-    { key: 'infra' as ActiveTab,         label: 'Infra',           icon: <Server className="w-4 h-4" />, superAdminOnly: true },
+    { key: 'infra'  as ActiveTab, label: 'Infra',           icon: <Server   className="w-4 h-4" />, superAdminOnly: true },
+    { key: 'redis'  as ActiveTab, label: 'Redis',           icon: <Database className="w-4 h-4" />, superAdminOnly: true },
   ] as { key: ActiveTab; label: string; icon: React.ReactNode; superAdminOnly?: boolean }[]).filter(t => !t.superAdminOnly || tier === 'super_admin');
 
   const yearOptions = Array.from({ length: 3 }, (_, i) => now.getFullYear() - i);
@@ -266,6 +271,7 @@ export default function ConsumptionPage() {
                 setSelectedOrgId(orgId);
                 setActiveTab('llm');
               }}
+              infraTotalUsd={infraTotal}
             />
           )}
 
@@ -349,7 +355,16 @@ export default function ConsumptionPage() {
           )}
 
           {activeTab === 'infra' && tier === 'super_admin' && (
-            <InfraConsumptionPanel />
+            <InfraConsumptionPanel
+              onTotalChange={(total, orgCount) => {
+                setInfraTotal(total);
+                setInfraOrgCount(orgCount);
+              }}
+            />
+          )}
+
+          {activeTab === 'redis' && tier === 'super_admin' && (
+            <RedisEfficiencyPanel />
           )}
 
           {activeTab === 'external_apis' && (

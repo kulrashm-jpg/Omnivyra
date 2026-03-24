@@ -3,58 +3,50 @@
 /**
  * /auth/callback
  *
- * Handles Supabase magic-link PKCE code exchange.
- * After exchanging the code for a session, asks the server where to route the user:
+ * Legacy Supabase PKCE callback — no longer used.
+ * Firebase email link authentication uses /auth/verify instead.
  *
- *   existing user               → /dashboard  (email auth is sufficient)
- *   new user / no phone         → /onboarding/phone
- *   new user completing flow    → /onboarding/verify-phone
- *   company admin (suspicious)  → /onboarding/verify-phone
- *   has phone but no company    → /onboarding/company
+ * Redirects to /auth/verify in case anyone has bookmarked this URL,
+ * or falls through to /dashboard if already authenticated.
  */
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { supabase } from '../../utils/supabaseClient';
-
-async function resolveRoute(accessToken: string): Promise<string> {
-  try {
-    const res = await fetch('/api/auth/post-login-route', {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (res.ok) {
-      const { route } = await res.json() as { route: string };
-      return route ?? '/dashboard';
-    }
-  } catch { /* fall through */ }
-  // On any error, fall back to dashboard (session is valid, let the page guard handle it)
-  return '/dashboard';
-}
+import { getFirebaseAuth } from '../../lib/firebase';
+import { getAuthToken } from '../../utils/getAuthToken';
+import { signOut } from 'firebase/auth';
 
 export default function AuthCallback() {
   const router = useRouter();
 
   useEffect(() => {
-    const code = new URLSearchParams(window.location.search).get('code');
-
-    if (code) {
-      supabase.auth.exchangeCodeForSession(code).then(async ({ data, error }) => {
-        if (error || !data.session) {
-          router.replace('/login');
-          return;
-        }
-        const route = await resolveRoute(data.session.access_token);
-        router.replace(route);
+    const fbUser = getFirebaseAuth().currentUser;
+    if (fbUser) {
+      // Already authenticated — resolve route and redirect
+      getAuthToken().then(async (token) => {
+        if (!token) { router.replace('/login'); return; }
+        try {
+          const res = await fetch('/api/auth/post-login-route', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (res.status === 401) {
+            // Ghost session: Firebase token valid but DB user deleted.
+            await signOut(getFirebaseAuth());
+            router.replace('/login');
+            return;
+          }
+          if (res.ok) {
+            const { route } = await res.json() as { route: string };
+            router.replace(route ?? '/dashboard');
+            return;
+          }
+        } catch { /* fall through */ }
+        router.replace('/login');
       });
     } else {
-      supabase.auth.getSession().then(async ({ data }) => {
-        if (data.session) {
-          const route = await resolveRoute(data.session.access_token);
-          router.replace(route);
-        } else {
-          router.replace('/login');
-        }
-      });
+      // No Firebase user — this could be a Firebase email link redirect.
+      // Forward to /auth/verify which handles Firebase email links.
+      router.replace(`/auth/verify${window.location.search}`);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -65,7 +57,7 @@ export default function AuthCallback() {
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
-        <p className="text-sm text-[#6B7C93]">Verifying your link…</p>
+        <p className="text-sm text-[#6B7C93]">Redirecting…</p>
       </div>
     </div>
   );

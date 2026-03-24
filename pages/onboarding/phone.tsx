@@ -13,7 +13,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import type { ConfirmationResult } from 'firebase/auth';
-import { supabase } from '../../utils/supabaseClient';
+import { getFirebaseAuth } from '../../lib/firebase';
 import { setupRecaptcha, sendPhoneOtp, clearRecaptcha } from '../../lib/firebase';
 
 type Step = 'company' | 'phone' | 'otp' | 'done' | 'error';
@@ -39,18 +39,14 @@ export default function PhoneVerificationPage() {
   const confirmationRef = useRef<ConfirmationResult | null>(null);
   const recaptchaContainerRef = useRef<HTMLDivElement>(null);
 
-  // ── Require Supabase session ────────────────────────────────────────────────
-  // The PKCE code exchange is handled upstream by /auth/callback before
-  // routing here, so a session is always present by the time this page loads.
+  // ── Require Firebase auth ─────────────────────────────────────────────────
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (!data.session) {
-        router.replace('/create-account');
-        return;
-      }
-      setSession(data.session);
-    });
-
+    const fbUser = getFirebaseAuth().currentUser;
+    if (!fbUser) {
+      router.replace('/create-account');
+      return;
+    }
+    setSession(fbUser);
     return () => clearRecaptcha();
   }, [router]);
 

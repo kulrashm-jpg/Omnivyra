@@ -22,6 +22,13 @@
 
 import { validateCronEnv } from '../utils/validateEnv';
 import { CronGuard } from '../utils/cronGuard';
+import { cronInstr } from '../utils/cronInstrumentation';
+import { getCronAdminConfig, shouldRunCronJob } from '../services/adminRuntimeConfig';
+import {
+  warmIntentContext,
+  triggerIntentJobs,
+  recordUserActivity,
+} from '../services/intentExecutionService';
 
 // Fail fast if required env vars are missing
 validateCronEnv();
@@ -71,7 +78,7 @@ import { runInfluencerLearningWorker } from '../workers/influencerLearningWorker
 import { runInsightLearningWorker } from '../workers/insightLearningWorker';
 import { runBuyerIntentLearningWorker } from '../workers/buyerIntentLearningWorker';
 
-const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_SECONDS || '60') * 1000;
+const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_SECONDS || '900') * 1000; // default 15 min
 const LEAD_THREAD_QUEUE_CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const LEAD_THREAD_RECOMPUTE_BASE_MS = 5 * 1000; // 5 seconds
 const LEAD_THREAD_RECOMPUTE_JITTER_MS = 2 * 1000; // 0-2 seconds jitter
@@ -112,6 +119,89 @@ const ENGAGEMENT_SIGNAL_ARCHIVE_INTERVAL_MS = 24 * 60 * 60 * 1000; // nightly
 const ENGAGEMENT_OPPORTUNITY_SCANNER_INTERVAL_MS = 4 * 60 * 60 * 1000; // every 4 hours
 const CONNECTOR_TOKEN_REFRESH_INTERVAL_MS      = 6 * 60 * 60 * 1000;  // every 6 hours
 const CONFIDENCE_CALIBRATION_INTERVAL_MS       = 7 * 24 * 60 * 60 * 1000; // weekly
+
+// ── Working-hours scheduler ───────────────────────────────────────────────────
+// The base tick fires every 15 minutes (regardless of CRON_INTERVAL_SECONDS).
+// The publish cycle only runs when the company-configured interval has elapsed,
+// AND respects working hours: during off-hours the effective interval is 6 hours
+// so posts are checked roughly twice per night.
+const BASE_TICK_MS        = 15 * 60 * 1000;       // fixed base clock
+const OFF_HOURS_INTERVAL_MS = 6 * 60 * 60 * 1000; // ~twice per 12-h off-hours window
+
+interface SchedulerPrefs {
+  interval_minutes: number;
+  timezone: string;
+  working_start: number; // 0–23 local hour
+  working_end: number;   // 0–23 local hour
+}
+let _schedulerPrefs: SchedulerPrefs | null = null;
+let _prefsCachedAt    = 0;
+let _lastPublishCycleRun = 0;
+
+/** Returns the local hour (0-23) in the given IANA timezone. */
+function localHour(tz: string): number {
+  try {
+    return parseInt(
+      new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(new Date()),
+      10,
+    );
+  } catch {
+    return new Date().getHours();
+  }
+}
+
+/**
+ * Loads company scheduler prefs from DB, cached for 5 minutes.
+ * Falls back to CRON_INTERVAL_MS / UTC 9-18 when no row exists.
+ */
+async function loadSchedulerPrefs(): Promise<SchedulerPrefs> {
+  if (_schedulerPrefs && Date.now() - _prefsCachedAt < 5 * 60 * 1000) return _schedulerPrefs;
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const db = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { persistSession: false, autoRefreshToken: false } },
+    );
+    const { data } = await db
+      .from('company_scheduler_prefs')
+      .select('interval_minutes, timezone, working_start, working_end')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    _schedulerPrefs = data ?? {
+      interval_minutes: Math.round(CRON_INTERVAL_MS / 60_000),
+      timezone: 'UTC',
+      working_start: 9,
+      working_end: 18,
+    };
+  } catch {
+    _schedulerPrefs = {
+      interval_minutes: Math.round(CRON_INTERVAL_MS / 60_000),
+      timezone: 'UTC',
+      working_start: 9,
+      working_end: 18,
+    };
+  }
+  _prefsCachedAt = Date.now();
+  return _schedulerPrefs!;
+}
+
+/**
+ * Returns true when the publish cycle should fire.
+ * Working hours  → use company's configured interval.
+ * Off hours      → use max(configured interval, 6 hours) — runs ~twice per night.
+ */
+async function shouldRunPublishCycle(): Promise<boolean> {
+  const prefs = await loadSchedulerPrefs();
+  const h      = localHour(prefs.timezone);
+  const inWork = h >= prefs.working_start && h < prefs.working_end;
+  const effectiveMs = inWork
+    ? prefs.interval_minutes * 60_000
+    : Math.max(prefs.interval_minutes * 60_000, OFF_HOURS_INTERVAL_MS);
+  return Date.now() - _lastPublishCycleRun >= effectiveMs;
+}
+
 let lastOpportunitySlotsRun = 0;
 let lastGovernanceAuditRun = 0;
 let lastAutoOptimizationRun = 0;
@@ -169,6 +259,7 @@ function scheduleWorker(
   const tick = () => {
     const delay = intervalMs + Math.random() * jitterMs;
     const timer = setTimeout(async () => {
+      let hadError = false;
       try {
         const result = await fn();
         const hasActivity = logFields.some((f) => (result[f] ?? 0) > 0);
@@ -177,8 +268,10 @@ function scheduleWorker(
           console.log(`[${label}] ${parts}`);
         }
       } catch (err: any) {
+        hadError = true;
         console.warn(`[${label}] worker error`, err?.message);
       }
+      cronInstr.workerExecuted(label, hadError);
       tick();
     }, delay);
     workerTimers.push(timer);
@@ -191,7 +284,7 @@ function scheduleWorker(
  */
 async function startCron() {
   console.log('[cron] starting scheduler loop');
-  console.log(`[cron] interval: ${CRON_INTERVAL_MS / 1000}s`);
+  console.log(`[cron] base tick: ${BASE_TICK_MS / 1000}s | default working-hours interval: ${CRON_INTERVAL_MS / 1000}s`);
 
   // ── Restore last-run timestamps from Redis (survives restarts) ─────────────
   const saved = await cronGuard.load();
@@ -238,12 +331,17 @@ async function startCron() {
   }
 
   // Run full scheduler cycle immediately on startup
+  _lastPublishCycleRun = Date.now();
   await runSchedulerCycle();
 
-  // Then run on interval
+  // Base tick fires every 15 min; the cycle only runs when the working-hours
+  // interval (or off-hours 6-hour gap) has elapsed.
   cronInterval = setInterval(async () => {
-    await runSchedulerCycle();
-  }, CRON_INTERVAL_MS);
+    if (await shouldRunPublishCycle()) {
+      _lastPublishCycleRun = Date.now();
+      await runSchedulerCycle();
+    }
+  }, BASE_TICK_MS);
 
   // All recurring workers — defined once via scheduleWorker(fn, intervalMs, label, logFields, jitterMs)
   scheduleWorker(
@@ -324,8 +422,55 @@ async function startCron() {
  * Run one scheduler cycle
  */
 async function runSchedulerCycle() {
+  // ── Distributed lock: skip cycle if another instance is already running ─────
+  const lockAcquired = await cronGuard.tryAcquireLock(cronInstr.instanceId);
+  if (!lockAcquired) {
+    console.warn('[cron] lock held by another instance — skipping cycle');
+    return;
+  }
+
+  // Warm cron admin-config cache so shouldRunCronJob() reads current overrides
+  await getCronAdminConfig();
+  // Warm intent context: loads company feature flags, active-company state,
+  // consumes any pending user-triggered job flags, and flushes savings counters.
+  await warmIntentContext();
+
   const startTime = Date.now();
   console.log(`\n🔄 Running scheduler cycle at ${new Date().toISOString()}`);
+
+  // ── Instrumentation: snapshot timestamps before any job runs ───────────────
+  cronInstr.cycleStart();
+  const _snap = {
+    opportunitySlots:             lastOpportunitySlotsRun,
+    governanceAudit:              lastGovernanceAuditRun,
+    autoOptimization:             lastAutoOptimizationRun,
+    engagementPolling:            lastEngagementPollingEnqueue,
+    intelligencePolling:          lastIntelligencePollingEnqueue,
+    signalClustering:             lastSignalClusteringRun,
+    signalIntelligence:           lastSignalIntelligenceRun,
+    strategicTheme:               lastStrategicThemeRun,
+    campaignOpportunity:          lastCampaignOpportunityRun,
+    contentOpportunity:           lastContentOpportunityRun,
+    narrativeEngine:              lastNarrativeEngineRun,
+    communityPost:                lastCommunityPostRun,
+    threadEngine:                 lastThreadEngineRun,
+    engagementCapture:            lastEngagementCaptureRun,
+    feedbackIntelligence:         lastFeedbackIntelligenceRun,
+    companyTrendRelevance:        lastCompanyTrendRelevanceRun,
+    performanceIngestion:         lastPerformanceIngestionRun,
+    performanceAggregation:       lastPerformanceAggregationRun,
+    campaignHealthEvaluation:     lastCampaignHealthEvaluationRun,
+    dailyIntelligence:            lastDailyIntelligenceRun,
+    intelligenceEventCleanup:     lastIntelligenceEventCleanupRun,
+    engagementDigest:             lastEngagementDigestRun,
+    engagementSignalScheduler:    lastEngagementSignalSchedulerRun,
+    engagementSignalArchive:      lastEngagementSignalArchiveRun,
+    engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
+    connectorTokenRefresh:        lastConnectorTokenRefreshRun,
+    leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
+    confidenceCalibration:        lastConfidenceCalibrationRun,
+    scheduledLeadHour:            lastScheduledLeadRunHour,
+  };
 
   try {
     const result = await findDuePostsAndEnqueue();
@@ -343,7 +488,7 @@ async function runSchedulerCycle() {
   }
 
   // Run opportunity slots task once per day
-  if (Date.now() - lastOpportunitySlotsRun >= OPPORTUNITY_SLOTS_INTERVAL_MS) {
+  if (shouldRunCronJob("opportunitySlots", OPPORTUNITY_SLOTS_INTERVAL_MS, lastOpportunitySlotsRun)) {
     lastOpportunitySlotsRun = Date.now();
     try {
       const opp = await runOpportunitySlotsScheduler();
@@ -360,7 +505,7 @@ async function runSchedulerCycle() {
   }
 
   // Run governance audit once per day (Stage 28)
-  if (Date.now() - lastGovernanceAuditRun >= GOVERNANCE_AUDIT_INTERVAL_MS) {
+  if (shouldRunCronJob("governanceAudit", GOVERNANCE_AUDIT_INTERVAL_MS, lastGovernanceAuditRun)) {
     lastGovernanceAuditRun = Date.now();
     try {
       await runAllCompanyAudits();
@@ -371,7 +516,7 @@ async function runSchedulerCycle() {
   }
 
   // Run auto-optimization once per day (Stage 37)
-  if (Date.now() - lastAutoOptimizationRun >= AUTO_OPTIMIZATION_INTERVAL_MS) {
+  if (shouldRunCronJob("autoOptimization", AUTO_OPTIMIZATION_INTERVAL_MS, lastAutoOptimizationRun)) {
     lastAutoOptimizationRun = Date.now();
     try {
       await runAutoOptimizationForEligibleCampaigns();
@@ -401,7 +546,7 @@ async function runSchedulerCycle() {
   }
 
   // Lead thread queue cleanup every 10 minutes (orphan rows)
-  if (Date.now() - lastLeadThreadQueueCleanupRun >= LEAD_THREAD_QUEUE_CLEANUP_INTERVAL_MS) {
+  if (shouldRunCronJob("leadThreadQueueCleanup", LEAD_THREAD_QUEUE_CLEANUP_INTERVAL_MS, lastLeadThreadQueueCleanupRun)) {
     lastLeadThreadQueueCleanupRun = Date.now();
     try {
       const result = await runLeadThreadRecomputeQueueCleanup();
@@ -414,7 +559,7 @@ async function runSchedulerCycle() {
   }
 
   // Enqueue engagement polling every 10 minutes (ingestion only; no evaluation changes)
-  if (Date.now() - lastEngagementPollingEnqueue >= ENGAGEMENT_POLLING_INTERVAL_MS) {
+  if (shouldRunCronJob("engagementPolling", ENGAGEMENT_POLLING_INTERVAL_MS, lastEngagementPollingEnqueue)) {
     lastEngagementPollingEnqueue = Date.now();
     try {
       await enqueueEngagementPolling();
@@ -424,7 +569,7 @@ async function runSchedulerCycle() {
   }
 
   // Enqueue intelligence polling every 2 hours (external API → signal store)
-  if (Date.now() - lastIntelligencePollingEnqueue >= INTELLIGENCE_POLLING_INTERVAL_MS) {
+  if (shouldRunCronJob("intelligencePolling", INTELLIGENCE_POLLING_INTERVAL_MS, lastIntelligencePollingEnqueue)) {
     lastIntelligencePollingEnqueue = Date.now();
     try {
       const result = await enqueueIntelligencePolling();
@@ -438,7 +583,7 @@ async function runSchedulerCycle() {
   }
 
   // Run signal clustering every 30 minutes (group similar signals into clusters)
-  if (Date.now() - lastSignalClusteringRun >= SIGNAL_CLUSTERING_INTERVAL_MS) {
+  if (shouldRunCronJob("signalClustering", SIGNAL_CLUSTERING_INTERVAL_MS, lastSignalClusteringRun)) {
     lastSignalClusteringRun = Date.now();
     try {
       const result = await runSignalClustering();
@@ -454,7 +599,7 @@ async function runSchedulerCycle() {
   }
 
   // Run signal intelligence engine every hour (clusters → actionable intelligence)
-  if (Date.now() - lastSignalIntelligenceRun >= SIGNAL_INTELLIGENCE_INTERVAL_MS) {
+  if (shouldRunCronJob("signalIntelligence", SIGNAL_INTELLIGENCE_INTERVAL_MS, lastSignalIntelligenceRun)) {
     lastSignalIntelligenceRun = Date.now();
     try {
       const result = await runSignalIntelligenceEngine();
@@ -469,7 +614,7 @@ async function runSchedulerCycle() {
   }
 
   // Run strategic theme engine every hour (intelligence → theme cards)
-  if (Date.now() - lastStrategicThemeRun >= STRATEGIC_THEME_INTERVAL_MS) {
+  if (shouldRunCronJob("strategicTheme", STRATEGIC_THEME_INTERVAL_MS, lastStrategicThemeRun)) {
     lastStrategicThemeRun = Date.now();
     try {
       const result = await runStrategicThemeEngine();
@@ -484,7 +629,7 @@ async function runSchedulerCycle() {
   }
 
   // Run campaign opportunity engine every hour (themes → campaign opportunities)
-  if (Date.now() - lastCampaignOpportunityRun >= CAMPAIGN_OPPORTUNITY_INTERVAL_MS) {
+  if (shouldRunCronJob("campaignOpportunity", CAMPAIGN_OPPORTUNITY_INTERVAL_MS, lastCampaignOpportunityRun)) {
     lastCampaignOpportunityRun = Date.now();
     try {
       const result = await runCampaignOpportunityEngine();
@@ -499,7 +644,7 @@ async function runSchedulerCycle() {
   }
 
   // Run content opportunity engine every 2 hours (themes → content_opportunities)
-  if (Date.now() - lastContentOpportunityRun >= CONTENT_OPPORTUNITY_INTERVAL_MS) {
+  if (shouldRunCronJob("contentOpportunity", CONTENT_OPPORTUNITY_INTERVAL_MS, lastContentOpportunityRun)) {
     lastContentOpportunityRun = Date.now();
     try {
       const result = await runContentOpportunityEngine();
@@ -514,7 +659,7 @@ async function runSchedulerCycle() {
   }
 
   // Run narrative engine every 4 hours (content_opportunities → campaign_narratives)
-  if (Date.now() - lastNarrativeEngineRun >= NARRATIVE_ENGINE_INTERVAL_MS) {
+  if (shouldRunCronJob("narrativeEngine", NARRATIVE_ENGINE_INTERVAL_MS, lastNarrativeEngineRun)) {
     lastNarrativeEngineRun = Date.now();
     try {
       const result = await runNarrativeEngine();
@@ -529,7 +674,7 @@ async function runSchedulerCycle() {
   }
 
   // Run community post engine every 3 hours (narratives → community_posts)
-  if (Date.now() - lastCommunityPostRun >= COMMUNITY_POST_INTERVAL_MS) {
+  if (shouldRunCronJob("communityPost", COMMUNITY_POST_INTERVAL_MS, lastCommunityPostRun)) {
     lastCommunityPostRun = Date.now();
     try {
       const result = await runCommunityPostEngine();
@@ -544,7 +689,7 @@ async function runSchedulerCycle() {
   }
 
   // Run thread engine every 3 hours (community_posts → community_threads)
-  if (Date.now() - lastThreadEngineRun >= THREAD_ENGINE_INTERVAL_MS) {
+  if (shouldRunCronJob("threadEngine", THREAD_ENGINE_INTERVAL_MS, lastThreadEngineRun)) {
     lastThreadEngineRun = Date.now();
     try {
       const result = await runThreadEngine();
@@ -559,7 +704,7 @@ async function runSchedulerCycle() {
   }
 
   // Run engagement capture every 30 minutes (community_posts → engagement_signals)
-  if (Date.now() - lastEngagementCaptureRun >= ENGAGEMENT_CAPTURE_INTERVAL_MS) {
+  if (shouldRunCronJob("engagementCapture", ENGAGEMENT_CAPTURE_INTERVAL_MS, lastEngagementCaptureRun)) {
     lastEngagementCaptureRun = Date.now();
     try {
       const result = await runEngagementCapture();
@@ -574,7 +719,7 @@ async function runSchedulerCycle() {
   }
 
   // Run feedback intelligence engine every 6 hours (engagement_signals → feedback_intelligence)
-  if (Date.now() - lastFeedbackIntelligenceRun >= FEEDBACK_INTELLIGENCE_INTERVAL_MS) {
+  if (shouldRunCronJob("feedbackIntelligence", FEEDBACK_INTELLIGENCE_INTERVAL_MS, lastFeedbackIntelligenceRun)) {
     lastFeedbackIntelligenceRun = Date.now();
     try {
       const result = await runFeedbackIntelligenceEngine();
@@ -589,7 +734,7 @@ async function runSchedulerCycle() {
   }
 
   // Run company trend relevance every 6 hours (theme–company scoring)
-  if (Date.now() - lastCompanyTrendRelevanceRun >= COMPANY_TREND_RELEVANCE_INTERVAL_MS) {
+  if (shouldRunCronJob("companyTrendRelevance", COMPANY_TREND_RELEVANCE_INTERVAL_MS, lastCompanyTrendRelevanceRun)) {
     lastCompanyTrendRelevanceRun = Date.now();
     try {
       const result = await runCompanyTrendRelevance();
@@ -607,7 +752,7 @@ async function runSchedulerCycle() {
   }
 
   // Run performance ingestion every 6 hours (content_analytics → campaign_performance_signals)
-  if (Date.now() - lastPerformanceIngestionRun >= PERFORMANCE_INGESTION_INTERVAL_MS) {
+  if (shouldRunCronJob("performanceIngestion", PERFORMANCE_INGESTION_INTERVAL_MS, lastPerformanceIngestionRun)) {
     lastPerformanceIngestionRun = Date.now();
     try {
       const result = await runPerformanceIngestion();
@@ -625,7 +770,7 @@ async function runSchedulerCycle() {
   }
 
   // Run performance aggregation once per day (signals → company aggregates)
-  if (Date.now() - lastPerformanceAggregationRun >= PERFORMANCE_AGGREGATION_INTERVAL_MS) {
+  if (shouldRunCronJob("performanceAggregation", PERFORMANCE_AGGREGATION_INTERVAL_MS, lastPerformanceAggregationRun)) {
     lastPerformanceAggregationRun = Date.now();
     try {
       const result = await runPerformanceAggregation();
@@ -644,7 +789,7 @@ async function runSchedulerCycle() {
   }
 
   // Run campaign health evaluation once per day (design + execution → suggestions)
-  if (Date.now() - lastCampaignHealthEvaluationRun >= CAMPAIGN_HEALTH_EVALUATION_INTERVAL_MS) {
+  if (shouldRunCronJob("campaignHealthEvaluation", CAMPAIGN_HEALTH_EVALUATION_INTERVAL_MS, lastCampaignHealthEvaluationRun)) {
     lastCampaignHealthEvaluationRun = Date.now();
     try {
       const result = await runCampaignHealthEvaluation();
@@ -662,7 +807,7 @@ async function runSchedulerCycle() {
   }
 
   // Run daily intelligence (Campaign Health + Strategic Insights + Opportunity Detection) once per day
-  if (Date.now() - lastDailyIntelligenceRun >= DAILY_INTELLIGENCE_INTERVAL_MS) {
+  if (shouldRunCronJob("dailyIntelligence", DAILY_INTELLIGENCE_INTERVAL_MS, lastDailyIntelligenceRun)) {
     lastDailyIntelligenceRun = Date.now();
     try {
       const result = await runDailyIntelligence();
@@ -680,7 +825,7 @@ async function runSchedulerCycle() {
   }
 
   // Run intelligence event cleanup once per day (delete events older than 180 days)
-  if (Date.now() - lastIntelligenceEventCleanupRun >= INTELLIGENCE_EVENT_CLEANUP_INTERVAL_MS) {
+  if (shouldRunCronJob("intelligenceEventCleanup", INTELLIGENCE_EVENT_CLEANUP_INTERVAL_MS, lastIntelligenceEventCleanupRun)) {
     lastIntelligenceEventCleanupRun = Date.now();
     try {
       const result = await runIntelligenceEventCleanup();
@@ -699,7 +844,7 @@ async function runSchedulerCycle() {
   }
 
   // Run engagement digest once per day (daily summary per organization)
-  if (Date.now() - lastEngagementDigestRun >= ENGAGEMENT_DIGEST_INTERVAL_MS) {
+  if (shouldRunCronJob("engagementDigest", ENGAGEMENT_DIGEST_INTERVAL_MS, lastEngagementDigestRun)) {
     lastEngagementDigestRun = Date.now();
     try {
       const result = await runEngagementDigestWorker();
@@ -714,7 +859,7 @@ async function runSchedulerCycle() {
   }
 
   // Run engagement signal collection every 15 minutes (LinkedIn, Twitter, community)
-  if (Date.now() - lastEngagementSignalSchedulerRun >= ENGAGEMENT_SIGNAL_SCHEDULER_INTERVAL_MS) {
+  if (shouldRunCronJob("engagementSignalScheduler", ENGAGEMENT_SIGNAL_SCHEDULER_INTERVAL_MS, lastEngagementSignalSchedulerRun)) {
     lastEngagementSignalSchedulerRun = Date.now();
     try {
       const result = await runEngagementSignalScheduler();
@@ -732,7 +877,7 @@ async function runSchedulerCycle() {
   }
 
   // Run engagement opportunity scanner every 4 hours (signals → opportunity_radar)
-  if (Date.now() - lastEngagementOpportunityScannerRun >= ENGAGEMENT_OPPORTUNITY_SCANNER_INTERVAL_MS) {
+  if (shouldRunCronJob("engagementOpportunityScanner", ENGAGEMENT_OPPORTUNITY_SCANNER_INTERVAL_MS, lastEngagementOpportunityScannerRun)) {
     lastEngagementOpportunityScannerRun = Date.now();
     try {
       const scanResult = await runEngagementOpportunityScanner();
@@ -751,7 +896,7 @@ async function runSchedulerCycle() {
   }
 
   // Run connector token refresh every 6 hours (G5.4 - community_ai_platform_tokens)
-  if (Date.now() - lastConnectorTokenRefreshRun >= CONNECTOR_TOKEN_REFRESH_INTERVAL_MS) {
+  if (shouldRunCronJob("connectorTokenRefresh", CONNECTOR_TOKEN_REFRESH_INTERVAL_MS, lastConnectorTokenRefreshRun)) {
     lastConnectorTokenRefreshRun = Date.now();
     try {
       const result = await runConnectorTokenRefreshJob();
@@ -766,7 +911,7 @@ async function runSchedulerCycle() {
   }
 
   // Archive signals older than 180 days (nightly)
-  if (Date.now() - lastEngagementSignalArchiveRun >= ENGAGEMENT_SIGNAL_ARCHIVE_INTERVAL_MS) {
+  if (shouldRunCronJob("engagementSignalArchive", ENGAGEMENT_SIGNAL_ARCHIVE_INTERVAL_MS, lastEngagementSignalArchiveRun)) {
     lastEngagementSignalArchiveRun = Date.now();
     try {
       const result = await archiveOldSignals();
@@ -782,7 +927,7 @@ async function runSchedulerCycle() {
   }
 
   // Calibrate confidence thresholds weekly (campaign planner edge case #3)
-  if (Date.now() - lastConfidenceCalibrationRun >= CONFIDENCE_CALIBRATION_INTERVAL_MS) {
+  if (shouldRunCronJob("confidenceCalibration", CONFIDENCE_CALIBRATION_INTERVAL_MS, lastConfidenceCalibrationRun)) {
     lastConfidenceCalibrationRun = Date.now();
     try {
       const thresholds = await calibrateThresholds();
@@ -791,6 +936,41 @@ async function runSchedulerCycle() {
       console.error('❌ Confidence calibration error:', error.message);
     }
   }
+
+  // ── Instrumentation: detect which jobs fired by comparing timestamps ────────
+  const _after: Record<string, number> = {
+    opportunitySlots:             lastOpportunitySlotsRun,
+    governanceAudit:              lastGovernanceAuditRun,
+    autoOptimization:             lastAutoOptimizationRun,
+    engagementPolling:            lastEngagementPollingEnqueue,
+    intelligencePolling:          lastIntelligencePollingEnqueue,
+    signalClustering:             lastSignalClusteringRun,
+    signalIntelligence:           lastSignalIntelligenceRun,
+    strategicTheme:               lastStrategicThemeRun,
+    campaignOpportunity:          lastCampaignOpportunityRun,
+    contentOpportunity:           lastContentOpportunityRun,
+    narrativeEngine:              lastNarrativeEngineRun,
+    communityPost:                lastCommunityPostRun,
+    threadEngine:                 lastThreadEngineRun,
+    engagementCapture:            lastEngagementCaptureRun,
+    feedbackIntelligence:         lastFeedbackIntelligenceRun,
+    companyTrendRelevance:        lastCompanyTrendRelevanceRun,
+    performanceIngestion:         lastPerformanceIngestionRun,
+    performanceAggregation:       lastPerformanceAggregationRun,
+    campaignHealthEvaluation:     lastCampaignHealthEvaluationRun,
+    dailyIntelligence:            lastDailyIntelligenceRun,
+    intelligenceEventCleanup:     lastIntelligenceEventCleanupRun,
+    engagementDigest:             lastEngagementDigestRun,
+    engagementSignalScheduler:    lastEngagementSignalSchedulerRun,
+    engagementSignalArchive:      lastEngagementSignalArchiveRun,
+    engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
+    connectorTokenRefresh:        lastConnectorTokenRefreshRun,
+    leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
+    confidenceCalibration:        lastConfidenceCalibrationRun,
+    scheduledLeadHour:            lastScheduledLeadRunHour,
+  };
+  const _triggered = Object.keys(_after).filter(k => _after[k] !== (_snap as Record<string, number>)[k]);
+  cronInstr.cycleEnd(_triggered);
 
   // ── Persist last-run timestamps to Redis (survives restarts) ───────────────
   void cronGuard.save({
@@ -823,6 +1003,9 @@ async function runSchedulerCycle() {
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,
   });
+
+  // Release distributed lock now that cycle is complete
+  void cronGuard.releaseLock(cronInstr.instanceId);
 }
 
 // Start cron if this file is run directly

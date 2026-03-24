@@ -7,6 +7,7 @@
 
 import IORedis from 'ioredis';
 import type { CompanyIntelligenceInsights } from './companyIntelligenceAggregator';
+import { createInstrumentedClient } from '../../lib/redis/instrumentation';
 
 const PREFIX = 'virality:company';
 const TTL_SEC = 300;
@@ -21,18 +22,19 @@ function getRedisClient(): IORedis | null {
   if (redisClient) return redisClient;
   const url = process.env.REDIS_URL || 'redis://localhost:6379';
   try {
-    redisClient = new IORedis(url, {
+    const raw = new IORedis(url, {
       enableReadyCheck: false,
       maxRetriesPerRequest: 3,
       retryStrategy: () => null,
       lazyConnect: true,
     });
-    redisClient.on('error', () => {
+    raw.on('error', () => {
       console.warn('[companyIntelligenceCache] Redis error');
     });
-    redisClient.connect().catch(() => {
+    raw.connect().catch(() => {
       console.warn('[companyIntelligenceCache] Redis unavailable, falling back to in-memory');
     });
+    redisClient = createInstrumentedClient(raw, 'intelligence_cache') as IORedis;
     return redisClient;
   } catch {
     console.warn('[companyIntelligenceCache] Redis unavailable, falling back to in-memory');

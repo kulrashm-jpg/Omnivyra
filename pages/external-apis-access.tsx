@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
-import { supabase } from '../utils/supabaseClient';
+import { getAuthToken } from '../utils/getAuthToken';
 
 type ApiSource = {
   id: string;
@@ -315,8 +315,7 @@ export default function ExternalApiAccessPage() {
   const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    const token = await getAuthToken();
     if (!token) {
       throw new Error('Not authenticated');
     }

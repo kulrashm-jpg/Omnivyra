@@ -31,13 +31,21 @@ export default async function handler(
     );
 
     // ── 1. Check public.users (fast path) ────────────────────────────────────
+    // Exclude soft-deleted rows: a deleted account should appear as "not found"
+    // so the login page doesn't reveal that an email was previously registered.
     const { data: publicUsers } = await adminClient
       .from('users')
-      .select('id')
+      .select('id, is_deleted')
       .ilike('email', normalised)
       .limit(1);
 
     if (Array.isArray(publicUsers) && publicUsers.length > 0) {
+      const row = publicUsers[0] as any;
+      // Treat soft-deleted as non-existent — the login flow will surface
+      // ACCOUNT_DELETED at the appropriate point (sync-firebase-user / post-login-route).
+      if (row.is_deleted) {
+        return res.status(200).json({ exists: false });
+      }
       return res.status(200).json({ exists: true });
     }
 

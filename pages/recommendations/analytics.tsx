@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Header from '../../components/Header';
 import { useCompanyContext } from '../../components/CompanyContext';
-import { supabase } from '../../utils/supabaseClient';
+import { getAuthToken } from '../../utils/getAuthToken';
 
 type RecommendationAnalytics = {
   totals: {
@@ -31,8 +31,7 @@ export default function RecommendationsAnalyticsPage() {
       setIsLoading(true);
       setErrorMessage(null);
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
+        const token = await getAuthToken();
         const response = await fetch(
           `/api/recommendations/analytics?companyId=${encodeURIComponent(selectedCompanyId)}`,
           {

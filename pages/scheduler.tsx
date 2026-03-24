@@ -8,7 +8,7 @@ import { Calendar, Clock, Send, AlertCircle, CheckCircle, Plus, Settings, Sparkl
 import PreviewCard from "../components/PreviewCard";
 import ContentRenderer from "../components/ContentRenderer";
 import { PLATFORM_CONFIGS, getPlatformConfig } from "../lib/platforms";
-import { supabase } from "../utils/supabaseClient";
+import { getAuthToken } from "../utils/getAuthToken";
 
 interface ScheduledPost {
   id: string;
@@ -59,6 +59,10 @@ export default function SchedulerPage() {
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
 
+  // Scheduler preferences
+  const [schedPrefs, setSchedPrefs] = useState({ interval_minutes: 60, timezone: 'UTC', working_start: 9, working_end: 18 });
+  const [schedPrefsSaving, setSchedPrefsSaving] = useState(false);
+
   useEffect(() => {
     if (!notice) return;
     const t = window.setTimeout(() => setNotice(null), 3200);
@@ -90,7 +94,31 @@ export default function SchedulerPage() {
   useEffect(() => {
     loadScheduledPosts();
     loadConnectedAccounts();
+    loadSchedPrefs();
   }, []);
+
+  async function loadSchedPrefs() {
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/settings/scheduler-prefs', { headers });
+      if (res.ok) setSchedPrefs(await res.json());
+    } catch { /* use defaults */ }
+  }
+
+  async function saveSchedPrefs() {
+    setSchedPrefsSaving(true);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/settings/scheduler-prefs', {
+        method: 'PUT',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(schedPrefs),
+      });
+      if (res.ok) notify('success', 'Scheduler preferences saved');
+      else { const j = await res.json(); notify('error', j.error ?? 'Save failed'); }
+    } catch { notify('error', 'Save failed'); }
+    finally { setSchedPrefsSaving(false); }
+  }
 
   // Handle pre-filled data from creative scheduler
   useEffect(() => {
@@ -107,8 +135,7 @@ export default function SchedulerPage() {
   }, [router.query]);
 
   const getAuthHeaders = async (): Promise<Record<string, string>> => {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    const token = await getAuthToken();
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
@@ -642,6 +669,94 @@ export default function SchedulerPage() {
               </div>
             )}
           </CardContent>
+          </Card>
+
+          {/* ── Scheduler Preferences ──────────────────────────────────────── */}
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Settings className="h-4 w-4 text-indigo-500" />
+                Scheduler Preferences
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-gray-500 mb-4">
+                Controls how often the system checks for posts to publish.
+                During <strong>off hours</strong> the check runs at most twice regardless of the interval chosen.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Interval */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Check frequency (working hours)</label>
+                  <select
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    value={schedPrefs.interval_minutes}
+                    onChange={e => setSchedPrefs(p => ({ ...p, interval_minutes: Number(e.target.value) }))}
+                  >
+                    <option value={15}>Every 15 minutes</option>
+                    <option value={30}>Every 30 minutes</option>
+                    <option value={60}>Every hour</option>
+                    <option value={120}>Every 2 hours</option>
+                    <option value={240}>Every 4 hours</option>
+                    <option value={480}>Every 8 hours</option>
+                  </select>
+                </div>
+
+                {/* Timezone */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Timezone</label>
+                  <select
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    value={schedPrefs.timezone}
+                    onChange={e => setSchedPrefs(p => ({ ...p, timezone: e.target.value }))}
+                  >
+                    {[
+                      'UTC','America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
+                      'America/Toronto','America/Sao_Paulo','Europe/London','Europe/Paris','Europe/Berlin',
+                      'Europe/Amsterdam','Europe/Stockholm','Asia/Dubai','Asia/Kolkata','Asia/Singapore',
+                      'Asia/Tokyo','Asia/Shanghai','Australia/Sydney','Pacific/Auckland',
+                    ].map(tz => <option key={tz} value={tz}>{tz.replace('_', ' ')}</option>)}
+                  </select>
+                </div>
+
+                {/* Working start */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Working hours start</label>
+                  <select
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    value={schedPrefs.working_start}
+                    onChange={e => setSchedPrefs(p => ({ ...p, working_start: Number(e.target.value) }))}
+                  >
+                    {Array.from({ length: 24 }, (_, i) => (
+                      <option key={i} value={i}>{i.toString().padStart(2, '0')}:00</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Working end */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Working hours end</label>
+                  <select
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    value={schedPrefs.working_end}
+                    onChange={e => setSchedPrefs(p => ({ ...p, working_end: Number(e.target.value) }))}
+                  >
+                    {Array.from({ length: 24 }, (_, i) => (
+                      <option key={i} value={i}>{i.toString().padStart(2, '0')}:00</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between">
+                <p className="text-xs text-gray-400">
+                  Off hours ({schedPrefs.working_end.toString().padStart(2,'0')}:00 – {schedPrefs.working_start.toString().padStart(2,'0')}:00 {schedPrefs.timezone}): runs at most twice per night
+                </p>
+                <Button onClick={saveSchedPrefs} disabled={schedPrefsSaving} className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-4 py-2">
+                  {schedPrefsSaving ? 'Saving…' : 'Save'}
+                </Button>
+              </div>
+            </CardContent>
           </Card>
         </main>
       </div>

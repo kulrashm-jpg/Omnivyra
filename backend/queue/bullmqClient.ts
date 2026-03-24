@@ -14,8 +14,30 @@
  */
 
 import { Queue, Worker } from 'bullmq';
+import {
+  instrumentQueue,
+  instrumentWorker,
+  startQueueReportFlush,
+} from './queueInstrumentation';
+import { getMetricsReport } from '../../lib/redis/instrumentation';
 import IORedis from 'ioredis';
 import { createHash } from 'crypto';
+import {
+  createInstrumentedClient,
+  startInstrumentation,
+  type RedisFeature,
+} from '../../lib/redis/instrumentation';
+import {
+  startUsageProtection,
+  isQueueAllowed,
+  getQueueFanOutMultiplier,
+  storeOverflow,
+  registerOverflowDrain,
+  type OverflowEntry,
+} from '../../lib/redis/usageProtection';
+import { startMetricsPersistence } from '../../lib/instrumentation/metricsPersistence';
+import { getSystemMetrics }        from '../../lib/instrumentation/systemMetrics';
+import { estimateCost }            from '../../lib/instrumentation/costEngine';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
@@ -95,6 +117,120 @@ export function getSharedRedisClient(): IORedis {
   return getRedisConnection();
 }
 
+/**
+ * Feature-tagged Redis client. Wraps the shared connection in an instrumentation
+ * proxy that records every command under `feature` for ops reporting.
+ * All calls still use the same underlying IORedis connection.
+ */
+export function getInstrumentedClient(feature: RedisFeature | string): IORedis {
+  return createInstrumentedClient(getRedisConnection(), feature);
+}
+
+// Start instrumentation timers once per process.
+// Pass the shared-client factory to avoid a circular import inside the module.
+startInstrumentation(() => getRedisConnection());
+// Start Redis usage-protection polling (60-second loop, best-effort).
+startUsageProtection(() => getRedisConnection());
+startQueueReportFlush(
+  () => getRedisConnection(),
+  () => getMetricsReport().opsPerMin,
+);
+
+// Start 5-minute system metrics persistence to Redis.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+startMetricsPersistence(
+  () => getRedisConnection() as any,
+  getSystemMetrics,
+  (metrics) => { try { return estimateCost(metrics); } catch { return null; } },
+);
+
+// ── Usage-protection queue guard ──────────────────────────────────────────────
+//
+// Patches `.add()` and `.addBulk()` on a Queue so that:
+//   - Non-essential queues are blocked entirely at critical usage (isQueueAllowed)
+//   - Bulk fan-out is capped by getQueueFanOutMultiplier() at throttle level
+//
+// Critical queues (posting, publish) are never blocked.
+
+function applyQueueProtection(queue: Queue): Queue {
+  const origAdd     = queue.add.bind(queue);
+  const origAddBulk = queue.addBulk.bind(queue);
+
+  // Register drain callback so the overflow buffer is flushed back into this
+  // queue when the protection level recovers to normal.  Uses the original
+  // (unpatched) addBulk so the drain bypasses the guard and always succeeds.
+  registerOverflowDrain(queue.name, async (_queueName, jobs) => {
+    if (jobs.length > 0) await origAddBulk(jobs as Parameters<typeof origAddBulk>[0]);
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (queue as any).add = async (...args: Parameters<typeof origAdd>) => {
+    if (!isQueueAllowed(queue.name)) {
+      const entry: OverflowEntry = { name: args[0], data: args[1], opts: args[2] };
+      const stored = storeOverflow(queue.name, entry);
+      console.error(JSON.stringify({
+        level:   'ERROR',
+        event:   stored ? 'queue_job_overflowed' : 'queue_job_dropped',
+        queue:   queue.name,
+        job:     args[0],
+        stored,
+        reason:  'critical_redis_usage',
+      }));
+      return null;
+    }
+    return origAdd(...args);
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (queue as any).addBulk = async (...args: Parameters<typeof origAddBulk>) => {
+    const [jobs] = args;
+
+    if (!isQueueAllowed(queue.name)) {
+      // Store all blocked bulk jobs in the overflow buffer
+      let storedCount = 0;
+      for (const j of jobs) {
+        const stored = storeOverflow(queue.name, j as OverflowEntry);
+        if (stored) storedCount++;
+      }
+      console.error(JSON.stringify({
+        level:   'ERROR',
+        event:   'queue_bulk_overflowed',
+        queue:   queue.name,
+        total:   jobs.length,
+        stored:  storedCount,
+        dropped: jobs.length - storedCount,
+        reason:  'critical_redis_usage',
+      }));
+      return [];
+    }
+
+    // Throttle: cap fan-out to the configured multiplier
+    const mult   = getQueueFanOutMultiplier();
+    const capped = mult < 1 ? jobs.slice(0, Math.max(1, Math.ceil(jobs.length * mult))) : jobs;
+    if (capped.length < jobs.length) {
+      const deferred = jobs.slice(capped.length);
+      let storedCount = 0;
+      for (const j of deferred) {
+        const stored = storeOverflow(queue.name, j as OverflowEntry);
+        if (stored) storedCount++;
+      }
+      console.warn(JSON.stringify({
+        level:    'WARN',
+        event:    'queue_bulk_fan_out_reduced',
+        queue:    queue.name,
+        original: jobs.length,
+        sent:     capped.length,
+        deferred: deferred.length,
+        stored:   storedCount,
+        reason:   'throttle_redis_usage',
+      }));
+    }
+    return origAddBulk(capped as typeof jobs);
+  };
+
+  return queue;
+}
+
 // Queue instance for enqueuing jobs
 let publishQueue: Queue | null = null;
 let engagementPollingQueue: Queue | null = null;
@@ -122,6 +258,8 @@ export function getPostingQueue(): Queue {
     postingQueue.on('error', (err) => {
       console.error('Posting queue error:', err);
     });
+    instrumentQueue(postingQueue);
+    applyQueueProtection(postingQueue);
   }
   return postingQueue;
 }
@@ -145,6 +283,8 @@ export function getAiHeavyQueue(): Queue {
     aiHeavyQueue.on('error', (err) => {
       console.error('AI-heavy queue error:', err);
     });
+    instrumentQueue(aiHeavyQueue);
+    applyQueueProtection(aiHeavyQueue);
   }
   return aiHeavyQueue;
 }
@@ -167,6 +307,8 @@ export function getEngagementPollingQueue(): Queue {
     engagementPollingQueue.on('error', (err) => {
       console.error('Engagement polling queue error:', err);
     });
+    instrumentQueue(engagementPollingQueue);
+    applyQueueProtection(engagementPollingQueue);
   }
   return engagementPollingQueue;
 }
@@ -197,6 +339,8 @@ export function getQueue(): Queue {
     publishQueue.on('error', (err) => {
       console.error('Queue error:', err);
     });
+    instrumentQueue(publishQueue);
+    applyQueueProtection(publishQueue);
   }
   return publishQueue;
 }
@@ -236,6 +380,7 @@ export function getWorker(
     console.error('Worker error:', err);
   });
 
+  instrumentWorker(worker);
   return worker;
 }
 
@@ -268,6 +413,7 @@ export function getEngagementPollingWorker(): Worker {
     console.error('Engagement polling worker error:', err);
   });
 
+  instrumentWorker(worker);
   return worker;
 }
 
@@ -308,7 +454,7 @@ export function createQueue(name: string): Queue {
   
   // Note: BullMQ v5+ handles delayed jobs automatically, no QueueScheduler needed
   
-  return new Queue(name, {
+  const q = new Queue(name, {
     connection: getConnectionConfig(),
     defaultJobOptions: {
       attempts: 3,
@@ -318,6 +464,8 @@ export function createQueue(name: string): Queue {
       },
     },
   });
+  instrumentQueue(q);
+  return q;
 }
 
 /**
@@ -383,6 +531,7 @@ export function createWorker(
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
+  instrumentWorker(worker);
   return worker;
 }
 

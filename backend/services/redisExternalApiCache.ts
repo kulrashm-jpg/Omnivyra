@@ -5,6 +5,7 @@
  */
 
 import IORedis from 'ioredis';
+import { createInstrumentedClient } from '../../lib/redis/instrumentation';
 
 const PREFIX = 'virality:ext_api';
 const CACHE_TTL_SEC = 720;
@@ -40,24 +41,25 @@ function getRedisClient(): IORedis | null {
   if (redisClient) return redisClient;
   const url = process.env.REDIS_URL || 'redis://localhost:6379';
   try {
-    redisClient = new IORedis(url, {
+    const raw = new IORedis(url, {
       enableReadyCheck: false,
       maxRetriesPerRequest: 3,
       retryStrategy: () => null,
       lazyConnect: true,
     });
-    redisClient.on('error', () => {
+    raw.on('error', () => {
       redisAvailable = false;
     });
-    redisClient.on('connect', () => {
+    raw.on('connect', () => {
       redisAvailable = true;
     });
-    redisClient.connect().then(() => {
+    raw.connect().then(() => {
       redisAvailable = true;
     }).catch(() => {
       redisAvailable = false;
       console.warn('[redisExternalApiCache] Redis unavailable, falling back to in-memory');
     });
+    redisClient = createInstrumentedClient(raw, 'external_api_cache') as IORedis;
     return redisClient;
   } catch {
     console.warn('[redisExternalApiCache] Redis unavailable, falling back to in-memory');

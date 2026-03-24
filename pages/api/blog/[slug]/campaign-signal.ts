@@ -27,6 +27,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { Role } from '../../../../backend/services/rbacService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -40,7 +41,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // ── Resolve company from session ─────────────────────────────────────────
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getSupabaseUserFromRequest(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
   // Resolve companyId from the authenticated user's company membership

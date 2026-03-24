@@ -62,7 +62,9 @@
     "bullmq": "^5.68.0",
     "caniuse-lite": "^1.0.30001777",
     "dotenv": "^16.6.1",
+    "express": "^5.2.1",
     "firebase": "^12.10.0",
+    "firebase-admin": "^13.7.0",
     "formidable": "^3.5.4",
     "ioredis": "^5.9.3",
     "langchain": "^1.2.30",
@@ -83,6 +85,7 @@
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
+    "@types/express": "^5.0.6",
     "@types/react": "19.1.13",
     "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.21",

@@ -1,5 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { supabase } from '../utils/supabaseClient';
+import { getAuthToken } from '../utils/getAuthToken';
+import { getCurrentFirebaseUser } from '../lib/auth/emailLink';
+import { getFirebaseAuth } from '../lib/firebase';
+import { onIdTokenChanged, getIdToken, signOut } from 'firebase/auth';
+import { isAccountDeleted } from '../utils/authErrors';
 
 type UserContext = {
   userId: string;
@@ -63,6 +67,10 @@ type CompanyContextValue = {
   selectedCompanyName: string;
   isLoading: boolean;
   isAuthenticated: boolean;
+  /** true once the Firebase session has been validated against the backend.
+   *  Consumers should show a loading/blank state until this is true to prevent
+   *  a flash of protected or unauthenticated content. */
+  authChecked: boolean;
   isAdmin: boolean;
   setSelectedCompanyId: (companyId: string) => void;
   refreshCompanies: () => Promise<void>;
@@ -127,9 +135,12 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setRolesByCompany({});
         return;
       }
-      const { data: sessionData } = await supabase.auth.getSession();
-      const supabaseUser = sessionData.session?.user;
-      if (!supabaseUser) {
+
+      // Firebase is the sole identity source.
+      // Get a fresh Firebase ID token and call /api/company-profile?mode=list.
+      const fbToken = await getAuthToken();
+      if (!fbToken) {
+        // No Firebase session — may be content-architect cookie path
         const asArchitect = await loadContentArchitectContext();
         if (!asArchitect) {
           setUser(null);
@@ -141,187 +152,92 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
         return;
       }
-      const meta = supabaseUser.user_metadata || {};
-      const explicitName =
-        (meta.name as string | undefined)?.trim() ||
-        (meta.full_name as string | undefined)?.trim();
-      const fromMeta =
-        explicitName ||
-        (typeof meta.first_name === 'string' && typeof meta.last_name === 'string'
-          ? `${(meta.first_name as string).trim()} ${(meta.last_name as string).trim()}`.trim()
-          : (meta.first_name as string | undefined)?.trim());
-      const email = supabaseUser.email || '';
-      const fromEmail =
-        email && email.includes('@')
-          ? email
-              .split('@')[0]
-              .replace(/[._-]+/g, ' ')
-              .replace(/\b\w/g, (c) => c.toUpperCase())
-          : '';
-      const resolvedName = fromMeta || fromEmail || 'User';
-      setUserName(resolvedName);
 
-      // Single query for all roles (active + invited) to reduce round-trips
-      const { data: roleRows, error: roleError } = await supabase
-        .from('user_company_roles')
-        .select('company_id, role, status')
-        .eq('user_id', supabaseUser.id);
-      if (roleError) {
-        console.warn('Failed to load roles for user', roleError.message);
-      }
+      const listRes = await fetch('/api/company-profile?mode=list', {
+        credentials: 'include',
+        headers: { Authorization: `Bearer ${fbToken}` },
+      });
 
-      const invitedRows = (roleRows || []).filter((row) => row.status === 'invited');
-      if (invitedRows.length > 0) {
-        await Promise.all([
-          supabase
-            .from('user_company_roles')
-            .update({
-              status: 'active',
-              accepted_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            })
-            .eq('user_id', supabaseUser.id)
-            .eq('status', 'invited'),
-          supabase.from('audit_logs').insert(
-            invitedRows.map((row) => ({
-              actor_user_id: supabaseUser.id,
-              action: 'USER_ACCEPTED_INVITE',
-              company_id: row.company_id,
-              created_at: new Date().toISOString(),
-            }))
-          ),
-        ]);
-      }
+      if (!listRes.ok) {
+        // Parse the error body once for AUTH_001 detection.
+        let errData: unknown = null;
+        try { errData = await listRes.json(); } catch { /* non-JSON — ignore */ }
 
-      // Include both active and newly-accepted invited in companies list
-      const activeRows = (roleRows || []).filter((row) => row.status === 'active');
-      const effectiveRoles = [...activeRows, ...invitedRows];
-      let rolesMap: Record<string, string> = {};
-      let companyIds: string[] = [];
-      let nextCompanies: CompanyOption[] = [];
-
-      if (effectiveRoles.length > 0) {
-        rolesMap = effectiveRoles.reduce<Record<string, string>>((acc, entry) => {
-          const normalizedRole = normalizeCompanyRole(entry?.role);
-          if (entry?.company_id && normalizedRole) {
-            acc[entry.company_id] = normalizedRole;
-          }
-          return acc;
-        }, {});
-        companyIds = Array.from(new Set(effectiveRoles.map((row) => row.company_id))).filter(Boolean) as string[];
-        if (companyIds.length > 0) {
-          const { data: profiles, error: profileError } = await supabase
-            .from('company_profiles')
-            .select('company_id, name')
-            .in('company_id', companyIds);
-          if (profileError) {
-            console.warn('Failed to load company profiles', profileError.message);
-          }
-          nextCompanies = (profiles || []).map((profile) => ({
-            company_id: profile.company_id,
-            name: profile.name || 'Unnamed company',
-          }));
-
-          // Fallback: company_profiles missing — read name directly from companies
-          if (nextCompanies.length === 0) {
-            const { data: companies } = await supabase
-              .from('companies')
-              .select('id, name')
-              .in('id', companyIds);
-            nextCompanies = (companies || []).map((c) => ({
-              company_id: c.id,
-              name: c.name || 'My Company',
-            }));
-          }
-
-          if (nextCompanies.length === 0) {
-            nextCompanies = companyIds.map((companyId) => ({
-              company_id: companyId,
-              name: 'My Company',
-            }));
-          }
+        if (isAccountDeleted(listRes, errData)) {
+          // ACCOUNT_DELETED: the DB user was soft-deleted. Force full sign-out
+          // so the user cannot linger in a half-authenticated state.
+          try { await signOut(getFirebaseAuth()); } catch { /* ignore */ }
+          setIsAuthenticated(false);
+          setAuthChecked(true);
+        } else if (listRes.status === 401) {
+          // Ghost session: Firebase token is valid but DB user no longer exists.
+          try { await signOut(getFirebaseAuth()); } catch { /* ignore */ }
+          setIsAuthenticated(false);
         }
-      }
-
-      if (nextCompanies.length === 0) {
-        const listRes = await fetch('/api/company-profile?mode=list', {
-          credentials: 'include',
-          headers: sessionData.session?.access_token
-            ? { Authorization: `Bearer ${sessionData.session.access_token}` }
-            : {},
-        });
-        if (listRes.ok) {
-          const listData = await listRes.json();
-          const list = listData?.companies || [];
-          const listRoles = listData?.rolesByCompany || [];
-          if (list.length > 0) {
-            nextCompanies = list.map((c: CompanyOption) => ({
-              company_id: c.company_id,
-              name: c.name || 'Unnamed company',
-            }));
-            rolesMap = (listRoles as { company_id: string; role: string }[]).reduce<Record<string, string>>(
-              (acc, entry) => {
-                const normalizedRole = normalizeCompanyRole(entry?.role);
-                if (entry?.company_id && normalizedRole) {
-                  acc[entry.company_id] = normalizedRole;
-                }
-                return acc;
-              },
-              {}
-            );
-            companyIds = nextCompanies.map((c) => c.company_id);
-          }
-        }
-      }
-
-      if (nextCompanies.length === 0) {
-        setUserRole(null);
+        setUser(null);
+        setUserName('');
         setCompanies([]);
         setSelectedCompanyIdInternal('');
-        setIsLoading(false);
+        setUserRole(null);
+        setRolesByCompany({});
         return;
       }
 
+      const listData = await listRes.json();
+      const list: CompanyOption[] = listData?.companies || [];
+      type RoleEntry = { company_id: string; role: string };
+      const listRoles: RoleEntry[] = listData?.rolesByCompany || [];
+
+      if (list.length === 0) {
+        setUser(null);
+        setUserName('');
+        setCompanies([]);
+        setSelectedCompanyIdInternal('');
+        setUserRole(null);
+        setRolesByCompany({});
+        return;
+      }
+
+      const rolesMap = listRoles.reduce<Record<string, string>>((acc, entry) => {
+        const normalizedRole = normalizeCompanyRole(entry?.role);
+        if (entry?.company_id && normalizedRole) acc[entry.company_id] = normalizedRole;
+        return acc;
+      }, {});
+      const companyIds = list.map((c) => c.company_id);
+      const firstRole = Object.values(rolesMap)[0] || 'COMPANY_ADMIN';
+
+      // Resolve display name from API response or Firebase user
+      let resolvedName = listData?.userName || '';
+      if (!resolvedName) {
+        try {
+          const fbUser = await getCurrentFirebaseUser();
+          resolvedName = fbUser?.displayName || fbUser?.email?.split('@')[0] || 'User';
+        } catch { resolvedName = 'User'; }
+      }
+      setUserName(resolvedName);
+
       const nextUser: UserContext = {
-        userId: supabaseUser.id,
-        role: Object.values(rolesMap).some((role) => role === 'SUPER_ADMIN' || role === 'COMPANY_ADMIN')
-          ? 'admin'
-          : 'user',
-        companyIds: companyIds as string[],
-        defaultCompanyId: (companyIds[0] || '') as string,
+        userId: listData?.userId || fbToken, // prefer DB id if returned by API
+        role: firstRole === 'SUPER_ADMIN' || firstRole === 'COMPANY_ADMIN' ? 'admin' : 'user',
+        companyIds,
+        defaultCompanyId: companyIds[0] || '',
       };
 
       setUser(nextUser);
-      setCompanies(nextCompanies);
+      setCompanies(list);
       setRolesByCompany(rolesMap);
 
       const stored = resolveStoredCompanyId();
-      const fallbackId = nextUser.defaultCompanyId || nextCompanies[0]?.company_id || '';
-      const resolvedId = stored && nextCompanies.some((c) => c.company_id === stored) ? stored : fallbackId;
-      if (resolvedId && resolvedId !== selectedCompanyId) {
+      const resolvedId = stored && list.some((c) => c.company_id === stored) ? stored : companyIds[0] || '';
+      setUserRole(rolesMap[resolvedId] || firstRole);
+      if (resolvedId) {
         setSelectedCompanyIdInternal(resolvedId);
         if (typeof window !== 'undefined') {
           window.localStorage.setItem('selected_company_id', resolvedId);
           window.localStorage.setItem('company_id', resolvedId);
         }
-        if (process.env.NODE_ENV === 'development') {
-          const match = nextCompanies.find((company) => company.company_id === resolvedId);
-          console.log('SELECTED_COMPANY', {
-            companyId: resolvedId,
-            companyName: match?.name || '',
-          });
-        }
       }
-      const nextRole = rolesMap[resolvedId] || null;
-      if (process.env.NODE_ENV === 'development') {
-        console.log('COMPANY_CONTEXT_ROLE', {
-          userId: supabaseUser.id,
-          companyId: resolvedId,
-          role: nextRole,
-        });
-      }
-      setUserRole(nextRole);
-    } catch (error) {
+    } catch {
       console.warn('Failed to load company context');
     } finally {
       setIsLoading(false);
@@ -376,29 +292,50 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   useEffect(() => {
-    const syncSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data.session) {
-        setIsAuthenticated(true);
+    // Firebase is the sole auth source of truth.
+    // onIdTokenChanged fires on mount with the current user AND every time the
+    // Firebase ID token is refreshed (~every 1 hour). This means the backend
+    // probe runs continuously, catching deleted/revoked sessions on any open tab
+    // within one token refresh cycle — not only on initial page load.
+    let fbUnsubscribe: (() => void) | undefined;
+    try {
+      const firebaseAuth = getFirebaseAuth();
+      fbUnsubscribe = onIdTokenChanged(firebaseAuth, async (fbUser) => {
+        if (fbUser) {
+          // Validate the Firebase session against the DB before trusting it.
+          // A ghost session has a valid Firebase token but no DB user row.
+          try {
+            const token = await getIdToken(fbUser, false);
+            const probe = await fetch('/api/auth/post-login-route', {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (probe.status === 401) {
+              // Ghost session detected — force sign out immediately.
+              await signOut(firebaseAuth);
+              setIsAuthenticated(false);
+              setAuthChecked(true);
+              return;
+            }
+          } catch {
+            // Network error: optimistically allow; refreshCompanies will catch 401 later.
+          }
+          setIsAuthenticated(true);
+          setAuthChecked(true);
+          return;
+        }
+        // No Firebase user — check for content-architect cookie session
+        const asArchitect = await loadContentArchitectContext();
+        setIsAuthenticated(asArchitect);
         setAuthChecked(true);
-        return;
-      }
-      const asArchitect = await loadContentArchitectContext();
-      setIsAuthenticated(asArchitect);
-      setAuthChecked(true);
-    };
-    syncSession();
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) {
-        setIsAuthenticated(true);
-      } else {
-        loadContentArchitectContext().then(setIsAuthenticated);
-      }
-      setAuthChecked(true);
-    });
-    return () => {
-      authListener?.subscription?.unsubscribe();
-    };
+      });
+    } catch {
+      // Firebase not initialised — fall through to unauthenticated
+      loadContentArchitectContext().then((asArchitect) => {
+        setIsAuthenticated(asArchitect);
+        setAuthChecked(true);
+      });
+    }
+    return () => { fbUnsubscribe?.(); };
   }, []);
 
   useEffect(() => {
@@ -426,12 +363,13 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       selectedCompanyName,
       isLoading,
       isAuthenticated,
+      authChecked,
       isAdmin: userRole === 'SUPER_ADMIN' || userRole === 'COMPANY_ADMIN',
       setSelectedCompanyId,
       refreshCompanies,
       hasPermission: (action: PermissionAction) => hasPermissionForRole(userRole, action),
     }),
-    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, isLoading, isAuthenticated]
+    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, isLoading, isAuthenticated, authChecked]
   );
 
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;

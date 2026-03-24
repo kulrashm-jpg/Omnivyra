@@ -8,20 +8,13 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { getDecisionLog } from '@/backend/services/autonomousDecisionLogger';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import type { AutonomousDecisionType } from '@/backend/services/autonomousDecisionLogger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const token = (req.headers.authorization ?? '').replace('Bearer ', '').trim();
-  if (!token) return res.status(401).json({ error: 'Authorization required' });
-
-  const anonClient = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } }
-  );
-  const { data: { user } } = await anonClient.auth.getUser();
+  const { user } = await getSupabaseUserFromRequest(req);
   if (!user) return res.status(401).json({ error: 'Invalid token' });
 
   const companyId    = req.query.company_id as string;

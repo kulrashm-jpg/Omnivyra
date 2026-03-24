@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import { Coins, Plus, Settings, AlertCircle, RefreshCw, CheckCircle } from 'lucide-react';
-import { supabase } from '../../utils/supabaseClient';
+import { getAuthToken } from '../../utils/getAuthToken';
 
 interface CreditTransaction {
   id: string;
@@ -52,8 +52,8 @@ export default function CreditsManagementPanel({ companyId, isSuperAdmin }: Prop
     setLoading(true);
     setError(null);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const authHeader = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      const token = await getAuthToken();
+      const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
       const resp = await fetch(`/api/admin/credits?companyId=${encodeURIComponent(companyId)}`, {
         credentials: 'include',
         headers: authHeader,
@@ -89,13 +89,13 @@ export default function CreditsManagementPanel({ companyId, isSuperAdmin }: Prop
     }
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const token = await getAuthToken();
       const resp = await fetch('/api/admin/credits', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(body),
       });

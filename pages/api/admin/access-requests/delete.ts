@@ -8,21 +8,18 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'DELETE') return res.status(405).json({ error: 'Method not allowed' });
 
-  const authHeader = req.headers.authorization ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing auth token' });
+  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
+  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
-
-  const { data: { user }, error: userErr } = await supabase.auth.getUser(token);
-  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
   const { data: profile } = await supabase
     .from('profiles')

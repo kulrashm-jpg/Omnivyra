@@ -289,6 +289,8 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
     usageBySource.set(r.api_source_id, r.request_count ?? 0);
   });
 
+  if (sources.length > 500) sources = sources.slice(0, 500);
+
   let enqueued = 0;
   let skippedRateLimit = 0;
   let skippedDisabled = 0;
@@ -560,7 +562,8 @@ export async function enqueueScheduledLeadDetection(): Promise<{ enqueued: numbe
   if (error) {
     return { enqueued: 0, errors: [`Failed to load companies: ${error.message}`] };
   }
-  const companyIds = (companies ?? []).map((r: { company_id: string }) => r.company_id).filter(Boolean);
+  const allIds     = (companies ?? []).map((r: { company_id: string }) => r.company_id).filter(Boolean);
+  const companyIds = allIds.length > 500 ? allIds.slice(0, 500) : allIds;
   if (companyIds.length === 0) return { enqueued: 0, errors: [] };
 
   const errors: string[] = [];

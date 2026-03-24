@@ -17,7 +17,7 @@
  *   - aiTemplateLayer.ts  → recordTemplateHit
  */
 
-import { getSharedRedisClient } from '../queue/bullmqClient';
+import { getInstrumentedClient } from '../queue/bullmqClient';
 
 // ── Counters ──────────────────────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ export async function getMetricsSnapshot(): Promise<MetricsSnapshot> {
   let redisMemoryMb: number | null = null;
   let redisConnected = false;
   try {
-    const client = getSharedRedisClient();
+    const client = getInstrumentedClient('metrics');
     const info = await client.info('memory');
     redisConnected = true;
     const match = info.match(/used_memory:(\d+)/);

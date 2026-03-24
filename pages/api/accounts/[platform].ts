@@ -2,40 +2,15 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getPlatformRules } from '@/backend/services/platformIntelligenceService';
-
-const extractAccessToken = (req: NextApiRequest): string | null => {
-  const authHeader = req.headers.authorization || '';
-  if (authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice('Bearer '.length).trim();
-    if (token) return token;
-  }
-  const cookieEntries = Object.entries(req.cookies || {});
-  const directToken = req.cookies?.['sb-access-token'];
-  if (directToken) return directToken;
-  for (const [name, value] of cookieEntries) {
-    if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
-    try {
-      const parsed = JSON.parse(value as any);
-      if (parsed?.access_token) return String(parsed.access_token);
-    } catch {
-      // ignore malformed cookie
-    }
-  }
-  return null;
-};
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
-  const token = extractAccessToken(req);
-  if (!token) {
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (error || !user?.id) {
     res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
     return null;
   }
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data?.user?.id) {
-    res.status(401).json({ success: false, error: 'UNAUTHORIZED' });
-    return null;
-  }
-  return data.user.id;
+  return user.id;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
