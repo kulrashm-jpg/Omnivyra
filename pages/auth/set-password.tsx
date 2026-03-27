@@ -98,21 +98,23 @@ export default function SetPasswordPage() {
     if (updateErr) { setError(updateErr.message); setLoading(false); return; }
 
     // Notify backend so it marks has_password, handles invitation acceptance, etc.
+    let route = '/onboarding/profile';
     try {
       const { data } = await getSupabaseBrowser().auth.getSession();
       if (data.session?.access_token) {
-        await fetch('/api/auth/set-password', {
+        const spRes = await fetch('/api/auth/set-password', {
           method:  'POST',
           headers: { Authorization: `Bearer ${data.session.access_token}` },
         });
+        if (spRes.ok) {
+          const json = await spRes.json() as { route: string };
+          route = json.route ?? '/onboarding/profile';
+        }
       }
-    } catch { /* ignore — password is set in Supabase regardless */ }
+    } catch { /* fall through to default route */ }
 
-    // Sign out so the user must log in with their new password.
-    // This confirms the password works and routes them correctly via /auth/callback.
-    await getSupabaseBrowser().auth.signOut();
     setStage('success');
-    setTimeout(() => router.replace('/login?verified=1'), 1200);
+    setTimeout(() => router.replace(route), 1200);
   }
 
   return (
@@ -215,7 +217,7 @@ export default function SetPasswordPage() {
                 </div>
                 <div>
                   <p className="text-lg font-bold text-[#0B1F33]">Password set!</p>
-                  <p className="mt-1 text-sm text-[#6B7C93]">Taking you to sign in…</p>
+                  <p className="mt-1 text-sm text-[#6B7C93]">Taking you to onboarding…</p>
                 </div>
               </div>
             )}
