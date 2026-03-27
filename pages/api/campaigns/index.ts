@@ -377,10 +377,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       let campaign: any = null;
       const { data: campaignRow, error } = await supabase
         .from('campaigns')
-        .select(
-          `*,
-           virality_playbooks(id, name, objective, platforms, content_types, company_id)`
-        )
+        .select('*')
         .eq('id', campaignId)
         .maybeSingle();
 
@@ -568,7 +565,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
         const result = await supabase
           .from('campaigns')
-          .select('*, virality_playbooks(id, name, objective, platforms, content_types, company_id)')
+          .select('*')
           .in('id', ids)
           .order('created_at', { ascending: false })
           .range(offset, offset + limit - 1);
