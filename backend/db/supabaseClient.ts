@@ -26,7 +26,7 @@ function getAdminClient(): SupabaseClient {
     throw new Error('SUPABASE_URL is missing in environment variables. Set SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL in .env.local');
   }
   if (!key) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing in environment variables. Set it in .env.local (Railway only — never add to Vercel)');
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing. Add it to your deployment environment variables (Vercel/Railway Settings → Environment Variables).');
   }
 
   _client = createClient(url, key, {
