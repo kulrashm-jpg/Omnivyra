@@ -101,21 +101,18 @@ export default function SetPasswordPage() {
     try {
       const { data } = await getSupabaseBrowser().auth.getSession();
       if (data.session?.access_token) {
-        const spRes = await fetch('/api/auth/set-password', {
+        await fetch('/api/auth/set-password', {
           method:  'POST',
           headers: { Authorization: `Bearer ${data.session.access_token}` },
         });
-        if (spRes.ok) {
-          const { route } = await spRes.json() as { route: string };
-          setStage('success');
-          setTimeout(() => router.replace(route ?? '/onboarding/profile'), 1200);
-          return;
-        }
       }
-    } catch { /* fall through to default redirect */ }
+    } catch { /* ignore — password is set in Supabase regardless */ }
 
+    // Sign out so the user must log in with their new password.
+    // This confirms the password works and routes them correctly via /auth/callback.
+    await getSupabaseBrowser().auth.signOut();
     setStage('success');
-    setTimeout(() => router.replace('/onboarding/profile'), 1200);
+    setTimeout(() => router.replace('/login?verified=1'), 1200);
   }
 
   return (
@@ -218,7 +215,7 @@ export default function SetPasswordPage() {
                 </div>
                 <div>
                   <p className="text-lg font-bold text-[#0B1F33]">Password set!</p>
-                  <p className="mt-1 text-sm text-[#6B7C93]">Redirecting…</p>
+                  <p className="mt-1 text-sm text-[#6B7C93]">Taking you to sign in…</p>
                 </div>
               </div>
             )}

@@ -110,10 +110,7 @@ export default function CreateAccountPage() {
               <h2 className="text-2xl font-bold text-[#0B1F33]">Check your inbox</h2>
               <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-[#6B7C93]">
                 We sent an account creation link to <strong className="text-[#0B1F33]">{email}</strong>.
-                Click it to verify your email and set your password.
-              </p>
-              <p className="mx-auto mt-2 max-w-sm text-xs text-[#6B7C93]">
-                The email may say &ldquo;Sign in&rdquo; — that&rsquo;s normal. It will take you to finish creating your account.
+                Click it to set your password, then sign in to get started.
               </p>
               <button onClick={() => { setSent(false); setError(null); }}
                 className="mt-6 text-sm text-[#0A66C2] hover:underline">
