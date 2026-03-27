@@ -95,7 +95,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!platform || !PLATFORM_DEFAULTS[platform]) {
       return res.status(400).json({ error: 'Invalid platform' });
     }
-    if (!client_id) return res.status(400).json({ error: 'client_id required' });
+
+    // If no client_id supplied, check if credentials already exist — allow enabled-only toggle
+    if (!client_id) {
+      const { data: existing } = await supabase
+        .from('platform_oauth_configs')
+        .select('oauth_client_id_encrypted')
+        .eq('platform', platform)
+        .maybeSingle();
+
+      if (!existing?.oauth_client_id_encrypted) {
+        return res.status(400).json({ error: 'client_id required' });
+      }
+
+      // Credentials exist — just update the enabled flag
+      const { error: updateErr } = await supabase
+        .from('platform_oauth_configs')
+        .update({ enabled: Boolean(enabled), updated_at: new Date().toISOString() })
+        .eq('platform', platform);
+
+      if (updateErr) {
+        console.error('[platform-oauth-configs] enabled-update error:', updateErr);
+        return res.status(500).json({ error: updateErr.message });
+      }
+      return res.status(200).json({ success: true });
+    }
 
     const defaults = PLATFORM_DEFAULTS[platform];
     const encrypted_id = encryptCredential(String(client_id).trim());

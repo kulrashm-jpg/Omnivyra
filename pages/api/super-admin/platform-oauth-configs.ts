@@ -14,12 +14,33 @@ async function requireAdminAccess(req: NextApiRequest, res: NextApiResponse): Pr
   if (req.cookies?.super_admin_session === '1') return true;
   if (req.cookies?.content_architect_session === '1') return true;
 
-  // Any valid Supabase session is accepted — this endpoint is internal and only
-  // reachable from the super-admin UI, so a valid authenticated user is sufficient.
+  // Require authenticated user with admin role in user_company_roles
   const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) return true;
+  if (error || !user?.id) {
+    res.status(403).json({ error: 'No session — log in via the Super Admin login page.' });
+    return false;
+  }
 
-  res.status(403).json({ error: 'No session — log in via the Super Admin login page or your company account' });
+  // Check for super_admin table entry first
+  const { data: sa } = await supabase
+    .from('super_admins')
+    .select('id')
+    .eq('user_id', user.id)
+    .limit(1)
+    .maybeSingle();
+  if (sa) return true;
+
+  // Fall back to admin role in user_company_roles
+  const { data: roleRows } = await supabase
+    .from('user_company_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .limit(5);
+  const adminRoles = ['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN', 'company_admin', 'super_admin', 'admin'];
+  const hasAdminRole = (roleRows || []).some((r: any) => adminRoles.includes(r.role));
+  if (hasAdminRole) return true;
+
+  res.status(403).json({ error: 'Admin role required to manage OAuth credentials.' });
   return false;
 }
 
@@ -54,21 +75,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const configMap: Record<string, any> = {};
     for (const row of configs || []) {
       let clientIdPreview = '';
-      let clientIdFull = '';
-      let clientSecretFull = '';
       try {
         const dec = row.oauth_client_id_encrypted ? decryptCredential(row.oauth_client_id_encrypted) : '';
-        clientIdFull = dec || '';
         clientIdPreview = dec ? dec.slice(0, 6) + '…' : '';
-      } catch { /* bad key */ }
-      try {
-        clientSecretFull = row.oauth_client_secret_encrypted ? decryptCredential(row.oauth_client_secret_encrypted) : '';
       } catch { /* bad key */ }
       configMap[row.platform] = {
         ...row,
         client_id_preview: clientIdPreview,
-        client_id: clientIdFull,
-        client_secret: clientSecretFull,
         has_client_id: !!row.oauth_client_id_encrypted,
         has_client_secret: !!row.oauth_client_secret_encrypted,
       };
@@ -82,9 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       default_scopes: defaults.scopes,
       configured: !!configMap[key]?.has_client_id,
       enabled: configMap[key]?.enabled ?? false,
-      client_id: configMap[key]?.client_id ?? '',
       client_id_preview: configMap[key]?.client_id_preview ?? '',
-      client_secret: configMap[key]?.client_secret ?? '',
       has_client_secret: configMap[key]?.has_client_secret ?? false,
       updated_at: configMap[key]?.updated_at ?? null,
     }));

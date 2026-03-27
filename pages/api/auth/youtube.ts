@@ -19,8 +19,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!clientId || clientId.includes('your_')) {
       return res.redirect(
-        `/creative-scheduler?error=${encodeURIComponent(
-          'YouTube not configured. Add OAuth Client ID & Secret in Social Platform Settings for your company.'
+        `/social-platforms?error=${encodeURIComponent(
+          'YouTube not configured. Ask your Super Admin to add OAuth credentials in the APIs settings.'
         )}`
       );
     }

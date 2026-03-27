@@ -250,7 +250,8 @@ export default function SuperAdminPanel() {
             const next = { ...prev };
             for (const p of apiPlatforms) {
               // Default to enabled=true for platforms that already have credentials saved
-              next[p.platform_key] = { client_id: p.client_id || '', client_secret: p.client_secret || '', enabled: p.configured ? (p.enabled ?? true) : true };
+              // Never pre-fill credentials from API — secrets must not be sent to browser
+              next[p.platform_key] = { client_id: '', client_secret: '', enabled: p.configured ? (p.enabled ?? true) : true };
             }
             return next;
           });
