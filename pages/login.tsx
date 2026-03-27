@@ -32,8 +32,9 @@ export default function LoginPage() {
     errorParam === 'auth_failed'     ? 'Sign-in failed. Please try again.' :
     null,
   );
-  const [resetSent,  setResetSent]  = useState(false);
-  const [magicSent,  setMagicSent]  = useState(false);
+  const [resetSent,    setResetSent]    = useState(false);
+  const [magicSent,    setMagicSent]    = useState(false);
+  const [noAccount,    setNoAccount]    = useState(false);
 
   useEffect(() => {
     if (emailParam && !email) setEmail(emailParam);
@@ -99,6 +100,29 @@ export default function LoginPage() {
     if (!trimmed) { setError('Enter your email address.'); return; }
     setLoading('magic');
     setError(null);
+
+    // Verify account exists before sending OTP — prevents magic links going to unknown emails
+    try {
+      const check = await fetch('/api/auth/magic-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: trimmed }),
+      });
+      const checkJson = await check.json();
+      if (!check.ok) {
+        setLoading(null);
+        if (checkJson.code === 'INVALID_CREDENTIALS') {
+          setNoAccount(true);
+        } else {
+          setError(checkJson.error ?? 'Unable to send link. Please try again.');
+        }
+        return;
+      }
+    } catch {
+      setLoading(null);
+      setError('Network error. Please try again.');
+      return;
+    }
 
     const { error: otpErr } = await getSupabaseBrowser().auth.signInWithOtp({
       email: trimmed,
@@ -234,7 +258,7 @@ export default function LoginPage() {
                 <div className="mb-4">
                   <label htmlFor="email" className="block text-sm font-medium text-[#0B1F33] mb-1.5">Work email</label>
                   <input id="email" type="email" autoComplete="email" autoFocus required
-                    value={email} onChange={e => { setEmail(e.target.value); setError(null); }}
+                    value={email} onChange={e => { setEmail(e.target.value); setError(null); setNoAccount(false); }}
                     placeholder="you@company.com"
                     className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]" />
                 </div>
@@ -280,6 +304,17 @@ export default function LoginPage() {
                     {loading === 'magic' ? <Spinner label="Sending…" color="blue" /> : 'Send me a magic link'}
                   </button>
                 </form>
+                {noAccount && (
+                  <div className="mt-3 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                    <span className="mt-0.5 text-amber-500">⚠</span>
+                    <p className="text-sm text-amber-800">
+                      No account found.{' '}
+                      <Link href="/create-account" className="font-semibold underline">
+                        Create a free account →
+                      </Link>
+                    </p>
+                  </div>
+                )}
                 <p className="mt-2 text-center text-xs text-[#6B7C93]">
                   No password? Sign in with a one-time link sent to your email.
                 </p>
