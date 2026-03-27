@@ -50,14 +50,22 @@ export default async function handler(
 
     const email = authUser.email?.toLowerCase() ?? '';
 
-    // Create user row (upsert on email to handle any race)
-    const { data: inserted } = await supabase
+    // Try insert with supabase_uid; fall back without it if column doesn't exist yet
+    let insertResult = await supabase
       .from('users')
       .insert({ supabase_uid: authUser.id, email, is_email_verified: true })
       .select('id')
       .maybeSingle();
 
-    let newId = (inserted as any)?.id ?? null;
+    if (insertResult.error?.message?.includes('supabase_uid')) {
+      insertResult = await supabase
+        .from('users')
+        .insert({ email, is_email_verified: true })
+        .select('id')
+        .maybeSingle();
+    }
+
+    let newId = (insertResult.data as any)?.id ?? null;
     if (!newId) {
       const { data: existing } = await supabase.from('users').select('id').eq('email', email).maybeSingle();
       newId = (existing as any)?.id ?? null;
@@ -72,12 +80,22 @@ export default async function handler(
   }
 
   // ── 2. Mark email as verified & advance onboarding_state ──────────────────
-  const { data: userRow } = await supabase
+  // Try full select first; fall back to just 'name' if new columns don't exist yet
+  let userRowResult = await supabase
     .from('users')
     .select('name, onboarding_state, has_password')
     .eq('id', resolvedUserId)
     .single();
 
+  if (userRowResult.error) {
+    userRowResult = await supabase
+      .from('users')
+      .select('name')
+      .eq('id', resolvedUserId)
+      .single() as typeof userRowResult;
+  }
+
+  const userRow = userRowResult.data;
   if (!userRow) {
     return res.status(404).json({ error: 'User not found' });
   }
@@ -85,13 +103,13 @@ export default async function handler(
   const currentState = (userRow as any).onboarding_state;
   const nextState = currentState === 'pending_verification' ? 'verified' : currentState;
 
+  // Build update payload — only include columns that exist
+  const updatePayload: Record<string, unknown> = { is_email_verified: true, last_sign_in_at: now };
+  if (nextState !== undefined) updatePayload.onboarding_state = nextState;
+
   await supabase
     .from('users')
-    .update({
-      is_email_verified: true,
-      onboarding_state:  nextState,
-      last_sign_in_at:   now,
-    })
+    .update(updatePayload)
     .eq('id', resolvedUserId);
 
   // ── 3. Complete any pending signup_intent for this email ──────────────────
