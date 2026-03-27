@@ -1,17 +1,17 @@
 /**
  * Campaign Context Bar
- * Description → Campaign Goal → Target Audience → Message/CTA →
- * Opportunity Suggestions → Opportunity Insights → Strategic Themes.
- * Title is auto-derived from description/themes (not entered manually).
- * Refine with AI removed.
+ * Description -> Campaign Goal -> Target Audience -> Message/CTA ->
+ * Opportunity Suggestions -> Opportunity Insights.
+ * Strategy card generation now happens in the right-hand strategy panel.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ChevronDown, ChevronUp, ChevronRight, Sparkles, Loader2, Target, Palette, RotateCcw, Trash2, Layers } from 'lucide-react';
-import { usePlannerSession, type IdeaSpine, type StrategicThemeEntry } from './plannerSessionStore';
+import { ChevronDown, ChevronUp, ChevronRight, Loader2, Target, Layers } from 'lucide-react';
+import { usePlannerSession, type IdeaSpine } from './plannerSessionStore';
 import { OpportunityInsightsTab } from './OpportunityInsightsTab';
 import { MultiSelectDropdown } from '../ui/dropdown';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { buildPlannerStrategicCard } from '../../lib/plannerStrategicCard';
 
 type CampaignSuggestion = {
   id: string;
@@ -52,6 +52,15 @@ function validateGoals(goals: string[]): string | null {
   return null;
 }
 
+const DEFAULT_STRATEGY_BASE = {
+  duration_weeks: 4,
+  platforms: [],
+  posting_frequency: {},
+  content_mix: [],
+  campaign_goal: '',
+  target_audience: '',
+};
+
 export interface CampaignContextBarProps {
   recommendation_context?: Record<string, unknown> | null;
   opportunity_context?: Record<string, unknown> | null;
@@ -74,7 +83,7 @@ export function CampaignContextBar({
     setIdeaSpine,
     setStrategyContext,
     setStrategicThemes,
-    clearStrategicThemes,
+    setStrategicCard,
     setSourceIds,
     setPlannerEntryMode,
   } = usePlannerSession();
@@ -82,19 +91,24 @@ export function CampaignContextBar({
   const strat = state.execution_plan?.strategy_context;
 
   const [collapsed, setCollapsed] = useState(false);
-
-  // ── Description (title auto-derived) ────────────────────────────────────
   const [description, setDescription] = useState(spine?.refined_description ?? spine?.description ?? '');
+  const [goalError, setGoalError] = useState<string | null>(null);
 
-  // Sync description from spine when updated externally (opportunity prefill, apply suggestion)
+  type StrategicConfig = { strategic_aspects: string[]; offerings_by_aspect: Record<string, string[]> };
+  const [strategicConfig, setStrategicConfig] = useState<StrategicConfig | null>(null);
+  const [suggestions, setSuggestions] = useState<CampaignSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
+  const [appliedSuggestion, setAppliedSuggestion] = useState<string | null>(null);
+  const [expandSuggestions, setExpandSuggestions] = useState(false);
+  const [expandInsights, setExpandInsights] = useState(false);
+
   useEffect(() => {
     setDescription(spine?.refined_description ?? spine?.description ?? '');
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spine?.refined_description, spine?.description]);
 
   const saveSpine = useCallback((desc: string, currentSpine: IdeaSpine | null | undefined) => {
     const trimmed = desc.trim();
-    // Title is auto-derived from description (first ~80 chars) or existing theme
     const autoTitle = trimmed.slice(0, 80) || (state.strategic_themes?.[0]?.title ?? 'Campaign');
     setIdeaSpine({
       ...(currentSpine ?? { origin: 'direct' }),
@@ -105,41 +119,36 @@ export function CampaignContextBar({
     } as IdeaSpine);
   }, [setIdeaSpine, state.strategic_themes]);
 
-  // Debounced save
   useEffect(() => {
     const t = setTimeout(() => saveSpine(description, spine), 400);
     return () => clearTimeout(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [description]);
+  }, [description, saveSpine, spine]);
 
-  // ── Campaign Goal ────────────────────────────────────────────────────────
   const goalList = toList(strat?.campaign_goal);
-  const [goalError, setGoalError] = useState<string | null>(null);
-
   const handleGoalChange = (vals: string[]) => {
     const err = validateGoals(vals);
-    if (err) { setGoalError(err); return; }
+    if (err) {
+      setGoalError(err);
+      return;
+    }
     setGoalError(null);
-    const base = strat ?? { duration_weeks: 6, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+    const base = strat ?? DEFAULT_STRATEGY_BASE;
     setStrategyContext({ ...base, campaign_goal: vals.filter(Boolean).join(', ') });
   };
 
-  // ── Target Audience ──────────────────────────────────────────────────────
   const audienceList = toList(strat?.target_audience);
   const applyAudience = (vals: string[]) => {
-    const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+    const base = strat ?? DEFAULT_STRATEGY_BASE;
     setStrategyContext({ ...base, target_audience: vals });
   };
 
-  // ── Message / CTA ────────────────────────────────────────────────────────
   const keyMessage = (strat as { key_message?: string } | null)?.key_message ?? '';
 
-  // ── Strategic Focus (aspects + offerings from company profile) ───────────
-  type StrategicConfig = { strategic_aspects: string[]; offerings_by_aspect: Record<string, string[]> };
-  const [strategicConfig, setStrategicConfig] = useState<StrategicConfig | null>(null);
-
   useEffect(() => {
-    if (!companyId) { setStrategicConfig(null); return; }
+    if (!companyId) {
+      setStrategicConfig(null);
+      return;
+    }
     let cancelled = false;
     fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => res.ok ? res.json() : null)
@@ -148,21 +157,26 @@ export function CampaignContextBar({
         const config = data?.recommendation_strategic_config;
         const map = config?.offerings_by_aspect ?? config?.aspect_offerings_map;
         if (config && Array.isArray(config.strategic_aspects) && typeof map === 'object') {
-          const sortAz = (a: string, b: string) => a.trim().toLowerCase().localeCompare(b.trim().toLowerCase(), undefined, { sensitivity: 'base' });
+          const sortAz = (a: string, b: string) =>
+            a.trim().toLowerCase().localeCompare(b.trim().toLowerCase(), undefined, { sensitivity: 'base' });
           const sortedAspects = [...config.strategic_aspects].sort(sortAz);
           const sortedMap: Record<string, string[]> = {};
           for (const [k, v] of Object.entries(map ?? {})) {
-            sortedMap[k] = Array.isArray(v) ? [...v as string[]].sort(sortAz) : [];
+            sortedMap[k] = Array.isArray(v) ? [...(v as string[])].sort(sortAz) : [];
           }
           setStrategicConfig({ strategic_aspects: sortedAspects, offerings_by_aspect: sortedMap });
         }
       })
-      .catch(() => { if (!cancelled) setStrategicConfig(null); });
-    return () => { cancelled = true; };
+      .catch(() => {
+        if (!cancelled) setStrategicConfig(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [companyId]);
 
-  const selectedAspects: string[] = (strat as any)?.selected_aspects ?? [];
-  const selectedOfferings: string[] = (strat as any)?.selected_offerings ?? [];
+  const selectedAspects: string[] = (strat as { selected_aspects?: string[] } | null)?.selected_aspects ?? [];
+  const selectedOfferings: string[] = (strat as { selected_offerings?: string[] } | null)?.selected_offerings ?? [];
 
   const offeringsForSelectedAspects = useMemo(() => {
     if (!strategicConfig || selectedAspects.length === 0) return [];
@@ -178,22 +192,16 @@ export function CampaignContextBar({
     const allowed = new Set(offeringsForSelectedAspects);
     const next = selectedOfferings.filter((o) => allowed.has(o));
     if (next.length !== selectedOfferings.length) {
-      const base = strat ?? { duration_weeks: 6, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
-      setStrategyContext({ ...base, selected_offerings: next } as any);
+      const base = strat ?? DEFAULT_STRATEGY_BASE;
+      setStrategyContext({ ...base, selected_offerings: next } as never);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offeringsForSelectedAspects]);
-
-  // ── Opportunity suggestions ──────────────────────────────────────────────
-  const [suggestions, setSuggestions] = useState<CampaignSuggestion[]>([]);
-  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
-  const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
-  const [appliedSuggestion, setAppliedSuggestion] = useState<string | null>(null);
-  const [expandSuggestions, setExpandSuggestions] = useState(false);
-  const [expandInsights, setExpandInsights] = useState(false);
+  }, [offeringsForSelectedAspects, selectedOfferings, setStrategyContext, strat]);
 
   useEffect(() => {
-    if (!companyId) { setSuggestions([]); return; }
+    if (!companyId) {
+      setSuggestions([]);
+      return;
+    }
     let cancelled = false;
     setSuggestionsLoading(true);
     setSuggestionsError(null);
@@ -208,15 +216,28 @@ export function CampaignContextBar({
         if (!res.ok) throw new Error(data?.error || 'Failed');
         return data;
       })
-      .then((data) => { if (!cancelled) setSuggestions(Array.isArray(data?.suggestions) ? data.suggestions as CampaignSuggestion[] : []); })
-      .catch((err) => { if (!cancelled) setSuggestionsError(err instanceof Error ? err.message : 'Failed to load suggestions.'); })
-      .finally(() => { if (!cancelled) setSuggestionsLoading(false); });
-    return () => { cancelled = true; };
+      .then((data) => {
+        if (!cancelled) {
+          setSuggestions(Array.isArray(data?.suggestions) ? data.suggestions as CampaignSuggestion[] : []);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSuggestionsError(err instanceof Error ? err.message : 'Failed to load suggestions.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSuggestionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [companyId]);
 
-  useEffect(() => { if (suggestions.length > 0) setExpandSuggestions(true); }, [suggestions.length]);
+  useEffect(() => {
+    if (suggestions.length > 0) setExpandSuggestions(true);
+  }, [suggestions.length]);
 
-  // ── Prefill from entry context ───────────────────────────────────────────
   useEffect(() => {
     if (recommendation_context) {
       const t = (recommendation_context.polished_title ?? recommendation_context.trend_topic ?? recommendation_context.topic ?? '') as string;
@@ -230,125 +251,40 @@ export function CampaignContextBar({
       const t = initial_idea.slice(0, 80);
       setIdeaSpine({ title: t, description: initial_idea, origin: 'direct', refined_title: t, refined_description: initial_idea });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recommendation_context, opportunity_context, initial_idea]);
+  }, [recommendation_context, opportunity_context, initial_idea, setIdeaSpine]);
 
   const handleApplySuggestion = (s: CampaignSuggestion) => {
-    setIdeaSpine({ title: s.suggested_campaign_title, description: s.topic, origin: 'opportunity', source_id: s.id, refined_title: s.suggested_campaign_title, refined_description: s.topic });
-    const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
-    setStrategyContext({ ...base, duration_weeks: s.suggested_duration });
+    setIdeaSpine({
+      title: s.suggested_campaign_title,
+      description: s.topic,
+      origin: 'opportunity',
+      source_id: s.id,
+      refined_title: s.suggested_campaign_title,
+      refined_description: s.topic,
+    });
+    const base = strat ?? DEFAULT_STRATEGY_BASE;
+    const nextStrategyContext = { ...base, duration_weeks: s.suggested_duration };
+    setStrategyContext(nextStrategyContext);
     setStrategicThemes(s.themes);
+    setStrategicCard(
+      buildPlannerStrategicCard({
+        sourceMode: 'trend',
+        ideaSpine: {
+          title: s.suggested_campaign_title,
+          description: s.topic,
+          origin: 'opportunity',
+          source_id: s.id,
+          refined_title: s.suggested_campaign_title,
+          refined_description: s.topic,
+        },
+        strategyContext: nextStrategyContext,
+        themes: s.themes,
+      })
+    );
     setSourceIds({ source_opportunity_id: s.id, opportunity_score: s.opportunity_score ?? undefined });
     setPlannerEntryMode('opportunity');
     setAppliedSuggestion(s.id);
     onOpportunityApplied?.();
-  };
-
-  // ── Strategic Themes ─────────────────────────────────────────────────────
-  const [themesLoading, setThemesLoading] = useState(false);
-  const [generatedThemes, setGeneratedThemes] = useState<StrategicThemeEntry[]>([]);
-  const [themesError, setThemesError] = useState<string | null>(null);
-  // Source: 'ai' | 'trend' | 'both'
-  const [themeSource, setThemeSource] = useState<'ai' | 'trend' | 'both'>('ai');
-  // Alternatives from regenerate: [optionA, optionB]
-  const [themeAlternatives, setThemeAlternatives] = useState<[StrategicThemeEntry[], StrategicThemeEntry[]] | null>(null);
-  const [selectedAlt, setSelectedAlt] = useState<0 | 1>(0);
-
-  const stratForThemes = state.execution_plan?.strategy_context ?? state.strategy_context;
-  const trendCtx = state.campaign_design?.trend_context ?? state.trend_context ?? null;
-  const hasTrendContext = Boolean(trendCtx?.recommendation_id || trendCtx?.trend_topic);
-  const hasIdea = Boolean(description.trim()) || Boolean((spine?.title ?? '').trim());
-
-  function parseThemes(raw: unknown[]): StrategicThemeEntry[] {
-    return raw
-      .map((t, i) => {
-        if (t && typeof t === 'object' && 'week' in t && 'title' in t)
-          return { week: Number((t as { week: unknown }).week) || i + 1, title: String((t as { title: unknown }).title ?? '') };
-        if (typeof t === 'string') return { week: i + 1, title: t };
-        return null;
-      })
-      .filter((x): x is StrategicThemeEntry => x !== null && x.title.trim() !== '');
-  }
-
-  const handleGenerateThemes = async (withAlternatives = false) => {
-    if (!companyId) { setThemesError('Select a company first.'); return; }
-    if (themeSource === 'ai' && !hasIdea) { setThemesError('Enter a description first.'); return; }
-    if (themeSource === 'trend' && !hasTrendContext) { setThemesError('No trend context — use AI or Both instead.'); return; }
-    setThemesLoading(true);
-    setThemesError(null);
-    setThemeAlternatives(null);
-    try {
-      const res = await fetch('/api/planner/generate-themes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          companyId,
-          idea_spine: spine,
-          strategy_context: stratForThemes,
-          trend_context: trendCtx,
-          duration_weeks: stratForThemes?.duration_weeks ?? 6,
-          theme_source: themeSource,
-          alternatives: withAlternatives ? 2 : 1,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || 'Failed to generate themes');
-      if (withAlternatives && Array.isArray(data?.alternatives) && data.alternatives.length === 2) {
-        const altA = parseThemes(data.alternatives[0]);
-        const altB = parseThemes(data.alternatives[1]);
-        setThemeAlternatives([altA, altB]);
-        setSelectedAlt(0);
-        setGeneratedThemes(altA);
-      } else {
-        setGeneratedThemes(parseThemes(Array.isArray(data?.themes) ? data.themes : []));
-      }
-    } catch (e) {
-      setThemesError(e instanceof Error ? e.message : 'Could not generate themes');
-    } finally {
-      setThemesLoading(false);
-    }
-  };
-
-  const handleApplyThemes = () => {
-    const themes = generatedThemes.length > 0 ? generatedThemes : (state.strategic_themes ?? []);
-    if (themes.length === 0) return;
-    const firstTitle = themes[0].title;
-    const currentSpine = spine ?? { title: '', description: '', origin: 'direct' as const };
-    setIdeaSpine({ ...currentSpine, title: currentSpine.title || firstTitle, refined_title: currentSpine.refined_title || firstTitle });
-    setStrategicThemes(themes);
-    setGeneratedThemes([]);
-    setThemeAlternatives(null);
-  };
-
-  const appliedThemes = state.strategic_themes ?? [];
-  const displayThemes = generatedThemes.length > 0 ? generatedThemes : appliedThemes;
-
-  const handleThemeChange = (weekIndex: number, value: string) => {
-    if (generatedThemes.length > 0) {
-      const updated = generatedThemes.map((t, i) => (i === weekIndex ? { ...t, title: value } : t));
-      setGeneratedThemes(updated);
-      if (themeAlternatives) {
-        const alts: [StrategicThemeEntry[], StrategicThemeEntry[]] = [
-          selectedAlt === 0 ? updated : themeAlternatives[0],
-          selectedAlt === 1 ? updated : themeAlternatives[1],
-        ];
-        setThemeAlternatives(alts);
-      }
-    } else {
-      setStrategicThemes((state.strategic_themes ?? []).map((t, i) => (i === weekIndex ? { ...t, title: value } : t)));
-    }
-  };
-
-  const handleAddCard = () => {
-    const current = generatedThemes.length > 0 ? generatedThemes : (state.strategic_themes ?? []);
-    const nextWeek = current.length > 0 ? Math.max(...current.map((t) => t.week)) + 1 : 1;
-    const newTheme: StrategicThemeEntry = { week: nextWeek, title: '' };
-    if (generatedThemes.length > 0) {
-      setGeneratedThemes([...generatedThemes, newTheme]);
-    } else {
-      setStrategicThemes([...current, newTheme]);
-    }
   };
 
   return (
@@ -364,22 +300,19 @@ export function CampaignContextBar({
 
       {!collapsed && (
         <div className="px-4 pb-4 pt-0 space-y-3">
-
-          {/* Campaign Goal */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Campaign Goal</label>
             <MultiSelectDropdown
               options={CAMPAIGN_GOAL_OPTIONS.map((v) => ({ value: v, label: v }))}
               values={goalList}
               onChange={handleGoalChange}
-              placeholder="Select goal(s)…"
+              placeholder="Select goal(s)..."
               className="w-full"
               size="sm"
             />
             {goalError && <p className="text-xs text-red-600 mt-1">{goalError}</p>}
           </div>
 
-          {/* Description */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
             <textarea
@@ -392,27 +325,25 @@ export function CampaignContextBar({
             />
           </div>
 
-          {/* Target Audience */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Target Audience</label>
             <MultiSelectDropdown
               options={TARGET_AUDIENCE_OPTIONS.map((v) => ({ value: v, label: v }))}
               values={audienceList}
               onChange={applyAudience}
-              placeholder="Select target audience…"
+              placeholder="Select target audience..."
               className="w-full"
               size="sm"
             />
           </div>
 
-          {/* Message / CTA */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Message / CTA</label>
             <input
               type="text"
               value={keyMessage}
               onChange={(e) => {
-                const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+                const base = strat ?? DEFAULT_STRATEGY_BASE;
                 setStrategyContext({ ...base, key_message: e.target.value });
               }}
               placeholder="Key message or call-to-action"
@@ -420,7 +351,6 @@ export function CampaignContextBar({
             />
           </div>
 
-          {/* Strategic Focus — aspects + offerings */}
           {companyId && strategicConfig && strategicConfig.strategic_aspects.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
@@ -431,10 +361,10 @@ export function CampaignContextBar({
                 options={strategicConfig.strategic_aspects.map((a) => ({ value: a, label: a }))}
                 values={selectedAspects}
                 onChange={(vals) => {
-                  const base = strat ?? { duration_weeks: 6, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
-                  setStrategyContext({ ...base, selected_aspects: vals } as any);
+                  const base = strat ?? DEFAULT_STRATEGY_BASE;
+                  setStrategyContext({ ...base, selected_aspects: vals } as never);
                 }}
-                placeholder="Select strategic aspects…"
+                placeholder="Select strategic aspects..."
                 className="w-full"
                 size="sm"
               />
@@ -446,10 +376,10 @@ export function CampaignContextBar({
                   }))}
                   values={selectedOfferings}
                   onChange={(vals) => {
-                    const base = strat ?? { duration_weeks: 6, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
-                    setStrategyContext({ ...base, selected_offerings: vals } as any);
+                    const base = strat ?? DEFAULT_STRATEGY_BASE;
+                    setStrategyContext({ ...base, selected_offerings: vals } as never);
                   }}
-                  placeholder={offeringsForSelectedAspects.length === 0 ? 'No offerings for selected aspects' : 'Select offerings…'}
+                  placeholder={offeringsForSelectedAspects.length === 0 ? 'No offerings for selected aspects' : 'Select offerings...'}
                   className="w-full"
                   size="sm"
                 />
@@ -457,7 +387,6 @@ export function CampaignContextBar({
             </div>
           )}
 
-          {/* Opportunity suggestions */}
           {companyId && (
             <>
               <div>
@@ -477,7 +406,7 @@ export function CampaignContextBar({
                     {appliedSuggestion && <p className="text-xs text-green-600 font-medium">Applied.</p>}
                     {suggestionsLoading ? (
                       <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
-                        <Loader2 className="h-4 w-4 animate-spin" />Loading…
+                        <Loader2 className="h-4 w-4 animate-spin" />Loading...
                       </div>
                     ) : suggestionsError ? (
                       <p className="text-xs text-red-600">{suggestionsError}</p>
@@ -491,7 +420,11 @@ export function CampaignContextBar({
                               <p className="text-xs font-medium text-amber-800">{s.topic}</p>
                               <p className="text-xs text-gray-600 mt-0.5">{s.suggested_campaign_title}</p>
                             </div>
-                            <button type="button" onClick={() => handleApplySuggestion(s)} className="shrink-0 px-2.5 py-1 text-xs rounded-lg bg-amber-600 text-white hover:bg-amber-700">
+                            <button
+                              type="button"
+                              onClick={() => handleApplySuggestion(s)}
+                              className="shrink-0 px-2.5 py-1 text-xs rounded-lg bg-amber-600 text-white hover:bg-amber-700"
+                            >
                               Use
                             </button>
                           </div>
@@ -522,128 +455,13 @@ export function CampaignContextBar({
             </>
           )}
 
-          {/* Strategic Themes */}
-          <div>
-            <h3 className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-2">
-              <Palette className="h-3.5 w-3.5 text-indigo-600" />
-              Strategic Themes
-            </h3>
-
-            {/* Source toggle: AI / Trend / Both */}
-            <div className="flex gap-1 mb-2">
-              {(['ai', ...(hasTrendContext ? ['trend', 'both'] : [])] as ('ai' | 'trend' | 'both')[]).map((src) => (
-                <button
-                  key={src}
-                  type="button"
-                  onClick={() => setThemeSource(src)}
-                  className={`px-2.5 py-1 text-xs rounded-full font-medium transition-colors capitalize ${
-                    themeSource === src
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  {src === 'ai' ? 'AI' : src === 'trend' ? 'Trend' : 'Both'}
-                </button>
-              ))}
-            </div>
-
-            {/* Action buttons */}
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              <button
-                type="button"
-                onClick={() => handleGenerateThemes(false)}
-                disabled={themesLoading || !companyId}
-                className="px-3 py-1.5 text-xs rounded-lg bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:opacity-50 flex items-center gap-1.5"
-              >
-                {themesLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                {displayThemes.length > 0 ? 'Generate New' : 'Generate Themes'}
-              </button>
-              {(displayThemes.length > 0 || generatedThemes.length > 0) && (
-                <button
-                  type="button"
-                  onClick={() => { setGeneratedThemes([]); handleGenerateThemes(true); }}
-                  disabled={themesLoading || !companyId}
-                  title="Get two alternative theme sets to compare"
-                  className="px-3 py-1.5 text-xs rounded-lg border border-indigo-300 bg-white text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Regenerate (A/B)
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={handleAddCard}
-                title="Add a blank theme card"
-                className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 flex items-center gap-1.5"
-              >
-                + Add Card
-              </button>
-              {displayThemes.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => { clearStrategicThemes(); setGeneratedThemes([]); setThemeAlternatives(null); }}
-                  className="px-3 py-1.5 text-xs rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 flex items-center gap-1.5"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Clear
-                </button>
-              )}
-              {generatedThemes.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleApplyThemes}
-                  className="px-3 py-1.5 text-xs rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
-                >
-                  Apply
-                </button>
-              )}
-            </div>
-
-            {/* A/B alternative picker */}
-            {themeAlternatives && (
-              <div className="flex gap-1.5 mb-2">
-                {(['Option A', 'Option B'] as const).map((label, idx) => (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={() => {
-                      setSelectedAlt(idx as 0 | 1);
-                      setGeneratedThemes(themeAlternatives[idx as 0 | 1]);
-                    }}
-                    className={`px-3 py-1 text-xs rounded-full font-medium transition-colors ${
-                      selectedAlt === idx
-                        ? 'bg-violet-600 text-white'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-                <span className="text-[10px] text-gray-400 self-center ml-1">Pick a set, then Apply</span>
-              </div>
-            )}
-
-            {themesError && <p className="text-xs text-red-600 mb-2">{themesError}</p>}
-
-            {/* Theme list — editable inputs */}
-            {displayThemes.length > 0 && (
-              <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                {displayThemes.map((theme, i) => (
-                  <div key={`${theme.week}-${i}`} className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-gray-400 shrink-0 w-10">Wk {theme.week}</span>
-                    <input
-                      type="text"
-                      value={theme.title}
-                      onChange={(e) => handleThemeChange(i, e.target.value)}
-                      placeholder={`Week ${theme.week} theme…`}
-                      className="flex-1 min-w-0 px-2.5 py-1 text-xs border border-gray-300 rounded-lg bg-white focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300"
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2.5">
+            <p className="text-xs font-semibold text-indigo-800">Next step</p>
+            <p className="mt-1 text-xs leading-relaxed text-indigo-700">
+              Use the strategy card panel on the right to generate and choose the campaign-level strategy card.
+              Once that card is finalized, confirm Strategy there to move forward.
+            </p>
           </div>
-
         </div>
       )}
     </div>

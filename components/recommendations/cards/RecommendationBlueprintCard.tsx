@@ -1,5 +1,11 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { ChevronDown } from 'lucide-react';
+import {
+  applyRecommendationStrategicCardDraft,
+  buildRecommendationStrategicCard,
+  buildRecommendationStrategicCardDraft,
+  type RecommendationStrategicCardDraft,
+} from '@/lib/recommendationStrategicCard';
 
 export type StrategyStatus = 'continuation' | 'expansion' | 'neutral' | 'momentum_expand';
 
@@ -63,6 +69,7 @@ export function isFullRecommendationView(role: string | null): boolean {
 
 type RecommendationBlueprintCardProps = {
   recommendation: Record<string, unknown>;
+  onRefineRecommendation?: (recommendation: Record<string, unknown>) => Promise<void> | void;
   onBuildCampaignBlueprint?: () => Promise<void> | void;
   /** Receives outcomeView, durationWeeks, campaignMode and contentFormats from BOLT options. */
   onBuildCampaignFast?: (options?: {
@@ -123,9 +130,9 @@ function RecommendationJourneyLabel(props: { state: Exclude<JourneyState, null> 
 }
 
 const NARRATIVE_BY_STATE: Record<Exclude<JourneyState, null>, string> = {
-  past: 'Building on your current direction, this recommendation extends the strategy forward.',
-  current: 'Based on your current momentum, this is the strongest next strategic focus.',
-  upcoming: 'As your strategy progresses, this is positioned as a strong upcoming opportunity.',
+  past: 'This builds on a direction your business is already moving in, so it should feel more familiar to execute.',
+  current: 'This looks like the strongest next campaign to pursue if you want to act now.',
+  upcoming: 'This is promising, but it may make more sense after your current focus is underway.',
 };
 
 /** AI narrative continuity — one sentence explaining why this recommendation appears now. Presentation only. */
@@ -156,11 +163,11 @@ function getStrategicMemoryState(props: {
 
 const STRATEGIC_MEMORY_MESSAGES: Record<Exclude<StrategicMemoryState, null>, string> = {
   reinforcement:
-    "Because you're already moving in this direction, the AI sees strong strategic continuity here.",
+    'The AI sees this as a natural continuation of work you already have momentum in.',
   momentum:
-    'This opportunity is elevated because it aligns with your current momentum.',
+    'This is being prioritized because it fits the direction your current activity is already supporting.',
   emerging:
-    'This has gained strength as your recent strategy signals evolved.',
+    'This option is becoming more relevant as your recent campaign signals change.',
 };
 
 /** AI strategic memory — one sentence quiet commentary. Presentation only. */
@@ -195,11 +202,11 @@ function getIntentForecastState(props: {
 
 const INTENT_FORECAST_MESSAGES: Record<Exclude<IntentForecastState, null>, string> = {
   momentum:
-    'If executed now, this is likely to accelerate momentum toward conversion-focused activity.',
+    'If you run this now, it is more likely to move people closer to taking action.',
   progression:
-    'If you explore this next, it will likely become a stronger strategic focus as your campaign progresses.',
+    'If you keep exploring this, it may become a stronger campaign option soon.',
   continuity:
-    'Continuing along this path will likely deepen consistency and strengthen long-term positioning.',
+    'Staying on this path should make your messaging feel more consistent over time.',
 };
 
 /** AI intent forecast — one sentence gentle prediction. Presentation only. */
@@ -233,9 +240,9 @@ export function getDecisionMomentumState(props: {
 }
 
 const MOMENTUM_CUE_MESSAGES: Record<Exclude<MomentumState, null>, string> = {
-  execute: 'AI suggests strong execution momentum.',
-  plan: 'AI suggests planning momentum.',
-  consistent: 'AI suggests maintaining strategic consistency.',
+  execute: 'This looks ready to turn into a campaign now.',
+  plan: 'This looks worth planning, but not rushing.',
+  consistent: 'This supports the direction you are already building.',
 };
 
 /** AI decision momentum cue — whisper-level guidance. Presentation only. */
@@ -248,43 +255,6 @@ function RecommendationMomentumCue(props: { state: Exclude<MomentumState, null> 
     </p>
   );
 }
-
-const readText = (obj: Record<string, unknown> | null | undefined, key: string): string | null => {
-  if (!obj) return null;
-  const value = obj[key];
-  return typeof value === 'string' && value.trim() ? value : null;
-};
-
-const readNumber = (obj: Record<string, unknown> | null | undefined, key: string): number | null => {
-  if (!obj) return null;
-  const value = obj[key];
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value);
-  return null;
-};
-
-const readList = (obj: Record<string, unknown> | null | undefined, key: string): string[] => {
-  if (!obj) return [];
-  const value = obj[key];
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((v) => (typeof v === 'string' ? v.trim() : String(v).trim()))
-    .filter(Boolean);
-};
-
-const readTopicList = (obj: Record<string, unknown> | null | undefined, key: string): string[] => {
-  if (!obj) return [];
-  const value = obj[key];
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      if (item && typeof item === 'object' && typeof (item as { topic?: unknown }).topic === 'string') {
-        return (item as { topic: string }).topic.trim();
-      }
-      return null;
-    })
-    .filter((v): v is string => !!v);
-};
 
 const MAX_BANNER_SNIPPET = 80;
 
@@ -359,6 +329,326 @@ function getConfidenceTier(
   return 'low';
 }
 
+function StrategicCardEditorField(props: {
+  label: string;
+  value: string;
+  multiline?: boolean;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  const sharedClassName =
+    'mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500';
+  return (
+    <label className="block">
+      <span className="text-xs font-medium uppercase tracking-wider text-gray-500">{props.label}</span>
+      {props.multiline ? (
+        <textarea
+          value={props.value}
+          rows={3}
+          placeholder={props.placeholder}
+          onChange={(event) => props.onChange(event.target.value)}
+          className={sharedClassName}
+        />
+      ) : (
+        <input
+          type="text"
+          value={props.value}
+          placeholder={props.placeholder}
+          onChange={(event) => props.onChange(event.target.value)}
+          className={sharedClassName}
+        />
+      )}
+    </label>
+  );
+}
+
+function StrategicCardRefinementEditor(props: {
+  draft: RecommendationStrategicCardDraft;
+  saving: boolean;
+  onChange: (draft: RecommendationStrategicCardDraft) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const { draft, saving, onChange, onCancel, onSave } = props;
+  const update = <K extends keyof RecommendationStrategicCardDraft>(
+    section: K,
+    field: keyof RecommendationStrategicCardDraft[K],
+    value: string
+  ) => {
+    onChange({
+      ...draft,
+      [section]: {
+        ...draft[section],
+        [field]: value,
+      },
+    });
+  };
+
+  return (
+    <section className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/50 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold text-gray-800">Refine Strategic Card</h4>
+          <p className="mt-1 text-xs text-gray-600">
+            Adjust the campaign-level strategy before approval. These edits will flow into saved recommendation campaigns too.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <StrategicCardEditorField
+          label="Polished Title"
+          value={draft.core.polished_title}
+          onChange={(value) => update('core', 'polished_title', value)}
+        />
+        <StrategicCardEditorField
+          label="Topic"
+          value={draft.core.topic}
+          onChange={(value) => update('core', 'topic', value)}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4">
+        <StrategicCardEditorField
+          label="Summary"
+          value={draft.core.summary}
+          multiline
+          onChange={(value) => update('core', 'summary', value)}
+        />
+        <StrategicCardEditorField
+          label="Narrative Direction"
+          value={draft.core.narrative_direction}
+          multiline
+          onChange={(value) => update('core', 'narrative_direction', value)}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <StrategicCardEditorField
+          label="Aspect"
+          value={draft.strategic_context.aspect}
+          onChange={(value) => update('strategic_context', 'aspect', value)}
+        />
+        <StrategicCardEditorField
+          label="Estimated Reach"
+          value={draft.core.estimated_reach}
+          onChange={(value) => update('core', 'estimated_reach', value)}
+        />
+        <StrategicCardEditorField
+          label="Facets"
+          value={draft.strategic_context.facets}
+          placeholder="Comma-separated"
+          onChange={(value) => update('strategic_context', 'facets', value)}
+        />
+        <StrategicCardEditorField
+          label="Audience Personas"
+          value={draft.strategic_context.audience_personas}
+          placeholder="Comma-separated"
+          onChange={(value) => update('strategic_context', 'audience_personas', value)}
+        />
+        <StrategicCardEditorField
+          label="Messaging Hooks"
+          value={draft.strategic_context.messaging_hooks}
+          placeholder="Comma-separated"
+          onChange={(value) => update('strategic_context', 'messaging_hooks', value)}
+        />
+        <StrategicCardEditorField
+          label="Formats"
+          value={draft.core.formats}
+          placeholder="Comma-separated"
+          onChange={(value) => update('core', 'formats', value)}
+        />
+        <StrategicCardEditorField
+          label="Regions"
+          value={draft.core.regions}
+          placeholder="Comma-separated"
+          onChange={(value) => update('core', 'regions', value)}
+        />
+        <StrategicCardEditorField
+          label="Duration Weeks"
+          value={draft.blueprint.duration_weeks}
+          onChange={(value) => update('blueprint', 'duration_weeks', value)}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <StrategicCardEditorField
+          label="Problem Being Solved"
+          value={draft.intelligence.problem_being_solved}
+          multiline
+          onChange={(value) => update('intelligence', 'problem_being_solved', value)}
+        />
+        <StrategicCardEditorField
+          label="Expected Transformation"
+          value={draft.intelligence.expected_transformation}
+          multiline
+          onChange={(value) => update('intelligence', 'expected_transformation', value)}
+        />
+        <StrategicCardEditorField
+          label="Why Now"
+          value={draft.intelligence.why_now}
+          multiline
+          onChange={(value) => update('intelligence', 'why_now', value)}
+        />
+        <StrategicCardEditorField
+          label="Campaign Angle"
+          value={draft.intelligence.campaign_angle}
+          multiline
+          onChange={(value) => update('intelligence', 'campaign_angle', value)}
+        />
+        <StrategicCardEditorField
+          label="Gap Being Filled"
+          value={draft.intelligence.gap_being_filled}
+          multiline
+          onChange={(value) => update('intelligence', 'gap_being_filled', value)}
+        />
+        <StrategicCardEditorField
+          label="Authority Reason"
+          value={draft.intelligence.authority_reason}
+          multiline
+          onChange={(value) => update('intelligence', 'authority_reason', value)}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <StrategicCardEditorField
+          label="Execution Stage"
+          value={draft.execution.execution_stage}
+          onChange={(value) => update('execution', 'execution_stage', value)}
+        />
+        <StrategicCardEditorField
+          label="Momentum Level"
+          value={draft.execution.momentum_level}
+          onChange={(value) => update('execution', 'momentum_level', value)}
+        />
+        <StrategicCardEditorField
+          label="Stage Objective"
+          value={draft.execution.stage_objective}
+          multiline
+          onChange={(value) => update('execution', 'stage_objective', value)}
+        />
+        <StrategicCardEditorField
+          label="Psychological Goal"
+          value={draft.execution.psychological_goal}
+          multiline
+          onChange={(value) => update('execution', 'psychological_goal', value)}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <StrategicCardEditorField
+          label="Progression Summary"
+          value={draft.blueprint.progression_summary}
+          multiline
+          onChange={(value) => update('blueprint', 'progression_summary', value)}
+        />
+        <StrategicCardEditorField
+          label="Primary Recommendations"
+          value={draft.blueprint.primary_recommendations}
+          multiline
+          placeholder="Comma-separated topics"
+          onChange={(value) => update('blueprint', 'primary_recommendations', value)}
+        />
+        <StrategicCardEditorField
+          label="Supporting Recommendations"
+          value={draft.blueprint.supporting_recommendations}
+          multiline
+          placeholder="Comma-separated topics"
+          onChange={(value) => update('blueprint', 'supporting_recommendations', value)}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <StrategicCardEditorField
+          label="Core Problem Statement"
+          value={draft.company_context_snapshot.core_problem_statement}
+          multiline
+          onChange={(value) => update('company_context_snapshot', 'core_problem_statement', value)}
+        />
+        <StrategicCardEditorField
+          label="Desired Transformation"
+          value={draft.company_context_snapshot.desired_transformation}
+          multiline
+          onChange={(value) => update('company_context_snapshot', 'desired_transformation', value)}
+        />
+        <StrategicCardEditorField
+          label="Brand Voice"
+          value={draft.company_context_snapshot.brand_voice}
+          multiline
+          onChange={(value) => update('company_context_snapshot', 'brand_voice', value)}
+        />
+        <StrategicCardEditorField
+          label="Brand Positioning"
+          value={draft.company_context_snapshot.brand_positioning}
+          multiline
+          onChange={(value) => update('company_context_snapshot', 'brand_positioning', value)}
+        />
+        <StrategicCardEditorField
+          label="Reader Emotion Target"
+          value={draft.company_context_snapshot.reader_emotion_target}
+          multiline
+          onChange={(value) => update('company_context_snapshot', 'reader_emotion_target', value)}
+        />
+        <StrategicCardEditorField
+          label="Narrative Flow Seed"
+          value={draft.company_context_snapshot.narrative_flow_seed}
+          multiline
+          onChange={(value) => update('company_context_snapshot', 'narrative_flow_seed', value)}
+        />
+        <StrategicCardEditorField
+          label="Recommended CTA Style"
+          value={draft.company_context_snapshot.recommended_cta_style}
+          multiline
+          onChange={(value) => update('company_context_snapshot', 'recommended_cta_style', value)}
+        />
+        <StrategicCardEditorField
+          label="Pain Symptoms"
+          value={draft.company_context_snapshot.pain_symptoms}
+          placeholder="Comma-separated"
+          onChange={(value) => update('company_context_snapshot', 'pain_symptoms', value)}
+        />
+        <StrategicCardEditorField
+          label="Authority Domains"
+          value={draft.company_context_snapshot.authority_domains}
+          placeholder="Comma-separated"
+          onChange={(value) => update('company_context_snapshot', 'authority_domains', value)}
+        />
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        >
+          Save Refinement
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function readNumber(obj: Record<string, unknown> | null | undefined, key: string): number | null {
+  if (!obj) return null;
+  const value = obj[key];
+  return typeof value === 'number' && isFinite(value) ? value : null;
+}
+
+function readText(obj: Record<string, unknown> | null | undefined, key: string): string | null {
+  if (!obj) return null;
+  const value = obj[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 /** Exported for UI-level priority ranking (e.g. TrendCampaignsTab). Single source of truth for tier from recommendation data. */
 export function getConfidenceTierForRecommendation(
   rec: Record<string, unknown> | null | undefined
@@ -374,12 +664,12 @@ export function getConfidenceTierForRecommendation(
 function getConfidencePhrase(tier: ConfidenceTier): string {
   switch (tier) {
     case 'high':
-      return 'High confidence — strong strategic alignment detected.';
+      return 'High confidence: this looks like a strong campaign choice right now.';
     case 'medium':
-      return 'Moderate confidence — strong potential with clear execution direction.';
+      return 'Medium confidence: this has real potential, but review the angle before you commit.';
     case 'low':
     default:
-      return 'Early-stage opportunity — recommended for exploration and testing.';
+      return 'Early-stage opportunity: worth exploring, but better to test before you build heavily.';
   }
 }
 
@@ -430,7 +720,7 @@ function RecommendationConfidenceBanner(props: {
           💎
         </span>
         <div className="min-w-0 flex-1 space-y-1 text-sm">
-          <div className="font-semibold text-slate-800">Recommended Campaign Direction</div>
+          <div className="font-semibold text-slate-800">Why This Campaign Is Worth Considering</div>
           <div className="text-slate-700">{transformationLine}</div>
           <div className="text-slate-600">{confidenceLine}</div>
         </div>
@@ -440,10 +730,27 @@ function RecommendationConfidenceBanner(props: {
 }
 
 export default function RecommendationBlueprintCard(props: RecommendationBlueprintCardProps) {
-  const { recommendation, onBuildCampaignBlueprint, onBuildCampaignFast, fastLoading, onMarkLongTerm, onArchive, strategyStatus, viewMode = 'FULL', isTopPriority, resurfaced, executionBadge, upcomingBadge, buildError } = props;
+  const {
+    recommendation,
+    onRefineRecommendation,
+    onBuildCampaignBlueprint,
+    onBuildCampaignFast,
+    fastLoading,
+    onMarkLongTerm,
+    onArchive,
+    strategyStatus,
+    viewMode = 'FULL',
+    isTopPriority,
+    resurfaced,
+    executionBadge,
+    upcomingBadge,
+    buildError,
+  } = props;
   const [expanded, setExpanded] = useState(false);
   const [minimized, setMinimized] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [isRefining, setIsRefining] = useState(false);
+  const [refinementDraft, setRefinementDraft] = useState<RecommendationStrategicCardDraft | null>(null);
   const [boltMenuOpen, setBoltMenuOpen] = useState(false);
   const [boltOutcomeView, setBoltOutcomeView] = useState<BoltOutcomeView>('schedule');
   const [boltDurationWeeks, setBoltDurationWeeks] = useState<number>(4);
@@ -509,72 +816,26 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
   const rec = recommendation ?? {};
   const canExecuteRecommendationActions =
     recommendation && typeof recommendation.id === 'string' && recommendation.id.trim().length > 0;
-  const intelligence = (rec.intelligence as Record<string, unknown> | undefined) ?? null;
-  const execution = (rec.execution as Record<string, unknown> | undefined) ?? null;
-  const snapshot = (rec.company_context_snapshot as Record<string, unknown> | undefined) ?? null;
+  const strategicCard = buildRecommendationStrategicCard(rec);
   const polishFlags = (rec.polish_flags as Record<string, unknown> | undefined) ?? null;
 
-  const core = {
-    topic: readText(rec, 'topic'),
-    polished_title: readText(rec, 'polished_title'),
-    summary: readText(rec, 'summary') ?? readText(rec, 'narrative_direction'),
-    estimated_reach: readNumber(rec, 'estimated_reach') ?? readNumber(rec, 'volume'),
-    formats: readList(rec, 'formats'),
-    regions: readList(rec, 'regions'),
+  const core = strategicCard.core;
+  const strategicContext = strategicCard.strategic_context;
+  const intelligenceBlock = strategicCard.intelligence;
+  const signals = strategicCard.signals;
+  const executionBlock = strategicCard.execution;
+  const snapshotBlock = strategicCard.company_context_snapshot;
+  const blueprint = strategicCard.blueprint;
+
+  const openRefinement = () => {
+    setRefinementDraft(buildRecommendationStrategicCardDraft(rec));
+    setIsRefining(true);
+    if (minimized) setMinimized(false);
   };
 
-  const strategicContext = {
-    aspect: readText(rec, 'aspect') ?? readText(rec, 'selected_aspect'),
-    facets: readList(rec, 'facets'),
-    audience_personas: readList(rec, 'audience_personas'),
-    messaging_hooks: readList(rec, 'messaging_hooks'),
-  };
-
-  const intelligenceBlock = {
-    problem_being_solved: readText(intelligence, 'problem_being_solved'),
-    gap_being_filled: readText(intelligence, 'gap_being_filled'),
-    why_now: readText(intelligence, 'why_now'),
-    authority_reason: readText(intelligence, 'authority_reason'),
-    expected_transformation: readText(intelligence, 'expected_transformation'),
-    campaign_angle: readText(intelligence, 'campaign_angle'),
-  };
-
-  const signals = {
-    diamond_type: readText(rec, 'diamond_type'),
-    strategy_mode: readText(rec, 'strategy_mode'),
-    final_alignment_score:
-      readNumber(rec, 'final_alignment_score') ?? readNumber(rec, 'finalAlignmentScore'),
-    strategy_modifier: readNumber(rec, 'strategy_modifier'),
-  };
-
-  const executionBlock = {
-    execution_stage:
-      readText(execution, 'execution_stage') ?? readText(rec, 'execution_stage'),
-    stage_objective:
-      readText(execution, 'stage_objective') ?? readText(rec, 'stage_objective'),
-    psychological_goal:
-      readText(execution, 'psychological_goal') ?? readText(rec, 'psychological_goal'),
-    momentum_level:
-      readText(execution, 'momentum_level') ?? readText(rec, 'momentum_level'),
-  };
-
-  const snapshotBlock = {
-    core_problem_statement: readText(snapshot, 'core_problem_statement'),
-    pain_symptoms: readList(snapshot, 'pain_symptoms'),
-    desired_transformation: readText(snapshot, 'desired_transformation'),
-    authority_domains: readList(snapshot, 'authority_domains'),
-    brand_voice: readText(snapshot, 'brand_voice'),
-    brand_positioning: readText(snapshot, 'brand_positioning'),
-    reader_emotion_target: readText(snapshot, 'reader_emotion_target'),
-    narrative_flow_seed: readText(snapshot, 'narrative_flow_seed'),
-    recommended_cta_style: readText(snapshot, 'recommended_cta_style'),
-  };
-
-  const blueprint = {
-    duration_weeks: readNumber(rec, 'duration_weeks'),
-    progression_summary: readText(rec, 'progression_summary'),
-    primary_recommendations: readTopicList(rec, 'primary_recommendations'),
-    supporting_recommendations: readTopicList(rec, 'supporting_recommendations'),
+  const closeRefinement = () => {
+    setIsRefining(false);
+    setRefinementDraft(null);
   };
 
   const badges = useMemo(() => {
@@ -628,6 +889,14 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
     } finally {
       setBusy(false);
     }
+  };
+
+  const saveRefinement = async () => {
+    if (!onRefineRecommendation || !refinementDraft) return;
+    await run(async () => {
+      await onRefineRecommendation(applyRecommendationStrategicCardDraft(rec, refinementDraft));
+      closeRefinement();
+    });
   };
 
   const hasMinimalProblemTransformation =
@@ -924,6 +1193,14 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             </div>
             <button
               type="button"
+              onClick={() => (isRefining ? closeRefinement() : openRefinement())}
+              disabled={busy || !onRefineRecommendation}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 disabled:opacity-50"
+            >
+              {isRefining ? 'Close Refine' : 'Refine Card'}
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 if (minimized) {
                   setMinimized(false);
@@ -954,6 +1231,16 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             </button>
           </div>
         </section>
+
+        {isRefining && refinementDraft ? (
+          <StrategicCardRefinementEditor
+            draft={refinementDraft}
+            saving={busy}
+            onChange={setRefinementDraft}
+            onCancel={closeRefinement}
+            onSave={saveRefinement}
+          />
+        ) : null}
       </div>
     );
   }
@@ -1048,7 +1335,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
 
       {!minimized && hasIntelligence && (
         <section className="mt-4 pt-4 border-t border-gray-200">
-          <h4 className="text-sm font-semibold text-gray-800 mb-2">Diamond Intelligence</h4>
+          <h4 className="text-sm font-semibold text-gray-800 mb-2">Why The AI Likes This Direction</h4>
           <div className="text-sm text-gray-700 space-y-1">
             {intelligenceBlock.problem_being_solved ? <div><span className="text-gray-500 font-medium">Problem:</span> <span className="whitespace-pre-wrap break-words">{intelligenceBlock.problem_being_solved}</span></div> : null}
             {intelligenceBlock.gap_being_filled ? <div><span className="text-gray-500 font-medium">Gap:</span> <span className="whitespace-pre-wrap break-words">{intelligenceBlock.gap_being_filled}</span></div> : null}
@@ -1085,7 +1372,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
 
       {!minimized && hasExecution && (
         <section className="mt-4 pt-4 border-t border-gray-200">
-          <h4 className="text-sm font-semibold text-gray-800 mb-2">Execution Stage</h4>
+          <h4 className="text-sm font-semibold text-gray-800 mb-2">How You Would Use This Campaign</h4>
           <div className="text-sm text-gray-700 space-y-1">
             {executionBlock.execution_stage ? <div><span className="text-gray-500 font-medium">Stage:</span> {executionBlock.execution_stage}</div> : null}
             {executionBlock.stage_objective ? <div><span className="text-gray-500 font-medium">Stage Objective:</span> <span className="whitespace-pre-wrap break-words">{executionBlock.stage_objective}</span></div> : null}
@@ -1110,7 +1397,7 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
 
       {!minimized && (blueprint.duration_weeks != null || blueprint.progression_summary || blueprint.primary_recommendations.length > 0 || blueprint.supporting_recommendations.length > 0) && (
         <section className="mt-4 pt-4 border-t border-gray-200">
-          <h4 className="text-sm font-semibold text-gray-800 mb-2">Campaign Blueprint Preview</h4>
+          <h4 className="text-sm font-semibold text-gray-800 mb-2">What This Could Turn Into</h4>
           <div className="text-sm text-gray-700 space-y-1">
             {blueprint.duration_weeks != null ? <div><span className="text-gray-500 font-medium">Duration:</span> {blueprint.duration_weeks} weeks</div> : null}
             {blueprint.progression_summary ? <div><span className="text-gray-500 font-medium">Progression:</span> <span className="whitespace-pre-wrap break-words">{blueprint.progression_summary}</span></div> : null}
@@ -1237,6 +1524,14 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
           </div>
           <button
             type="button"
+            onClick={() => (isRefining ? closeRefinement() : openRefinement())}
+            disabled={busy || !onRefineRecommendation}
+            className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 disabled:opacity-50"
+          >
+            {isRefining ? 'Close Refine' : 'Refine Card'}
+          </button>
+          <button
+            type="button"
             onClick={() => {
               if (minimized) {
                 setMinimized(false);
@@ -1268,6 +1563,16 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
         </div>
       </section>
 
+      {isRefining && refinementDraft ? (
+        <StrategicCardRefinementEditor
+          draft={refinementDraft}
+          saving={busy}
+          onChange={setRefinementDraft}
+          onCancel={closeRefinement}
+          onSave={saveRefinement}
+        />
+      ) : null}
+
       {!minimized && expanded && (
         <details open className="mt-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
           <summary className="cursor-pointer text-sm font-semibold text-gray-800">Expandable Details</summary>
@@ -1279,4 +1584,3 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
     </div>
   );
 }
-

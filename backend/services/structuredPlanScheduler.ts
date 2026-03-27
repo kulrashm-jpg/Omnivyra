@@ -1,6 +1,7 @@
 import { supabase } from '../db/supabaseClient';
 import { getPlatformRules, listPlatformCatalog } from './platformIntelligenceService';
 import { generateContentForDailyPlans } from './boltContentGenerationForSchedule';
+import { evaluateScheduleEligibility } from './campaignScheduleEligibilityService';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -121,7 +122,6 @@ const FALLBACK_CONTENT_TYPE_MAP: Record<string, Record<string, string>> = {
   instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post' },
   youtube: { post: 'video', video: 'video', article: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video' },
   facebook: { post: 'post', video: 'video', article: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post' },
-  blog: { post: 'post', video: 'post', article: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'post', short: 'post', story: 'post', thread: 'post' },
 };
 
 function extractTypeMapFromPlatformRules(bundle: any): Record<string, string> | null {
@@ -577,6 +577,17 @@ export type ScheduleStructuredPlanOptions = {
   skipExisting?: boolean;
 };
 
+export class ScheduleEligibilityError extends Error {
+  code = 'SCHEDULE_NOT_READY';
+  details: ReturnType<typeof evaluateScheduleEligibility>;
+
+  constructor(details: ReturnType<typeof evaluateScheduleEligibility>) {
+    super('Campaign has creator-dependent activities that are not ready for scheduling');
+    this.name = 'ScheduleEligibilityError';
+    this.details = details;
+  }
+}
+
 export async function scheduleStructuredPlan(
   plan: StructuredPlan,
   campaignId: string,
@@ -661,12 +672,26 @@ export async function scheduleStructuredPlan(
   // STEP 1: Prefer BOLT-generated daily_content_plans when they exist
   const { data: dailyPlans, error: dailyPlansError } = await supabase
     .from('daily_content_plans')
-    .select('id, campaign_id, week_number, day_of_week, date, platform, content_type, title, topic, scheduled_time, content')
+    .select('id, campaign_id, week_number, day_of_week, date, platform, content_type, title, topic, scheduled_time, content, execution_mode, creator_asset')
     .eq('campaign_id', campaignId)
     .order('date', { ascending: true })
     .order('week_number', { ascending: true });
 
   const hasDailyPlans = !dailyPlansError && Array.isArray(dailyPlans) && dailyPlans.length > 0;
+
+  if (hasDailyPlans && Array.isArray(dailyPlans)) {
+    const eligibility = evaluateScheduleEligibility(dailyPlans as Array<{
+      id?: string | null;
+      title?: string | null;
+      platform?: string | null;
+      content_type?: string | null;
+      execution_mode?: string | null;
+      creator_asset?: unknown;
+    }>);
+    if (!eligibility.eligible) {
+      throw new ScheduleEligibilityError(eligibility);
+    }
+  }
 
   let contentMap: Map<string, string> | undefined;
   if (hasDailyPlans && options?.generateContent && dailyPlans) {

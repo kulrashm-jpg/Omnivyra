@@ -24,6 +24,7 @@ import PlatformIcon from '../ui/PlatformIcon';
 import ActivityWorkspaceDrawer, { type ContentGroup } from './ActivityWorkspaceDrawer';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import { weeksToCalendarPlan } from './calendarPlanConverter';
+import type { PlannerStrategicCard } from '../../lib/plannerStrategicCard';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Satu
 const INTELLIGENCE_SOURCES = [
   { value: 'hybrid' as const, label: 'Hybrid Intelligence',  desc: 'Trend signals + AI reasoning',      icon: Zap,       themeSource: 'both'  as const },
   { value: 'api'    as const, label: 'API Intelligence',     desc: 'Platform signals & market data',    icon: Sparkles,  themeSource: 'trend' as const },
+  { value: 'blog'   as const, label: 'Blog Intelligence',    desc: 'Existing blogs + AI synthesis',     icon: BookOpen,  themeSource: 'blog'  as const },
   { value: 'ai'     as const, label: 'AI Strategic Engine',  desc: 'Pure AI strategic planning',        icon: FileText,  themeSource: 'ai'    as const },
 ] as const;
 
@@ -118,14 +120,21 @@ function CardsView({
   selectedWeek,
   onSelectWeek,
   onEnterPlanView,
+  onConfirmed,
+  canConfirm = false,
+  skeletonAlreadyConfirmed = false,
 }: {
   companyId?: string | null;
   selectedWeek?: number | null;
   onSelectWeek?: (week: number | null) => void;
   onEnterPlanView: () => void;
+  onConfirmed?: () => void;
+  canConfirm?: boolean;
+  skeletonAlreadyConfirmed?: boolean;
 }) {
-  const { state, setStrategicThemes, setCampaignStructure, setCalendarPlan } = usePlannerSession();
+  const { state, setStrategicThemes, setStrategicCard, setCampaignStructure, setCalendarPlan, confirmStrategy } = usePlannerSession();
   const themes = state.strategic_themes ?? [];
+  const strategicCard = state.strategic_card ?? null;
   const [intelligenceSource, setIntelligenceSource] = useState<IntelligenceSource>('hybrid');
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -158,7 +167,15 @@ function CardsView({
         companyId,
         theme_source: sourceConfig.themeSource,
         duration_weeks: strat?.duration_weeks ?? 6,
-        strategy_context: { duration_weeks: strat?.duration_weeks ?? 6 },
+        strategy_context: strat
+          ? {
+              ...strat,
+              duration_weeks: strat.duration_weeks ?? 6,
+              target_audience: Array.isArray(strat.target_audience)
+                ? strat.target_audience.filter(Boolean)
+                : strat.target_audience,
+            }
+          : { duration_weeks: 6 },
         idea_spine: state.idea_spine,
         trend_context: state.trend_context,
       };
@@ -170,6 +187,11 @@ function CardsView({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || 'Generation failed');
       const raw: Array<{ week: number; title: string; phase_label?: string; objective?: string; content_focus?: string; cta_focus?: string }> = Array.isArray(data.themes) ? data.themes : [];
+      const returnedCard =
+        data?.strategic_card && typeof data.strategic_card === 'object' && !Array.isArray(data.strategic_card)
+          ? (data.strategic_card as PlannerStrategicCard)
+          : null;
+      setStrategicCard(returnedCard);
       setStrategicThemes(raw.filter((t) => typeof t.week === 'number' && typeof t.title === 'string'));
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : 'Could not generate themes');
@@ -201,7 +223,8 @@ function CardsView({
             : (strat.target_audience ?? ''),
         } : { duration_weeks: themes.length || 6 },
         campaign_direction: spine?.selected_angle ?? 'EDUCATION',
-        company_context_mode: 'full_company_context',
+        company_context_mode: state.campaign_design?.company_context_mode ?? 'full_company_context',
+        focus_modules: state.campaign_design?.focus_modules ?? [],
         campaign_type: state.campaign_type ?? 'TEXT',
         account_context: state.account_context,
         prefilledPlanning: {
@@ -229,6 +252,12 @@ function CardsView({
     } finally {
       setConvertingToPlan(false);
     }
+  }
+
+  function handleConfirmStrategy() {
+    if (!canConfirm) return;
+    confirmStrategy();
+    onConfirmed?.();
   }
 
   return (
@@ -264,6 +293,72 @@ function CardsView({
 
       {/* Theme cards — scrollable, padded bottom for FAB */}
       <div className="flex-1 overflow-y-auto p-3 pb-20 space-y-2">
+        {strategicCard && (
+          <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-slate-50 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600">
+                  Campaign Strategy Card
+                </p>
+                <h4 className="mt-1 text-sm font-semibold text-gray-900">
+                  {strategicCard.core.polished_title || strategicCard.core.topic || 'Untitled strategy'}
+                </h4>
+              </div>
+              <span className="rounded-full bg-white px-2 py-1 text-[10px] font-medium text-indigo-700 border border-indigo-200">
+                {strategicCard.source_label}
+              </span>
+            </div>
+            {strategicCard.core.summary && (
+              <p className="text-xs text-gray-700 leading-relaxed">{strategicCard.core.summary}</p>
+            )}
+            <div className="grid grid-cols-1 gap-2">
+              {strategicCard.strategic_context.campaign_goal && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Campaign goal</p>
+                  <p className="text-[11px] text-gray-700">{strategicCard.strategic_context.campaign_goal}</p>
+                </div>
+              )}
+              {strategicCard.strategic_context.target_audience.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Target audience</p>
+                  <p className="text-[11px] text-gray-700">
+                    {strategicCard.strategic_context.target_audience.join(', ')}
+                  </p>
+                </div>
+              )}
+              {strategicCard.strategic_context.key_message && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Key message</p>
+                  <p className="text-[11px] text-gray-700">{strategicCard.strategic_context.key_message}</p>
+                </div>
+              )}
+              {strategicCard.intelligence.why_now && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Why now</p>
+                  <p className="text-[11px] text-gray-700">{strategicCard.intelligence.why_now}</p>
+                </div>
+              )}
+              {strategicCard.intelligence.expected_transformation && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Intended outcome</p>
+                  <p className="text-[11px] text-gray-700">{strategicCard.intelligence.expected_transformation}</p>
+                </div>
+              )}
+              {strategicCard.execution.execution_stage && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Execution stage</p>
+                  <p className="text-[11px] text-gray-700">{strategicCard.execution.execution_stage}</p>
+                </div>
+              )}
+              {strategicCard.blueprint.progression_summary && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Weekly arc</p>
+                  <p className="text-[11px] text-gray-700">{strategicCard.blueprint.progression_summary}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {themes.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center px-4">
             <Palette className="h-10 w-10 text-gray-200 mb-3" />
@@ -359,6 +454,19 @@ function CardsView({
               {convertError}
             </p>
           )}
+          <button
+            type="button"
+            onClick={handleConfirmStrategy}
+            disabled={!canConfirm}
+            className={`pointer-events-auto w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold shadow-xl transition-all ${
+              canConfirm
+                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                : 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
+            }`}
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            {skeletonAlreadyConfirmed ? 'Confirm Strategy And Open Build' : 'Confirm Strategy And Open Skeleton'}
+          </button>
           <button
             type="button"
             onClick={handleCreateWeeklyPlan}
@@ -665,10 +773,16 @@ export function StrategicThemeCards({
   companyId,
   selectedWeek,
   onSelectWeek,
+  onConfirmed,
+  canConfirm = false,
+  skeletonAlreadyConfirmed = false,
 }: {
   companyId?: string | null;
   selectedWeek?: number | null;
   onSelectWeek?: (week: number | null) => void;
+  onConfirmed?: () => void;
+  canConfirm?: boolean;
+  skeletonAlreadyConfirmed?: boolean;
 }) {
   const { state } = usePlannerSession();
   const themes = state.strategic_themes ?? [];
@@ -733,6 +847,9 @@ export function StrategicThemeCards({
               selectedWeek={selectedWeek}
               onSelectWeek={onSelectWeek}
               onEnterPlanView={() => setViewMode('plan')}
+              onConfirmed={onConfirmed}
+              canConfirm={canConfirm}
+              skeletonAlreadyConfirmed={skeletonAlreadyConfirmed}
             />
           ) : (
             <div className="overflow-y-auto h-full">

@@ -55,10 +55,19 @@ function deriveStrategyFromMatrix(
 export interface SkeletonBuilderPanelProps {
   companyId?: string | null;
   onGenerate?: () => void;
+  onConfirmed?: () => void;
+  canConfirm?: boolean;
+  strategyAlreadyConfirmed?: boolean;
 }
 
-export function SkeletonBuilderPanel({ companyId, onGenerate }: SkeletonBuilderPanelProps) {
-  const { state, setStrategyContext, setCampaignStructure, setCalendarPlan } = usePlannerSession();
+export function SkeletonBuilderPanel({
+  companyId,
+  onGenerate,
+  onConfirmed,
+  canConfirm = false,
+  strategyAlreadyConfirmed = false,
+}: SkeletonBuilderPanelProps) {
+  const { state, setStrategyContext, setCampaignStructure, setCalendarPlan, confirmSkeleton } = usePlannerSession();
   const prev = state.execution_plan?.strategy_context;
 
   const startDate = (prev?.planned_start_date && /^\d{4}-\d{2}-\d{2}$/.test(prev.planned_start_date))
@@ -149,6 +158,19 @@ export function SkeletonBuilderPanel({ companyId, onGenerate }: SkeletonBuilderP
       );
     }
     return [];
+  }
+
+  const touchedWeeks = new Set(
+    flatActivities()
+      .map((activity) => Number(activity.week_number) || 0)
+      .filter((week) => week > 0)
+  );
+  const canSubmitSkeleton = canConfirm && touchedWeeks.size >= durationWeeks;
+
+  function handleConfirmSkeleton() {
+    if (!canSubmitSkeleton) return;
+    confirmSkeleton();
+    onConfirmed?.();
   }
 
   // AI Chat tab — send message, update calendar
@@ -294,6 +316,25 @@ export function SkeletonBuilderPanel({ companyId, onGenerate }: SkeletonBuilderP
             ))}
           </select>
         </div>
+      </div>
+      <div className="flex-shrink-0 px-4 pt-3">
+        <button
+          type="button"
+          onClick={handleConfirmSkeleton}
+          disabled={!canSubmitSkeleton}
+          title={!canSubmitSkeleton ? `Touch all ${durationWeeks} week${durationWeeks === 1 ? '' : 's'} in the skeleton first` : undefined}
+          className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
+            canSubmitSkeleton
+              ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+              : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+          }`}
+        >
+          <CalendarDays className="h-4 w-4" />
+          {strategyAlreadyConfirmed ? 'Confirm Skeleton And Open Build' : 'Confirm Skeleton And Open Strategy'}
+        </button>
+        <p className="mt-1 text-[11px] text-gray-500">
+          Weeks covered: {touchedWeeks.size}/{durationWeeks}
+        </p>
       </div>
 
       {/* Sub-tabs */}

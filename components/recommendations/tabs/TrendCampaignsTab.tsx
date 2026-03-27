@@ -37,6 +37,7 @@ import {
   type SecondaryOptionId,
 } from '../../../lib/campaignTypeHierarchy';
 import { TARGET_AUDIENCE_CATEGORIES, PROFESSIONAL_SEGMENTS } from '../../../lib/audienceCategories';
+import { buildSourceStrategicTheme } from '../../../lib/recommendationStrategicCard';
 
 const TYPE = 'TREND';
 
@@ -418,6 +419,9 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [generatedEngineRecommendations, setGeneratedEngineRecommendations] = useState<
     Array<Record<string, unknown>>
   >([]);
+  const [recommendationRefinements, setRecommendationRefinements] = useState<
+    Record<string, Record<string, unknown>>
+  >({});
   const [strategyStatusPayload, setStrategyStatusPayload] = useState<StrategyStatusPayload | null>(null);
   /** Recommendation snapshot id -> state (ACTIVE | ARCHIVED | LONG_TERM). From API + optimistic updates. */
   const [recommendationUserStateMap, setRecommendationUserStateMap] = useState<Record<string, string>>({});
@@ -579,9 +583,10 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
         (typeof rec.snapshot_hash === 'string' && rec.snapshot_hash) ||
         (typeof rec.id === 'string' && rec.id) ||
         `${topic || polishedTitle || 'rec'}-${index}`;
-      return { id: `engine-${idBase}`, recommendation: rec };
+      const cardId = `engine-${idBase}`;
+      return { id: cardId, recommendation: recommendationRefinements[cardId] ?? rec };
     });
-  }, [engineRecommendationSource]);
+  }, [engineRecommendationSource, recommendationRefinements]);
   const visibleEngineCards = useMemo(() => {
     return engineRecommendationCards.filter((c) => {
       const snapshotId = typeof c.recommendation?.id === 'string' ? c.recommendation.id.trim() : '';
@@ -1301,6 +1306,7 @@ Generate strategic campaign pillars to capture this demand.`;
       const recData = await recRes.json().catch(() => null);
       const trends = Array.isArray(recData?.trends_used) ? recData.trends_used : [];
       setGeneratedEngineRecommendations(trends as Array<Record<string, unknown>>);
+      setRecommendationRefinements({});
       if (trends.length === 0) {
         setValidationError('Engine returned no recommendations for this input. Adjust context/objective and try again.');
       } else {
@@ -2187,6 +2193,12 @@ Generate strategic campaign pillars to capture this demand.`;
                     <RecommendationBlueprintCard
                     key={card.id}
                     recommendation={card.recommendation}
+                    onRefineRecommendation={async (nextRecommendation) => {
+                      setRecommendationRefinements((prev) => ({
+                        ...prev,
+                        [card.id]: nextRecommendation,
+                      }));
+                    }}
                     strategyStatus={strategyStatus}
                     viewMode={viewMode}
                     isTopPriority={isTopPriority}
@@ -2251,21 +2263,7 @@ Generate strategic campaign pillars to capture this demand.`;
                           ? recommendation.snapshot_hash
                           : null) ??
                         `recommendation:${card.id}`;
-                      const sourceStrategicTheme = {
-                        topic: recommendation.topic ?? recommendation.polished_title ?? title,
-                        polished_title: recommendation.polished_title ?? recommendation.topic ?? title,
-                        summary: recommendation.summary ?? recommendation.narrative_direction ?? description,
-                        intelligence: recommendation.intelligence ?? undefined,
-                        execution: recommendation.execution ?? undefined,
-                        company_context_snapshot: recommendation.company_context_snapshot ?? undefined,
-                        duration_weeks: recommendation.duration_weeks ?? undefined,
-                        progression_summary: recommendation.progression_summary ?? undefined,
-                        primary_recommendations: recommendation.primary_recommendations ?? undefined,
-                        supporting_recommendations: recommendation.supporting_recommendations ?? undefined,
-                        estimated_reach: recommendation.estimated_reach ?? recommendation.volume ?? undefined,
-                        formats: recommendation.formats ?? undefined,
-                        regions: recommendation.regions ?? undefined,
-                      };
+                      const sourceStrategicTheme = buildSourceStrategicTheme(recommendation);
                       const recId = typeof recommendation.id === 'string' ? recommendation.id.trim() : '';
                       try {
                         let createdCampaignId: string;
@@ -2394,21 +2392,7 @@ Generate strategic campaign pillars to capture this demand.`;
                           ? recommendation.snapshot_hash
                           : null) ??
                         `recommendation:${card.id}`;
-                      const sourceStrategicTheme = {
-                        topic: recommendation.topic ?? recommendation.polished_title ?? title,
-                        polished_title: recommendation.polished_title ?? recommendation.topic ?? title,
-                        summary: recommendation.summary ?? recommendation.narrative_direction ?? description,
-                        intelligence: recommendation.intelligence ?? undefined,
-                        execution: recommendation.execution ?? undefined,
-                        company_context_snapshot: recommendation.company_context_snapshot ?? undefined,
-                        duration_weeks: recommendation.duration_weeks ?? undefined,
-                        progression_summary: recommendation.progression_summary ?? undefined,
-                        primary_recommendations: recommendation.primary_recommendations ?? undefined,
-                        supporting_recommendations: recommendation.supporting_recommendations ?? undefined,
-                        estimated_reach: recommendation.estimated_reach ?? recommendation.volume ?? undefined,
-                        formats: recommendation.formats ?? undefined,
-                        regions: recommendation.regions ?? undefined,
-                      };
+                      const sourceStrategicTheme = buildSourceStrategicTheme(recommendation);
                       const recId = typeof recommendation.id === 'string' ? recommendation.id.trim() : '';
                       const durationWeeks = Math.min(4, Math.max(1, options?.durationWeeks ?? 4));
                       const executionConfigPayload =

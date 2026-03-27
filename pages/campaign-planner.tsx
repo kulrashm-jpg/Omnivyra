@@ -48,7 +48,7 @@ function CampaignPlannerLayout({
   onRefresh,
   onFinalize,
 }: CampaignPlannerLayoutProps) {
-  const { state, setAccountContext, setStrategicThemes } = usePlannerSession();
+  const { state, setAccountContext } = usePlannerSession();
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'build'>('skeleton');
   const [leftPanelTab, setLeftPanelTab] = useState<'plan' | 'chat'>('plan');
@@ -75,20 +75,17 @@ function CampaignPlannerLayout({
     }
   }, [companyId, state.account_context, setAccountContext, router.query.connected]);
 
-  const hasSkeleton =
+  const hasSkeletonDraft =
     Boolean(state.calendar_plan?.activities?.length) || Boolean(state.calendar_plan?.days?.length);
 
-  // Strategy is complete when campaign has meaningful context filled in
-  const hasStrategy = Boolean(
-    (state.campaign_design?.idea_spine?.description ?? state.campaign_design?.idea_spine?.refined_description ?? '').trim() ||
-    (state.campaign_design?.idea_spine?.title ?? '').trim() ||
-    state.strategic_themes?.length ||
-    (state.execution_plan?.strategy_context?.campaign_goal ?? '').trim()
-  );
+  // Strategy can only be confirmed after a campaign-level strategic card exists.
+  const hasStrategyDraft = Boolean(state.strategic_card);
 
+  const hasSkeleton = state.skeleton_confirmed === true;
+  const hasStrategy = state.strategy_confirmed === true;
   const canBuild = hasSkeleton && hasStrategy;
 
-  // Auto-advance to Strategy tab when a skeleton is first generated
+  // Auto-advance to Strategy tab when a skeleton is first confirmed
   useEffect(() => {
     if (hasSkeleton && !hasAdvancedRef.current) {
       hasAdvancedRef.current = true;
@@ -153,6 +150,9 @@ function CampaignPlannerLayout({
               <SkeletonBuilderPanel
                 companyId={companyId}
                 onGenerate={onRefresh}
+                onConfirmed={() => setActiveTab(hasStrategy ? 'build' : 'strategy')}
+                canConfirm={hasSkeletonDraft}
+                strategyAlreadyConfirmed={hasStrategy}
               />
             </div>
             {/* Right: calendar preview */}
@@ -214,19 +214,6 @@ function CampaignPlannerLayout({
                     </span>
                   )}
                 </button>
-                {/* Add Theme Card — persistent in both tabs */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const themes = state.strategic_themes ?? [];
-                    const nextWeek = themes.length > 0 ? Math.max(...themes.map((t) => t.week)) + 1 : 1;
-                    setStrategicThemes([...themes, { week: nextWeek, title: '' }]);
-                  }}
-                  className="ml-auto flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium px-3 py-2 hover:bg-indigo-50 rounded-lg transition-colors"
-                >
-                  <span className="text-base leading-none">+</span>
-                  Add Theme Card
-                </button>
               </div>
 
               {/* Plan tab content */}
@@ -264,6 +251,9 @@ function CampaignPlannerLayout({
                   setSelectedThemeWeek(week);
                   if (week !== null) setLeftPanelTab('chat');
                 }}
+                onConfirmed={() => setActiveTab(hasSkeleton ? 'build' : 'skeleton')}
+                canConfirm={hasStrategyDraft}
+                skeletonAlreadyConfirmed={hasSkeleton}
               />
             </div>
           </div>
@@ -274,7 +264,7 @@ function CampaignPlannerLayout({
       {activeTab === 'build' && (
         <div className={`${styles.plannerExecutionRow} flex-1 min-h-0`}>
           <div className="min-w-0 flex flex-col">
-            {hasSkeleton && (
+            {hasSkeletonDraft && (
               <div className="flex gap-1 border-b border-gray-200 px-2 py-2">
                 <button
                   type="button"
@@ -344,9 +334,12 @@ function PlanLoader({
   companyId: string | null;
   refreshTrigger: number;
 }) {
-  const { setCampaignStructure, setCalendarPlan } = usePlannerSession();
+  const { state, setCampaignStructure, setCalendarPlan } = usePlannerSession();
   useEffect(() => {
     if (!campaignId || !companyId) {
+      return;
+    }
+    if (refreshTrigger === 0 && (state.calendar_plan || state.campaign_structure)) {
       return;
     }
     let cancelled = false;
@@ -369,7 +362,7 @@ function PlanLoader({
         }
       });
     return () => { cancelled = true; };
-  }, [campaignId, companyId, refreshTrigger, setCampaignStructure, setCalendarPlan]);
+  }, [campaignId, companyId, refreshTrigger, setCampaignStructure, setCalendarPlan, state.calendar_plan, state.campaign_structure]);
   return null;
 }
 

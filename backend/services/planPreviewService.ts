@@ -8,19 +8,18 @@
 import { generateCampaignPlanAI } from './aiPlanningService';
 import { parseAndValidateCampaignPlan } from './campaignPlanCore';
 import { buildDeterministicWeeklySkeleton, DeterministicWeeklySkeletonError } from './deterministicWeeklySkeleton';
+import { inferExecutionMode } from './executionModeInference';
 import type { PlanningGenerationInput } from '../types/campaignPlanning';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-const CREATOR_CONTENT_TYPES = new Set(['video', 'carousel', 'story', 'reel', 'image']);
 type CampaignType = 'TEXT' | 'CREATOR' | 'HYBRID';
 type ExecutionMode = 'AI_AUTOMATED' | 'CREATOR_REQUIRED' | 'CONDITIONAL_AI';
 
 function executionModeForSlot(campaignType: CampaignType, contentType: string): ExecutionMode {
   if (campaignType === 'TEXT') return 'AI_AUTOMATED';
   if (campaignType === 'CREATOR') return 'CREATOR_REQUIRED';
-  const ct = String(contentType ?? '').toLowerCase().trim();
-  return CREATOR_CONTENT_TYPES.has(ct) ? 'CREATOR_REQUIRED' : 'AI_AUTOMATED';
+  return inferExecutionMode(String(contentType ?? 'post'));
 }
 
 function skeletonToWeeks(

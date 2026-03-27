@@ -82,9 +82,10 @@ export async function buildCampaignFromRecommendation(input: {
     throw new Error('Failed to create campaign');
   }
 
+  const resolvedDurationWeeks = durationWeeks ?? 4;
   const message =
-    'Generate a 12-week content mix proposal based on this recommendation.\n' +
-    'Use the provided context to propose: platforms, content types (video/blog/post/etc.), weekly frequency, and reuse opportunities across platforms.\n' +
+    `Generate a ${resolvedDurationWeeks}-week content mix proposal based on this recommendation.\n` +
+    'Use the provided context to propose: platforms, content types, weekly frequency, and reuse opportunities across platforms.\n' +
     'Base the proposal on: confidence, final_score, company_profile, and platforms.\n' +
     'After proposing, ask for confirmation one field at a time. For each field, provide two suggested options and accept user-provided alternatives.\n' +
     stringifyContext(recommendation as RecommendationSnapshot, profile);
@@ -111,7 +112,7 @@ export async function buildCampaignFromRecommendation(input: {
     campaignId: campaign.id,
     mode: 'generate_plan',
     message,
-    durationWeeks: durationWeeks ?? 12,
+    durationWeeks: resolvedDurationWeeks,
     collectedPlanningContext: finalCollectedPlanningContext,
   });
 

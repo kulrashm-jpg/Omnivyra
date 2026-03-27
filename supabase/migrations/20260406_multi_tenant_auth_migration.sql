@@ -312,12 +312,15 @@ ALTER TABLE signup_intents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE company_join_requests ENABLE ROW LEVEL SECURITY;
 
 -- Service role has full access (API routes use service role key)
+DROP POLICY IF EXISTS "service_role_full_access" ON company_domains;
 CREATE POLICY "service_role_full_access" ON company_domains
   FOR ALL TO service_role USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "service_role_full_access" ON signup_intents;
 CREATE POLICY "service_role_full_access" ON signup_intents
   FOR ALL TO service_role USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "service_role_full_access" ON company_join_requests;
 CREATE POLICY "service_role_full_access" ON company_join_requests
   FOR ALL TO service_role USING (true) WITH CHECK (true);
 

@@ -108,7 +108,16 @@ export const validateCompanyProfileGate = async (
   return validateCompanyProfile(profile);
 };
 
-/** Removed DEFAULT_DURATION_WEEKS - duration must come from input.durationWeeks or blueprint. No silent 12-week default. */
+/** Shared execution planning should only target supported social channels. */
+const EXECUTION_SOCIAL_PLATFORMS = new Set([
+  'linkedin',
+  'instagram',
+  'x',
+  'youtube',
+  'tiktok',
+  'reddit',
+  'facebook',
+]);
 
 const normalizePlatform = (platform: string): string => {
   const lower = platform.trim().toLowerCase();
@@ -119,8 +128,6 @@ const normalizePlatform = (platform: string): string => {
   if (lower === 'facebook') return 'facebook';
   if (lower === 'tiktok') return 'tiktok';
   if (lower === 'reddit') return 'reddit';
-  if (lower === 'blog') return 'blog';
-  if (lower === 'podcast') return 'podcast';
   return lower;
 };
 
@@ -148,8 +155,6 @@ const defaultPlatformFrequency: Record<string, number> = {
   tiktok: 3,
   reddit: 2,
   facebook: 3,
-  blog: 1,
-  podcast: 1,
 };
 
 const platformContentMap: Record<string, string[]> = {
@@ -160,8 +165,6 @@ const platformContentMap: Record<string, string[]> = {
   tiktok: ['video'],
   reddit: ['text'],
   facebook: ['text', 'image', 'video'],
-  blog: ['text'],
-  podcast: ['audio'],
 };
 
 const resolveSupportedContentTypes = (
@@ -197,13 +200,14 @@ const selectPlatforms = (
   const socialPlatforms = Array.isArray(profile.social_profiles)
     ? profile.social_profiles
         .map((entry) => normalizePlatform(entry.platform))
+        .filter((platform) => EXECUTION_SOCIAL_PLATFORMS.has(platform))
         .filter(Boolean)
     : [];
   const uniquePlatforms = Array.from(new Set(socialPlatforms));
   const orderedPriority = (() => {
     if (objective === 'awareness') return ['instagram', 'tiktok', 'youtube', 'x', 'facebook', 'linkedin'];
     if (objective === 'engagement') return ['instagram', 'x', 'reddit', 'facebook', 'linkedin'];
-    if (objective === 'leads') return ['linkedin', 'facebook', 'x', 'blog'];
+    if (objective === 'leads') return ['linkedin', 'facebook', 'x'];
     if (objective === 'conversions') return ['linkedin', 'youtube', 'facebook', 'instagram'];
     return ['linkedin', 'instagram', 'x', 'youtube', 'facebook', 'tiktok'];
   })();
@@ -280,8 +284,8 @@ export const generateCampaignStrategy = async (input: {
   const objective = input.objective ?? 'awareness';
   let duration = input.durationWeeks;
   if (duration == null) {
-    console.warn('Campaign duration not explicitly set; inferring from weeks array.');
-    duration = 12; /* fallback for backward compatibility when no blueprint/plan exists yet */
+    console.warn('Campaign duration not explicitly set; defaulting shared planning to 4 weeks.');
+    duration = 4;
   }
   const capabilities: ContentCapabilities = {
     can_generate_text: input.contentCapabilities?.can_generate_text ?? true,
@@ -580,8 +584,6 @@ const buildScheduleHint = (platform: string, dayOffset: number) => {
     tiktok: { day: 'Saturday', time: '19:00', confidence: 66 },
     reddit: { day: 'Monday', time: '08:00', confidence: 60 },
     facebook: { day: 'Wednesday', time: '13:00', confidence: 62 },
-    blog: { day: 'Tuesday', time: '10:00', confidence: 58 },
-    podcast: { day: 'Thursday', time: '07:00', confidence: 55 },
   };
   const fallback = { day: 'Wednesday', time: buildScheduledTime(dayOffset), confidence: 50 };
   const hint = platformHints[platform] ?? fallback;

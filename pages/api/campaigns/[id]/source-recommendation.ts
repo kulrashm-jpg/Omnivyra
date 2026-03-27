@@ -8,6 +8,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { getStoredStrategicThemeTitle } from '../../../../lib/recommendationStrategicCard';
 
 async function getCompanyIdForCampaign(campaignId: string): Promise<string | null> {
   const { data, error } = await supabase
@@ -100,10 +101,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Update campaign name to theme topic when we have a strategic theme (so dashboard shows topic, not "Campaign from themes")
-  const theme = source_strategic_theme as { polished_title?: string; topic?: string; title?: string } | null;
-  if (theme && (theme.polished_title ?? theme.topic ?? theme.title)) {
-    const themeName = [theme.polished_title, theme.topic, theme.title].map((t) => (typeof t === 'string' ? t.trim() : '')).find(Boolean);
-    if (themeName) {
+  const themeName = getStoredStrategicThemeTitle(source_strategic_theme as Record<string, unknown> | null | undefined);
+  if (themeName) {
       const { error: nameError } = await supabase
         .from('campaigns')
         .update({ name: themeName })
@@ -111,13 +110,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (nameError) {
         console.warn('Failed to update campaign name from theme:', nameError.message);
       }
-    }
   }
 
   if (source_strategic_theme) {
-    const themeTopic = [theme?.polished_title, theme?.topic, theme?.title]
-      .map((t) => (typeof t === 'string' ? t.trim() : ''))
-      .find(Boolean);
+    const themeTopic = themeName;
     if (themeTopic) {
       const { markThemeInUse } = await import('../../../../backend/services/companyThemeStateService');
       markThemeInUse(companyId, campaignId, themeTopic).catch((err) =>

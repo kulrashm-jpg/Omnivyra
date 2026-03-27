@@ -35,7 +35,9 @@ export default async function handler(
     return res.status(400).json({ error: err.message, code: 'PERSONAL_EMAIL' });
   }
 
-  // ── 2. Check if user already exists with an active account ────────────────
+  // ── 2. Check if user + company both exist ─────────────────────────────────
+  // Only block signup when BOTH a user record AND an active company membership
+  // exist. If a user abandoned onboarding (no company yet), allow re-signup.
   const { data: existingUser } = await supabase
     .from('users')
     .select('id, is_deleted, has_password')
@@ -46,8 +48,24 @@ export default async function handler(
     return res.status(403).json({ error: 'This account has been deactivated.', code: 'ACCOUNT_DELETED' });
   }
 
-  if (existingUser && (existingUser as any).has_password) {
-    return res.status(409).json({ error: 'An account with this email already exists. Please log in.', code: 'ACCOUNT_EXISTS' });
+  if (existingUser) {
+    // Check for active company membership
+    const { data: companyRole } = await supabase
+      .from('user_company_roles')
+      .select('id')
+      .eq('user_id', (existingUser as any).id)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+
+    if (companyRole) {
+      // Full account exists (user + company) — direct them to login
+      return res.status(409).json({
+        error: 'An account with this email already exists. Please log in.',
+        code:  'ACCOUNT_EXISTS',
+      });
+    }
+    // User exists but no company (incomplete signup) — allow re-signup
   }
 
   // ── 3. Create or reuse signup_intent ──────────────────────────────────────

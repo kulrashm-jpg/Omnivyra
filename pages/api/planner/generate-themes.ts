@@ -9,6 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { generateRichThemesForCampaignWeeks } from '../../../backend/services/strategicThemeEngine';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { buildPlannerStrategicCard, type PlannerStrategicSourceMode } from '../../../lib/plannerStrategicCard';
 
 type IdeaSpine = {
   title?: string | null;
@@ -19,6 +20,11 @@ type IdeaSpine = {
 
 type StrategyContext = {
   duration_weeks?: number;
+  campaign_goal?: string;
+  target_audience?: string | string[];
+  key_message?: string;
+  selected_aspects?: string[];
+  selected_offerings?: string[];
 };
 
 type TrendContext = {
@@ -26,6 +32,17 @@ type TrendContext = {
   trend_topic?: string | null;
   [key: string]: unknown;
 };
+
+function toList(value: string | string[] | null | undefined): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+  return String(value)
+    .split(/[,;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -51,7 +68,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const weeks = Math.max(1, Math.min(24, Math.round(duration)));
 
     // Resolve theme_source: 'ai' | 'trend' | 'both' (default: 'ai')
-    const source: 'ai' | 'trend' | 'both' = theme_source === 'trend' ? 'trend' : theme_source === 'both' ? 'both' : 'ai';
+    const source: PlannerStrategicSourceMode =
+      theme_source === 'trend' ? 'trend' : theme_source === 'both' ? 'both' : theme_source === 'blog' ? 'blog' : 'ai';
 
     // Resolve trend topic
     let trendTopic: string | null = null;
@@ -99,21 +117,57 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
+    const goal = typeof strategy_context?.campaign_goal === 'string' ? strategy_context.campaign_goal.trim() : null;
+    const audience = toList(strategy_context?.target_audience);
+    const keyMessage = typeof strategy_context?.key_message === 'string' ? strategy_context.key_message.trim() : null;
+    const aspects = Array.isArray(strategy_context?.selected_aspects)
+      ? strategy_context.selected_aspects.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const offerings = Array.isArray(strategy_context?.selected_offerings)
+      ? strategy_context.selected_offerings.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const enrichedTopic = [
+      genTopic,
+      goal ? `Goal: ${goal}` : null,
+      audience.length > 0 ? `Audience: ${audience.join(', ')}` : null,
+      keyMessage ? `Message: ${keyMessage}` : null,
+      aspects.length > 0 ? `Strategic aspects: ${aspects.join(', ')}` : null,
+      offerings.length > 0 ? `Offerings: ${offerings.join(', ')}` : null,
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
     // Return alternatives (1 or 2 sets) — each set is independently generated
     const numAlts = alternatives === 2 ? 2 : 1;
     if (numAlts === 2) {
       const [setA, setB] = await Promise.all([
-        generateRichThemesForCampaignWeeks(genTopic, weeks),
-        generateRichThemesForCampaignWeeks(genTopic, weeks),
+        generateRichThemesForCampaignWeeks(enrichedTopic, weeks),
+        generateRichThemesForCampaignWeeks(enrichedTopic, weeks),
       ]);
       return res.status(200).json({
         themes: setA,
+        strategic_card: buildPlannerStrategicCard({
+          sourceMode: source,
+          ideaSpine: spine,
+          strategyContext: strategy_context as StrategyContext | null | undefined,
+          trendContext: trendCtx,
+          themes: setA,
+        }),
         alternatives: [setA, setB],
       });
     }
 
-    const themes = await generateRichThemesForCampaignWeeks(genTopic, weeks);
-    return res.status(200).json({ themes });
+    const themes = await generateRichThemesForCampaignWeeks(enrichedTopic, weeks);
+    return res.status(200).json({
+      themes,
+      strategic_card: buildPlannerStrategicCard({
+        sourceMode: source,
+        ideaSpine: spine,
+        strategyContext: strategy_context as StrategyContext | null | undefined,
+        trendContext: trendCtx,
+        themes,
+      }),
+    });
   } catch (err: unknown) {
     console.error('[planner/generate-themes]', err);
     return res.status(500).json({

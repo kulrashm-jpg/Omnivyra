@@ -22,6 +22,10 @@ import { getLatestCampaignVersionByCampaignId } from '../../../backend/db/campai
 import { getStrategicThemesAsOpportunities } from '../../../backend/services/strategicThemeEngine';
 import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
+import {
+  getStoredStrategicThemeTitle,
+  normalizeStoredStrategicTheme,
+} from '../../../lib/recommendationStrategicCard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -173,42 +177,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
         const snapshot = (version?.campaign_snapshot ?? {}) as {
           source_recommendation_id?: string;
-          source_strategic_theme?: {
-            topic?: string;
-            polished_title?: string;
-            summary?: string;
-            intelligence?: { problem_being_solved?: string; gap_being_filled?: string; why_now?: string; expected_transformation?: string; campaign_angle?: string };
-            execution?: { execution_stage?: string; stage_objective?: string; psychological_goal?: string; momentum_level?: string };
-            company_context_snapshot?: Record<string, unknown>;
-            duration_weeks?: number;
-            progression_summary?: string;
-            primary_recommendations?: string[] | Array<{ topic?: string }>;
-            supporting_recommendations?: string[] | Array<{ topic?: string }>;
-          };
+          source_strategic_theme?: Record<string, unknown>;
         };
         const sourceRecId = snapshot?.source_recommendation_id;
         const sourceTheme = snapshot?.source_strategic_theme;
+        const normalizedSourceTheme = normalizeStoredStrategicTheme(sourceTheme);
 
         // 0. Strategic theme from selected recommendation card (Build Campaign Blueprint): use this first
-        if (sourceTheme && typeof sourceTheme === 'object') {
-          const themeTopic = [sourceTheme.polished_title, sourceTheme.topic].filter(Boolean).map((t) => String(t).trim())[0];
+        if (sourceTheme && typeof sourceTheme === 'object' && normalizedSourceTheme) {
+          const themeTopic = getStoredStrategicThemeTitle(sourceTheme);
           if (themeTopic) topicSet.add(themeTopic);
-          const primary = Array.isArray(sourceTheme.primary_recommendations)
-            ? sourceTheme.primary_recommendations.map((p) => (typeof p === 'string' ? p : (p as { topic?: string })?.topic ?? '')).filter(Boolean)
-            : [];
-          const supporting = Array.isArray(sourceTheme.supporting_recommendations)
-            ? sourceTheme.supporting_recommendations.map((s) => (typeof s === 'string' ? s : (s as { topic?: string })?.topic ?? '')).filter(Boolean)
-            : [];
+          const primary = normalizedSourceTheme.blueprint.primary_recommendations;
+          const supporting = normalizedSourceTheme.blueprint.supporting_recommendations;
           primary.forEach((t) => topicSet.add(t.trim()));
           supporting.forEach((t) => topicSet.add(t.trim()));
-          if (sourceTheme.progression_summary?.trim()) {
-            mergedPlanningContext.strategic_theme_progression = sourceTheme.progression_summary.trim();
+          if (normalizedSourceTheme.blueprint.progression_summary?.trim()) {
+            mergedPlanningContext.strategic_theme_progression = normalizedSourceTheme.blueprint.progression_summary.trim();
           }
-          if (sourceTheme.duration_weeks != null && Number.isFinite(Number(sourceTheme.duration_weeks))) {
-            mergedPlanningContext.strategic_theme_duration_weeks = Number(sourceTheme.duration_weeks);
+          if (normalizedSourceTheme.blueprint.duration_weeks != null) {
+            mergedPlanningContext.strategic_theme_duration_weeks = normalizedSourceTheme.blueprint.duration_weeks;
           }
-          const intel = sourceTheme.intelligence;
-          if (intel && typeof intel === 'object') {
+          const intel = normalizedSourceTheme.intelligence;
+          if (intel) {
             const parts: string[] = [];
             if (intel.problem_being_solved?.trim()) parts.push(`Problem: ${intel.problem_being_solved.slice(0, 400)}`);
             if (intel.expected_transformation?.trim()) parts.push(`Transformation: ${intel.expected_transformation.slice(0, 300)}`);

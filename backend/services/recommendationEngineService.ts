@@ -1256,7 +1256,7 @@ export const generateRecommendations = async (
     execConfig.campaign_duration <= 12
       ? execConfig.campaign_duration
       : null;
-  let rawDurationWeeks = input.durationWeeks ?? execDuration ?? 12;
+  let rawDurationWeeks = input.durationWeeks ?? execDuration ?? 4;
   rawDurationWeeks = Math.max(4, Math.min(12, rawDurationWeeks));
   const { normalizeCampaignDuration } = await import('../utils/durationNormalization');
   const normalized = normalizeCampaignDuration(rawDurationWeeks);
@@ -2215,4 +2215,3 @@ export const generateRecommendations = async (
 
   return result;
 };
-

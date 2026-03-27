@@ -1,6 +1,7 @@
 /**
- * Strategy Intelligence Panel — read-only surface for awareness, drift, trend, bias, AI pressure.
- * Minimized (single line) when no data to reduce noise; expanded (full grid) when data is available.
+ * Strategy Intelligence Panel — read-only explanation surface for how the current
+ * recommendation set is behaving. Copy is intentionally plain-language so non-marketers
+ * can understand what changed and what to watch.
  */
 
 import React from 'react';
@@ -84,19 +85,19 @@ export default function StrategyIntelligencePanel(props: { data?: StrategyStatus
       aria-label="Strategy intelligence"
     >
       <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
-        Strategy Intelligence
+        Recommendation Health Check
       </h3>
       {!expanded && (
-        <p className="text-xs text-slate-400">No data yet — select a campaign or run strategy analysis to see awareness, drift, trend, bias, and AI pressure.</p>
+        <p className="text-xs text-slate-400">No recommendation health details yet. Run strategy analysis to see what looks clear, what is drifting, and where to focus next.</p>
       )}
       {expanded && (
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {/* A) Awareness */}
         <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-2">
-          <p className="text-xs font-medium text-slate-500 mb-1">Awareness</p>
+          <p className="text-xs font-medium text-slate-500 mb-1">How Clear The Direction Is</p>
           <p className={`text-sm font-medium inline-block px-1.5 py-0.5 rounded ${levelColor(awareness?.awareness_level ?? '')}`}>
             {awareness?.awareness_level ?? NO_DATA}
           </p>
+          <p className="mt-1 text-xs text-slate-500">This tells you how clearly the current recommendations point toward one usable direction.</p>
           {Array.isArray(awareness?.awareness_summary) && awareness.awareness_summary.length > 0 ? (
             <ul className="mt-1.5 space-y-0.5 text-xs text-slate-600 list-disc list-inside">
               {awareness.awareness_summary.slice(0, 3).map((s, i) => (
@@ -108,9 +109,8 @@ export default function StrategyIntelligencePanel(props: { data?: StrategyStatus
           )}
         </div>
 
-        {/* B) Drift */}
         <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-2">
-          <p className="text-xs font-medium text-slate-500 mb-1">Drift</p>
+          <p className="text-xs font-medium text-slate-500 mb-1">Where Things Are Starting To Drift</p>
           <p className="text-sm font-medium text-slate-700">
             {drift?.drift_type ?? NO_DATA}
           </p>
@@ -128,11 +128,11 @@ export default function StrategyIntelligencePanel(props: { data?: StrategyStatus
           ) : drift == null && (
             <p className="mt-1 text-xs text-slate-400">{NO_DATA}</p>
           )}
+          <p className="mt-1 text-xs text-slate-500">If this is high, your campaign ideas may be moving away from your strongest theme.</p>
         </div>
 
-        {/* C) Trend */}
         <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-2">
-          <p className="text-xs font-medium text-slate-500 mb-1">Engagement trend</p>
+          <p className="text-xs font-medium text-slate-500 mb-1">How Response Is Trending</p>
           <span className={`inline-block px-1.5 py-0.5 rounded text-sm font-medium ${trendColor(trend?.trend ?? '')}`}>
             {trend?.trend ?? NO_DATA}
           </span>
@@ -140,11 +140,11 @@ export default function StrategyIntelligencePanel(props: { data?: StrategyStatus
             <p className="mt-1 text-xs text-slate-600">{trend.summary[0]}</p>
           )}
           {trend == null && <p className="mt-1 text-xs text-slate-400">{NO_DATA}</p>}
+          <p className="mt-1 text-xs text-slate-500">Use this to judge whether interest looks stronger, weaker, or unchanged.</p>
         </div>
 
-        {/* D) Bias */}
         <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-2">
-          <p className="text-xs font-medium text-slate-500 mb-1">Bias</p>
+          <p className="text-xs font-medium text-slate-500 mb-1">How Narrow The Recommendations Are</p>
           <p className={`text-sm font-medium inline-block px-1.5 py-0.5 rounded ${levelColor(bias?.bias_level ?? '')}`}>
             {bias?.bias_level ?? NO_DATA}
           </p>
@@ -160,11 +160,11 @@ export default function StrategyIntelligencePanel(props: { data?: StrategyStatus
             </div>
           )}
           {bias == null && <p className="mt-1 text-xs text-slate-400">{NO_DATA}</p>}
+          <p className="mt-1 text-xs text-slate-500">Higher bias means the system is leaning too heavily toward one type of strategy.</p>
         </div>
 
-        {/* E) AI Pressure */}
         <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-2 sm:col-span-2 lg:col-span-1">
-          <p className="text-xs font-medium text-slate-500 mb-1">AI pressure</p>
+          <p className="text-xs font-medium text-slate-500 mb-1">How Many Priorities Need Attention</p>
           {pressure != null ? (
             <div className="flex flex-wrap gap-2 text-xs">
               <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-700">
@@ -182,9 +182,10 @@ export default function StrategyIntelligencePanel(props: { data?: StrategyStatus
           )}
           {intelligence?.intelligence_level != null && (
             <p className={`mt-1 inline-block px-1.5 py-0.5 rounded text-xs ${levelColor(intelligence.intelligence_level)}`}>
-              Level: {intelligence.intelligence_level}
+              Overall priority: {intelligence.intelligence_level}
             </p>
           )}
+          <p className="mt-1 text-xs text-slate-500">If the high bucket is crowded, focus on one or two campaigns first instead of doing everything at once.</p>
         </div>
       </div>
       )}

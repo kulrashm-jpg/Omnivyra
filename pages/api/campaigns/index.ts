@@ -12,6 +12,10 @@ import {
 } from '../../../backend/services/campaignContextConfig';
 import { buildHierarchicalPayload, type PrimaryCampaignTypeId } from '../../../lib/campaignTypeHierarchy';
 import {
+  getStoredStrategicThemeTitle,
+  normalizeStoredStrategicTheme,
+} from '../../../lib/recommendationStrategicCard';
+import {
   Role,
   getCompanyRoleIncludingInvited,
   getUserRole,
@@ -470,20 +474,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       } | null;
 
       if (snapshot) {
-        const theme = snapshot.source_strategic_theme as { polished_title?: string; topic?: string; title?: string; progression_summary?: string; duration_weeks?: number; themes?: string[]; intelligence?: unknown } | null | undefined;
-        const topicFromCard =
-          theme && typeof theme === 'object'
-            ? (typeof theme.polished_title === 'string' && theme.polished_title.trim()
-                ? theme.polished_title.trim()
-                : null) ??
-              (typeof theme.topic === 'string' && theme.topic.trim() ? theme.topic.trim() : null) ??
-              (typeof theme.title === 'string' && theme.title.trim() ? theme.title.trim() : null)
+        const theme =
+          snapshot.source_strategic_theme && typeof snapshot.source_strategic_theme === 'object'
+            ? snapshot.source_strategic_theme
             : null;
+        const normalizedTheme = normalizeStoredStrategicTheme(theme);
+        const topicFromCard = getStoredStrategicThemeTitle(theme);
         // Merge source_strategic_theme into context_payload so plan API receives full theme (progression, themes, duration) for week plan generation
         const basePayload = (snapshot.context_payload && typeof snapshot.context_payload === 'object') ? { ...snapshot.context_payload } : {};
         const mergedPayload = snapshot.source_strategic_theme && typeof snapshot.source_strategic_theme === 'object'
           ? { ...basePayload, ...snapshot.source_strategic_theme }
           : basePayload;
+        if (normalizedTheme) {
+          mergedPayload.primary_recommendations = normalizedTheme.blueprint.primary_recommendations;
+          mergedPayload.supporting_recommendations = normalizedTheme.blueprint.supporting_recommendations;
+          mergedPayload.progression_summary = normalizedTheme.blueprint.progression_summary;
+          mergedPayload.duration_weeks = normalizedTheme.blueprint.duration_weeks;
+        }
         recommendationContext = {
           target_regions: snapshot.target_regions ?? null,
           context_payload: Object.keys(mergedPayload).length > 0 ? mergedPayload : null,
@@ -600,12 +607,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           });
         }
         for (const [cid, { campaign_snapshot }] of latestByCampaign) {
-          const snap = campaign_snapshot as { source_strategic_theme?: { polished_title?: string; topic?: string; title?: string } } | null;
-          const theme = snap?.source_strategic_theme;
-          if (theme && (theme.polished_title ?? theme.topic ?? theme.title)) {
-            const name = [theme.polished_title, theme.topic, theme.title].map((t) => (typeof t === 'string' ? t.trim() : '')).find(Boolean);
-            if (name) themeNameByCampaignId[cid] = name;
-          }
+          const snap = campaign_snapshot as { source_strategic_theme?: Record<string, unknown> } | null;
+          const name = getStoredStrategicThemeTitle(snap?.source_strategic_theme);
+          if (name) themeNameByCampaignId[cid] = name;
         }
       }
 

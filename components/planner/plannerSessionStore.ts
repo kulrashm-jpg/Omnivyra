@@ -13,6 +13,7 @@ import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
 import { hydrateWizardFromPlannerSession } from '../../lib/wizard/campaignWizardAdapter';
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
 import { AccountContext } from '../../backend/types/accountContext';
+import { type PlannerStrategicCard, syncPlannerStrategicCardThemes } from '../../lib/plannerStrategicCard';
 
 const PLANNER_STORAGE_KEY_PREFIX = 'omnivyra_planner_session_';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -154,6 +155,8 @@ export interface StrategicThemeEntry {
 export interface PlannerSessionState {
   idea_spine: IdeaSpine | null;
   strategy_context: StrategyContext | null;
+  skeleton_confirmed?: boolean;
+  strategy_confirmed?: boolean;
   planner_entry_mode: PlannerEntryMode;
   /** Campaign type for execution_mode assignment. Default: TEXT */
   campaign_type: CampaignType;
@@ -188,6 +191,8 @@ export interface PlannerSessionState {
   trend_context?: TrendContext | null;
   /** Strategic themes (weekly) for skeleton generation. Optional; from generate-themes or Trend card. */
   strategic_themes?: StrategicThemeEntry[];
+  /** Campaign-level strategic card that weekly themes are derived from. */
+  strategic_card?: PlannerStrategicCard | null;
   /** Last fetched campaign health report (UI-only, not persisted). */
   health_report?: Record<string, unknown> | null;
   /** Account context for planning influence (maturity, performance, recommendations). */
@@ -195,7 +200,7 @@ export interface PlannerSessionState {
 }
 
 const defaultStrategyContext: StrategyContext = {
-  duration_weeks: 12,
+  duration_weeks: 4,
   platforms: [],
   posting_frequency: {},
   content_mix: [],
@@ -207,6 +212,8 @@ const defaultStrategyContext: StrategyContext = {
 const defaultState: PlannerSessionState = {
   idea_spine: null,
   strategy_context: null,
+  skeleton_confirmed: false,
+  strategy_confirmed: false,
   planner_entry_mode: 'direct',
   campaign_type: 'TEXT',
   platform_content_requests: null,
@@ -227,6 +234,8 @@ type PlannerSessionContextValue = {
   };
   setIdeaSpine: (value: IdeaSpine | null) => void;
   setStrategyContext: (value: Partial<StrategyContext> | null) => void;
+  confirmSkeleton: () => void;
+  confirmStrategy: () => void;
   setCampaignType: (value: CampaignType) => void;
   setPlatformContentRequests: (value: PlatformContentRequests | null) => void;
   setPlannerEntryMode: (mode: PlannerEntryMode) => void;
@@ -238,6 +247,7 @@ type PlannerSessionContextValue = {
   setRecommendedSuggestions: (goal?: string | null, audience?: string[] | null) => void;
   setCampaignDesign: (partial: Partial<Pick<CampaignDesign, 'company_context_mode' | 'focus_modules' | 'trend_context'>>) => void;
   setStrategicThemes: (themes: StrategicThemeEntry[]) => void;
+  setStrategicCard: (card: PlannerStrategicCard | null) => void;
   clearStrategicThemes: () => void;
   setHealthReport: (report: Record<string, unknown> | null) => void;
   setAccountContext: (context: AccountContext | null) => void;
@@ -273,6 +283,10 @@ function loadPersistedSession(storageKey: string): Partial<PlannerSessionState> 
         : undefined;
     const focus_modules = Array.isArray(parsed.focus_modules) ? (parsed.focus_modules as FocusModule[]) : undefined;
     const rawThemes = parsed.strategic_themes;
+    const strategic_card =
+      parsed.strategic_card && typeof parsed.strategic_card === 'object' && !Array.isArray(parsed.strategic_card)
+        ? (parsed.strategic_card as PlannerStrategicCard)
+        : null;
     let strategic_themes: StrategicThemeEntry[] | undefined;
     if (Array.isArray(rawThemes) && rawThemes.length > 0) {
       const first = rawThemes[0];
@@ -296,6 +310,8 @@ function loadPersistedSession(storageKey: string): Partial<PlannerSessionState> 
     return {
       idea_spine: parsed.idea_spine && typeof parsed.idea_spine === 'object' ? (parsed.idea_spine as IdeaSpine) : null,
       strategy_context: parsed.strategy_context && typeof parsed.strategy_context === 'object' ? { ...defaultStrategyContext, ...parsed.strategy_context } : null,
+      skeleton_confirmed: parsed.skeleton_confirmed === true,
+      strategy_confirmed: parsed.strategy_confirmed === true,
       campaign_type,
       platform_content_requests,
       plan_snapshot_hash: typeof parsed.plan_snapshot_hash === 'string' ? parsed.plan_snapshot_hash : null,
@@ -305,6 +321,7 @@ function loadPersistedSession(storageKey: string): Partial<PlannerSessionState> 
       ...(company_context_mode ? { company_context_mode } : {}),
       ...(focus_modules ? { focus_modules } : {}),
       ...(strategic_themes ? { strategic_themes } : {}),
+      ...(strategic_card ? { strategic_card } : {}),
     };
   } catch {
     return null;
@@ -318,6 +335,8 @@ function persistSession(s: PlannerSessionState, storageKey: string): void {
     const payload = {
       idea_spine: s.idea_spine,
       strategy_context: s.strategy_context,
+      skeleton_confirmed: s.skeleton_confirmed === true,
+      strategy_confirmed: s.strategy_confirmed === true,
       campaign_type: s.campaign_type ?? 'TEXT',
       platform_content_requests: s.platform_content_requests ?? null,
       campaign_id: campaignId,
@@ -327,6 +346,7 @@ function persistSession(s: PlannerSessionState, storageKey: string): void {
       company_context_mode: s.company_context_mode ?? 'full_company_context',
       focus_modules: s.focus_modules ?? [],
       strategic_themes: s.strategic_themes ?? [],
+      strategic_card: s.strategic_card ?? null,
       stored_at: Date.now(),
     };
     localStorage.setItem(storageKey, JSON.stringify(payload));
@@ -394,12 +414,14 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
   }, [state, storageKey]);
 
   const setIdeaSpine = useCallback((value: IdeaSpine | null) => {
-    setState((prev) => ({ ...prev, idea_spine: value }));
+    setState((prev) => ({ ...prev, idea_spine: value, strategic_card: null, strategy_confirmed: false }));
   }, []);
 
   const setStrategyContext = useCallback((value: Partial<StrategyContext> | null) => {
     setState((prev) => ({
       ...prev,
+      strategic_card: null,
+      strategy_confirmed: false,
       strategy_context:
         value === null
           ? null
@@ -407,8 +429,16 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
     }));
   }, []);
 
+  const confirmSkeleton = useCallback(() => {
+    setState((prev) => ({ ...prev, skeleton_confirmed: true }));
+  }, []);
+
+  const confirmStrategy = useCallback(() => {
+    setState((prev) => ({ ...prev, strategy_confirmed: true }));
+  }, []);
+
   const setCampaignType = useCallback((value: CampaignType) => {
-    setState((prev) => ({ ...prev, campaign_type: value }));
+    setState((prev) => ({ ...prev, campaign_type: value, strategic_card: null, strategy_confirmed: false }));
   }, []);
 
   const setPlatformContentRequests = useCallback((value: PlatformContentRequests | null) => {
@@ -419,6 +449,7 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
       if (prev.platform_content_requests !== value) {
         next.calendar_plan = null;
         next.campaign_structure = null;
+        next.skeleton_confirmed = false;
       }
       return next;
     });
@@ -441,19 +472,22 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
   }, []);
 
   const setCampaignStructure = useCallback((value: CampaignStructure | null) => {
-    setState((prev) => ({ ...prev, campaign_structure: value ?? null }));
+    setState((prev) => ({ ...prev, campaign_structure: value ?? null, skeleton_confirmed: false }));
   }, []);
 
   const setCalendarPlan = useCallback((value: CalendarPlan | null) => {
     setState((prev) => ({
       ...prev,
       calendar_plan: value ?? null,
+      skeleton_confirmed: false,
     }));
   }, []);
 
   const setCampaignDesign = useCallback((partial: Partial<Pick<CampaignDesign, 'company_context_mode' | 'focus_modules' | 'trend_context'>>) => {
     setState((prev) => ({
       ...prev,
+      strategic_card: null,
+      strategy_confirmed: false,
       ...(partial.company_context_mode !== undefined ? { company_context_mode: partial.company_context_mode } : {}),
       ...(partial.focus_modules !== undefined ? { focus_modules: partial.focus_modules } : {}),
       ...(partial.trend_context !== undefined ? { trend_context: partial.trend_context } : {}),
@@ -461,11 +495,24 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
   }, []);
 
   const setStrategicThemes = useCallback((themes: StrategicThemeEntry[]) => {
-    setState((prev) => ({ ...prev, strategic_themes: themes }));
+    setState((prev) => ({
+      ...prev,
+      strategic_themes: themes,
+      strategic_card: syncPlannerStrategicCardThemes(prev.strategic_card ?? null, themes),
+      strategy_confirmed: false,
+    }));
+  }, []);
+
+  const setStrategicCard = useCallback((card: PlannerStrategicCard | null) => {
+    setState((prev) => ({
+      ...prev,
+      strategic_card: card,
+      strategy_confirmed: false,
+    }));
   }, []);
 
   const clearStrategicThemes = useCallback(() => {
-    setState((prev) => ({ ...prev, strategic_themes: [] }));
+    setState((prev) => ({ ...prev, strategic_themes: [], strategic_card: null, strategy_confirmed: false }));
   }, []);
 
   const setHealthReport = useCallback((report: Record<string, unknown> | null) => {
@@ -511,6 +558,8 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
     state: stateWithNested,
     setIdeaSpine,
     setStrategyContext,
+    confirmSkeleton,
+    confirmStrategy,
     setCampaignType,
     setPlatformContentRequests,
     setPlannerEntryMode,
@@ -522,6 +571,7 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
     setRecommendedSuggestions,
     setCampaignDesign,
     setStrategicThemes,
+    setStrategicCard,
     clearStrategicThemes,
     setHealthReport,
     setAccountContext,

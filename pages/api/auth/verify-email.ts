@@ -113,12 +113,15 @@ export default async function handler(
     .eq('id', resolvedUserId);
 
   // ── 3. Complete any pending signup_intent for this email ──────────────────
+  // Wrapped in try-catch so a missing signup_intents table never blocks routing.
   if (resolvedEmail) {
-    await supabase
-      .from('signup_intents')
-      .update({ status: 'completed', completed_at: now })
-      .eq('email', resolvedEmail.toLowerCase())
-      .eq('status', 'pending');
+    try {
+      await supabase
+        .from('signup_intents')
+        .update({ status: 'completed', completed_at: now })
+        .eq('email', resolvedEmail.toLowerCase())
+        .eq('status', 'pending');
+    } catch { /* non-fatal — table may not exist yet */ }
   }
 
   // ── 4. Determine routing ──────────────────────────────────────────────────
@@ -127,7 +130,9 @@ export default async function handler(
 
   let route: string;
 
-  if (!(userRow as any).has_password && mode !== 'passwordless') {
+  // Route to set-password if: no password set yet (new signup) OR column missing (new user)
+  const hasPassword = (userRow as any).has_password === true;
+  if (!hasPassword && mode !== 'passwordless') {
     route = '/auth/set-password';
   } else if (!(userRow as any).name) {
     route = '/onboarding/profile';

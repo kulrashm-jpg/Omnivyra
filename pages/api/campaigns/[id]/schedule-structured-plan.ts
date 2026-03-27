@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockdownService';
-import { scheduleStructuredPlan } from '../../../../backend/services/structuredPlanScheduler';
+import { scheduleStructuredPlan, ScheduleEligibilityError } from '../../../../backend/services/structuredPlanScheduler';
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
 import { assertBlueprintActive, assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../../backend/services/campaignBlueprintService';
@@ -211,6 +211,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(409).json({
         code: error.code,
         message: 'Scheduler integrity check failed',
+      });
+    }
+    if (error instanceof ScheduleEligibilityError) {
+      return res.status(409).json({
+        code: error.code,
+        message: error.message,
+        details: error.details,
       });
     }
     if (error instanceof BlueprintExecutionFreezeError) {

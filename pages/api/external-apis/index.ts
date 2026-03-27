@@ -542,9 +542,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // Mark external_api_connected in setup progress and check earn credits (fire-and-forget)
     if (companyId && access?.userId) {
-      supabase.from('company_setup_progress').upsert(
-        { company_id: companyId, external_api_connected: true, updated_at: new Date().toISOString() },
-        { onConflict: 'company_id' },
+      Promise.resolve(
+        supabase.from('company_setup_progress').upsert(
+          { company_id: companyId, external_api_connected: true, updated_at: new Date().toISOString() },
+          { onConflict: 'company_id' },
+        )
       ).then(() =>
         checkAndGrantSetupCredits(companyId, access.userId)
           .catch(e => console.warn('[external-apis] setup credits check failed:', e?.message))

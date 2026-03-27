@@ -1,7 +1,6 @@
 import React from 'react';
 import StrategyIntelligencePanel, { type StrategyStatusPayload } from '../strategy/StrategyIntelligencePanel';
 
-/** Strategic flow state from list-level aggregation (TrendCampaignsTab). */
 export type StrategicFlowState =
   | 'expansion'
   | 'momentum'
@@ -9,12 +8,10 @@ export type StrategicFlowState =
   | 'consolidation'
   | 'default';
 
-/** Per-card signals used for workspace summary. Read-only. */
 export type WorkspaceCardSignal = {
   journeyState: 'past' | 'current' | 'upcoming' | null;
   momentumState: 'execute' | 'plan' | 'consistent' | null;
   strategyStatus?: string;
-  /** When set, enables "click count to see which cards" and optional scroll-to-card. */
   cardId?: string;
   cardTitle?: string;
 };
@@ -22,21 +19,18 @@ export type WorkspaceCardSignal = {
 export type StrategicWorkspacePanelProps = {
   flowState: StrategicFlowState;
   cardsWithSignals: WorkspaceCardSignal[];
-  /** Optional strategy-status payload for intelligence panel (awareness, drift, trend, bias, AI pressure). */
   strategyStatusPayload?: StrategyStatusPayload | null;
-  /** Optional: when user clicks a listed opportunity/direction, scroll that card into view. */
   onScrollToCard?: (cardId: string) => void;
 };
 
 const POSITION_LABELS: Record<StrategicFlowState, string> = {
-  expansion: 'Expansion Phase',
-  momentum: 'Momentum Phase',
-  exploration: 'Exploration Phase',
-  consolidation: 'Consolidation Phase',
-  default: 'Multiple opportunities',
+  expansion: 'Growing from what is already working',
+  momentum: 'Good time to move forward',
+  exploration: 'Review before committing',
+  consolidation: 'Stay consistent with proven themes',
+  default: 'Several good options to compare',
 };
 
-/** Strategy Memory Snapshot: perceived continuity from current-state signals only. Max 2–3 lines; hidden if no signals. */
 function StrategyMemorySnapshot(props: {
   flowState: StrategicFlowState;
   cardsWithSignals: WorkspaceCardSignal[];
@@ -50,26 +44,32 @@ function StrategyMemorySnapshot(props: {
 
   const lines: string[] = [];
   if (hasContinuity) {
-    lines.push('Your current strategy is building on previously established themes.');
+    lines.push('These recommendations build on themes that already fit your brand and direction.');
   }
   if (hasNewDirections) {
-    lines.push('New strategic directions are emerging alongside your current focus.');
+    lines.push('You also have a few newer directions worth reviewing before you commit.');
   }
   if (hasExecuteMomentum) {
-    lines.push('Execution-ready opportunities have increased since your last strategic phase.');
+    lines.push('Some opportunities are strong enough to turn into campaigns right away.');
   }
   const hasStrongSignals = hasContinuity || hasNewDirections || hasExecuteMomentum;
   if (flowState === 'consolidation') {
-    lines.push('Your strategy is currently stabilizing around proven directions.');
-  } else if (hasStrongSignals && (flowState === 'exploration' || flowState === 'default' || flowState === 'momentum' || flowState === 'expansion')) {
-    lines.push('Your strategy is actively evolving and exploring new paths.');
+    lines.push('Right now, staying consistent is likely to work better than changing direction too quickly.');
+  } else if (
+    hasStrongSignals &&
+    (flowState === 'exploration' ||
+      flowState === 'default' ||
+      flowState === 'momentum' ||
+      flowState === 'expansion')
+  ) {
+    lines.push('Your strategy is still evolving, so compare options carefully before you build.');
   }
 
   const displayLines = lines.slice(0, 3);
   if (displayLines.length === 0) return null;
 
   return (
-    <div className="mt-4 pt-3 border-t border-slate-100" role="status" aria-label="Strategy memory snapshot">
+    <div className="mt-4 pt-3 border-t border-slate-100" role="status" aria-label="Strategy summary">
       <div className="space-y-0.5">
         {displayLines.map((line, i) => (
           <p key={i} className="text-xs text-slate-500 italic">
@@ -91,16 +91,16 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
   const upcomingCount = upcomingCards.length;
   const momentumCopy =
     executeCount > 0
-      ? `${executeCount} opportunit${executeCount === 1 ? 'y' : 'ies'} ready for execution.`
-      : 'Building planning momentum.';
+      ? `${executeCount} opportunit${executeCount === 1 ? 'y' : 'ies'} look ready to turn into campaigns now.`
+      : 'Nothing looks urgent yet, so this is a good moment to review and plan.';
   const upcomingCopy =
     upcomingCount === 0
-      ? 'No upcoming directions yet.'
-      : `${upcomingCount} strategic direction${upcomingCount === 1 ? '' : 's'} forming.`;
+      ? 'No additional directions need attention right now.'
+      : `${upcomingCount} other direction${upcomingCount === 1 ? '' : 's'} may become stronger soon.`;
   const stabilityCopy =
     flowState === 'consolidation'
-      ? 'Strong continuity detected.'
-      : 'Flexible — exploring new directions.';
+      ? 'Your current theme is consistent, so staying focused is likely the safer move.'
+      : 'You still have room to test and compare different directions.';
 
   const showExecuteList = expandedSection === 'execute' && executeCount > 0;
   const showUpcomingList = expandedSection === 'upcoming' && upcomingCount > 0;
@@ -109,18 +109,18 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
     <div
       className="mb-4 rounded-xl border border-slate-200 bg-white px-5 py-4"
       role="region"
-      aria-label="Strategic Workspace"
+      aria-label="Recommendation summary"
     >
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <p className="text-sm text-slate-700">
-            <span className="font-medium text-slate-800">Current Position:</span>{' '}
+            <span className="font-medium text-slate-800">What The AI Sees:</span>{' '}
             {POSITION_LABELS[flowState]}
           </p>
         </div>
         <div>
           <p className="text-sm text-slate-700">
-            <span className="font-medium text-slate-800">Momentum Zone:</span>{' '}
+            <span className="font-medium text-slate-800">Ready To Act:</span>{' '}
             {executeCount > 0 ? (
               <>
                 <button
@@ -129,9 +129,9 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
                   className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 rounded"
                   aria-expanded={showExecuteList}
                 >
-                  {executeCount} opportunit{executeCount === 1 ? 'y' : 'ies'} ready for execution
+                  {executeCount} opportunit{executeCount === 1 ? 'y' : 'ies'} worth acting on now
                 </button>
-                . {showExecuteList && onScrollToCard && ' (click a title below to scroll to it)'}
+                . {showExecuteList && onScrollToCard && 'Click a title below to jump to it.'}
               </>
             ) : (
               momentumCopy
@@ -144,7 +144,7 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
                   {c.cardId && onScrollToCard ? (
                     <button
                       type="button"
-                      onClick={() => onScrollToCard(c.cardId!)}
+                      onClick={() => onScrollToCard(c.cardId)}
                       className="text-left text-indigo-600 hover:text-indigo-800 hover:underline focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
                     >
                       {c.cardTitle ?? 'Opportunity'}
@@ -159,7 +159,7 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
         </div>
         <div>
           <p className="text-sm text-slate-700">
-            <span className="font-medium text-slate-800">Upcoming Opportunities:</span>{' '}
+            <span className="font-medium text-slate-800">Worth Watching:</span>{' '}
             {upcomingCount > 0 ? (
               <>
                 <button
@@ -168,9 +168,9 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
                   className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 rounded"
                   aria-expanded={showUpcomingList}
                 >
-                  {upcomingCount} strategic direction{upcomingCount === 1 ? '' : 's'} forming
+                  {upcomingCount} direction{upcomingCount === 1 ? '' : 's'} to keep an eye on
                 </button>
-                . {showUpcomingList && onScrollToCard && ' (click a title below to scroll to it)'}
+                . {showUpcomingList && onScrollToCard && 'Click a title below to jump to it.'}
               </>
             ) : (
               upcomingCopy
@@ -183,13 +183,13 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
                   {c.cardId && onScrollToCard ? (
                     <button
                       type="button"
-                      onClick={() => onScrollToCard(c.cardId!)}
+                      onClick={() => onScrollToCard(c.cardId)}
                       className="text-left text-indigo-600 hover:text-indigo-800 hover:underline focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
                     >
-                      {c.cardTitle ?? 'Strategic direction'}
+                      {c.cardTitle ?? 'Direction to watch'}
                     </button>
                   ) : (
-                    <span>{c.cardTitle ?? 'Strategic direction'}</span>
+                    <span>{c.cardTitle ?? 'Direction to watch'}</span>
                   )}
                 </li>
               ))}
@@ -198,7 +198,7 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
         </div>
         <div>
           <p className="text-sm text-slate-700">
-            <span className="font-medium text-slate-800">Strategic Stability:</span>{' '}
+            <span className="font-medium text-slate-800">How Stable This Direction Is:</span>{' '}
             {stabilityCopy}
           </p>
         </div>

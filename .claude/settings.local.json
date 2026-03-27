@@ -119,7 +119,12 @@
       "mcp__ide__getDiagnostics",
       "Bash(git remote:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Read(//c/virality/$APPDATA/com.vercel.cli/**)",
+      "Read(//c/virality/Local/com.vercel.cli/**)",
+      "Read(//c/virality/**)",
+      "Bash(RAILWAY_TOKEN=\"rw_Fe26.2**7f905862dfe0c7db90c8aa030aa0de0e6afe594ee64f78d4f6c553b8123b36fd*J-LVrnS60nM3wb-eOTmWjw*0gyPMTaUq929E8BbqEryRsmd8CDyleXHn09pliQ4ZsVNabRB9vXAC9Yf9TjWoOufz-vY9uBSiXrDuftBeWNKEg*1776791717032*3750c2edbc6c620e7acfe80363f2dd3b6e590750e296b2555febcde05f2ab8f1*yqvhCz376Ojl8H-MmDO-jJNrBLe-s3l7v39U7JFpl0Q\" railway whoami 2>&1)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]"

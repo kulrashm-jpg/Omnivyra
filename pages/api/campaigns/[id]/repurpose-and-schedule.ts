@@ -11,34 +11,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
-import { scheduleStructuredPlan } from '../../../../backend/services/structuredPlanScheduler';
+import { evaluateScheduleEligibility } from '../../../../backend/services/campaignScheduleEligibilityService';
+import { scheduleStructuredPlan, ScheduleEligibilityError } from '../../../../backend/services/structuredPlanScheduler';
 import { acquireSchedulerLock, releaseSchedulerLock, SchedulerLockError } from '../../../../backend/services/SchedulerLockService';
-
-/** Content types that require creator asset for repurposing. */
-const CREATOR_REQUIRED_TYPES = new Set([
-  'video',
-  'reel',
-  'carousel',
-  'podcast',
-  'livestream',
-  'live',
-  'short',
-  'image',
-  'story',
-]);
-
-function isCreatorRequired(contentType: string): boolean {
-  const ct = String(contentType || 'post').toLowerCase().trim();
-  return CREATOR_REQUIRED_TYPES.has(ct);
-}
-
-function hasCreatorAsset(plan: { creator_asset?: unknown; content_status?: string }): boolean {
-  const asset = plan.creator_asset;
-  if (asset == null) return false;
-  if (typeof asset !== 'object') return false;
-  const a = asset as Record<string, unknown>;
-  return Boolean(a?.url || (Array.isArray(a?.files) && (a.files as unknown[]).length > 0));
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -105,13 +80,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Safety check: count creator-required activities missing creator_asset
-    let skippedCreatorActivities = 0;
-    for (const plan of plans) {
-      const contentType = String(plan.content_type ?? 'post').toLowerCase().trim();
-      if (isCreatorRequired(contentType) && !hasCreatorAsset(plan)) {
-        skippedCreatorActivities++;
-      }
+    const eligibility = evaluateScheduleEligibility(plans as Array<{
+      id?: string | null;
+      title?: string | null;
+      platform?: string | null;
+      content_type?: string | null;
+      execution_mode?: string | null;
+      creator_asset?: unknown;
+    }>);
+    if (!eligibility.eligible) {
+      return res.status(409).json({
+        success: false,
+        error: 'Campaign has creator-dependent activities waiting for media links.',
+        details: eligibility,
+      });
     }
 
     // Build minimal plan.weeks for scheduleStructuredPlan
@@ -134,12 +116,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       success: true,
       scheduledPostsCreated: result.scheduled_count,
       alreadyScheduled: result.already_scheduled_count ?? 0,
-      skippedCreatorActivities,
+      skippedCreatorActivities: eligibility.blockingCount,
       weeksScheduled: weekNumbers.length,
       platformsScheduled,
       skipped_platforms: result.skipped_platforms ?? [],
+      fullyAiExecutable: eligibility.fullyAiExecutable,
     });
   } catch (err) {
+    if (err instanceof ScheduleEligibilityError) {
+      return res.status(409).json({
+        success: false,
+        error: err.message,
+        details: err.details,
+      });
+    }
     console.error('[repurpose-and-schedule] Error:', err);
     const message = err instanceof Error ? err.message : 'Failed to repurpose and schedule';
     return res.status(500).json({

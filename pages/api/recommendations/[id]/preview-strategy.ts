@@ -76,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     '- frequency_plan: object keyed by platform or content type with weekly frequency\n' +
     '- reuse_plan: array of reuse/repurpose ideas\n' +
     '- narrative_direction: short narrative direction text\n' +
-    '- directional_themes: array of 12-week theme ideas\n' +
+    '- directional_themes: array of campaign theme ideas\n' +
     '- confidence: number between 0 and 1\n' +
     '- content_frequency: object keyed by platform or content type\n' +
     'If preview_overrides are provided, use them as primary guidance.\n' +

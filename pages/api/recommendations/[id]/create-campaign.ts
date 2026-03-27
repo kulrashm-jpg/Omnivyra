@@ -209,9 +209,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       console.warn('Failed to create campaign_versions mapping:', versionError.message);
     }
 
+    const resolvedDurationWeeks = typeof durationWeeks === 'number' ? durationWeeks : 4;
     const message =
-      'Generate a 12-week content mix proposal based on this recommendation.\n' +
-      'Use the provided context to propose: platforms, content types (video/blog/post/etc.), weekly frequency, and reuse opportunities across platforms.\n' +
+      `Generate a ${resolvedDurationWeeks}-week content mix proposal based on this recommendation.\n` +
+      'Use the provided context to propose: platforms, content types, weekly frequency, and reuse opportunities across platforms.\n' +
       'Base the proposal on: confidence, final_score, company_profile (if present in context), and platforms.\n' +
       'After proposing, ask for confirmation one field at a time. For each field, provide two suggested options and accept user-provided alternatives.\n' +
       buildRecommendationContext(
@@ -243,7 +244,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       campaignId: campaign.id,
       mode: 'generate_plan',
       message,
-      durationWeeks: typeof durationWeeks === 'number' ? durationWeeks : undefined,
+      durationWeeks: resolvedDurationWeeks,
       collectedPlanningContext: finalCollectedPlanningContext,
     });
 

@@ -4,6 +4,8 @@
  * Maps execution categories for ai_generated compatibility.
  */
 
+import { inferExecutionMode } from './executionModeInference';
+
 export type ExecutionCategory = 'AI_GENERATED' | 'AI_ASSISTED' | 'CREATOR_REQUIRED';
 
 export interface ActivityCard {
@@ -28,23 +30,14 @@ export interface PlanWeekLike {
   [key: string]: unknown;
 }
 
-const CREATOR_REQUIRED_TYPES = new Set([
-  'video',
-  'reel',
-  'carousel',
-  'podcast',
-  'livestream',
-  'live',
-]);
-
 /**
  * Derive execution category from content type.
  * AI_GENERATED/AI_ASSISTED -> ai_generated=true
  * CREATOR_REQUIRED -> ai_generated=false
  */
 export function getExecutionCategoryForContentType(contentType: string): ExecutionCategory {
-  const normalized = String(contentType || 'post').toLowerCase().trim();
-  if (CREATOR_REQUIRED_TYPES.has(normalized)) return 'CREATOR_REQUIRED';
+  const mode = inferExecutionMode(String(contentType || 'post'));
+  if (mode === 'CREATOR_REQUIRED') return 'CREATOR_REQUIRED';
   return 'AI_ASSISTED';
 }
 

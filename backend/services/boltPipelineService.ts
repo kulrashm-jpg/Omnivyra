@@ -25,6 +25,10 @@ import {
   pressureConfigToLevel,
 } from './postDensityEngine';
 import { generateWeeklyStructure } from './generateWeeklyStructureService';
+import {
+  getStoredStrategicThemeTitle,
+  normalizeStoredStrategicTheme,
+} from '../../lib/recommendationStrategicCard';
 
 const AI_PLAN_TIMEOUT_MS = 120_000;
 const GENERATE_WEEKLY_TIMEOUT_MS = 90_000;
@@ -179,6 +183,7 @@ async function runSourceRecommendation(
   payload: BoltPayload
 ): Promise<string> {
   const { companyId, userId, generatedCampaignId, sourceStrategicTheme, executionConfig, recId, title, description, sourceOpportunityId, regionsFromCard } = payload;
+  const sourceThemeTitle = getStoredStrategicThemeTitle(sourceStrategicTheme);
 
   let campaignId: string;
 
@@ -216,12 +221,8 @@ async function runSourceRecommendation(
 
     if (updateError) throw new Error(`Source-recommendation update failed: ${updateError.message}`);
 
-    const theme = sourceStrategicTheme as { polished_title?: string; topic?: string; title?: string };
-    const themeName = [theme?.polished_title, theme?.topic, theme?.title]
-      .map((t) => (typeof t === 'string' ? t.trim() : ''))
-      .find(Boolean);
     const updates: Record<string, unknown> = {};
-    if (themeName) updates.name = themeName;
+    if (sourceThemeTitle) updates.name = sourceThemeTitle;
     const tentativeStart = executionConfig.tentative_start as string | undefined;
     if (tentativeStart) {
       updates.start_date = tentativeStart.includes('T') ? tentativeStart : `${tentativeStart}T00:00:00.000Z`;
@@ -280,22 +281,22 @@ async function runSourceRecommendation(
 
 async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[]): Promise<{ plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> }> {
   const snapshot = payload.sourceStrategicTheme as Record<string, unknown>;
+  const normalizedTheme = normalizeStoredStrategicTheme(snapshot);
   const basePayload = (snapshot?.context_payload && typeof snapshot.context_payload === 'object')
     ? { ...snapshot.context_payload }
     : {};
-  const mergedPayload =
+  const mergedPayload: Record<string, unknown> =
     payload.sourceStrategicTheme && typeof payload.sourceStrategicTheme === 'object'
       ? { ...basePayload, ...payload.sourceStrategicTheme }
       : basePayload;
+  if (normalizedTheme) {
+    mergedPayload.primary_recommendations = normalizedTheme.blueprint.primary_recommendations;
+    mergedPayload.supporting_recommendations = normalizedTheme.blueprint.supporting_recommendations;
+    mergedPayload.progression_summary = normalizedTheme.blueprint.progression_summary;
+    mergedPayload.duration_weeks = normalizedTheme.blueprint.duration_weeks;
+  }
 
-  const topicFromCard =
-    typeof snapshot?.polished_title === 'string' && (snapshot.polished_title as string).trim()
-      ? (snapshot.polished_title as string).trim()
-      : typeof snapshot?.topic === 'string' && (snapshot.topic as string).trim()
-        ? (snapshot.topic as string).trim()
-        : typeof snapshot?.title === 'string' && (snapshot.title as string).trim()
-          ? (snapshot.title as string).trim()
-          : null;
+  const topicFromCard = getStoredStrategicThemeTitle(snapshot);
 
   const recommendationContext = {
     target_regions: payload.regionsFromCard ?? null,
@@ -305,7 +306,7 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
   };
 
   const execConfig = (payload.executionConfig ?? {}) as Record<string, unknown>;
-  const themeTitle = typeof snapshot?.polished_title === 'string' ? snapshot.polished_title : typeof snapshot?.topic === 'string' ? snapshot.topic : typeof snapshot?.title === 'string' ? snapshot.title : null;
+  const themeTitle = topicFromCard;
 
   // Build collectedPlanningContext: executionConfig from Trend page first, then theme, then defaults for QA keys only
   const parsedFreq =

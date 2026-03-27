@@ -19,7 +19,7 @@ interface Props {
 }
 
 export function StrategyAIChat({ companyId, selectedWeek, onClearSelection }: Props) {
-  const { state, setStrategicThemes } = usePlannerSession();
+  const { state, setStrategicThemes, setStrategicCard } = usePlannerSession();
   const themes = state.strategic_themes ?? [];
   const selectedTheme = selectedWeek != null ? themes.find((t) => t.week === selectedWeek) : null;
   const [history, setHistory] = useState<ChatTurn[]>([]);
@@ -54,6 +54,7 @@ export function StrategyAIChat({ companyId, selectedWeek, onClearSelection }: Pr
           strategy_context: state.strategy_context ?? null,
           idea_spine: state.idea_spine ?? null,
           selected_week: selectedWeek ?? null,
+          strategic_card: state.strategic_card ?? null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -62,6 +63,9 @@ export function StrategyAIChat({ companyId, selectedWeek, onClearSelection }: Pr
       const updatedThemes: StrategicThemeEntry[] = data.themes ?? themes;
       const reply: string = data.reply ?? 'Themes updated.';
 
+      if (data?.strategic_card && typeof data.strategic_card === 'object' && !Array.isArray(data.strategic_card)) {
+        setStrategicCard(data.strategic_card);
+      }
       setStrategicThemes(updatedThemes);
       setHistory((h) => [...h, { role: 'assistant', text: reply }]);
     } catch (e) {
