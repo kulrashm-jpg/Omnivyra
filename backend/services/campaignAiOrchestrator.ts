@@ -4266,12 +4266,15 @@ export async function runCampaignAiPlan(
   const [campaignResult, versionRow] = await Promise.all([
     supabase
       .from('campaigns')
-      .select('duration_weeks, start_date, description, name')
+      .select('id, start_date, description, name')
       .eq('id', input.campaignId)
       .maybeSingle(),
     getLatestCampaignVersionByCampaignId(input.campaignId),
   ]);
-  const { data: campaignRow } = campaignResult;
+  const { data: campaignRow, error: campaignQueryError } = campaignResult;
+  if (campaignQueryError) {
+    console.error('[campaignAiOrchestrator] campaign query error:', campaignQueryError.message);
+  }
 
   // Fail fast: ensure required data exists before any heavy work (no loops, clear error).
   if (input.mode === 'generate_plan') {
@@ -4284,7 +4287,8 @@ export async function runCampaignAiPlan(
   }
 
   const fromConversation = extractDurationFromConversation(input.conversationHistory ?? []);
-  const dbDuration = toValidWeeks(campaignRow?.duration_weeks);
+  // duration_weeks is sourced from execConfig (snapshot) as first priority; DB column may not exist in all environments
+  const dbDuration: number | null = null;
   const recommendationSeed = recommendationDurationSeed(input.recommendationContext);
   const explicitConversationDuration = toValidWeeks(fromConversation);
   const snapshot = versionRow?.campaign_snapshot as Record<string, unknown> | null | undefined;

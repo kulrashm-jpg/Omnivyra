@@ -14,19 +14,7 @@ import { withRBAC } from '../../../backend/middleware/withRBAC';
 
 const mapCampaignPlaybook = (campaign: any) => ({
   ...campaign,
-  // Playbooks are informational only:
-  // - Do NOT drive scheduling
-  // - Do NOT alter publishing logic
-  // - Do NOT affect approvals
-  playbook: campaign.virality_playbooks
-    ? {
-        id: campaign.virality_playbooks.id,
-        name: campaign.virality_playbooks.name,
-        objective: campaign.virality_playbooks.objective,
-        platforms: campaign.virality_playbooks.platforms,
-        content_types: campaign.virality_playbooks.content_types,
-      }
-    : null,
+  playbook: null,
 });
 
 const requireCompanyRole = async (
@@ -136,11 +124,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         timeframe,
         start_date,
         end_date,
-        created_at,
-        updated_at,
-        weekly_themes,
-        virality_playbook_id,
-        virality_playbooks(id, name, objective, platforms, content_types, company_id)
+        created_at
       `)
       .in('id', campaignIds)
       .order('created_at', { ascending: false });
@@ -186,9 +170,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         name: displayName,
         stats: {
           goals: 0,
-          weeklyPlans: campaign.weekly_themes ? campaign.weekly_themes.length : 0,
+          weeklyPlans: 0,
           dailyPlans: 0,
-          totalContent: campaign.weekly_themes ? campaign.weekly_themes.length : 0
+          totalContent: 0,
         }
       };
     });
