@@ -12,14 +12,11 @@
  * so retries from the gateway do not double-credit the organization.
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
 
 function serviceSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  return supabase;
 }
 
 export type PurchaseResult =

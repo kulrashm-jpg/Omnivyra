@@ -9,17 +9,13 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { invalidateDomainCache } from '@/backend/services/domainEligibilityService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 
-const serviceSupabase = () => createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return 'cookie';
@@ -33,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const adminId = await requireSuperAdmin(req, res);
   if (!adminId) return;
 
-  const sb = serviceSupabase();
+  const sb = supabase;
 
   // ── GET: list requests ────────────────────────────────────────────────────
   if (req.method === 'GET') {

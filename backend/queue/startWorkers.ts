@@ -8,7 +8,7 @@
  */
 
 import os from 'os';
-import { getWorker } from './bullmqClient';
+import { getWorker, usageProtectionReady } from './bullmqClient';
 import { processPublishJob } from './jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from './jobProcessors/engagementPollingProcessor';
 import { processBoltJob } from './jobProcessors/boltProcessor';
@@ -32,6 +32,10 @@ const shutdown = async () => {
  */
 export async function startWorkers(): Promise<void> {
   const boltConcurrency = Math.min(4, Math.max(1, os.cpus().length));
+
+  // BUG#21 fix: await first usage-protection poll before registering workers.
+  // This ensures _level is known and protection is enforced from job #1.
+  await usageProtectionReady;
 
   publishWorker = getWorker('publish', processPublishJob);
   boltWorker = getWorker('bolt-execution', processBoltJob, { concurrency: boltConcurrency });

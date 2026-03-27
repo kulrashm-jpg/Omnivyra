@@ -7,7 +7,7 @@
  *   Property 'auth' does not exist on type 'DbOnlyClient'
  *
  * This is the single authoritative type for all server-side database access.
- * Firebase Admin SDK (lib/firebaseAdmin.ts) is the ONLY permitted auth path.
+ * Supabase Admin SDK (backend/db/supabaseClient.ts) is the ONLY permitted auth path.
  *
  * Usage:
  *   import type { DbOnlyClient } from '@/lib/db/types';

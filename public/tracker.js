@@ -25,7 +25,7 @@
   var accountId = (sc.getAttribute('data-account') || '').trim();
   if (!accountId) return;
 
-  var apiBase  = (sc.getAttribute('data-api') || 'https://app.omnivyra.com').replace(/\/$/, '');
+  var apiBase  = (sc.getAttribute('data-api') || 'https://www.omnivyra.com').replace(/\/$/, '');
   var endpoint = apiBase + '/api/track';
 
   // ── Session ID ────────────────────────────────────────────────────────────

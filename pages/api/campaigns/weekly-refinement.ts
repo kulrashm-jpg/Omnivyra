@@ -1,13 +1,14 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingResponse';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   const { method, query } = req;
   const { campaignId, weekNumber, action } = query;
 

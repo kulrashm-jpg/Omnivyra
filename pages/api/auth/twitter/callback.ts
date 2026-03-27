@@ -6,6 +6,7 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
+import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -151,6 +152,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await setToken(accountId, tokenObj);
 
     console.log('✅ Twitter account saved successfully:', { accountId, accountName });
+
+    if (companyId && userId) {
+      checkAndGrantSetupCredits(companyId, userId)
+        .catch(e => console.warn('[twitter/callback] setup credits check failed:', e?.message));
+    }
 
     const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';

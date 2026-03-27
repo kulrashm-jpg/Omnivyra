@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { v4 as uuidv4 } from 'uuid';
+
 import { 
   ArrowLeft, 
   Calendar, 
@@ -299,7 +299,7 @@ export default function CampaignPlanning() {
     setIsLoading(true);
     try {
       // Generate proper UUID for campaign ID
-      const newCampaignId = uuidv4();
+      const newCampaignId = crypto.randomUUID();
       console.log('Creating new campaign with ID:', newCampaignId);
       
       // Set campaign data

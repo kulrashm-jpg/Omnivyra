@@ -23,7 +23,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { supabase as sb } from '@/backend/db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
@@ -39,7 +40,7 @@ type GrantCategory = typeof GRANT_CATEGORIES[number];
 async function requireSuperAdmin(
   req: NextApiRequest,
   res: NextApiResponse,
-  sb: ReturnType<typeof createClient>,
+  sb: SupabaseClient,
 ): Promise<string | null> {
   if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) {
     return 'cookie';
@@ -53,7 +54,7 @@ async function requireSuperAdmin(
 // ── Notify org admin (best-effort, non-blocking) ──────────────────────────────
 
 async function notifyOrgAdmin(
-  sb:      ReturnType<typeof createClient>,
+  sb:      SupabaseClient,
   orgId:   string,
   credits: number,
   reason:  string,
@@ -86,11 +87,6 @@ async function notifyOrgAdmin(
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-  const sb = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
 
   const adminId = await requireSuperAdmin(req, res, sb as any);
   if (!adminId) return;

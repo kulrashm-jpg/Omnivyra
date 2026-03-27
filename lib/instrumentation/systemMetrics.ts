@@ -10,7 +10,6 @@
 
 import { getMetricsReport, type RedisMetricsReport } from '../redis/instrumentation';
 import { getSupabaseMetrics, recordSupabaseCall, type SupabaseMetrics } from './supabaseInstrumentation';
-import { getFirebaseMetrics, type FirebaseMetrics }                     from './firebaseInstrumentation';
 import { getApiMetrics, type ApiMetrics }                               from './apiInstrumentation';
 import {
   getExternalApiMetrics,
@@ -37,7 +36,6 @@ export interface SystemMetrics {
   env:         Env;
   redis:       RedisMetricsReport | null;
   supabase:    SupabaseMetrics    | null;
-  firebase:    FirebaseMetrics    | null;
   api:         ApiMetrics         | null;
   external:    ExternalApiMetrics | null;
   errors:      Record<string, string>;
@@ -78,17 +76,16 @@ export function ensureTrackingActive(): void {
 export async function getSystemMetrics(): Promise<SystemMetrics> {
   ensureTrackingActive();
 
-  const [redisR, supabaseR, firebaseR, apiR, externalR] = await Promise.allSettled([
+  const [redisR, supabaseR, apiR, externalR] = await Promise.allSettled([
     Promise.resolve(getMetricsReport()),
     Promise.resolve(getSupabaseMetrics()),
-    Promise.resolve(getFirebaseMetrics()),
     Promise.resolve(getApiMetrics()),
     Promise.resolve(getExternalApiMetrics()),
   ]);
 
   const errors: Record<string, string> = {};
   const sources = {
-    redis: redisR, supabase: supabaseR, firebase: firebaseR,
+    redis: redisR, supabase: supabaseR,
     api: apiR, external: externalR,
   };
   for (const [key, r] of Object.entries(sources)) {
@@ -101,7 +98,6 @@ export async function getSystemMetrics(): Promise<SystemMetrics> {
     env:         RUNTIME_ENV,
     redis:       extract(redisR),
     supabase:    extract(supabaseR),
-    firebase:    extract(firebaseR),
     api:         extract(apiR),
     external:    extract(externalR),
     errors,

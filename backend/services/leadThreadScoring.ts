@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { getLeadThreadRecomputeQueue } from '../queue/bullmqClient';
 
 const DEBOUNCE_SECONDS = 5;
 
@@ -123,6 +124,16 @@ export async function scheduleThreadScoreUpdate(threadId: string, organizationId
     p_thread_id: threadId,
     p_organization_id: organizationId,
   });
+  // Fire a BullMQ drain job immediately (200 ms debounce via fixed jobId).
+  // If a drain is already queued/active, this is a no-op.
+  try {
+    await getLeadThreadRecomputeQueue().add('recompute', {}, {
+      jobId: 'drain',
+      delay: 200,
+    });
+  } catch {
+    // Non-fatal — the safety-net cron handles any missed events
+  }
 }
 
 /**

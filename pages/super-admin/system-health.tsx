@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 import OrgServiceDrilldown, { type ServiceKey } from '../../components/super-admin/OrgServiceDrilldown';
+import RailwayEfficiencyPanel from '../../components/super-admin/RailwayEfficiencyPanel';
+import RailwayCompanyCostsPanel from '../../components/super-admin/RailwayCompanyCostsPanel';
 
 // ── Activity Breakdown type ────────────────────────────────────────────────────
 interface ActivityBreakdown {
@@ -83,9 +85,9 @@ interface SystemHealthData {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const SEVERITY_CONFIG: Record<Severity, { bg: string; text: string; dot: string; label: string }> = {
-  CRITICAL: { bg: 'bg-red-500/10',    text: 'text-red-400',    dot: 'bg-red-400',    label: 'CRITICAL' },
-  WARNING:  { bg: 'bg-yellow-500/10', text: 'text-yellow-400', dot: 'bg-yellow-400', label: 'WARNING'  },
-  INFO:     { bg: 'bg-blue-500/10',   text: 'text-blue-400',   dot: 'bg-blue-400',   label: 'INFO'     },
+  CRITICAL: { bg: 'bg-red-50',    text: 'text-red-600',    dot: 'bg-red-600',    label: 'CRITICAL' },
+  WARNING:  { bg: 'bg-yellow-50', text: 'text-yellow-600', dot: 'bg-yellow-600', label: 'WARNING'  },
+  INFO:     { bg: 'bg-blue-50',   text: 'text-blue-600',   dot: 'bg-blue-600',   label: 'INFO'     },
 };
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -100,8 +102,8 @@ function SeverityBadge({ severity }: { severity: Severity }) {
 
 function StatusDot({ status }: { status: 'ok' | 'degraded' }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 text-sm font-medium ${status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
-      <span className={`w-2 h-2 rounded-full ${status === 'ok' ? 'bg-green-400' : 'bg-red-400 animate-pulse'}`} />
+    <span className={`inline-flex items-center gap-1.5 text-sm font-medium ${status === 'ok' ? 'text-green-600' : 'text-red-600'}`}>
+      <span className={`w-2 h-2 rounded-full ${status === 'ok' ? 'bg-green-600' : 'bg-red-600 animate-pulse'}`} />
       {status === 'ok' ? 'Operational' : 'Degraded'}
     </span>
   );
@@ -109,17 +111,17 @@ function StatusDot({ status }: { status: 'ok' | 'degraded' }) {
 
 function MetaExpander({ metadata }: { metadata: Record<string, unknown> | null }) {
   const [open, setOpen] = useState(false);
-  if (!metadata || Object.keys(metadata).length === 0) return <span className="text-gray-600 text-xs">—</span>;
+  if (!metadata || Object.keys(metadata).length === 0) return <span className="text-slate-500 text-xs">—</span>;
   return (
     <div>
       <button
         onClick={() => setOpen(o => !o)}
-        className="text-xs text-gray-400 hover:text-gray-200 underline-offset-2 hover:underline"
+        className="text-xs text-slate-600 hover:text-slate-900 underline-offset-2 hover:underline"
       >
         {open ? 'hide' : 'view details'}
       </button>
       {open && (
-        <pre className="mt-1.5 p-2 bg-gray-900 rounded text-xs text-gray-300 overflow-auto max-h-32 whitespace-pre-wrap break-all">
+        <pre className="mt-1.5 p-2 bg-slate-100 rounded text-xs text-slate-700 overflow-auto max-h-32 whitespace-pre-wrap break-all border border-slate-200">
           {JSON.stringify(metadata, null, 2)}
         </pre>
       )}
@@ -130,26 +132,26 @@ function MetaExpander({ metadata }: { metadata: Record<string, unknown> | null }
 const STATE_CONFIG: Record<SystemStatus, {
   border: string; bg: string; icon: string; label: string; textColor: string;
 }> = {
-  healthy:  { border: 'border-green-500/30',  bg: 'bg-green-500/10',  icon: '✓', label: 'System Healthy',   textColor: 'text-green-400'  },
-  degraded: { border: 'border-yellow-500/30', bg: 'bg-yellow-500/10', icon: '⚠', label: 'System Degraded',  textColor: 'text-yellow-400' },
-  critical: { border: 'border-red-500/40',    bg: 'bg-red-500/15',    icon: '✕', label: 'System Critical',  textColor: 'text-red-400'    },
+  healthy:  { border: 'border-green-300',  bg: 'bg-green-50',  icon: '✓', label: 'System Healthy',   textColor: 'text-green-600'  },
+  degraded: { border: 'border-yellow-300', bg: 'bg-yellow-50', icon: '⚠', label: 'System Degraded',  textColor: 'text-yellow-600' },
+  critical: { border: 'border-red-300',    bg: 'bg-red-50',    icon: '✕', label: 'System Critical',  textColor: 'text-red-600'    },
 };
 
 function SystemStateBanner({ state }: { state: SystemHealthData['systemState'] }) {
   const cfg = STATE_CONFIG[state.status];
   return (
-    <div className={`flex items-start gap-3 p-4 rounded-lg border ${cfg.bg} ${cfg.border} mb-6`}>
+    <div className={`flex items-start gap-3 p-4 rounded-lg border ${cfg.bg} ${cfg.border} mb-6 shadow-sm`}>
       <span className={`text-lg font-bold mt-0.5 ${cfg.textColor}`}>{cfg.icon}</span>
       <div className="flex-1 min-w-0">
         <p className={`text-sm font-semibold ${cfg.textColor}`}>{cfg.label}</p>
         {state.reasons.length > 0 ? (
           <ul className="mt-1 space-y-0.5">
             {state.reasons.map((r, i) => (
-              <li key={i} className="text-xs text-gray-400">{r}</li>
+              <li key={i} className="text-xs text-slate-600">{r}</li>
             ))}
           </ul>
         ) : (
-          <p className="text-xs text-gray-500 mt-0.5">No active alerts · All systems operational</p>
+          <p className="text-xs text-slate-500 mt-0.5">No active alerts · All systems operational</p>
         )}
       </div>
       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cfg.bg} ${cfg.textColor} border ${cfg.border} whitespace-nowrap`}>
@@ -167,13 +169,41 @@ function fmt(iso: string) {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
-type Tab = 'all' | 'user' | 'company' | 'system';
+type Tab = 'all' | 'user' | 'company' | 'system' | 'railway' | 'cache';
 const TABS: { key: Tab; label: string }[] = [
   { key: 'all',     label: 'All'     },
   { key: 'user',    label: 'User'    },
   { key: 'company', label: 'Company' },
   { key: 'system',  label: 'System'  },
+  { key: 'railway', label: '🚂 Railway Efficiency' },
+  { key: 'cache',   label: '🗄 Cache' },
 ];
+
+// ── Cache types ───────────────────────────────────────────────────────────────
+
+interface CacheData {
+  redis: {
+    available: boolean;
+    used_memory: string;
+    peak_memory: string;
+    max_memory: string;
+    eviction_policy: string;
+    evicted_keys: number;
+    expired_keys: number;
+    connected_clients: number;
+    uptime_days: number;
+  };
+  key_counts: { prefix: string; count: number }[];
+  ext_api_cache: {
+    hits: number;
+    misses: number;
+    hit_rate: number | null;
+    per_api_hits: Record<string, number>;
+    per_api_misses: Record<string, number>;
+  };
+  layers: { name: string; prefix: string; ttl: string; auto_evict: boolean }[];
+  collected_at: string;
+}
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -195,6 +225,10 @@ export default function SystemHealthPage() {
   const [activityData,    setActivityData]    = useState<ActivityBreakdown | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
 
+  const [cacheData,    setCacheData]    = useState<CacheData | null>(null);
+  const [cacheLoading, setCacheLoading] = useState(false);
+  const [cacheMsg,     setCacheMsg]     = useState<string | null>(null);
+
   // Drilldown — which service card is open
   const [drilldown, setDrilldown] = useState<{
     serviceKey: ServiceKey;
@@ -205,6 +239,7 @@ export default function SystemHealthPage() {
   const now2 = new Date();
   const [drillYear,  setDrillYear]  = useState(now2.getFullYear());
   const [drillMonth, setDrillMonth] = useState(now2.getMonth() + 1);
+  const [railwayView, setRailwayView] = useState<'efficiency' | 'company-costs'>('company-costs');
 
   // ── Auth gate ────────────────────────────────────────────────────────────
   // Effect 1: check super_admin_session cookie once on mount (HttpOnly — server only)
@@ -277,15 +312,43 @@ export default function SystemHealthPage() {
     finally { setActivityLoading(false); }
   }, []);
 
+  const fetchCacheData = useCallback(async () => {
+    setCacheLoading(true);
+    try {
+      const res = await fetch('/api/admin/cache-management', { credentials: 'include' });
+      if (!res.ok) return;
+      const json = await res.json() as CacheData;
+      setCacheData(json);
+    } catch { /* silently degrade */ }
+    finally { setCacheLoading(false); }
+  }, []);
+
+  const flushCache = async (action: 'flush_ai' | 'flush_ext_api' | 'flush_intelligence') => {
+    setCacheMsg(null);
+    try {
+      const res = await fetch('/api/admin/cache-management', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const json = await res.json() as { message?: string; error?: string };
+      setCacheMsg(json.message ?? json.error ?? 'Done');
+      void fetchCacheData();
+    } catch (e) {
+      setCacheMsg('Flush failed: ' + (e as Error).message);
+    }
+  };
+
   // Fetch once auth is confirmed
   useEffect(() => {
-    if (isSuperAdmin) { void fetchData(); void fetchIntelligence(); void fetchActivityBreakdown(); }
-  }, [isSuperAdmin, fetchData, fetchIntelligence, fetchActivityBreakdown]);
+    if (isSuperAdmin) { void fetchData(); void fetchIntelligence(); void fetchActivityBreakdown(); void fetchCacheData(); }
+  }, [isSuperAdmin, fetchData, fetchIntelligence, fetchActivityBreakdown, fetchCacheData]);
 
   // Auto-refresh every 60 s
   useEffect(() => {
     if (!isSuperAdmin) return;
-    const id = setInterval(() => { void fetchData(); void fetchIntelligence(); void fetchActivityBreakdown(); }, 60_000);
+    const id = setInterval(() => { void fetchData(); void fetchIntelligence(); void fetchActivityBreakdown(); void fetchCacheData(); }, 60_000);
     return () => clearInterval(id);
   }, [isSuperAdmin, fetchData, fetchIntelligence, fetchActivityBreakdown]);
 
@@ -299,24 +362,24 @@ export default function SystemHealthPage() {
 
   return (
     <>
-    <div className="min-h-screen bg-gray-950 text-gray-100 p-6">
+    <div className="min-h-screen bg-slate-50 text-slate-900 p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-white">System Health</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Anomaly detection · Last 24 hours</p>
+          <h1 className="text-xl font-semibold text-slate-900">System Health</h1>
+          <p className="text-sm text-slate-600 mt-0.5">Anomaly detection · Last 24 hours</p>
         </div>
         <button
           onClick={() => void fetchData()}
           disabled={loading}
-          className="px-3 py-1.5 text-sm rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-50 transition-colors"
+          className="px-3 py-1.5 text-sm rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 transition-colors shadow-sm"
         >
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm shadow-sm">
           {error}
         </div>
       )}
@@ -328,46 +391,46 @@ export default function SystemHealthPage() {
       {data && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           {/* Redis */}
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1.5">Redis</p>
+          <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+            <p className="text-xs text-slate-600 mb-1.5 font-medium">Redis</p>
             <StatusDot status={data.systemStatus.redis} />
             {data.systemStatus.last_redis_failure && (
-              <p className="text-xs text-gray-600 mt-1">
+              <p className="text-xs text-slate-600 mt-1">
                 Last failure: {fmt(data.systemStatus.last_redis_failure)}
               </p>
             )}
           </div>
           {/* Critical */}
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1.5">Critical (24 h)</p>
-            <p className={`text-2xl font-bold ${data.summary.critical_24h > 0 ? 'text-red-400' : 'text-gray-300'}`}>
+          <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+            <p className="text-xs text-slate-600 mb-1.5 font-medium">Critical (24 h)</p>
+            <p className={`text-2xl font-bold ${data.summary.critical_24h > 0 ? 'text-red-600' : 'text-slate-700'}`}>
               {data.summary.critical_24h}
             </p>
             {data.summary.last_critical_at && (
-              <p className="text-xs text-gray-600 mt-1">
+              <p className="text-xs text-slate-600 mt-1">
                 Last: {fmt(data.summary.last_critical_at)}
               </p>
             )}
           </div>
           {/* Warning */}
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-1.5">Warnings (24 h)</p>
-            <p className={`text-2xl font-bold ${data.summary.warning_24h > 0 ? 'text-yellow-400' : 'text-gray-300'}`}>
+          <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+            <p className="text-xs text-slate-600 mb-1.5 font-medium">Warnings (24 h)</p>
+            <p className={`text-2xl font-bold ${data.summary.warning_24h > 0 ? 'text-yellow-600' : 'text-slate-700'}`}>
               {data.summary.warning_24h}
             </p>
           </div>
           {/* Auth events */}
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-2">Auth Events (24 h)</p>
+          <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+            <p className="text-xs text-slate-600 mb-2 font-medium">Auth Events (24 h)</p>
             <div className="space-y-0.5">
               {Object.entries(data.authEventCounts).slice(0, 3).map(([evt, cnt]) => (
                 <div key={evt} className="flex items-center justify-between">
-                  <span className="text-xs text-gray-400 truncate">{evt.replace(/_/g, ' ')}</span>
-                  <span className="text-xs font-medium text-gray-300 ml-2">{cnt}</span>
+                  <span className="text-xs text-slate-600 truncate">{evt.replace(/_/g, ' ')}</span>
+                  <span className="text-xs font-medium text-slate-900 ml-2">{cnt}</span>
                 </div>
               ))}
               {Object.keys(data.authEventCounts).length === 0 && (
-                <span className="text-xs text-gray-600">No events</span>
+                <span className="text-xs text-slate-600">No events</span>
               )}
             </div>
           </div>
@@ -375,39 +438,222 @@ export default function SystemHealthPage() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-4 border-b border-gray-800 pb-0">
-        {TABS.map(t => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`px-4 py-2 text-sm font-medium rounded-t-md transition-colors ${
-              tab === t.key
-                ? 'text-white bg-gray-800 border-b-2 border-indigo-500'
-                : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            {t.label}
-            {data && t.key !== 'all' && (
-              <span className="ml-1.5 text-xs text-gray-600">
-                ({(data.anomalies ?? []).filter(a => a.entity_type === t.key).length})
-              </span>
-            )}
-          </button>
-        ))}
+      <div className="flex gap-1 mb-4 border-b border-slate-200 pb-0">
+        {TABS.map(t => {
+          let borderColor = 'border-slate-300';
+          if (t.key === 'all') borderColor = 'border-blue-600';
+          else if (t.key === 'user') borderColor = 'border-slate-400';
+          else if (t.key === 'company') borderColor = 'border-slate-400';
+          else if (t.key === 'system') borderColor = 'border-red-600';
+          else if (t.key === 'railway') borderColor = 'border-purple-600';
+          
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-4 py-2 text-sm font-medium rounded-t-md transition-all ${
+                tab === t.key
+                  ? `text-white bg-blue-600 border-b-2 ${borderColor}`
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {t.label}
+              {data && t.key !== 'all' && (
+                <span className="ml-1.5 text-xs text-slate-500">
+                  ({(data.anomalies ?? []).filter(a => a.entity_type === t.key).length})
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      {/* Anomaly Table */}
-      {loading && !data ? (
-        <div className="flex items-center justify-center h-32 text-gray-600 text-sm">Loading…</div>
+      {/* Anomaly Table, Railway Efficiency, or Cache Management */}
+      {tab === 'cache' ? (
+        <div className="space-y-4">
+          {cacheMsg && (
+            <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-sm">
+              {cacheMsg}
+            </div>
+          )}
+
+          {cacheLoading && !cacheData ? (
+            <div className="flex items-center justify-center h-32 text-slate-600 text-sm">Loading cache stats…</div>
+          ) : cacheData ? (
+            <>
+              {/* Redis overview */}
+              <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-semibold text-slate-800">Redis</h2>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cacheData.redis.available ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+                    {cacheData.redis.available ? 'Connected' : 'Unavailable'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                  {[
+                    { label: 'Memory Used',    value: cacheData.redis.used_memory },
+                    { label: 'Peak Memory',    value: cacheData.redis.peak_memory },
+                    { label: 'Max Memory',     value: cacheData.redis.max_memory },
+                    { label: 'Eviction Policy', value: cacheData.redis.eviction_policy },
+                    { label: 'Evicted Keys',   value: cacheData.redis.evicted_keys.toLocaleString() },
+                    { label: 'Expired Keys',   value: cacheData.redis.expired_keys.toLocaleString() },
+                    { label: 'Clients',        value: cacheData.redis.connected_clients.toString() },
+                    { label: 'Uptime',         value: `${cacheData.redis.uptime_days}d` },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="bg-slate-50 rounded-md p-3">
+                      <p className="text-xs text-slate-500 mb-0.5">{label}</p>
+                      <p className="text-sm font-semibold text-slate-800 font-mono">{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Key counts per layer */}
+                <div className="border-t border-slate-100 pt-4">
+                  <p className="text-xs font-medium text-slate-600 mb-2">Keys by Layer</p>
+                  <div className="space-y-1.5">
+                    {cacheData.key_counts.map(({ prefix, count }) => (
+                      <div key={prefix} className="flex items-center justify-between">
+                        <span className="text-xs text-slate-600 font-mono">{prefix}</span>
+                        <span className={`text-xs font-semibold ${count === -1 ? 'text-slate-400' : 'text-slate-800'}`}>
+                          {count === -1 ? 'scan error' : count.toLocaleString()} keys
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Cache layers + flush controls */}
+              <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+                <h2 className="text-sm font-semibold text-slate-800 mb-4">Cache Layers</h2>
+                <div className="space-y-3">
+                  {cacheData.layers.map((layer) => (
+                    <div key={layer.prefix} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                      <div>
+                        <p className="text-sm font-medium text-slate-800">{layer.name}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">TTL: {layer.ttl} · {layer.auto_evict ? 'Auto-evict enabled' : 'Manual eviction'}</p>
+                      </div>
+                      {layer.prefix === 'ai_cache' && (
+                        <button
+                          onClick={() => void flushCache('flush_ai')}
+                          className="text-xs px-3 py-1.5 rounded-md bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-colors font-medium"
+                        >
+                          Flush
+                        </button>
+                      )}
+                      {layer.prefix === 'ext_api' && (
+                        <button
+                          onClick={() => void flushCache('flush_ext_api')}
+                          className="text-xs px-3 py-1.5 rounded-md bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-colors font-medium"
+                        >
+                          Flush
+                        </button>
+                      )}
+                      {layer.prefix === 'intelligence' && (
+                        <button
+                          onClick={() => void flushCache('flush_intelligence')}
+                          className="text-xs px-3 py-1.5 rounded-md bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-colors font-medium"
+                        >
+                          Flush
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* External API cache hit rate */}
+              <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+                <h2 className="text-sm font-semibold text-slate-800 mb-4">External API Cache (current process)</h2>
+                <div className="grid grid-cols-3 gap-4 mb-4">
+                  <div className="bg-green-50 rounded-md p-3">
+                    <p className="text-xs text-slate-500 mb-0.5">Hits</p>
+                    <p className="text-xl font-bold text-green-700">{cacheData.ext_api_cache.hits.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-orange-50 rounded-md p-3">
+                    <p className="text-xs text-slate-500 mb-0.5">Misses</p>
+                    <p className="text-xl font-bold text-orange-600">{cacheData.ext_api_cache.misses.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-blue-50 rounded-md p-3">
+                    <p className="text-xs text-slate-500 mb-0.5">Hit Rate</p>
+                    <p className="text-xl font-bold text-blue-700">
+                      {cacheData.ext_api_cache.hit_rate !== null ? `${cacheData.ext_api_cache.hit_rate}%` : '—'}
+                    </p>
+                  </div>
+                </div>
+                {Object.keys(cacheData.ext_api_cache.per_api_hits).length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-slate-600 mb-2">Per API</p>
+                    <div className="space-y-1">
+                      {Object.entries(cacheData.ext_api_cache.per_api_hits).map(([api, hits]) => {
+                        const misses = cacheData.ext_api_cache.per_api_misses[api] ?? 0;
+                        const total = hits + misses;
+                        const rate = total > 0 ? Math.round((hits / total) * 100) : 0;
+                        return (
+                          <div key={api} className="flex items-center gap-3">
+                            <span className="text-xs text-slate-600 font-mono w-32 truncate">{api}</span>
+                            <div className="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                              <div className="bg-green-500 h-full rounded-full" style={{ width: `${rate}%` }} />
+                            </div>
+                            <span className="text-xs text-slate-600 w-10 text-right">{rate}%</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs text-slate-400 text-right">Collected {new Date(cacheData.collected_at).toLocaleTimeString()} · Auto-refreshes every 60s</p>
+            </>
+          ) : (
+            <div className="flex items-center justify-center h-32 text-slate-500 text-sm">Cache data unavailable</div>
+          )}
+        </div>
+      ) : tab === 'railway' ? (
+        <div className="space-y-4">
+          {/* Railway sub-tabs */}
+          <div className="flex gap-2 border-b border-slate-200 pb-0">
+            <button
+              onClick={() => setRailwayView('company-costs')}
+              className={`px-4 py-2 text-sm font-medium rounded-t-md transition-all ${
+                railwayView === 'company-costs'
+                  ? 'text-white bg-blue-600 border-b-2 border-purple-600'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              💰 Company & Activity Breakdown
+            </button>
+            <button
+              onClick={() => setRailwayView('efficiency')}
+              className={`px-4 py-2 text-sm font-medium rounded-t-md transition-all ${
+                railwayView === 'efficiency'
+                  ? 'text-white bg-blue-600 border-b-2 border-amber-600'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              ⚡ Feature Efficiency
+            </button>
+          </div>
+
+          {/* Railway view content */}
+          {railwayView === 'company-costs' ? (
+            <RailwayCompanyCostsPanel />
+          ) : (
+            <RailwayEfficiencyPanel />
+          )}
+        </div>
+      ) : loading && !data ? (
+        <div className="flex items-center justify-center h-32 text-slate-600 text-sm">Loading…</div>
       ) : filtered.length === 0 ? (
-        <div className="flex items-center justify-center h-32 text-gray-600 text-sm">
+        <div className="flex items-center justify-center h-32 text-slate-600 text-sm">
           No anomalies in the last 24 hours 🎉
         </div>
       ) : (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+        <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-xs text-gray-500 uppercase tracking-wide">
+              <tr className="border-b border-slate-200 text-xs text-slate-600 uppercase tracking-wide bg-slate-50">
                 <th className="text-left px-4 py-3 w-24">Severity</th>
                 <th className="text-left px-4 py-3">Type</th>
                 <th className="text-left px-4 py-3 hidden md:table-cell">Entity</th>
@@ -416,46 +662,46 @@ export default function SystemHealthPage() {
                 <th className="text-left px-4 py-3">Time</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-800/60">
+            <tbody className="divide-y divide-slate-200">
               {filtered.map(anomaly => (
-                <tr key={anomaly.id} className="hover:bg-gray-800/40 transition-colors">
+                <tr key={anomaly.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-4 py-3">
                     <SeverityBadge severity={anomaly.severity} />
                   </td>
                   <td className="px-4 py-3">
-                    <span className="font-mono text-xs text-gray-300">{anomaly.type}</span>
+                    <span className="font-mono text-xs text-slate-700">{anomaly.type}</span>
                     {anomaly.alerted_at && (
-                      <span className="ml-2 text-xs text-indigo-400">notified</span>
+                      <span className="ml-2 text-xs text-blue-600">notified</span>
                     )}
                   </td>
                   <td className="px-4 py-3 hidden md:table-cell">
-                    <span className="text-xs text-gray-400">
+                    <span className="text-xs text-slate-600">
                       {anomaly.entity_type}
                       {anomaly.entity_id && (
-                        <span className="text-gray-600"> / {anomaly.entity_id.slice(0, 12)}…</span>
+                        <span className="text-slate-500"> / {anomaly.entity_id.slice(0, 12)}…</span>
                       )}
                     </span>
                   </td>
                   <td className="px-4 py-3 hidden lg:table-cell">
                     {anomaly.metric_value != null ? (
-                      <span className="text-xs text-gray-400">
-                        <span className="text-white font-medium">{anomaly.metric_value}</span>
+                      <span className="text-xs text-slate-600">
+                        <span className="text-slate-900 font-medium">{anomaly.metric_value}</span>
                         {anomaly.threshold != null && (
-                          <span className="text-gray-600"> / {anomaly.threshold.toFixed(1)}</span>
+                          <span className="text-slate-500"> / {anomaly.threshold.toFixed(1)}</span>
                         )}
                         {anomaly.baseline != null && (
-                          <span className="text-gray-700"> (base {anomaly.baseline.toFixed(1)}/h)</span>
+                          <span className="text-slate-600"> (base {anomaly.baseline.toFixed(1)}/h)</span>
                         )}
                       </span>
                     ) : (
-                      <span className="text-gray-700 text-xs">—</span>
+                      <span className="text-slate-500 text-xs">—</span>
                     )}
                   </td>
                   <td className="px-4 py-3 hidden xl:table-cell">
                     <MetaExpander metadata={anomaly.metadata} />
                   </td>
                   <td className="px-4 py-3">
-                    <span className="text-xs text-gray-500">{fmt(anomaly.created_at)}</span>
+                    <span className="text-xs text-slate-600">{fmt(anomaly.created_at)}</span>
                   </td>
                 </tr>
               ))}
@@ -467,15 +713,15 @@ export default function SystemHealthPage() {
       {/* Baseline reference */}
       {data && Object.keys(data.baselines).length > 0 && (
         <details className="mt-6">
-          <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-400 select-none">
+          <summary className="text-xs text-slate-600 cursor-pointer hover:text-slate-800 select-none font-medium">
             Current baselines (hourly averages over last 24 h)
           </summary>
           <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
             {Object.entries(data.baselines).map(([type, avg]) => (
-              <div key={type} className="bg-gray-900 border border-gray-800 rounded p-2">
-                <p className="text-xs font-mono text-gray-500 truncate">{type}</p>
-                <p className="text-sm font-medium text-gray-300">
-                  {avg.toFixed(2)}<span className="text-xs text-gray-600">/h</span>
+              <div key={type} className="bg-white border border-slate-200 rounded p-2 shadow-sm">
+                <p className="text-xs font-mono text-slate-600 truncate">{type}</p>
+                <p className="text-sm font-medium text-slate-900">
+                  {avg.toFixed(2)}<span className="text-xs text-slate-600 ml-0.5">/h</span>
                 </p>
               </div>
             ))}
@@ -484,15 +730,15 @@ export default function SystemHealthPage() {
       )}
 
       {/* ── System Intelligence ───────────────────────────────────────────── */}
-      <div className="mt-10 border-t border-gray-800 pt-8">
+      <div className="mt-10 border-t border-slate-200 pt-8">
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h2 className="text-base font-semibold text-white">System Intelligence</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Multi-service metrics · Cost estimates</p>
+            <h2 className="text-base font-semibold text-slate-900">System Intelligence</h2>
+            <p className="text-xs text-slate-600 mt-0.5">Multi-service metrics · Cost estimates</p>
           </div>
-          {intelLoading && <span className="text-xs text-gray-600 animate-pulse">Refreshing…</span>}
+          {intelLoading && <span className="text-xs text-slate-600 animate-pulse">Refreshing…</span>}
           {intel?.errors && Object.keys(intel.errors).length > 0 && (
-            <span className="text-xs text-yellow-500 bg-yellow-500/10 px-2 py-0.5 rounded">
+            <span className="text-xs text-yellow-700 bg-yellow-50 px-2 py-0.5 rounded border border-yellow-200">
               Partial data — {Object.keys(intel.errors).join(', ')} unavailable
             </span>
           )}
@@ -518,8 +764,8 @@ export default function SystemHealthPage() {
                   <MetricRow label="Avg read"   value={`${intel.metrics.supabase.avgReadLatency.toFixed(0)} ms`} />
                 )}
                 {activeSection === 'supabase' && (
-                  <div className="mt-3 pt-3 border-t border-gray-800/60">
-                    <p className="text-xs text-gray-500 mb-1">Cost contribution</p>
+                  <div className="mt-3 pt-3 border-t border-slate-200">
+                    <p className="text-xs text-slate-600 mb-1">Cost contribution</p>
                     <CostLine cost={intel.cost?.breakdown?.['Supabase']} />
                   </div>
                 )}
@@ -544,8 +790,8 @@ export default function SystemHealthPage() {
                   <MetricRow label="Avg verify"      value={`${intel.metrics.firebase.avgVerifyLatencyMs} ms`} />
                 )}
                 {activeSection === 'firebase' && (
-                  <div className="mt-3 pt-3 border-t border-gray-800/60">
-                    <p className="text-xs text-gray-500 mb-1">Cost contribution</p>
+                  <div className="mt-3 pt-3 border-t border-slate-200">
+                    <p className="text-xs text-slate-600 mb-1">Cost contribution</p>
                     <CostLine cost={intel.cost?.breakdown?.['Firebase Auth']} />
                   </div>
                 )}
@@ -573,12 +819,12 @@ export default function SystemHealthPage() {
                   <MetricRow label="p95 latency" value={`${intel.metrics.api.p95LatencyMs} ms`} />
                 )}
                 {activeSection === 'api' && intel.metrics.api.topEndpoints.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-gray-800/60 space-y-1">
-                    <p className="text-xs text-gray-500 mb-1">Top endpoints</p>
+                  <div className="mt-3 pt-3 border-t border-slate-200 space-y-1">
+                    <p className="text-xs text-slate-600 mb-1">Top endpoints</p>
                     {intel.metrics.api.topEndpoints.slice(0, 5).map(ep => (
                       <div key={ep.endpoint} className="flex items-center justify-between">
-                        <span className="text-xs font-mono text-gray-400 truncate max-w-[160px]">{ep.endpoint}</span>
-                        <span className="text-xs text-gray-500 ml-2">{ep.calls}</span>
+                        <span className="text-xs font-mono text-slate-600 truncate max-w-[160px]">{ep.endpoint}</span>
+                        <span className="text-xs text-slate-600 ml-2">{ep.calls}</span>
                       </div>
                     ))}
                     <div className="mt-2">
@@ -615,7 +861,7 @@ export default function SystemHealthPage() {
                 )}
               </>
             ) : (
-              <p className="text-xs text-gray-600 mt-1">No external calls observed yet</p>
+              <p className="text-xs text-slate-600 mt-1">No external calls observed yet</p>
             )}
           </IntelCard>
 
@@ -638,11 +884,11 @@ export default function SystemHealthPage() {
                   <MetricRow label="Top command"  value={`${intel.metrics.redis.topCommands[0].command} (${intel.metrics.redis.topCommands[0].pct}%)`} />
                 )}
                 {activeSection === 'redis' && (
-                  <div className="mt-3 pt-3 border-t border-gray-800/60 space-y-1">
+                  <div className="mt-3 pt-3 border-t border-slate-200 space-y-1">
                     {intel.metrics.redis.topFeatures.slice(0, 5).map(f => (
                       <div key={f.feature} className="flex items-center justify-between">
-                        <span className="text-xs font-mono text-gray-400">{f.feature}</span>
-                        <span className="text-xs text-gray-500">{f.total.toLocaleString()} ({f.pct}%)</span>
+                        <span className="text-xs font-mono text-slate-600">{f.feature}</span>
+                        <span className="text-xs text-slate-600">{f.total.toLocaleString()} ({f.pct}%)</span>
                       </div>
                     ))}
                     <div className="mt-2"><CostLine cost={intel.cost?.breakdown?.['Upstash Redis']} /></div>
@@ -663,9 +909,9 @@ export default function SystemHealthPage() {
             {intel?.cost ? (
               <>
                 <div className="mb-3">
-                  <p className="text-2xl font-bold text-white">
+                  <p className="text-2xl font-bold text-slate-900">
                     ${intel.cost.totalMonthlyEstimate.toFixed(2)}
-                    <span className="text-xs text-gray-500 font-normal ml-1">/ mo [est]</span>
+                    <span className="text-xs text-slate-600 font-normal ml-1">/ mo [est]</span>
                   </p>
                   <ConfidencePill confidence={intel.cost.confidence} />
                 </div>
@@ -673,19 +919,19 @@ export default function SystemHealthPage() {
                   .sort((a, b) => b.estimatedMonthly - a.estimatedMonthly)
                   .map(s => (
                     <div key={s.service} className="flex items-center justify-between py-0.5">
-                      <span className="text-xs text-gray-400 truncate">{s.service}</span>
-                      <span className="text-xs font-medium text-gray-300 ml-2">
+                      <span className="text-xs text-slate-600 truncate">{s.service}</span>
+                      <span className="text-xs font-medium text-slate-700 ml-2">
                         ${s.estimatedMonthly.toFixed(2)}
                       </span>
                     </div>
                   ))}
                 {activeSection === 'cost' && (
-                  <div className="mt-3 pt-3 border-t border-gray-800/60">
-                    <p className="text-xs text-yellow-500/80 leading-relaxed">
+                  <div className="mt-3 pt-3 border-t border-slate-200">
+                    <p className="text-xs text-yellow-700 leading-relaxed">
                       {intel.cost.warnings[0]}
                     </p>
                     {intel.cost.confidence === 'low' && (
-                      <p className="text-xs text-gray-600 mt-1">
+                      <p className="text-xs text-slate-600 mt-1">
                         Counters are at zero — instrument more endpoints to improve accuracy.
                       </p>
                     )}
@@ -697,16 +943,16 @@ export default function SystemHealthPage() {
         </div>
       </div>
 
-      {/* ── Activity & Cost Breakdown ──────────────────────────────────────── */}
-      <div className="mt-10 border-t border-gray-800 pt-8">
+      {/* -- Activity & Cost Breakdown ---- */}
+      <div className="mt-10 border-t border-slate-200 pt-8">
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h2 className="text-base font-semibold text-white">Activity × Cost Breakdown</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <h2 className="text-base font-semibold text-slate-900">Activity × Cost Breakdown</h2>
+            <p className="text-xs text-slate-600 mt-0.5">
               How platform activity drives LLM + infra spend · current month
             </p>
           </div>
-          {activityLoading && <span className="text-xs text-gray-600 animate-pulse">Loading…</span>}
+          {activityLoading && <span className="text-xs text-slate-600 animate-pulse">Loading…</span>}
         </div>
 
         {activityData ? (
@@ -714,29 +960,29 @@ export default function SystemHealthPage() {
 
             {/* Feature area cost card */}
             <div
-              className="bg-gray-900 border border-gray-800 rounded-lg p-4 lg:col-span-1 cursor-pointer hover:bg-gray-800/50 hover:border-gray-700 transition-colors"
+              className="bg-white border border-slate-200 rounded-lg p-4 lg:col-span-1 cursor-pointer hover:bg-slate-50 hover:border-slate-300 transition-colors shadow-sm"
               onClick={() => setDrilldown({ serviceKey: 'llm', serviceLabel: 'LLM Usage by Organisation', serviceCostUsd: 0 })}
             >
               <div className="flex items-center justify-between mb-1">
-                <p className="text-sm font-medium text-white">Cost by Feature Area</p>
-                <span className="text-xs text-gray-600">↗ orgs</span>
+                <p className="text-sm font-medium text-slate-900">Cost by Feature Area</p>
+                <span className="text-xs text-slate-600">↗ orgs</span>
               </div>
-              <p className="text-xs text-gray-600 mb-3">What the platform spends LLM budget on · click for per-org view</p>
+              <p className="text-xs text-slate-600 mb-3">What the platform spends LLM budget on · click for per-org view</p>
               {activityData.by_feature_area.length === 0 ? (
-                <p className="text-xs text-gray-600">No LLM usage recorded this month.</p>
+                <p className="text-xs text-slate-600">No LLM usage recorded this month.</p>
               ) : (() => {
                 const maxCost = activityData.by_feature_area[0]?.total_cost_usd ?? 1;
                 return activityData.by_feature_area.slice(0, 8).map(f => (
                   <div key={f.feature_area} className="mb-2">
                     <div className="flex items-center justify-between text-xs mb-0.5">
-                      <span className="text-gray-300 truncate max-w-[170px]">{f.feature_area}</span>
-                      <span className="text-gray-400 ml-2 shrink-0">
+                      <span className="text-slate-700 truncate max-w-[170px]">{f.feature_area}</span>
+                      <span className="text-slate-600 ml-2 shrink-0">
                         ${f.total_cost_usd.toFixed(4)} · {f.call_count.toLocaleString()} calls
                       </span>
                     </div>
-                    <div className="w-full bg-gray-800 rounded-full h-1.5">
+                    <div className="w-full bg-slate-200 rounded-full h-1.5 shadow-sm">
                       <div
-                        className="bg-indigo-500 h-1.5 rounded-full"
+                        className="bg-blue-600 h-1.5 rounded-full"
                         style={{ width: `${Math.max(2, (f.total_cost_usd / maxCost) * 100)}%` }}
                       />
                     </div>
@@ -747,11 +993,11 @@ export default function SystemHealthPage() {
 
             {/* Platform post distribution card */}
             <div
-              className="bg-gray-900 border border-gray-800 rounded-lg p-4 cursor-pointer hover:bg-gray-800/50 hover:border-gray-700 transition-colors"
+              className="bg-white border border-slate-200 rounded-lg p-4 cursor-pointer hover:bg-slate-50 hover:border-slate-300 transition-colors shadow-sm"
               onClick={() => setDrilldown({ serviceKey: 'api', serviceLabel: 'API Usage by Organisation', serviceCostUsd: 0 })}
             >
               <div className="flex items-center justify-between mb-1">
-                <p className="text-sm font-medium text-white">Posts by Platform</p>
+                <p className="text-sm font-medium text-slate-900">Posts by Platform</p>
                 <span className="text-xs text-gray-600">↗ orgs</span>
               </div>
               <p className="text-xs text-gray-600 mb-3">

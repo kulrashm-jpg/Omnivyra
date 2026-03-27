@@ -8,6 +8,7 @@ import { getCachedCompletion, setCachedCompletion, buildNormalizedKey } from './
 import { resolveEffectiveModel } from './aiModelRouter';
 import { recordGptCall, recordGptLatency, recordGptFailure } from './metricsCollector';
 import { evaluateJobCost } from './jobCostEstimator';
+import { trackLlmTokens } from '../../lib/redis/usageProtection';
 
 const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
@@ -284,6 +285,8 @@ const runCompletion = async (
   const inputTokens = usage?.prompt_tokens ?? 0;
   const outputTokens = usage?.completion_tokens ?? 0;
   const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
+  // BUG#8 fix: advisory LLM token tracking
+  trackLlmTokens(totalTokens);
   const cost = resolveLlmCost('openai', request.model, inputTokens, outputTokens);
   void logUsageEvent({
     organization_id: request.companyId ?? UNKNOWN_ORG,

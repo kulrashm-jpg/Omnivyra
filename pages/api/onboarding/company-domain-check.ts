@@ -17,8 +17,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
-import { verifyAuthHeader } from '../../../lib/auth/serverValidation';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { extractDomain, isFreeEmailDomain } from '../../../backend/services/companyMatchService';
 
 type MatchedResponse = {
@@ -37,12 +37,12 @@ export default async function handler(
 ) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  // ── 1. Verify Firebase token ──────────────────────────────────────────────
-  let firebaseUid: string;
+  // ── 1. Verify Supabase token ──────────────────────────────────────────────
+  let supabaseUid: string;
   let email: string;
   try {
-    const verified = await verifyAuthHeader(req.headers.authorization);
-    firebaseUid = verified.uid;
+    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
+    supabaseUid = verified.id;
     email       = verified.email;
   } catch {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -54,17 +54,11 @@ export default async function handler(
     return res.status(200).json({ matched: false });
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
-
   // ── 3. Resolve the user's internal ID ────────────────────────────────────
   const { data: userRow } = await supabase
     .from('users')
     .select('id')
-    .eq('firebase_uid', firebaseUid)
+    .or(`supabase_uid.eq.${supabaseUid},email.eq.${email.toLowerCase()}`)
     .maybeSingle();
 
   // If the user has no DB row yet (edge case during onboarding), let setup-company handle it

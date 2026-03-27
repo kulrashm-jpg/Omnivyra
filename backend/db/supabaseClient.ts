@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { trackDbOp } from '../../lib/redis/usageProtection';
 
 // Load .env.local for server (helps during Next.js hot reload / env reload)
 dotenv.config({ path: `${process.cwd()}/.env.local` });
@@ -36,8 +37,34 @@ function getAdminClient(): SupabaseClient {
 
 // Proxy so all existing `supabase.from(...)` call sites work unchanged.
 // The underlying client is created on first property access (i.e. first actual use).
+// BUG#7 fix: intercept .select() / write methods so advisory DB counters are tracked.
 export const supabase = new Proxy({} as SupabaseClient, {
   get(_target, prop, receiver) {
-    return Reflect.get(getAdminClient(), prop, receiver);
+    const client = getAdminClient();
+    const val = Reflect.get(client, prop, receiver);
+    if (prop === 'from' && typeof val === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return function (...fromArgs: any[]) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const builder: any = (val as Function).apply(client, fromArgs);
+        return new Proxy(builder, {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          get(bTarget: any, bProp: any) {
+            const method = bTarget[bProp];
+            if (typeof method !== 'function') return method;
+            if (bProp === 'select') {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              return function (...a: any[]) { trackDbOp(1, 'read'); return method.apply(bTarget, a); };
+            }
+            if (bProp === 'insert' || bProp === 'upsert' || bProp === 'update' || bProp === 'delete') {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              return function (...a: any[]) { trackDbOp(1, 'write'); return method.apply(bTarget, a); };
+            }
+            return method.bind(bTarget);
+          },
+        });
+      };
+    }
+    return val;
   },
 });

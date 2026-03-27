@@ -291,16 +291,27 @@ function getRedis(): IORedis {
   return _redis;
 }
 
+/** Disconnect the Redis client (for graceful shutdown). */
+export function shutdownIntentExecutionRedis(): void {
+  if (_redis) {
+    _redis.quit().catch(() => {});
+    _redis = null;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Supabase client (service-role, for config reads and savings log writes)
 // ─────────────────────────────────────────────────────────────────────────────
 
+let _db: ReturnType<typeof createClient> | null = null;
 function getDb() {
-  return createClient(
+  if (_db) return _db;
+  _db = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { persistSession: false, autoRefreshToken: false } },
   );
+  return _db;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,7 +356,7 @@ export async function getCompanyExecutionFlags(companyId: string): Promise<Compa
 
   try {
     const db = getDb();
-    const { data } = await db
+    const { data } = await (db as any)
       .from('company_execution_config')
       .select('*')
       .eq('company_id', companyId)
@@ -382,7 +393,7 @@ export async function setCompanyExecutionFlags(
     frequency: { ...existing.frequency, ...flags.frequency },
   };
 
-  await db.from('company_execution_config').upsert(
+  await (db as any).from('company_execution_config').upsert(
     {
       company_id:                   companyId,
       insights_market_trends:       merged.insights.market_trends,
@@ -421,7 +432,7 @@ async function loadAllCompanyConfigs(): Promise<Map<string, CompanyExecutionFlag
 
   try {
     const db = getDb();
-    const { data } = await db
+    const { data } = await (db as any)
       .from('company_execution_config')
       .select('company_id, insights_market_trends, insights_competitor_tracking, insights_ai_recommendations, frequency_insights');
 

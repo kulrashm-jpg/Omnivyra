@@ -6,6 +6,8 @@
  */
 
 import { Queue } from 'bullmq';
+import { applyQueueProtection } from './bullmqClient';
+import { instrumentQueue } from './queueInstrumentation';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
@@ -63,6 +65,8 @@ export function getIntelligencePollingQueue(): Queue {
     intelligencePollingQueue.on('error', (err) => {
       console.error('[intelligence-polling] queue error', err);
     });
+    instrumentQueue(intelligencePollingQueue);
+    applyQueueProtection(intelligencePollingQueue);  // BUG#10 fix
   }
   return intelligencePollingQueue;
 }

@@ -19,6 +19,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
   getCompanyExecutionFlags,
@@ -60,13 +61,7 @@ function validateBody(body: unknown): { valid: boolean; error?: string } {
 /** Resolve the company_id for the authenticated user from their profile. */
 async function resolveCompanyId(userId: string): Promise<string | null> {
   try {
-    const { createClient } = await import('@supabase/supabase-js');
-    const db = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      { auth: { persistSession: false, autoRefreshToken: false } },
-    );
-    const { data } = await db
+    const { data } = await supabase
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', userId)

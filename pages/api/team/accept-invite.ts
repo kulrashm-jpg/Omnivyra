@@ -25,8 +25,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
-import { createClient } from '@supabase/supabase-js';
-import { verifyAuthHeader } from '../../../lib/auth/serverValidation';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -37,8 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let callerUid: string;
   let callerEmail: string;
   try {
-    const verified = await verifyAuthHeader(req.headers.authorization);
-    callerUid = verified.uid;
+    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
+    callerUid   = verified.id;
     callerEmail = verified.email;
   } catch {
     return res.status(401).json({ error: 'Authentication required' });
@@ -53,12 +53,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const tokenHash = createHash('sha256').update(token.trim()).digest('hex');
-
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
 
   // ── 3. Look up the invitation (single query — fail fast if invalid) ───────
   const { data: invitation } = await supabase
@@ -94,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { data: userRow } = await supabase
     .from('users')
     .select('id, company_id')
-    .eq('firebase_uid', callerUid)
+    .or(`supabase_uid.eq.${callerUid},email.eq.${callerEmail.toLowerCase()}`)
     .maybeSingle();
 
   if (!userRow) {

@@ -47,7 +47,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   const platformScopeRequested = req.query?.scope === 'platform';
   const testCategory = typeof category === 'string' ? category : '';
-  const testGeo = typeof geo === 'string' ? geo : 'US';
+  const testGeo = typeof geo === 'string' ? geo.toLowerCase() : 'us';
   const { defaultCompanyId } = await resolveUserContext(req);
   const companyId =
     (req.query.companyId as string | undefined) ||

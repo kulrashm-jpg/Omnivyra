@@ -6,7 +6,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -14,11 +14,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
 
   // Verify super-admin
   const { data: profile } = await supabase

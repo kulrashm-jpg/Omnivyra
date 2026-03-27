@@ -18,8 +18,7 @@ import { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import type { ConfirmationResult } from 'firebase/auth';
-import { getFirebaseAuth, setupRecaptcha, sendPhoneOtp, clearRecaptcha } from '../../lib/firebase';
+import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { getAuthToken } from '../../utils/getAuthToken';
 
 type Step = 'loading' | 'send' | 'otp' | 'error';
@@ -34,13 +33,13 @@ export default function VerifyPhonePage() {
   const [loading, setLoading]         = useState(false);
   const [errorMsg, setErrorMsg]       = useState<string | null>(null);
 
-  const confirmationRef = useRef<ConfirmationResult | null>(null);
+  const confirmationRef = useRef<any>(null);
 
-  // ── 1. Require Firebase auth, then fetch stored phone ────────────────────
+  // ── 1. Require Supabase session, then fetch stored phone ─────────────────
   useEffect(() => {
     const init = async () => {
-      const fbUser = getFirebaseAuth().currentUser;
-      if (!fbUser) {
+      const { data } = await getSupabaseBrowser().auth.getSession();
+      if (!data.session) {
         router.replace('/login');
         return;
       }
@@ -72,17 +71,16 @@ export default function VerifyPhonePage() {
     };
 
     void init();
-    return () => clearRecaptcha();
   }, [router]);
 
-  // ── 2. Send Firebase OTP ──────────────────────────────────────────────────
+  // ── 2. Send Supabase OTP ──────────────────────────────────────────────────
   async function handleSendOtp() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      setupRecaptcha('recaptcha-container');
-      const result = await sendPhoneOtp(phone);
-      confirmationRef.current = result;
+      const supabase = getSupabaseBrowser();
+      const { error } = await supabase.auth.signInWithOtp({ phone });
+      if (error) throw error;
       setStep('otp');
     } catch (err: any) {
       setErrorMsg(err.message ?? 'Failed to send SMS. Please try again.');
@@ -98,7 +96,9 @@ export default function VerifyPhonePage() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      await confirmationRef.current!.confirm(otp.trim());
+      const supabase = getSupabaseBrowser();
+      const { error } = await supabase.auth.verifyOtp({ phone, token: otp.trim(), type: 'sms' });
+      if (error) throw error;
       router.replace('/dashboard');
     } catch (err: any) {
       setErrorMsg('Incorrect code. Please try again.');
@@ -112,9 +112,6 @@ export default function VerifyPhonePage() {
         <title>Verify Phone | Omnivyra</title>
         <meta name="robots" content="noindex" />
       </Head>
-
-      {/* Invisible reCAPTCHA anchor */}
-      <div id="recaptcha-container" />
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
 

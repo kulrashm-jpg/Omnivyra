@@ -3,6 +3,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import { getAuthToken } from '../utils/getAuthToken';
+import CostAccountingDashboard from '../components/super-admin/CostAccountingDashboard';
+import ActivityCostBreakdown from '../components/super-admin/ActivityCostBreakdown';
 import {
   ArrowLeft,
   BarChart3,
@@ -124,6 +126,7 @@ export default function SuperAdminPanel() {
   const { userRole } = useCompanyContext();
   const isSuperAdmin = userRole === 'SUPER_ADMIN';
   const [isSuperAdminSession, setIsSuperAdminSession] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const isSuperAdminRoute = router.pathname?.startsWith('/super-admin');
   const canShowExternalApisTab = isSuperAdminRoute || isSuperAdmin || isSuperAdminSession;
   useEffect(() => {
@@ -134,7 +137,7 @@ export default function SuperAdminPanel() {
   const [activeTab, setActiveTab] = useState('analytics');
   const [analyticsSubTab, setAnalyticsSubTab] = useState<'overview' | 'campaign-health'>('overview');
   const [companySubTab, setCompanySubTab] = useState<'users' | 'rbac'>('users');
-  const [plansSubTab, setPlansSubTab] = useState<'plans' | 'consumption'>('plans');
+  const [costSubTab, setCostSubTab] = useState<'accounting' | 'activities'>('accounting');
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
   const [analyticsSummary, setAnalyticsSummary] = useState<AnalyticsSummary | null>(null);
@@ -190,6 +193,7 @@ export default function SuperAdminPanel() {
   const [isSavingPlan, setIsSavingPlan] = useState<string | null>(null);
   const [plansSaveError, setPlansSaveError] = useState<string | null>(null);
   const [plansSaveSuccess, setPlansSaveSuccess] = useState<string | null>(null);
+  const [plansSubTab, setPlansSubTab] = useState<'plans' | 'consumption'>('plans');
   const [externalApisHealth, setExternalApisHealth] = useState<{ healthy: number; warning: number; failed: number; status: string } | null>(null);
   const [apiSubTab, setApiSubTab] = useState<'social' | 'trend' | 'community' | 'llm' | 'image' | 'others'>('social');
   const [catalogApis, setCatalogApis] = useState<any[]>([]);
@@ -445,6 +449,9 @@ export default function SuperAdminPanel() {
         const companiesData = await companiesResponse.json();
         setCompanies(companiesData.companies || []);
         setIsSuperAdminSession(true);
+        setAuthError(null);
+      } else if (companiesResponse.status === 403) {
+        setAuthError('Session expired or not authorised. Please log in via the Super Admin login page.');
       }
 
       // Load users
@@ -453,6 +460,9 @@ export default function SuperAdminPanel() {
         const usersData = await usersResponse.json();
         setAppUsers(usersData.users || []);
         setIsSuperAdminSession(true);
+        setAuthError(null);
+      } else if (usersResponse.status === 403) {
+        setAuthError(prev => prev ?? 'Session expired or not authorised. Please log in via the Super Admin login page.');
       }
 
       // Load Community-AI metrics
@@ -1005,31 +1015,33 @@ export default function SuperAdminPanel() {
   const permissionEntries = Object.entries(rbacDraftPermissions || {});
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-red-50 via-orange-50 to-yellow-50">
+    <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4">
+      <div className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-6 py-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <button 
                 onClick={() => window.location.href = '/team-management'}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-600"
               >
-                <ArrowLeft className="h-5 w-5 text-gray-600" />
+                <ArrowLeft className="h-5 w-5" />
               </button>
               <div>
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-red-600 to-orange-600 bg-clip-text text-transparent flex items-center gap-3">
-                  <BarChart3 className="h-8 w-8 text-red-600" />
+                <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
+                  <div className="p-2.5 bg-blue-100 rounded-lg">
+                    <BarChart3 className="h-6 w-6 text-blue-600" />
+                  </div>
                   Platform Analytics Console
                 </h1>
-                <p className="text-gray-600 mt-1">Realtime analytics and governance across all tenants</p>
+                <p className="text-sm text-slate-600 mt-1">Realtime analytics and governance across all tenants</p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <button 
                 onClick={loadSuperAdminData}
                 disabled={isLoading}
-                className="px-4 py-2 text-gray-600 hover:text-gray-900 font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+                className="px-4 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 font-medium transition-all rounded-lg disabled:opacity-50 flex items-center gap-2"
               >
                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
                 Refresh
@@ -1041,7 +1053,7 @@ export default function SuperAdminPanel() {
                   window.location.href = '/super-admin/login';
                 }}
                 disabled={isLoggingOut}
-                className="px-4 py-2 bg-gray-900 text-white rounded-lg font-medium disabled:opacity-50"
+                className="px-4 py-2 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-medium transition-all disabled:opacity-50"
               >
                 {isLoggingOut ? 'Signing out...' : 'Logout'}
               </button>
@@ -1052,15 +1064,14 @@ export default function SuperAdminPanel() {
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Navigation Tabs */}
-        <div className="flex space-x-1 bg-gray-100 rounded-lg p-1 mb-8">
-          {[
-            { id: 'analytics',     label: 'Analytics',        icon: BarChart3  },
+        <div className="flex flex-wrap gap-2 bg-white rounded-lg p-2 mb-8 shadow-sm border border-slate-200">
+          {[            { id: 'analytics',     label: 'Analytics',        icon: BarChart3  },
             { id: 'company-users', label: 'Companies & Users', icon: Users      },
             { id: 'plans',         label: 'Pricing & Plans',   icon: DollarSign },
             { id: 'community-ai',  label: 'Engagement',        icon: Activity   },
+            { id: 'cost-analysis', label: 'Cost Analysis',     icon: DollarSign },
             { id: 'audit',         label: 'Audit Logs',        icon: Eye        },
             { id: 'social-platforms', label: 'APIs',           icon: Globe      },
-            { id: 'system-health', label: 'System Health',     icon: TrendingUp },
             { id: 'blog',          label: 'Blog',              icon: FileText   },
           ].map((tab) => {
             const Icon = tab.icon;
@@ -1069,14 +1080,13 @@ export default function SuperAdminPanel() {
                 key={tab.id}
                 onClick={() => {
                   if (tab.id === 'blog') { router.push('/admin/blog'); return; }
-                  if (tab.id === 'system-health') { router.push('/super-admin/system-health'); return; }
                   setActiveTab(tab.id);
                   if (tab.id === 'social-platforms') loadSocialPlatforms();
                 }}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-all duration-200 whitespace-nowrap ${
                   activeTab === tab.id
-                    ? 'bg-white text-red-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
               >
                 <Icon className="h-4 w-4" />
@@ -1090,12 +1100,12 @@ export default function SuperAdminPanel() {
         {activeTab === 'analytics' && (
           <div className="space-y-6">
             {/* Analytics sub-tabs */}
-            <div className="flex space-x-1 bg-gray-100 rounded-lg p-1 w-fit">
+            <div className="flex gap-2 bg-white rounded-lg p-2 w-fit border border-slate-200 shadow-sm">
               {([{ id: 'overview', label: 'Overview' }, { id: 'campaign-health', label: 'Campaign Health' }] as const).map((sub) => (
                 <button
                   key={sub.id}
                   onClick={() => setAnalyticsSubTab(sub.id)}
-                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${analyticsSubTab === sub.id ? 'bg-white text-red-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${analyticsSubTab === sub.id ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'}`}
                 >
                   {sub.label}
                 </button>
@@ -1103,56 +1113,56 @@ export default function SuperAdminPanel() {
             </div>
 
             {analyticsSubTab === 'overview' && <><div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+              <div className="bg-white rounded-lg shadow-sm p-6 border border-slate-200 hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3">
                   <div className="p-3 bg-blue-100 rounded-lg">
                     <BarChart3 className="h-6 w-6 text-blue-600" />
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Total Posts</p>
-                    <p className="text-2xl font-bold text-gray-900">
+                    <p className="text-sm text-slate-600">Total Posts</p>
+                    <p className="text-2xl font-bold text-slate-900">
                       {isLoadingAnalytics ? '—' : (analyticsSummary?.total_posts ?? 0).toLocaleString()}
                     </p>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+              <div className="bg-white rounded-lg shadow-sm p-6 border border-slate-200 hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3">
-                  <div className="p-3 bg-green-100 rounded-lg">
-                    <Activity className="h-6 w-6 text-green-600" />
+                  <div className="p-3 bg-emerald-100 rounded-lg">
+                    <Activity className="h-6 w-6 text-emerald-600" />
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Total Engagement</p>
-                    <p className="text-2xl font-bold text-gray-900">
+                    <p className="text-sm text-slate-600">Total Engagement</p>
+                    <p className="text-2xl font-bold text-slate-900">
                       {isLoadingAnalytics ? '—' : (analyticsSummary?.total_engagement ?? 0).toLocaleString()}
                     </p>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+              <div className="bg-white rounded-lg shadow-sm p-6 border border-slate-200 hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3">
-                  <div className="p-3 bg-orange-100 rounded-lg">
-                    <Eye className="h-6 w-6 text-orange-600" />
+                  <div className="p-3 bg-amber-100 rounded-lg">
+                    <Eye className="h-6 w-6 text-amber-600" />
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Total Reach</p>
-                    <p className="text-2xl font-bold text-gray-900">
+                    <p className="text-sm text-slate-600">Total Reach</p>
+                    <p className="text-2xl font-bold text-slate-900">
                       {isLoadingAnalytics ? '—' : (analyticsSummary?.total_reach ?? 0).toLocaleString()}
                     </p>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+              <div className="bg-white rounded-lg shadow-sm p-6 border border-slate-200 hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3">
                   <div className="p-3 bg-purple-100 rounded-lg">
                     <TrendingUp className="h-6 w-6 text-purple-600" />
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Avg Engagement Rate</p>
-                    <p className="text-2xl font-bold text-gray-900">
+                    <p className="text-sm text-slate-600">Avg Engagement Rate</p>
+                    <p className="text-2xl font-bold text-slate-900">
                       {isLoadingAnalytics
                         ? '—'
                         : `${(analyticsSummary?.avg_engagement_rate ?? 0).toFixed(2)}%`}
@@ -1167,10 +1177,10 @@ export default function SuperAdminPanel() {
                 onClick={() => setActiveTab('social-platforms')}
                 className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
                   externalApisHealth?.status === 'healthy'
-                    ? 'bg-green-50 border-green-200 text-green-800 hover:bg-green-100'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
                     : externalApisHealth != null
                     ? 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
-                    : 'bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100'
+                    : 'bg-slate-100 border-slate-200 text-slate-800 hover:bg-slate-200'
                 }`}
               >
                 <Key className="h-4 w-4" />
@@ -1180,53 +1190,53 @@ export default function SuperAdminPanel() {
               </button>
             )}
 
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
-                <h3 className="text-lg font-semibold text-gray-900">Platform Performance</h3>
-                <p className="text-sm text-gray-600 mt-1">
+            <div className="bg-white rounded-lg shadow-sm border border-slate-200">
+              <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 rounded-t-lg">
+                <h3 className="text-lg font-bold text-slate-900">Platform Performance</h3>
+                <p className="text-sm text-slate-600 mt-1">
                   Aggregated engagement and reach across all published posts.
                 </p>
               </div>
               <div className="overflow-x-auto">
                 {isLoadingAnalytics ? (
-                  <div className="px-6 py-8 text-sm text-gray-500">Loading analytics…</div>
+                  <div className="px-6 py-8 text-sm text-slate-600">Loading analytics…</div>
                 ) : analyticsSummary?.platforms?.length ? (
                   <table className="w-full">
-                    <thead className="bg-gray-50">
+                    <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">
                           Platform
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">
                           Posts
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">
                           Engagement
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">
                           Reach
                         </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">
                           Avg Rate
                         </th>
                       </tr>
                     </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
+                    <tbody className="bg-white divide-y divide-slate-200">
                       {analyticsSummary.platforms.map((row) => (
-                        <tr key={row.platform} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 capitalize">
+                        <tr key={row.platform} className="hover:bg-slate-50">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900 capitalize">
                             {row.platform}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                             {row.total_posts.toLocaleString()}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                             {row.total_engagement.toLocaleString()}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                             {row.total_reach.toLocaleString()}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                             {row.avg_engagement_rate.toFixed(2)}%
                           </td>
                         </tr>
@@ -1234,7 +1244,7 @@ export default function SuperAdminPanel() {
                     </tbody>
                   </table>
                 ) : (
-                  <div className="px-6 py-8 text-sm text-gray-500">No analytics data available yet.</div>
+                  <div className="px-6 py-8 text-sm text-slate-600">No analytics data available yet.</div>
                 )}
               </div>
             </div>
@@ -1242,56 +1252,56 @@ export default function SuperAdminPanel() {
 
             {analyticsSubTab === 'campaign-health' && <>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                <div className="bg-white rounded-lg shadow-sm p-6 border border-slate-200 hover:shadow-md transition-shadow">
                   <div className="flex items-center gap-3">
                     <div className="p-3 bg-blue-100 rounded-lg">
                       <BarChart3 className="h-6 w-6 text-blue-600" />
                     </div>
                     <div>
-                      <p className="text-sm text-gray-600">Total Campaigns</p>
-                      <p className="text-2xl font-bold text-gray-900">
+                      <p className="text-sm text-slate-600">Total Campaigns</p>
+                      <p className="text-2xl font-bold text-slate-900">
                         {isLoadingCampaignHealth ? '—' : (campaignHealth?.total_campaigns ?? 0).toLocaleString()}
                       </p>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                <div className="bg-white rounded-lg shadow-sm p-6 border border-slate-200 hover:shadow-md transition-shadow">
                   <div className="flex items-center gap-3">
-                    <div className="p-3 bg-green-100 rounded-lg">
-                      <Activity className="h-6 w-6 text-green-600" />
+                    <div className="p-3 bg-emerald-100 rounded-lg">
+                      <Activity className="h-6 w-6 text-emerald-600" />
                     </div>
                     <div>
-                      <p className="text-sm text-gray-600">Active Campaigns</p>
-                      <p className="text-2xl font-bold text-gray-900">
+                      <p className="text-sm text-slate-600">Active Campaigns</p>
+                      <p className="text-2xl font-bold text-slate-900">
                         {isLoadingCampaignHealth ? '—' : (campaignHealth?.active_campaigns ?? 0).toLocaleString()}
                       </p>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                <div className="bg-white rounded-lg shadow-sm p-6 border border-slate-200 hover:shadow-md transition-shadow">
                   <div className="flex items-center gap-3">
                     <div className="p-3 bg-purple-100 rounded-lg">
                       <CheckCircle className="h-6 w-6 text-purple-600" />
                     </div>
                     <div>
-                      <p className="text-sm text-gray-600">Approved Strategies</p>
-                      <p className="text-2xl font-bold text-gray-900">
+                      <p className="text-sm text-slate-600">Approved Strategies</p>
+                      <p className="text-2xl font-bold text-slate-900">
                         {isLoadingCampaignHealth ? '—' : (campaignHealth?.approved_strategies ?? 0).toLocaleString()}
                       </p>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                <div className="bg-white rounded-lg shadow-sm p-6 border border-slate-200 hover:shadow-md transition-shadow">
                   <div className="flex items-center gap-3">
                     <div className="p-3 bg-amber-100 rounded-lg">
                       <AlertCircle className="h-6 w-6 text-amber-600" />
                     </div>
                     <div>
-                      <p className="text-sm text-gray-600">Pending Re-Approval</p>
-                      <p className="text-2xl font-bold text-gray-900">
+                      <p className="text-sm text-slate-600">Pending Re-Approval</p>
+                      <p className="text-2xl font-bold text-slate-900">
                         {isLoadingCampaignHealth ? '—' : (campaignHealth?.reapproval_required_count ?? 0).toLocaleString()}
                       </p>
                     </div>
@@ -1299,52 +1309,52 @@ export default function SuperAdminPanel() {
                 </div>
               </div>
 
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-                <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
-                  <h3 className="text-lg font-semibold text-gray-900">Campaigns by Company</h3>
-                  <p className="text-sm text-gray-600 mt-1">
+              <div className="bg-white rounded-lg shadow-sm border border-slate-200">
+                <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 rounded-t-lg">
+                  <h3 className="text-lg font-bold text-slate-900">Campaigns by Company</h3>
+                  <p className="text-sm text-slate-600 mt-1">
                     Strategy approval health across tenants.
                   </p>
                 </div>
                 <div className="overflow-x-auto">
                   {isLoadingCampaignHealth ? (
-                    <div className="px-6 py-8 text-sm text-gray-500">Loading campaign health…</div>
+                    <div className="px-6 py-8 text-sm text-slate-600">Loading campaign health…</div>
                   ) : campaignHealth?.campaigns_by_company?.length ? (
                     <table className="w-full">
-                      <thead className="bg-gray-50">
+                      <thead className="bg-slate-50 border-b border-slate-200">
                         <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">
                             Company
                           </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">
                             Campaign Count
                           </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">
                             Active
                           </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">
                             Re-Approval Required
                           </th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-200">
+                      <tbody className="divide-y divide-slate-200">
                         {campaignHealth.campaigns_by_company.map((row) => {
                           const companyName =
                             companies.find((company) => company.id === row.company_id)?.name ||
                             row.company_id;
                           return (
                             <tr key={row.company_id}>
-                              <td className="px-6 py-4 text-sm text-gray-900">{companyName}</td>
-                              <td className="px-6 py-4 text-sm text-gray-900">{row.total_campaigns}</td>
-                              <td className="px-6 py-4 text-sm text-gray-900">{row.active_campaigns}</td>
-                              <td className="px-6 py-4 text-sm text-gray-900">{row.reapproval_required}</td>
+                              <td className="px-6 py-4 text-sm text-slate-900">{companyName}</td>
+                              <td className="px-6 py-4 text-sm text-slate-900">{row.total_campaigns}</td>
+                              <td className="px-6 py-4 text-sm text-slate-900">{row.active_campaigns}</td>
+                              <td className="px-6 py-4 text-sm text-slate-900">{row.reapproval_required}</td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
                   ) : (
-                    <div className="px-6 py-8 text-sm text-gray-500">
+                    <div className="px-6 py-8 text-sm text-slate-600">
                       No campaign health data available yet.
                     </div>
                   )}
@@ -1356,13 +1366,21 @@ export default function SuperAdminPanel() {
 
         {activeTab === 'company-users' && (
           <div className="space-y-6">
+            {authError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg px-6 py-4 flex items-center justify-between">
+                <span className="text-sm text-red-700">{authError}</span>
+                <a href="/super-admin/login" className="ml-4 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors whitespace-nowrap">
+                  Log in
+                </a>
+              </div>
+            )}
             {/* Companies & Users sub-tabs */}
-            <div className="flex space-x-1 bg-gray-100 rounded-lg p-1 w-fit">
+            <div className="flex gap-2 bg-white rounded-lg p-2 w-fit border border-slate-200 shadow-sm">
               {([{ id: 'users', label: 'Companies & Users' }, { id: 'rbac', label: 'RBAC' }] as const).map((sub) => (
                 <button
                   key={sub.id}
                   onClick={() => setCompanySubTab(sub.id)}
-                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${companySubTab === sub.id ? 'bg-white text-red-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${companySubTab === sub.id ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'}`}
                 >
                   {sub.label}
                 </button>
@@ -1370,13 +1388,13 @@ export default function SuperAdminPanel() {
             </div>
 
             {companySubTab === 'users' && <>
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
+            <div className="bg-white rounded-lg shadow-sm border border-slate-200">
+              <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 rounded-t-lg flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900">
-                    Companies <span className="text-sm text-gray-500">({filteredCompanies.length}/{companies.length})</span>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Companies <span className="text-sm text-slate-600">({filteredCompanies.length}/{companies.length})</span>
                   </h3>
-                  <p className="text-xs text-gray-500">Select a company to manage its users.</p>
+                  <p className="text-xs text-slate-600">Select a company to manage its users.</p>
                 </div>
                 <div className="flex items-center gap-3">
                   {selectedCompanyId && (
@@ -1385,24 +1403,24 @@ export default function SuperAdminPanel() {
                         setSelectedCompanyId(null);
                         setShowAllUsers(true);
                       }}
-                      className="text-xs text-gray-600 hover:text-gray-900"
+                      className="text-xs text-slate-600 hover:text-slate-900"
                     >
                       Clear selection
                     </button>
                   )}
-                  <div className="flex items-center gap-2 bg-white border border-gray-300 rounded-lg px-2 py-1">
-                    <Search className="h-4 w-4 text-gray-400" />
+                  <div className="flex items-center gap-2 bg-white border border-slate-300 rounded-lg px-3 py-2">
+                    <Search className="h-4 w-4 text-slate-400" />
                     <input
                       type="text"
                       placeholder="Search companies..."
                       value={companySearch}
                       onChange={(e) => setCompanySearch(e.target.value)}
-                      className="text-sm outline-none"
+                      className="text-sm outline-none bg-white"
                     />
                   </div>
                   <button
                     onClick={() => setShowCreateCompanyModal(true)}
-                    className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium"
+                    className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors"
                   >
                     Create Company
                   </button>
@@ -1410,39 +1428,39 @@ export default function SuperAdminPanel() {
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full">
-                  <thead className="bg-gray-50">
+                  <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Website</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Industry</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Name</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Website</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Industry</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Status</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Created</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="bg-white divide-y divide-slate-200">
                     {filteredCompanies.map((company) => {
                       const isSelected = selectedCompanyId === company.id;
                       return (
                       <tr
                         key={company.id}
-                        className={`hover:bg-gray-50 ${isSelected ? 'bg-red-50 border-l-4 border-l-red-600' : ''}`}
+                        className={`hover:bg-slate-50 ${isSelected ? 'bg-blue-50 border-l-4 border-l-blue-600' : ''}`}
                       >
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
                           <button
                             onClick={() => {
                               setSelectedCompanyId(company.id);
                               setShowAllUsers(false);
                             }}
-                            className={`text-left transition-colors ${isSelected ? 'text-red-700 font-semibold' : 'hover:text-red-600'}`}
+                            className={`text-left transition-colors ${isSelected ? 'text-blue-700 font-semibold' : 'hover:text-blue-600'}`}
                           >
                             {company.name}
                           </button>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                           {company.website}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                           {company.industry || '—'}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
@@ -1450,7 +1468,7 @@ export default function SuperAdminPanel() {
                             {company.status}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
                           {new Date(company.created_at).toLocaleDateString()}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
@@ -1498,15 +1516,15 @@ export default function SuperAdminPanel() {
               </div>
             </div>
 
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
+            <div className="bg-white rounded-lg shadow-sm border border-slate-200">
+              <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 rounded-t-lg flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900">
+                  <h3 className="text-lg font-bold text-slate-900">
                     {selectedCompanyId
                       ? `Users for ${companies.find((company) => company.id === selectedCompanyId)?.name || 'Company'}`
                       : 'All Users'}
                   </h3>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-slate-600">
                     {selectedCompanyId
                       ? 'Manage users for the selected company.'
                       : showAllUsers
@@ -1515,27 +1533,27 @@ export default function SuperAdminPanel() {
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 bg-white border border-gray-300 rounded-lg px-2 py-1">
-                    <Search className="h-4 w-4 text-gray-400" />
+                  <div className="flex items-center gap-2 bg-white border border-slate-300 rounded-lg px-3 py-2">
+                    <Search className="h-4 w-4 text-slate-400" />
                     <input
                       type="text"
                       placeholder="Search users..."
                       value={userSearch}
                       onChange={(e) => setUserSearch(e.target.value)}
-                      className="text-sm outline-none"
+                      className="text-sm outline-none bg-white"
                     />
                   </div>
                   <div className="flex items-center gap-2 text-xs">
                     <button
                       onClick={() => setShowAllUsers(true)}
-                      className={`px-2 py-1 rounded ${showAllUsers ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 border border-gray-300'}`}
+                      className={`px-3 py-2 rounded-lg font-medium transition-colors ${showAllUsers ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
                     >
                       All Companies
                     </button>
                     <button
                       onClick={() => setShowAllUsers(false)}
                       disabled={!selectedCompanyId}
-                      className={`px-2 py-1 rounded ${!showAllUsers ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 border border-gray-300'} disabled:opacity-50`}
+                      className={`px-3 py-2 rounded-lg font-medium transition-colors ${!showAllUsers ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'} disabled:opacity-50`}
                     >
                       Selected Company
                     </button>
@@ -1548,7 +1566,7 @@ export default function SuperAdminPanel() {
                       setShowCreateCompanyAdminModal(true);
                     }}
                     disabled={!selectedCompanyId}
-                    className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium"
+                    className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                   >
                     Add User
                   </button>
@@ -1556,31 +1574,32 @@ export default function SuperAdminPanel() {
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full">
-                  <thead className="bg-gray-50">
+                  <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Email</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Company</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Role</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Status</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Created</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-600 uppercase tracking-wider">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="bg-white divide-y divide-slate-200">
                     {filteredUsers.map((user) => (
-                      <tr key={`${user.user_id}-${user.company_id}`} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <tr key={`${user.user_id}-${user.company_id}`} className="hover:bg-slate-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
                           {user.email}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                           {user.company_name || user.company_id}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                           <select
                             value={user.role}
                             onChange={(e) => handleUserRoleChange(user.user_id, user.company_id, e.target.value)}
-                            className="border border-gray-300 rounded-lg px-2 py-1 text-sm"
-                            disabled={isLoading}
+                            className="border border-gray-300 rounded-lg px-2 py-1 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={isLoading || !user.company_id}
+                            title={!user.company_id ? 'Assign this user to a company first' : undefined}
                           >
                             {!roleOptions.some((option) => option.id === user.role) && (
                               <option value={user.role}>{user.role}</option>
@@ -2659,6 +2678,39 @@ export default function SuperAdminPanel() {
           </div>
           );
         })()}
+
+        {activeTab === 'cost-analysis' && (
+          <div className="space-y-6">
+            {/* Cost Analysis sub-tabs */}
+            <div className="flex gap-2 bg-white rounded-lg p-2 border border-slate-200 shadow-sm">
+              {([{ id: 'accounting', label: 'Cost Accounting' }, { id: 'activities', label: 'Activities' }] as const).map((sub) => (
+                <button
+                  key={sub.id}
+                  onClick={() => setCostSubTab(sub.id)}
+                  className={`px-4 py-2 rounded-lg font-medium transition-all text-sm ${
+                    costSubTab === sub.id
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+            
+            {costSubTab === 'accounting' && (
+              <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+                <CostAccountingDashboard />
+              </div>
+            )}
+            
+            {costSubTab === 'activities' && (
+              <div className="bg-white rounded-lg shadow-sm border border-slate-200">
+                <ActivityCostBreakdown period="month" />
+              </div>
+            )}
+          </div>
+        )}
 
         {activeTab === 'audit' && (
           <div className="bg-white rounded-lg shadow-sm border border-gray-200">

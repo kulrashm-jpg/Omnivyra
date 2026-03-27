@@ -52,26 +52,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const companies = data || [];
     const companyIds = new Set(companies.map((company) => company.id));
-    const { data: profileRows, error: profileError } = await supabase
+
+    // Enrich existing companies with profile data (name/industry from company_profiles).
+    // Profiles whose company_id has NO matching companies row are incomplete onboarding
+    // artefacts — do NOT synthesize ghost company entries from them (they have no users,
+    // no roles, and cannot be properly managed or deleted).
+    const { data: profileRows } = await supabase
       .from('company_profiles')
       .select('company_id,name,industry,website_url,created_at')
-      .order('created_at', { ascending: false });
-    if (!profileError && profileRows && profileRows.length > 0) {
-      profileRows.forEach((profile) => {
-        if (!profile.company_id || companyIds.has(profile.company_id)) return;
-        companies.push({
-          id: profile.company_id,
-          name: profile.name || profile.website_url || 'Unnamed company',
-          website: profile.website_url || '',
-          industry: profile.industry || null,
-          status: 'active',
-          created_at: profile.created_at,
-          source: 'company_profile',
-        } as any);
-      });
-    }
+      .in('company_id', companies.length > 0 ? Array.from(companyIds) : ['__none__']);
 
-    return res.status(200).json({ companies });
+    const profileByCompanyId = (profileRows || []).reduce<Record<string, typeof profileRows[0]>>((acc, p) => {
+      if (p.company_id) acc[p.company_id] = p;
+      return acc;
+    }, {});
+
+    const enriched = companies.map((company) => {
+      const profile = profileByCompanyId[company.id];
+      return {
+        ...company,
+        name: company.name || profile?.name || profile?.website_url || 'Unnamed company',
+        industry: company.industry || profile?.industry || null,
+        website: company.website || profile?.website_url || '',
+      };
+    });
+
+    return res.status(200).json({ companies: enriched });
   }
 
   if (req.method === 'POST') {

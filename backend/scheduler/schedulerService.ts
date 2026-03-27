@@ -172,6 +172,88 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
 }
 
 /**
+ * Enqueue a single scheduled post to fire at its exact scheduled time.
+ *
+ * Called immediately after a post is inserted or updated so publishing
+ * is triggered at the precise scheduled_for timestamp rather than waiting
+ * for the next cron poll window (which could be up to 4 hours away in
+ * off-hours and up to the configured interval during working hours).
+ *
+ * BullMQ stores the delayed job in a Redis sorted-set keyed by the fire
+ * timestamp and promotes it to the active set at the right moment — no
+ * polling loop needed.
+ *
+ * Idempotent: if a pending/processing queue_jobs row already exists for
+ * this post the function returns early so re-scheduling the same post
+ * (e.g. user edits the time) is safe — the old BullMQ job will fire at
+ * its original time but findDuePostsAndEnqueue() (safety-net) will skip
+ * it because the post will already be queued or published.
+ * For a full reschedule (cancel old + enqueue new) users should go
+ * through a dedicated update-schedule endpoint.
+ *
+ * @param scheduledPostId  UUID of the scheduled_posts row.
+ * @param userId           Owner user_id (stored on queue_jobs).
+ * @param socialAccountId  Target social account (stored on queue_jobs payload).
+ * @param scheduledFor     ISO-8601 datetime the post should publish.
+ * @returns                'enqueued' | 'duplicate' | 'past' (fired immediately by safety-net)
+ */
+export async function enqueueScheduledPostAt(
+  scheduledPostId: string,
+  userId: string,
+  socialAccountId: string,
+  scheduledFor: string,
+): Promise<'enqueued' | 'duplicate' | 'past'> {
+  // Duplicate guard: skip if a queue_jobs row already exists for this post
+  const { data: existing } = await supabase
+    .from('queue_jobs')
+    .select('id, status')
+    .eq('scheduled_post_id', scheduledPostId)
+    .in('status', ['pending', 'processing'])
+    .maybeSingle();
+
+  if (existing) {
+    console.log(`[enqueueScheduledPostAt] duplicate – queue_job ${existing.id} already exists for post ${scheduledPostId}`);
+    return 'duplicate';
+  }
+
+  const delayMs = new Date(scheduledFor).getTime() - Date.now();
+
+  // Post is already past due — the safety-net cron will catch it on next tick
+  if (delayMs < 0) {
+    console.log(`[enqueueScheduledPostAt] post ${scheduledPostId} is past due (${Math.abs(delayMs)}ms ago) – leaving for safety-net`);
+    return 'past';
+  }
+
+  const queueJobId = await createQueueJob({
+    scheduled_post_id: scheduledPostId,
+    job_type: 'publish',
+    status: 'pending',
+    scheduled_for: scheduledFor,
+    priority: 0,
+  });
+
+  const queue = getQueue();
+  await queue.add(
+    'publish',
+    {
+      scheduled_post_id: scheduledPostId,
+      social_account_id: socialAccountId,
+      user_id: userId,
+    },
+    {
+      jobId: queueJobId,
+      delay: delayMs,          // fires at the exact scheduled_for time
+      removeOnComplete: true,
+      removeOnFail: false,
+    },
+  );
+
+  const firesAt = new Date(scheduledFor).toISOString();
+  console.log(`[enqueueScheduledPostAt] post ${scheduledPostId} enqueued – fires in ${Math.round(delayMs / 1000)}s at ${firesAt}`);
+  return 'enqueued';
+}
+
+/**
  * Enqueue one engagement polling job.
  * Idempotent ingestion; no duplicate check. Call every 10 minutes (e.g. from cron).
  */

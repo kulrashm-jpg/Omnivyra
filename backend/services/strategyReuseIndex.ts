@@ -44,6 +44,14 @@ function getClient(): IORedis | null {
   }
 }
 
+/** Disconnect the Redis client (for graceful shutdown). */
+export function shutdownStrategyReuseIndex(): void {
+  if (_client) {
+    _client.quit().catch(() => {});
+    _client = null;
+  }
+}
+
 // ── Fingerprinting ────────────────────────────────────────────────────────────
 
 interface StrategyFingerprint {

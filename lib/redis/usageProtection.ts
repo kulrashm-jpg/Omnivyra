@@ -49,6 +49,8 @@
  */
 
 import IORedis from 'ioredis';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -76,6 +78,8 @@ export interface ProtectionImpact {
   fanOutReductionPct:  number;
   /** Jobs sent to the overflow buffer since level was last elevated. */
   totalJobsBlocked:    number;
+  /** Jobs dropped because the overflow buffer was full (truly lost — not recoverable). */
+  totalJobsDropped:    number;
   /** Jobs currently sitting in the overflow buffer (not yet drained). */
   totalJobsOverflowed: number;
   /** Per-queue overflow buffer depth. */
@@ -91,8 +95,25 @@ export interface ProtectionImpact {
   longDeferredCronJobs: string[];
 }
 
+export interface AdvisoryCounters {
+  /** DB SELECT calls recorded today (advisory only). */
+  dbReadsToday:   number;
+  /** DB write calls (INSERT/UPSERT/UPDATE/DELETE) recorded today (advisory only). */
+  dbWritesToday:  number;
+  /** LLM tokens consumed today (advisory only). */
+  llmTokensToday: number;
+  /** Configured daily read limit — 0 means unlimited / not configured. */
+  dbMaxReads:     number;
+  /** Configured daily write limit — 0 means unlimited / not configured. */
+  dbMaxWrites:    number;
+  /** Configured daily LLM token limit — 0 means unlimited / not configured. */
+  llmMaxTokens:   number;
+}
+
 export interface RedisUsageStatus {
   level:        UsageLevel;
+  /** True once at least one poll has completed — false means level='normal' is the uninitialised default, not a real reading. */
+  initialized:  boolean;
   /** Memory pressure axis. */
   memory:       MemoryUsage;
   /** Request-rate pressure axis. */
@@ -101,6 +122,8 @@ export interface RedisUsageStatus {
   effectivePct: number;
   checkedAt:    string;
   impact:       ProtectionImpact;
+  /** Advisory counters for DB and LLM operations (never affect protection level). */
+  advisory:     AdvisoryCounters;
 }
 
 /** A single job entry held in the overflow buffer. */
@@ -185,22 +208,79 @@ let _requests: RequestUsage = {
   resetAt: new Date(0).toISOString(),
 };
 let _effectivePct = 0;
-let _level:     UsageLevel = 'normal';
-let _prevLevel: UsageLevel = 'normal';
-let _checkedAt  = new Date(0).toISOString();
-let _notifiedAt = 0;
+let _level:        UsageLevel = 'normal';
+let _prevLevel:    UsageLevel = 'normal';
+let _checkedAt     = new Date(0).toISOString();
+let _notifiedAt    = 0;
+// BUG#3 fix: track whether the engine has ever completed a poll. Consumers can
+// check getUsageStatus().initialized before trusting the level.
+let _initialized   = false;
 
 // Per-elevation impact counters (reset when level returns to normal)
 let _totalJobsBlocked   = 0;
+let _totalJobsDropped   = 0;  // BUG#14 fix: separate dropped (buffer full = truly lost) from buffered
 let _totalCronSkipped   = 0;
 const _skippedCronJobs  = new Set<string>();
 
 // Per-critical-job deferral start times (for starvation detection)
 const _criticalDeferStart = new Map<string, number>();
 
-// Daily request baseline (in-memory; resets on process restart which
-// causes a momentary undercount — acceptable trade-off vs extra Redis I/O)
+// Dynamic limit overrides (loaded from omnivyra:admin:config:infra_limits each poll)
+// 0 = not set — fall back to env-var / code default.
+let _adminDailyLimit   = 0;   // overrides UPSTASH_DAILY_REQUEST_LIMIT
+let _adminMaxMemBytes  = 0;   // overrides REDIS_MAX_BYTES
+
+// BUG#7/#8 fix: Advisory DB + LLM counters (in-memory, reset daily).
+// These are advisory only — they NEVER block operations, but emit stderr
+// warnings when admin-configured daily limits are crossed.
+let _dbReadsToday      = 0;
+let _dbWritesToday     = 0;
+let _llmTokensToday    = 0;
+let _advisoryDate      = '';   // UTC date when advisory counters were last reset
+let _adminDbMaxReads   = 0;   // 0 = unlimited (from infra limits)
+let _adminDbMaxWrites  = 0;   // 0 = unlimited (from infra limits)
+let _adminLlmMaxTokens = 0;   // 0 = unlimited (from infra limits)
+let _dbAdvisoryWarnedAt  = 0; // rate-limit advisory warnings (avoid stderr flood)
+let _llmAdvisoryWarnedAt = 0;
+
+// Daily request baseline — persisted to Redis (key: omnivyra:usage:baseline:YYYY-MM-DD)
+// so process restarts/hot-reloads never reset the daily count.
+// The in-memory copy is updated after each successful poll.
 let _reqBaseline = { date: '', total: 0 };
+
+/**
+ * Load (or initialise) the daily baseline from Redis.
+ * Uses SET … NX so only the very first process to poll today sets the value;
+ * all later pollers (any process, any restart) read the same stored number.
+ * Returns the baseline total to subtract from today's totalCommandsProcessed.
+ */
+async function loadDailyBaseline(redis: IORedis, totalNow: number): Promise<number> {
+  const today       = todayUtc();
+  const key         = `omnivyra:usage:baseline:${today}`;
+  const ttl         = 49 * 3600;   // expires safely after midnight UTC
+
+  // If our in-memory copy is still for today, trust it (saves a round-trip)
+  if (_reqBaseline.date === today) return _reqBaseline.total;
+
+  try {
+    // Try to set baseline only if key does not exist for today
+    const setOk = await redis.set(key, totalNow.toString(), 'EX', ttl, 'NX');
+    if (setOk === 'OK') {
+      // This process is first today — baseline = current total
+      _reqBaseline = { date: today, total: totalNow };
+      return totalNow;
+    }
+    // Another process already set the baseline — read it
+    const stored = await redis.get(key);
+    const base   = stored !== null ? parseInt(stored, 10) : totalNow;
+    _reqBaseline  = { date: today, total: base };
+    return base;
+  } catch {
+    // Redis unavailable — fall back to in-memory (may undercount after restart)
+    if (_reqBaseline.date !== today) _reqBaseline = { date: today, total: totalNow };
+    return _reqBaseline.total;
+  }
+}
 
 // Overflow buffer
 const OVERFLOW_CAP = parseInt(process.env.REDIS_OVERFLOW_CAP_PER_QUEUE ?? '200', 10);
@@ -215,6 +295,7 @@ let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
 function resolveMaxBytes(infoMax: number): number {
   if (infoMax > 0) return infoMax;
+  if (_adminMaxMemBytes > 0) return _adminMaxMemBytes;
   const envMax = parseInt(process.env.REDIS_MAX_BYTES ?? '0', 10);
   if (envMax > 0) return envMax;
   return 256 * 1024 * 1024;  // 256 MB — Upstash free-tier ceiling
@@ -252,14 +333,14 @@ function nextUtcMidnight(): string {
   return d.toISOString();
 }
 
-function computeRequestUsage(totalCommandsProcessed: number): RequestUsage {
-  const today = todayUtc();
-  if (_reqBaseline.date !== today) {
-    // New day (or first ever poll) — set baseline to current total
-    _reqBaseline = { date: today, total: totalCommandsProcessed };
-  }
-  const dailyLimit = parseInt(process.env.UPSTASH_DAILY_REQUEST_LIMIT ?? '10000', 10);
-  const dailyUsed  = Math.max(0, totalCommandsProcessed - _reqBaseline.total);
+async function computeRequestUsage(redis: IORedis, totalCommandsProcessed: number): Promise<RequestUsage> {
+  const baseline   = await loadDailyBaseline(redis, totalCommandsProcessed);
+  // Default is 25,000 — a conservative limit between the free tier (10k) and paid entry tier.
+  // ALWAYS set UPSTASH_DAILY_REQUEST_LIMIT explicitly in your .env — do not rely on this default.
+  const dailyLimit = _adminDailyLimit > 0
+    ? _adminDailyLimit
+    : parseInt(process.env.UPSTASH_DAILY_REQUEST_LIMIT ?? '25000', 10);
+  const dailyUsed  = Math.max(0, totalCommandsProcessed - baseline);
   return {
     dailyUsed,
     dailyLimit,
@@ -291,6 +372,7 @@ export function storeOverflow(queueName: string, entry: OverflowEntry): boolean 
       job:    entry.name,
       reason: 'overflow_cap_reached_job_dropped',
     }));
+    _totalJobsDropped++;  // BUG#14 fix: count truly dropped jobs separately
     return false;
   }
   buf.push(entry);
@@ -371,7 +453,35 @@ async function writeAdminAlert(redis: IORedis, recovered: boolean): Promise<void
     dailyLimit:   _requests.dailyLimit,
     ts:           _checkedAt,
   });
+
+  // ── 1. Write alert key to Redis (best-effort — may fail when Redis is at limit) ──
   await redis.set('omnivyra:redis:usage:alert', payload, 'EX', 6 * 3600).catch(() => {});
+
+  // ── 2. Write to filesystem (survives Redis failure / high-usage states) ──
+  // Lives at <project-root>/.redis-usage-alert.json
+  try {
+    const alertPath = path.resolve(process.cwd(), '.redis-usage-alert.json');
+    fs.writeFileSync(alertPath, payload + '\n', { flag: 'w' });
+  } catch { /* non-fatal — filesystem might be read-only in some hosting envs */ }
+
+  // ── 3. Loud stderr banner so it's impossible to miss in any terminal ──
+  if (_level === 'critical' || _level === 'throttle') {
+    const bar = '='.repeat(70);
+    process.stderr.write(
+      `\n${bar}\n` +
+      `🚨 REDIS USAGE ${_level.toUpperCase()} — ${_effectivePct.toFixed(1)}% of daily limit used\n` +
+      `   Commands today: ${_requests.dailyUsed.toLocaleString()} / ${_requests.dailyLimit.toLocaleString()}\n` +
+      `   Memory: ${Math.round(_memory.usedBytes/1024/1024)} MB / ${Math.round(_memory.maxBytes/1024/1024)} MB\n` +
+      `   Time: ${_checkedAt}\n` +
+      `${bar}\n\n`,
+    );
+  } else if (_level === 'warning') {
+    process.stderr.write(
+      `⚠️  Redis usage WARNING: ${_effectivePct.toFixed(1)}% ` +
+      `(${_requests.dailyUsed.toLocaleString()}/${_requests.dailyLimit.toLocaleString()} cmds, ` +
+      `${_memory.usagePct.toFixed(1)}% mem)\n`,
+    );
+  }
 }
 
 function logTransition(prev: UsageLevel, next: UsageLevel): void {
@@ -415,6 +525,30 @@ async function poll(getRedis: () => IORedis): Promise<void> {
   try { redis = getRedis(); } catch { return; }
 
   try {
+    // Refresh admin-configured infra limits (single GET, low overhead)
+    try {
+      const raw = await redis.get('omnivyra:admin:config:infra_limits');
+      if (raw) {
+        const limits = JSON.parse(raw);
+        if (limits?.redis?.maxCommandsPerDay > 0) _adminDailyLimit  = limits.redis.maxCommandsPerDay;
+        if (limits?.redis?.maxMemoryBytes    > 0) _adminMaxMemBytes = limits.redis.maxMemoryBytes;
+        // BUG#7/#8 fix: also load advisory DB/LLM limits
+        if (limits?.db  !== undefined) {
+          _adminDbMaxReads  = limits.db.maxReadsPerDay  ?? 0;
+          _adminDbMaxWrites = limits.db.maxWritesPerDay ?? 0;
+        }
+        if (limits?.llm !== undefined) {
+          _adminLlmMaxTokens = limits.llm.maxTokensPerDay ?? 0;
+        }
+        // Reset advisory counters on UTC date rollover
+        const todayStr = todayUtc();
+        if (_advisoryDate !== todayStr) {
+          _dbReadsToday = 0; _dbWritesToday = 0; _llmTokensToday = 0;
+          _advisoryDate = todayStr;
+        }
+      }
+    } catch { /* non-fatal — keep previous values */ }
+
     // Single INFO call — returns memory + stats sections together
     const info = await redis.info();
     const { usedBytes, maxBytes, totalCommandsProcessed } = parseInfo(info);
@@ -426,7 +560,7 @@ async function poll(getRedis: () => IORedis): Promise<void> {
       usagePct: Math.round(memPct * 10_000) / 100,
     };
 
-    _requests     = computeRequestUsage(totalCommandsProcessed);
+    _requests     = await computeRequestUsage(redis, totalCommandsProcessed);
     _effectivePct = Math.max(_memory.usagePct, _requests.usagePct);
     _level        = classify(_effectivePct / 100);
     _checkedAt    = new Date().toISOString();
@@ -438,14 +572,14 @@ async function poll(getRedis: () => IORedis): Promise<void> {
       const recovered = _level === 'normal' && _prevLevel !== 'normal';
 
       if (recovered) {
-        // Reset all per-elevation impact counters
+        // Drain FIRST then reset counters (BUG#13 previously fixed order)
+        await drainAllOverflows();
+
         _totalJobsBlocked = 0;
+        _totalJobsDropped = 0;   // reset dropped counter on recovery too
         _totalCronSkipped = 0;
         _skippedCronJobs.clear();
         _criticalDeferStart.clear();
-
-        // Drain overflow buffers back into queues
-        await drainAllOverflows();
       }
 
       _prevLevel  = _level;
@@ -460,6 +594,7 @@ async function poll(getRedis: () => IORedis): Promise<void> {
       _notifiedAt = Date.now();
       await writeAdminAlert(redis, false);
     }
+    _initialized = true;   // BUG#3 fix: mark that at least one poll completed
   } catch (err) {
     console.warn('[redis][usageProtection] poll error:', (err as Error)?.message);
   }
@@ -468,6 +603,19 @@ async function poll(getRedis: () => IORedis): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Immediately override the infra limits used by the protection engine.
+ * Called by the admin API after saving new limits to Redis so they apply
+ * within the current poll cycle without waiting for the next auto-refresh.
+ */
+export function applyInfraLimitsOverride(limits: {
+  redisMaxCommandsPerDay?: number;
+  redisMaxMemoryBytes?:    number;
+}): void {
+  if ((limits.redisMaxCommandsPerDay ?? 0) > 0) _adminDailyLimit  = limits.redisMaxCommandsPerDay!;
+  if ((limits.redisMaxMemoryBytes    ?? 0) > 0) _adminMaxMemBytes = limits.redisMaxMemoryBytes!;
+}
 
 /** Full status snapshot including both usage axes and protection impact. */
 export function getUsageStatus(): RedisUsageStatus {
@@ -492,6 +640,7 @@ export function getUsageStatus(): RedisUsageStatus {
 
   return {
     level:        _level,
+    initialized:  _initialized,
     memory:       { ..._memory },
     requests:     { ..._requests },
     effectivePct: _effectivePct,
@@ -500,11 +649,20 @@ export function getUsageStatus(): RedisUsageStatus {
       blockedQueues,
       fanOutReductionPct,
       totalJobsBlocked:    _totalJobsBlocked,
+      totalJobsDropped:    _totalJobsDropped,
       totalJobsOverflowed: totalOverflowed(),
       overflowByQueue:     overflowByQueue(),
       totalCronSkipped:    _totalCronSkipped,
       skippedCronJobs:     [..._skippedCronJobs],
       longDeferredCronJobs,
+    },
+    advisory: {
+      dbReadsToday:   _dbReadsToday,
+      dbWritesToday:  _dbWritesToday,
+      llmTokensToday: _llmTokensToday,
+      dbMaxReads:     _adminDbMaxReads,
+      dbMaxWrites:    _adminDbMaxWrites,
+      llmMaxTokens:   _adminLlmMaxTokens,
     },
   };
 }
@@ -579,20 +737,99 @@ export function isCronJobAllowedByUsage(
 
 /**
  * Start the background polling loop. Idempotent — safe to call multiple times.
- * First check fires immediately; subsequent checks every 60 s.
+ *
+ * BUG#1+#25 fix: Returns a promise that resolves after the FIRST poll completes
+ * so callers can await it before enqueuing jobs. Poll interval reduced from
+ * 60 s → 15 s so the protection level goes stale for at most 15 s instead of 60 s.
  */
-export function startUsageProtection(getRedis: () => IORedis): void {
-  if (_pollTimer) return;
+export function startUsageProtection(getRedis: () => IORedis): Promise<void> {
+  if (_pollTimer) return Promise.resolve();  // already running
 
-  poll(getRedis).catch(() => {});
+  // BUG#24 fix: warn loudly at startup if critical env vars are missing so
+  // operators don't rely on wrong defaults that cause premature throttling.
+  if (!process.env.REDIS_MAX_BYTES && !process.env.UPSTASH_DAILY_REQUEST_LIMIT) {
+    process.stderr.write(
+      `⚠️  [redis][usageProtection] Neither REDIS_MAX_BYTES nor UPSTASH_DAILY_REQUEST_LIMIT\n` +
+      `   is set. Using defaults: 256 MB memory cap, 500,000 commands/day.\n` +
+      `   Set these in .env to match your actual Redis tier.\n`,
+    );
+  } else if (!process.env.REDIS_MAX_BYTES) {
+    process.stderr.write(
+      `⚠️  [redis][usageProtection] REDIS_MAX_BYTES is not set.\n` +
+      `   Memory cap defaults to 256 MB. Set REDIS_MAX_BYTES=<bytes> to match your tier.\n`,
+    );
+  }
+
+  const firstPoll = poll(getRedis);   // awaitable first poll
 
   _pollTimer = setInterval(() => {
     poll(getRedis).catch(() => {});
-  }, 60_000);
+  }, 15_000);   // BUG#25 fix: was 60 s — stale window now ≤15 s
 
   if (typeof _pollTimer.unref === 'function') _pollTimer.unref();
+
+  return firstPoll;   // callers can await this to ensure initial state is known
 }
 
 export function stopUsageProtection(): void {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+/**
+ * (Advisory) Track a database operation.  Call once per Supabase query;
+ * count=1 for a single-row call, or the row count for bulk ops.
+ *
+ * BUG#7 fix: provides the DB tracking hook required by the infra limits config.
+ * Never blocks — advisory only.  Emits a stderr warning (throttled to once per
+ * 5 min) when the admin-configured maxReadsPerDay / maxWritesPerDay is crossed.
+ */
+export function trackDbOp(count: number, type: 'read' | 'write'): void {
+  if (type === 'read') {
+    _dbReadsToday += count;
+    if (_adminDbMaxReads > 0 && _dbReadsToday > _adminDbMaxReads) {
+      const now = Date.now();
+      if (now - _dbAdvisoryWarnedAt > NOTIFY_COOLDOWN_MS) {
+        _dbAdvisoryWarnedAt = now;
+        process.stderr.write(
+          `⚠️  [advisory] DB reads today: ${_dbReadsToday.toLocaleString()} ` +
+          `exceeds configured limit of ${_adminDbMaxReads.toLocaleString()}/day\n`,
+        );
+      }
+    }
+  } else {
+    _dbWritesToday += count;
+    if (_adminDbMaxWrites > 0 && _dbWritesToday > _adminDbMaxWrites) {
+      const now = Date.now();
+      if (now - _dbAdvisoryWarnedAt > NOTIFY_COOLDOWN_MS) {
+        _dbAdvisoryWarnedAt = now;
+        process.stderr.write(
+          `⚠️  [advisory] DB writes today: ${_dbWritesToday.toLocaleString()} ` +
+          `exceeds configured limit of ${_adminDbMaxWrites.toLocaleString()}/day\n`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * (Advisory) Track LLM token consumption.  Call once per AI completion;
+ * pass the total_tokens value returned by the model API.
+ *
+ * BUG#8 fix: provides the LLM tracking hook required by the infra limits config.
+ * Never blocks — advisory only.  Emits a stderr warning (throttled to once per
+ * 5 min) when the admin-configured maxTokensPerDay is crossed.
+ */
+export function trackLlmTokens(count: number): void {
+  if (count <= 0) return;
+  _llmTokensToday += count;
+  if (_adminLlmMaxTokens > 0 && _llmTokensToday > _adminLlmMaxTokens) {
+    const now = Date.now();
+    if (now - _llmAdvisoryWarnedAt > NOTIFY_COOLDOWN_MS) {
+      _llmAdvisoryWarnedAt = now;
+      process.stderr.write(
+        `⚠️  [advisory] LLM tokens today: ${_llmTokensToday.toLocaleString()} ` +
+        `exceeds configured limit of ${_adminLlmMaxTokens.toLocaleString()}/day\n`,
+      );
+    }
+  }
 }

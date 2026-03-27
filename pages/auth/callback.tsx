@@ -1,53 +1,109 @@
 'use client';
 
-/**
- * /auth/callback
- *
- * Legacy Supabase PKCE callback — no longer used.
- * Firebase email link authentication uses /auth/verify instead.
- *
- * Redirects to /auth/verify in case anyone has bookmarked this URL,
- * or falls through to /dashboard if already authenticated.
- */
-
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { getFirebaseAuth } from '../../lib/firebase';
-import { getAuthToken } from '../../utils/getAuthToken';
-import { signOut } from 'firebase/auth';
+import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 
 export default function AuthCallback() {
   const router = useRouter();
+  const [statusMsg, setStatusMsg] = useState('Signing you in…');
 
   useEffect(() => {
-    const fbUser = getFirebaseAuth().currentUser;
-    if (fbUser) {
-      // Already authenticated — resolve route and redirect
-      getAuthToken().then(async (token) => {
-        if (!token) { router.replace('/login'); return; }
-        try {
-          const res = await fetch('/api/auth/post-login-route', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (res.status === 401) {
-            // Ghost session: Firebase token valid but DB user deleted.
-            await signOut(getFirebaseAuth());
-            router.replace('/login');
-            return;
+    async function handleCallback() {
+      const supabase  = getSupabaseBrowser();
+      const params    = new URLSearchParams(window.location.search);
+      const code      = params.get('code');
+      const errorParam = params.get('error');
+      const errorDesc  = params.get('error_description');
+
+      if (errorParam) {
+        router.replace(`/login?error=${encodeURIComponent(errorDesc ?? errorParam)}`);
+        return;
+      }
+
+      let accessToken: string | null = null;
+
+      if (code) {
+        setStatusMsg('Completing sign-in…');
+
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+
+        if (error || !data.session) {
+          router.replace('/login?error=auth_failed');
+          return;
+        }
+
+        accessToken = data.session.access_token;
+      } else {
+        // ── Implicit flow: hash fragment (#access_token=…) ──────────────────
+        // The SDK processes hash tokens asynchronously, so getSession() may
+        // return null if called before initialization completes.
+        // Explicitly parse and set the session from the hash to avoid the race.
+        const hash = window.location.hash;
+        if (hash && hash.includes('access_token')) {
+          const hp = new URLSearchParams(hash.substring(1));
+          const at = hp.get('access_token');
+          const rt = hp.get('refresh_token');
+          if (at && rt) {
+            // Clear the hash from the URL so it isn't reprocessed on refresh.
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            const { data, error } = await supabase.auth.setSession({ access_token: at, refresh_token: rt });
+            if (error || !data.session) {
+              router.replace('/login?error=auth_failed');
+              return;
+            }
+            accessToken = data.session.access_token;
           }
-          if (res.ok) {
-            const { route } = await res.json() as { route: string };
-            router.replace(route ?? '/dashboard');
-            return;
-          }
-        } catch { /* fall through */ }
+        }
+
+        // No hash tokens — fall back to an existing session (e.g. page refresh).
+        if (!accessToken) {
+          const { data } = await supabase.auth.getSession();
+          accessToken = data.session?.access_token ?? null;
+        }
+      }
+
+      if (!accessToken) {
         router.replace('/login');
-      });
-    } else {
-      // No Firebase user — this could be a Firebase email link redirect.
-      // Forward to /auth/verify which handles Firebase email links.
-      router.replace(`/auth/verify${window.location.search}`);
+        return;
+      }
+
+      // Verify email & get routing decision from backend
+      setStatusMsg('Setting up your account…');
+      const mode = params.get('mode') ?? '';
+      try {
+        const verifyRes = await fetch('/api/auth/verify-email', {
+          method:  'POST',
+          headers: {
+            Authorization:  `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ mode }),
+        });
+
+        if (verifyRes.status === 401) {
+          await supabase.auth.signOut();
+          router.replace('/login?error=account_deleted');
+          return;
+        }
+
+        if (verifyRes.ok) {
+          const { route } = await verifyRes.json() as { route: string };
+          const dest   = route ?? '/dashboard';
+          const pinned = localStorage.getItem('pin_home') === '1';
+          setStatusMsg('Redirecting…');
+          router.replace(dest === '/dashboard' && pinned ? '/home' : dest);
+          return;
+        }
+      } catch (e) {
+        console.error('[auth/callback] verify-email error:', e);
+      }
+
+      // verify-email failed — redirect to login
+      router.replace('/login?error=auth_failed');
     }
+
+    handleCallback();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -57,7 +113,7 @@ export default function AuthCallback() {
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
-        <p className="text-sm text-[#6B7C93]">Redirecting…</p>
+        <p className="text-sm text-[#6B7C93]">{statusMsg}</p>
       </div>
     </div>
   );

@@ -116,7 +116,10 @@
       "Bash(find pages/api -name login*)",
       "Bash(find /c/virality -type f -name *schema* -o -name *migration*)",
       "Bash(find /c/virality/database -name \"*.sql\" -type f -exec grep -l \"pricing_plan\\\\|subscription\\\\|plan_feature\" {})",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(git remote:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]"

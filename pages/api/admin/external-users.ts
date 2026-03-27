@@ -26,7 +26,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 // ── Response shape ────────────────────────────────────────────────────────────
@@ -51,7 +52,7 @@ export interface ExternalUser {
 
 async function assertSuperAdmin(
   req: NextApiRequest,
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
 ): Promise<boolean> {
   if (req.cookies?.super_admin_session === '1') return true;
 
@@ -72,12 +73,7 @@ async function assertSuperAdmin(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
-
-  if (!await assertSuperAdmin(req, supabase as any)) {
+  if (!await assertSuperAdmin(req, supabase)) {
     return res.status(403).json({ error: 'Super admin access required' });
   }
 

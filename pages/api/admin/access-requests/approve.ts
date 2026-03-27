@@ -21,7 +21,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -34,11 +34,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     if (!token) return res.status(401).json({ error: 'Missing auth token' });
   }
-
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
 
   // Resolve admin identity (Bearer or cookie session)
   let adminUserId: string | null = null;

@@ -37,6 +37,30 @@ const inMemoryCache = new Map<string, CacheEntry<any>>();
 const inMemoryRateLimit = new Map<string, number[]>();
 let lastRateLimitedSources: string[] = [];
 
+// Evict stale entries from in-memory fallback maps every 2 minutes
+const _evictionTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of inMemoryCache) {
+    if (now > v.expires_at) inMemoryCache.delete(k);
+  }
+  const windowMs = 60_000;
+  for (const [k, timestamps] of inMemoryRateLimit) {
+    const recent = timestamps.filter((t) => now - t < windowMs);
+    if (recent.length === 0) inMemoryRateLimit.delete(k);
+    else inMemoryRateLimit.set(k, recent);
+  }
+}, 2 * 60_000);
+if (_evictionTimer.unref) _evictionTimer.unref();
+
+/** Disconnect the Redis client (for graceful shutdown). */
+export function shutdownRedisExternalApiCache(): void {
+  if (redisClient) {
+    redisClient.quit().catch(() => {});
+    redisClient = null;
+    redisAvailable = false;
+  }
+}
+
 function getRedisClient(): IORedis | null {
   if (redisClient) return redisClient;
   const url = process.env.REDIS_URL || 'redis://localhost:6379';

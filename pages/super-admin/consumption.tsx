@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
-import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag, Server, Database } from 'lucide-react';
+import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag, Server, Database, BarChart3, SlidersHorizontal } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { getAuthToken } from '../../utils/getAuthToken';
 import LLMConsumptionPanel from '../../components/super-admin/LLMConsumptionPanel';
@@ -22,8 +22,9 @@ import PlansPricingPanel from '../../components/super-admin/PlansPricingPanel';
 import PlanAnalyticsPanel from '../../components/super-admin/PlanAnalyticsPanel';
 import InfraConsumptionPanel    from '../../components/super-admin/InfraConsumptionPanel';
 import RedisEfficiencyPanel    from '../../components/super-admin/RedisEfficiencyPanel';
+import ActivityControlPanel    from '../../components/super-admin/ActivityControlPanel';
 
-type ActiveTab = 'overview' | 'llm' | 'apis' | 'credits' | 'external_apis' | 'plans' | 'infra' | 'redis';
+type ActiveTab = 'overview' | 'llm' | 'apis' | 'credits' | 'external_apis' | 'plans' | 'infra' | 'redis' | 'activity_control';
 type Tier = 'super_admin' | 'company_admin' | 'user';
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -135,26 +136,27 @@ export default function ConsumptionPage() {
     { key: 'plans' as ActiveTab,         label: 'Plans & Pricing', icon: <Tag className="w-4 h-4" />, superAdminOnly: true },
     { key: 'infra'  as ActiveTab, label: 'Infra',           icon: <Server   className="w-4 h-4" />, superAdminOnly: true },
     { key: 'redis'  as ActiveTab, label: 'Redis',           icon: <Database className="w-4 h-4" />, superAdminOnly: true },
+    { key: 'activity_control' as ActiveTab, label: 'Activity Control', icon: <SlidersHorizontal className="w-4 h-4" />, superAdminOnly: true },
   ] as { key: ActiveTab; label: string; icon: React.ReactNode; superAdminOnly?: boolean }[]).filter(t => !t.superAdminOnly || tier === 'super_admin');
 
   const yearOptions = Array.from({ length: 3 }, (_, i) => now.getFullYear() - i);
 
   if (!tierResolved) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <RefreshCw className="w-5 h-5 text-gray-400 animate-spin" />
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <RefreshCw className="w-5 h-5 text-slate-400 animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white">
+    <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* Back link */}
         <div className="mb-6">
           <Link
             href={tier === 'super_admin' ? '/super-admin/dashboard' : '/dashboard'}
-            className="inline-flex items-center gap-2 text-gray-400 hover:text-white text-sm transition-colors"
+            className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-900 font-medium text-sm transition-colors"
           >
             <ArrowLeft className="w-4 h-4" /> {tier === 'super_admin' ? 'Super Admin Dashboard' : 'Dashboard'}
           </Link>
@@ -162,8 +164,8 @@ export default function ConsumptionPage() {
 
         {/* Page header */}
         <div className="mb-6 sm:mb-8">
-          <h1 className="text-xl sm:text-2xl font-bold text-white mb-1">Consumption Analytics</h1>
-          <p className="text-gray-400 text-sm">
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 mb-2">Consumption Analytics</h1>
+          <p className="text-slate-600 text-sm">
             {tier === 'super_admin'
               ? 'Full cost and credit visibility across all organizations.'
               : tier === 'company_admin'
@@ -173,19 +175,19 @@ export default function ConsumptionPage() {
         </div>
 
         {/* Period selector */}
-        <div className="flex items-center gap-3 mb-6 flex-wrap">
-          <Calendar className="w-4 h-4 text-gray-400" />
+        <div className="flex items-center gap-3 mb-6 flex-wrap bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+          <Calendar className="w-4 h-4 text-blue-600" />
           <select
             value={selMonth}
             onChange={e => setSelMonth(parseInt(e.target.value, 10))}
-            className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-violet-500"
+            className="bg-white border border-slate-300 text-slate-900 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           >
             {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
           </select>
           <select
             value={selYear}
             onChange={e => setSelYear(parseInt(e.target.value, 10))}
-            className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-violet-500"
+            className="bg-white border border-slate-300 text-slate-900 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           >
             {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
@@ -193,7 +195,7 @@ export default function ConsumptionPage() {
           {/* Org selector for super_admin drill-down */}
           {tier === 'super_admin' && (
             <div className="flex items-center gap-2 ml-4">
-              <Building2 className="w-4 h-4 text-gray-400" />
+              <Building2 className="w-4 h-4 text-blue-600" />
               <div className="relative">
                 <input
                   type="text"
@@ -201,12 +203,12 @@ export default function ConsumptionPage() {
                   value={orgSearch || (selectedOrgId ? (orgs.find(o => o.id === selectedOrgId)?.name ?? '') : '')}
                   onFocus={() => setOrgSearch('')}
                   onChange={e => { setOrgSearch(e.target.value); setSelectedOrgId(null); }}
-                  className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-violet-500 w-[260px] placeholder-gray-500"
+                  className="bg-white border border-slate-300 text-slate-900 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500 w-[260px] placeholder-slate-500"
                 />
                 {orgSearch.length > 0 && (
-                  <div className="absolute top-full left-0 mt-1 w-full bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto">
+                  <div className="absolute top-full left-0 mt-1 w-full bg-white border border-slate-300 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
                     <div
-                      className="px-3 py-2 text-sm text-gray-400 hover:bg-gray-700 cursor-pointer"
+                      className="px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 cursor-pointer"
                       onClick={() => { setSelectedOrgId(null); setOrgSearch(''); }}
                     >
                       All organizations
@@ -219,24 +221,24 @@ export default function ConsumptionPage() {
                       .map(o => (
                         <div
                           key={o.id}
-                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer"
+                          className="px-3 py-2 hover:bg-slate-100 cursor-pointer border-b border-slate-200 last:border-0"
                           onClick={() => { setSelectedOrgId(o.id); setOrgSearch(''); }}
                         >
-                          <div className="text-sm text-white font-medium">{o.name}</div>
-                          {o.website && <div className="text-xs text-gray-400">{o.website}</div>}
+                          <div className="text-sm text-slate-900 font-medium">{o.name}</div>
+                          {o.website && <div className="text-xs text-slate-600">{o.website}</div>}
                         </div>
                       ))}
                     {orgs.filter(o => {
                       const q = orgSearch.toLowerCase();
                       return o.name.toLowerCase().includes(q) || o.website.toLowerCase().includes(q);
                     }).length === 0 && (
-                      <div className="px-3 py-2 text-sm text-gray-500">No results</div>
+                      <div className="px-3 py-2 text-sm text-slate-600">No results</div>
                     )}
                   </div>
                 )}
               </div>
               {selectedOrgId && (
-                <button onClick={() => { setSelectedOrgId(null); setOrgSearch(''); }} className="text-gray-400 hover:text-white text-xs">✕</button>
+                <button onClick={() => { setSelectedOrgId(null); setOrgSearch(''); }} className="text-slate-600 hover:text-slate-900 font-medium text-xs">✕</button>
               )}
             </div>
           )}
@@ -244,15 +246,15 @@ export default function ConsumptionPage() {
 
         {/* Tabs */}
         <div className="mb-6 overflow-x-auto">
-          <div className="flex gap-1 bg-gray-800/50 rounded-xl p-1 w-max min-w-full sm:w-fit">
+          <div className="flex gap-2 bg-white rounded-lg p-2 w-max min-w-full sm:w-fit border border-slate-200 shadow-sm">
             {tabs.map(t => (
               <button
                 key={t.key}
                 onClick={() => setActiveTab(t.key)}
-                className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
                   activeTab === t.key
-                    ? 'bg-gray-700 text-white shadow-sm'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
               >
                 {t.icon} {t.label}
@@ -261,8 +263,8 @@ export default function ConsumptionPage() {
           </div>
         </div>
 
-        {/* Tab content */}
-        <div className="bg-gray-900 rounded-2xl border border-gray-800 p-4 sm:p-6">
+        {/* Tab content - with section-specific colored borders for distinction */}
+        <div className="bg-white rounded-lg border border-slate-200 p-4 sm:p-6 shadow-sm">
           {activeTab === 'overview' && tier === 'super_admin' && (
             <AllOrgsConsumptionTable
               year={selYear}
@@ -276,44 +278,50 @@ export default function ConsumptionPage() {
           )}
 
           {activeTab === 'llm' && (
-            <LLMConsumptionPanel
-              tier={tier}
-              companyId={effectiveCompanyId ?? undefined}
-              year={selYear}
-              month={selMonth}
-            />
+            <div className="border-l-4 border-l-blue-600 pl-6">
+              <LLMConsumptionPanel
+                tier={tier}
+                companyId={effectiveCompanyId ?? undefined}
+                year={selYear}
+                month={selMonth}
+              />
+            </div>
           )}
 
           {activeTab === 'apis' && (
-            <ApiConsumptionPanel
-              tier={tier}
-              companyId={effectiveCompanyId ?? undefined}
-              year={selYear}
-              month={selMonth}
-            />
+            <div className="border-l-4 border-l-emerald-600 pl-6">
+              <ApiConsumptionPanel
+                tier={tier}
+                companyId={effectiveCompanyId ?? undefined}
+                year={selYear}
+                month={selMonth}
+              />
+            </div>
           )}
 
           {activeTab === 'credits' && effectiveCompanyId && (
-            <CreditsManagementPanel
-              companyId={effectiveCompanyId}
-              isSuperAdmin={tier === 'super_admin'}
-            />
+            <div className="border-l-4 border-l-purple-600 pl-6">
+              <CreditsManagementPanel
+                companyId={effectiveCompanyId}
+                isSuperAdmin={tier === 'super_admin'}
+              />
+            </div>
           )}
 
           {activeTab === 'credits' && !effectiveCompanyId && tier === 'super_admin' && (
             <div className="py-12 flex flex-col items-center gap-4">
-              <p className="text-gray-400 text-sm mb-2">Search for a company to grant or adjust credits</p>
+              <p className="text-slate-600 text-sm mb-2">Search for a company to grant or adjust credits</p>
               <div className="relative w-full max-w-sm">
                 <input
                   type="text"
                   placeholder="Search by company name or website domain…"
                   value={orgSearch}
                   onChange={e => setOrgSearch(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-600 text-white text-sm rounded-lg px-4 py-2.5 focus:outline-none focus:border-violet-500 placeholder-gray-500"
+                  className="w-full bg-white border border-slate-300 text-slate-900 text-sm rounded-lg px-4 py-2.5 focus:outline-none focus:border-blue-500 placeholder-slate-500"
                   autoFocus
                 />
                 {orgSearch.length > 0 && (
-                  <div className="absolute top-full left-0 mt-1 w-full bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto">
+                  <div className="absolute top-full left-0 mt-1 w-full bg-white border border-slate-300 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
                     {orgs
                       .filter(o => {
                         const q = orgSearch.toLowerCase();
@@ -322,18 +330,18 @@ export default function ConsumptionPage() {
                       .map(o => (
                         <div
                           key={o.id}
-                          className="px-4 py-3 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
+                          className="px-4 py-3 hover:bg-slate-100 cursor-pointer border-b border-slate-200 last:border-0"
                           onClick={() => { setSelectedOrgId(o.id); setOrgSearch(''); }}
                         >
-                          <div className="text-sm text-white font-medium">{o.name}</div>
-                          {o.website && <div className="text-xs text-gray-400 mt-0.5">{o.website}</div>}
+                          <div className="text-sm text-slate-900 font-medium">{o.name}</div>
+                          {o.website && <div className="text-xs text-slate-600 mt-0.5">{o.website}</div>}
                         </div>
                       ))}
                     {orgs.filter(o => {
                       const q = orgSearch.toLowerCase();
                       return o.name.toLowerCase().includes(q) || o.website.toLowerCase().includes(q);
                     }).length === 0 && (
-                      <div className="px-4 py-3 text-sm text-gray-500">No companies found</div>
+                      <div className="px-4 py-3 text-sm text-slate-600">No companies found</div>
                     )}
                   </div>
                 )}
@@ -341,66 +349,85 @@ export default function ConsumptionPage() {
             </div>
           )}
           {activeTab === 'credits' && !effectiveCompanyId && tier !== 'super_admin' && (
-            <div className="text-gray-400 text-sm text-center py-12">No organization context available.</div>
+            <div className="text-slate-600 text-sm text-center py-12">No organization context available.</div>
           )}
 
           {activeTab === 'plans' && tier === 'super_admin' && (
-            <div className="space-y-8">
-              <PlanAnalyticsPanel />
-              <div className="border-t border-gray-800 pt-8">
-                <h3 className="text-lg font-semibold text-white mb-4">Manage Plans & Pricing</h3>
+            <div className="space-y-0">
+              <div className="border-b border-slate-200 pb-8">
+                <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-3">
+                  <BarChart3 className="w-5 h-5 text-indigo-600" />
+                  Plan Analytics
+                </h3>
+                <PlanAnalyticsPanel />
+              </div>
+              <div className="border-t border-slate-200 pt-8">
+                <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-3">
+                  <div className="p-2 bg-purple-100 rounded-lg"><Tag className="w-5 h-5 text-purple-600" /></div>
+                  Manage Plans & Pricing
+                </h3>
                 <PlansPricingPanel />
               </div>
             </div>
           )}
 
           {activeTab === 'infra' && tier === 'super_admin' && (
-            <InfraConsumptionPanel
-              onTotalChange={(total, orgCount) => {
-                setInfraTotal(total);
-                setInfraOrgCount(orgCount);
-              }}
-            />
+            <div className="border-l-4 border-l-amber-600 pl-6">
+              <InfraConsumptionPanel
+                onTotalChange={(total, orgCount) => {
+                  setInfraTotal(total);
+                  setInfraOrgCount(orgCount);
+                }}
+              />
+            </div>
           )}
 
           {activeTab === 'redis' && tier === 'super_admin' && (
-            <RedisEfficiencyPanel />
+            <div className="border-l-4 border-l-red-600 pl-6">
+              <RedisEfficiencyPanel />
+            </div>
+          )}
+
+          {activeTab === 'activity_control' && tier === 'super_admin' && (
+            <div className="border-l-4 border-l-orange-600 pl-6">
+              <ActivityControlPanel companyId={effectiveCompanyId ?? undefined} />
+            </div>
           )}
 
           {activeTab === 'external_apis' && (
             <div>
               <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                <h2 className="text-base sm:text-lg font-semibold text-white">External API Usage</h2>
+                <h2 className="text-base sm:text-lg font-semibold text-slate-900">External API Usage</h2>
                 <button
                   onClick={loadExternalApis}
-                  className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
+                  className="inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900 transition-colors"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${loadingExternalApis ? 'animate-spin' : ''}`} />
                   Refresh
                 </button>
               </div>
               {loadingExternalApis ? (
-                <div className="flex items-center gap-2 text-gray-400 py-8">
+                <div className="flex items-center gap-2 text-slate-600 py-8">
                   <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
                 </div>
               ) : !effectiveCompanyId ? (
-                <p className="text-gray-400 text-sm py-8">Select an organization to view external API usage.</p>
+                <p className="text-slate-600 text-sm py-8">Select an organization to view external API usage.</p>
               ) : externalApis.length === 0 ? (
-                <p className="text-gray-400 text-sm py-8">No external APIs configured for this organization.</p>
+                <p className="text-slate-600 text-sm py-8">No external APIs configured for this organization.</p>
               ) : (
                 <div className="space-y-4">
                   {externalApis.map((api: any) => {
                     const s = api.usage_summary;
                     const failureRate = s && s.request_count > 0 ? Math.round((s.failure_count / s.request_count) * 100) : 0;
                     return (
-                      <div key={api.id} className="bg-gray-800 rounded-xl border border-gray-700 p-4 sm:p-5">
+                      <div key={api.id} className="bg-white rounded-xl border border-slate-200 p-4 sm:p-5 shadow-sm">
                         <div className="flex items-start justify-between gap-3 mb-4">
                           <div>
-                            <div className="font-semibold text-white">{api.name}</div>
-                            <div className="text-xs text-gray-400 truncate">{api.base_url}</div>
+                            <div className="font-semibold text-slate-900">{api.name}</div>
+                            <div className="text-xs text-slate-600 truncate">{api.base_url}</div>
                           </div>
                           {api.enabled_user_count != null && (
-                            <span className="text-xs text-gray-400 shrink-0">{api.enabled_user_count} enabled</span>
+                            <span className="text-xs text-slate-600 shrink-0">{api.enabled_user_count} enabled</span>
                           )}
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm mb-4">
@@ -410,24 +437,24 @@ export default function ConsumptionPage() {
                             { label: 'Failures',       value: s?.failure_count ?? 0 },
                             { label: 'Failure rate',   value: `${failureRate}%`, warn: failureRate > 10 },
                           ].map(({ label, value, warn }) => (
-                            <div key={label} className="bg-gray-900 rounded-lg p-3">
-                              <div className="text-xs text-gray-400">{label}</div>
-                              <div className={`text-lg font-semibold mt-0.5 ${warn ? 'text-red-400' : 'text-white'}`}>{value}</div>
+                            <div key={label} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                              <div className="text-xs text-slate-600">{label}</div>
+                              <div className={`text-lg font-semibold mt-0.5 ${warn ? 'text-red-600' : 'text-slate-900'}`}>{value}</div>
                             </div>
                           ))}
                         </div>
                         {/* Daily bar chart */}
                         {Array.isArray(api.usage_daily) && api.usage_daily.length > 0 && (
                           <div>
-                            <div className="text-xs text-gray-400 mb-2">Daily usage (14d)</div>
+                            <div className="text-xs text-slate-600 mb-2">Daily usage (14d)</div>
                             <div className="flex items-end gap-1 h-12">
                               {api.usage_daily.slice(-14).map((day: any) => {
                                 const max = Math.max(1, ...api.usage_daily.map((d: any) => d.request_count || 0));
                                 const h = Math.round(((day.request_count || 0) / max) * 44);
                                 return (
                                   <div key={day.usage_date} className="flex-1 flex flex-col items-center gap-0.5" title={`${day.usage_date}: ${day.request_count} requests`}>
-                                    <div className="w-full bg-indigo-600 rounded-sm" style={{ height: `${h}px` }} />
-                                    <span className="text-[8px] text-gray-500">{String(day.usage_date).slice(8)}</span>
+                                    <div className="w-full bg-blue-600 rounded-sm" style={{ height: `${h}px` }} />
+                                    <span className="text-[8px] text-slate-500">{String(day.usage_date).slice(8)}</span>
                                   </div>
                                 );
                               })}
@@ -436,7 +463,7 @@ export default function ConsumptionPage() {
                         )}
                         {/* Last error */}
                         {s?.last_error_message && (
-                          <div className="mt-3 text-xs text-red-400">
+                          <div className="mt-3 text-xs text-red-600">
                             Last error: {s.last_error_code ? `[${s.last_error_code}] ` : ''}{s.last_error_message}
                           </div>
                         )}

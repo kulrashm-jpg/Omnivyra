@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isSuperAdmin } from '../../../backend/services/rbacService';
 

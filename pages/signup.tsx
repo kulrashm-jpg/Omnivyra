@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { getFirebaseAuth } from '../lib/firebase';
-import { sendEmailLink } from '../lib/auth/emailLink';
+import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -11,23 +10,16 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fbUser = getFirebaseAuth().currentUser;
-    if (fbUser) router.replace('/dashboard');
+    getSupabaseBrowser().auth.getSession().then(({ data }) => {
+      if (data.session) router.replace('/dashboard');
+    });
   }, [router]);
 
   const handleSignup = async () => {
     setError(null);
     setStatus(null);
-    if (!email) {
-      setError('Email is required.');
-      return;
-    }
-    try {
-      await sendEmailLink(email.trim().toLowerCase());
-      setStatus('Check your email to complete signup.');
-    } catch (err: any) {
-      setError(err.message ?? 'Failed to send sign-in link.');
-    }
+    if (!email) { setError('Email is required.'); return; }
+    router.replace(`/create-account?email=${encodeURIComponent(email.trim().toLowerCase())}`);
   };
 
   return (

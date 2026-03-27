@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../backend/services/supabaseAuthService';
+import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const { user, error } = await getSupabaseUserFromRequest(req);

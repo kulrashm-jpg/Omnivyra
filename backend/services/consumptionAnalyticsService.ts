@@ -299,18 +299,20 @@ export async function getLlmConsumption(
       userMap.set(uid, uRow);
     }
 
-    // Resolve emails via auth.admin
+    // Resolve emails via public.users (source of truth — no auth.admin dependency)
     const realUserIds = Array.from(userMap.keys()).filter(uid => uid !== '__system__' && uid !== ZERO_UUID);
     if (realUserIds.length > 0) {
       try {
-        const { data: authData } = await (supabase.auth as any).admin.listUsers({ perPage: 1000 });
-        const authUsers: Array<{ id: string; email?: string }> = authData?.users ?? [];
-        const emailMap = new Map(authUsers.map((u: { id: string; email?: string }) => [u.id, u.email ?? null]));
+        const { data: userRows } = await supabase
+          .from('users')
+          .select('supabase_uid, email')
+          .in('supabase_uid', realUserIds);
+        const emailMap = new Map((userRows ?? []).map((u: { supabase_uid: string; email?: string }) => [u.supabase_uid, u.email ?? null]));
         for (const uid of realUserIds) {
           const row = userMap.get(uid);
           if (row) row.email = emailMap.get(uid) ?? null;
         }
-      } catch { /* auth.admin unavailable — emails stay null */ }
+      } catch { /* public.users query failed — emails stay null */ }
 
       // Resolve membership type: users with a role row in this org are 'member'; others are 'guest'
       const { data: roleRows } = await supabase

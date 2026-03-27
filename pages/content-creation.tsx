@@ -165,9 +165,6 @@ export default function ContentCreation() {
     
     setIsGeneratingContent(true);
     try {
-      // Get API key from environment or user input
-      const apiKey = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY || '';
-      
       const response = await fetch('/api/ai/generate-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -179,8 +176,7 @@ export default function ContentCreation() {
           campaignData,
           campaignGoals,
           brandVoice: 'DrishiQ - clarity engine that solves life miseries',
-          useAI: !!apiKey,
-          apiKey
+          useAI: true
         })
       });
 

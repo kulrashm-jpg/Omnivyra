@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { applyDefaultRetention } from '../../../backend/services/contentRetentionLifecycle';
 import { buildDailyExecutionMetadata } from '../../../lib/dailyExecutionMetadata';
 

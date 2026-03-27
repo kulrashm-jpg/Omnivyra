@@ -118,4 +118,13 @@ export class CronGuard {
       );
     } catch { /* ignore — lock will expire via TTL */ }
   }
+
+  /** Disconnect the Redis client (for graceful shutdown). */
+  shutdown(): void {
+    if (this.client) {
+      this.client.quit().catch(() => {});
+      this.client = null;
+      this.available = false;
+    }
+  }
 }

@@ -17,6 +17,7 @@ import {
   Role,
 } from '../../../backend/services/rbacService';
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
+import { checkAndGrantSetupCredits } from '../../../backend/services/earnCreditsService';
 
 const requireExternalApiAccess = async (
   req: NextApiRequest,
@@ -538,6 +539,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
     const { oauth_client_id_encrypted: _oid, oauth_client_secret_encrypted: _osec, ...apiSafe } = (data || {}) as any;
+
+    // Mark external_api_connected in setup progress and check earn credits (fire-and-forget)
+    if (companyId && access?.userId) {
+      supabase.from('company_setup_progress').upsert(
+        { company_id: companyId, external_api_connected: true, updated_at: new Date().toISOString() },
+        { onConflict: 'company_id' },
+      ).then(() =>
+        checkAndGrantSetupCredits(companyId, access.userId)
+          .catch(e => console.warn('[external-apis] setup credits check failed:', e?.message))
+      ).catch(() => {});
+    }
+
     return res.status(201).json({ api: { ...apiSafe, has_oauth_credentials: !!(_oid && _osec) } });
   }
 

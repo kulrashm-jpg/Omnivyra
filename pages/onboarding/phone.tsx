@@ -12,9 +12,7 @@ import { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import type { ConfirmationResult } from 'firebase/auth';
-import { getFirebaseAuth } from '../../lib/firebase';
-import { setupRecaptcha, sendPhoneOtp, clearRecaptcha } from '../../lib/firebase';
+import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 
 type Step = 'company' | 'phone' | 'otp' | 'done' | 'error';
 
@@ -36,18 +34,17 @@ export default function PhoneVerificationPage() {
   const [loading, setLoading]       = useState(false);
   const [errorMsg, setErrorMsg]     = useState<string | null>(null);
 
-  const confirmationRef = useRef<ConfirmationResult | null>(null);
-  const recaptchaContainerRef = useRef<HTMLDivElement>(null);
+  const confirmationRef = useRef<any>(null);
 
-  // ── Require Firebase auth ─────────────────────────────────────────────────
+  // ── Require Supabase session ──────────────────────────────────────────────
   useEffect(() => {
-    const fbUser = getFirebaseAuth().currentUser;
-    if (!fbUser) {
-      router.replace('/create-account');
-      return;
-    }
-    setSession(fbUser);
-    return () => clearRecaptcha();
+    getSupabaseBrowser().auth.getSession().then(({ data }) => {
+      if (!data.session) {
+        router.replace('/create-account');
+        return;
+      }
+      setSession(data.session.user);
+    });
   }, [router]);
 
   // ── Step 0: Company name ────────────────────────────────────────────────────
@@ -66,9 +63,9 @@ export default function PhoneVerificationPage() {
     setErrorMsg(null);
 
     try {
-      setupRecaptcha('recaptcha-container');
-      const result = await sendPhoneOtp(phone.trim());
-      confirmationRef.current = result;
+      const supabase = getSupabaseBrowser();
+      const { error } = await supabase.auth.signInWithOtp({ phone: phone.trim() });
+      if (error) throw error;
       setStep('otp');
     } catch (err: any) {
       setErrorMsg(err.message ?? 'Failed to send OTP. Check the phone number and try again.');
@@ -85,18 +82,13 @@ export default function PhoneVerificationPage() {
     setErrorMsg(null);
 
     try {
-      const credential = await confirmationRef.current!.confirm(otp.trim());
-      const fbUid = credential.user.uid;
+      const supabase = getSupabaseBrowser();
+      const { error } = await supabase.auth.verifyOtp({ phone: phone.trim(), token: otp.trim(), type: 'sms' });
+      if (error) throw error;
 
-      // Get the Firebase ID token to let the server verify phone auth server-side
-      const firebaseIdToken = await credential.user.getIdToken();
-
-      // Store firebase data temporarily so profile page can call the complete API
       if (typeof window !== 'undefined') {
-        sessionStorage.setItem('onboarding_phone',           phone.trim());
-        sessionStorage.setItem('onboarding_firebase_uid',    fbUid);
-        sessionStorage.setItem('onboarding_firebase_token',  firebaseIdToken);
-        sessionStorage.setItem('onboarding_company_name',    companyName.trim());
+        sessionStorage.setItem('onboarding_phone',        phone.trim());
+        sessionStorage.setItem('onboarding_company_name', companyName.trim());
       }
 
       // Redirect to profile capture page
@@ -124,9 +116,6 @@ export default function PhoneVerificationPage() {
       <Head>
         <title>Set Up Account | Omnivyra</title>
       </Head>
-
-      {/* Invisible reCAPTCHA anchor */}
-      <div id="recaptcha-container" ref={recaptchaContainerRef} />
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
         {/* Minimal header */}

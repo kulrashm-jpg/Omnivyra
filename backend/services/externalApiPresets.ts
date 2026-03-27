@@ -94,7 +94,7 @@ export const externalApiPresets: ExternalApiPreset[] = [
     },
     query_params: {
       q: '{{category}}',
-      language: '{{geo}}',
+      language: 'en',
       pageSize: 10,
       sortBy: 'publishedAt',
       apiKey: '{{NEWS_API_KEY}}',

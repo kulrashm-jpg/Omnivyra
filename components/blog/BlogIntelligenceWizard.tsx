@@ -104,7 +104,7 @@ export default function BlogIntelligenceWizard({ accountId, onClose, onSuccess }
   const [verifyErr, setVerifyErr] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const apiBase  = typeof window !== 'undefined' ? window.location.origin : 'https://app.omnivyra.com';
+  const apiBase  = typeof window !== 'undefined' ? window.location.origin : 'https://www.omnivyra.com';
   const scriptTag = `<script src="https://cdn.omnivyra.com/tracker.js" data-account="${accountId}" data-api="${apiBase}"></script>`;
 
   // ── Cleanup on unmount ───────────────────────────────────────────────

@@ -23,11 +23,12 @@
 import { validateCronEnv } from '../utils/validateEnv';
 import { CronGuard } from '../utils/cronGuard';
 import { cronInstr } from '../utils/cronInstrumentation';
-import { getCronAdminConfig, shouldRunCronJob } from '../services/adminRuntimeConfig';
+import { shutdownAdminRuntimeConfig, getCronAdminConfig, shouldRunCronJob } from '../services/adminRuntimeConfig';
 import {
   warmIntentContext,
   triggerIntentJobs,
   recordUserActivity,
+  shutdownIntentExecutionRedis,
 } from '../services/intentExecutionService';
 
 // Fail fast if required env vars are missing
@@ -62,11 +63,11 @@ import { runEngagementOpportunityScanner } from '../jobs/engagementOpportunitySc
 import { runDailyIntelligence } from '../schedulers/intelligenceScheduler';
 import { runIntelligenceEventCleanup } from '../jobs/intelligenceEventCleanup';
 import { runConnectorTokenRefreshJob } from '../jobs/connectorTokenRefreshJob';
+import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
 import {
-  runLeadThreadRecomputeWorker,
-  runLeadThreadRecomputeQueueCleanup,
-} from '../workers/leadThreadRecomputeWorker';
-import { runConversationMemoryWorker } from '../workers/conversationMemoryWorker';
+  getLeadThreadRecomputeQueue,
+  getConversationMemoryRebuildQueue,
+} from '../queue/bullmqClient';
 import { runResponsePerformanceEvaluationWorker } from '../workers/responsePerformanceEvaluationWorker';
 import { runReplyIntelligenceAggregationWorker } from '../workers/replyIntelligenceAggregationWorker';
 import { runEngagementOpportunityDetectionWorker } from '../workers/engagementOpportunityDetectionWorker';
@@ -80,9 +81,10 @@ import { runBuyerIntentLearningWorker } from '../workers/buyerIntentLearningWork
 
 const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_SECONDS || '900') * 1000; // default 15 min
 const LEAD_THREAD_QUEUE_CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-const LEAD_THREAD_RECOMPUTE_BASE_MS = 5 * 1000; // 5 seconds
-const LEAD_THREAD_RECOMPUTE_JITTER_MS = 2 * 1000; // 0-2 seconds jitter
-const CONVERSATION_MEMORY_WORKER_INTERVAL_MS = 10 * 1000; // 10 seconds
+// Safety-net enqueue intervals — cron fires a BullMQ drain job periodically as
+// a fallback for any rows that the event-driven path missed (e.g. Redis hiccup).
+const LEAD_THREAD_RECOMPUTE_SAFETYNET_MS = 5 * 60 * 1000; // 5 minutes
+const CONVERSATION_MEMORY_SAFETYNET_MS   = 5 * 60 * 1000; // 5 minutes
 const RESPONSE_PERFORMANCE_EVAL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const REPLY_INTELLIGENCE_AGGREGATION_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const ENGAGEMENT_OPPORTUNITY_DETECTION_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -120,13 +122,18 @@ const ENGAGEMENT_OPPORTUNITY_SCANNER_INTERVAL_MS = 4 * 60 * 60 * 1000; // every 
 const CONNECTOR_TOKEN_REFRESH_INTERVAL_MS      = 6 * 60 * 60 * 1000;  // every 6 hours
 const CONFIDENCE_CALIBRATION_INTERVAL_MS       = 7 * 24 * 60 * 60 * 1000; // weekly
 
-// ── Working-hours scheduler ───────────────────────────────────────────────────
-// The base tick fires every 15 minutes (regardless of CRON_INTERVAL_SECONDS).
-// The publish cycle only runs when the company-configured interval has elapsed,
-// AND respects working hours: during off-hours the effective interval is 6 hours
-// so posts are checked roughly twice per night.
-const BASE_TICK_MS        = 15 * 60 * 1000;       // fixed base clock
-const OFF_HOURS_INTERVAL_MS = 6 * 60 * 60 * 1000; // ~twice per 12-h off-hours window
+// ── Publish safety-net scheduler ─────────────────────────────────────────────
+// Posts are now enqueued with a BullMQ `delay` at the moment they are scheduled
+// (see enqueueScheduledPostAt in schedulerService.ts), so this loop is a
+// safety net only — it catches posts that were scheduled before this change,
+// posts whose BullMQ job was lost due to a Redis flush, or posts rescheduled
+// while the cron process was down.
+//
+// 4-hour tick is sufficient: a missed post is at most 4 hours late, which is
+// an acceptable SLA for the recovery path.  During off-hours the effective
+// interval is already 6 hours so we unify both to 4 h.
+const BASE_TICK_MS          = 4 * 60 * 60 * 1000;  // safety-net check every 4 hours
+const OFF_HOURS_INTERVAL_MS = 4 * 60 * 60 * 1000;  // same — no distinction needed
 
 interface SchedulerPrefs {
   interval_minutes: number;
@@ -157,12 +164,7 @@ function localHour(tz: string): number {
 async function loadSchedulerPrefs(): Promise<SchedulerPrefs> {
   if (_schedulerPrefs && Date.now() - _prefsCachedAt < 5 * 60 * 1000) return _schedulerPrefs;
   try {
-    const { createClient } = await import('@supabase/supabase-js');
-    const db = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      { auth: { persistSession: false, autoRefreshToken: false } },
-    );
+    const { supabase: db } = await import('../db/supabaseClient');
     const { data } = await db
       .from('company_scheduler_prefs')
       .select('interval_minutes, timezone, working_start, working_end')
@@ -231,6 +233,7 @@ let lastConnectorTokenRefreshRun = 0;
 let lastLeadThreadQueueCleanupRun = 0;
 let lastConfidenceCalibrationRun = 0;
 let lastScheduledLeadRunHour = -1;
+let lastScheduledLeadRunMs   = 0;   // timestamp for shouldRunCronJob
 
 let cronInterval: NodeJS.Timeout | null = null;
 const cronGuard = new CronGuard();
@@ -261,6 +264,9 @@ function scheduleWorker(
     const timer = setTimeout(async () => {
       let hadError = false;
       try {
+        // BUG#20 fix: warm admin config cache before each tick so shouldRunCronJob()
+        // and per-activity overrides read a fresh value, not cold/stale cache.
+        await getCronAdminConfig().catch(() => { /* non-fatal */ });
         const result = await fn();
         const hasActivity = logFields.some((f) => (result[f] ?? 0) > 0);
         if (hasActivity) {
@@ -344,16 +350,24 @@ async function startCron() {
   }, BASE_TICK_MS);
 
   // All recurring workers — defined once via scheduleWorker(fn, intervalMs, label, logFields, jitterMs)
+  // Safety-net: enqueue a BullMQ drain job every 5 min in case the event-driven
+  // path missed any rows (e.g. transient Redis error). The worker process in
+  // main.ts does the actual work — cron only fires the trigger.
   scheduleWorker(
-    () => runLeadThreadRecomputeWorker() as any,
-    LEAD_THREAD_RECOMPUTE_BASE_MS, 'leadThreadRecompute',
-    ['processed', 'errors', 'retriesExhausted'],
-    LEAD_THREAD_RECOMPUTE_JITTER_MS
+    async () => {
+      await getLeadThreadRecomputeQueue().add('recompute', {}, { jobId: 'drain', delay: 200 });
+      return {};
+    },
+    LEAD_THREAD_RECOMPUTE_SAFETYNET_MS, 'leadThreadRecompute-safetynet',
+    []
   );
   scheduleWorker(
-    () => runConversationMemoryWorker() as any,
-    CONVERSATION_MEMORY_WORKER_INTERVAL_MS, 'conversationMemory',
-    ['processed', 'errors']
+    async () => {
+      await getConversationMemoryRebuildQueue().add('rebuild', {}, { jobId: 'drain', delay: 200 });
+      return {};
+    },
+    CONVERSATION_MEMORY_SAFETYNET_MS, 'conversationMemory-safetynet',
+    []
   );
   scheduleWorker(
     () => runResponsePerformanceEvaluationWorker() as any,
@@ -411,6 +425,11 @@ async function startCron() {
     // Clear all worker timers registered via scheduleWorker()
     for (const t of workerTimers) clearTimeout(t);
     workerTimers.length = 0;
+    // Close Redis clients
+    cronGuard.shutdown();
+    cronInstr.shutdown();
+    shutdownAdminRuntimeConfig();
+    shutdownIntentExecutionRedis();
     process.exit(0);
   };
 
@@ -526,10 +545,18 @@ async function runSchedulerCycle() {
   }
 
   // Scheduled lead detection at 07:00 and 18:00 (twice daily)
+  // BUG#19 fix: gate behind shouldRunCronJob so Redis usage protection + admin
+  // overrides can throttle or disable it like every other job.
   const now = new Date();
   const currentHour = now.getHours();
-  if ((currentHour === 7 || currentHour === 18) && lastScheduledLeadRunHour !== currentHour) {
+  const LEAD_DETECTION_INTERVAL_MS = 6 * 3600 * 1000;  // 6 hours between runs
+  if (
+    (currentHour === 7 || currentHour === 18) &&
+    lastScheduledLeadRunHour !== currentHour &&
+    shouldRunCronJob('scheduledLeadDetection', LEAD_DETECTION_INTERVAL_MS, lastScheduledLeadRunMs)
+  ) {
     lastScheduledLeadRunHour = currentHour;
+    lastScheduledLeadRunMs   = Date.now();
     try {
       const result = await enqueueScheduledLeadDetection();
       if (result.enqueued > 0 || result.errors.length > 0) {

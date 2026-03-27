@@ -49,12 +49,6 @@ export interface SlimSnapshot {
     bytesIn: number;
   } | null;
 
-  firebase: {
-    verifyPerMin:  number;
-    verifications: number;
-    authErrors:    number;
-  } | null;
-
   api: {
     cpm:     number;
     total:   number;
@@ -102,12 +96,6 @@ export function slimify(
     bytesIn: metrics.supabase.estimatedBytesIn,
   } : null;
 
-  const firebase = metrics.firebase ? {
-    verifyPerMin:  metrics.firebase.verificationsPerMin,
-    verifications: metrics.firebase.tokenVerifications,
-    authErrors:    metrics.firebase.authErrors,
-  } : null;
-
   const api = metrics.api ? {
     cpm:     metrics.api.callsPerMin,
     total:   metrics.api.totalCalls,
@@ -130,7 +118,7 @@ export function slimify(
     topDriver:  cost.topCostDrivers?.[0]?.reason ?? null,
   } : null;
 
-  return { v: 2, ts, iso, env: metrics.env, redis, supabase, firebase, api, external, cost: costSlim };
+  return { v: 2, ts, iso, env: metrics.env, redis, supabase, api, external, cost: costSlim };
 }
 
 // ── Compression helpers ───────────────────────────────────────────────────────

@@ -14,7 +14,7 @@
  * - Worker processes batches asynchronously
  */
 
-import { v4 as uuidv4 } from 'uuid';
+
 import {
   ValidatedExtensionEvent,
   IExtensionEventService,
@@ -49,7 +49,7 @@ export class ExtensionEventService implements IExtensionEventService {
    */
   async ingestEvent(event: ValidatedExtensionEvent): Promise<{ event_id: string }> {
     try {
-      const eventId = uuidv4();
+      const eventId = crypto.randomUUID();
 
       // ASSUMPTION: In production, this becomes a database INSERT
       // SQL:

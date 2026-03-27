@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
   AccountContext,
   PlatformMetrics,
@@ -16,11 +17,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   try {
     const { companyId, refresh } = req.query;
 
     if (!companyId || typeof companyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required' });
+    }
+
+    // Verify the requesting user belongs to this company
+    const { data: roleRow } = await supabase
+      .from('user_company_roles')
+      .select('company_id')
+      .eq('user_id', user.id)
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (!roleRow) {
+      return res.status(403).json({ error: 'Forbidden' });
     }
 
     const now = Date.now();

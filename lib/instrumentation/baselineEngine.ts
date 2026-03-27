@@ -99,7 +99,7 @@ export function computeBaselines(snapshots: SlimSnapshot[]): SystemBaselines {
     apiErrorRate:     buildBaseline(pluck(snapshots, s => s.api?.errRate)),
     apiP95Ms:         buildBaseline(pluck(snapshots, s => s.api?.p95Ms)),
     externalCalls:    buildBaseline(pluck(snapshots, s => s.external?.totalCalls)),
-    authVerifyPerMin: buildBaseline(pluck(snapshots, s => s.firebase?.verifyPerMin)),
+    authVerifyPerMin: buildBaseline([]), // firebase removed — Supabase auth has no equivalent metric
     monthlyCost:      buildBaseline(pluck(snapshots, s => s.cost?.total)),
   };
 }

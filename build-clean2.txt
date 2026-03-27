@@ -1,0 +1,55 @@
+﻿Γû▓ Next.js 16.2.1 (Turbopack)
+- Environments: .env.local
+
+npx : ΓÜá The "middleware" file convention is deprecated. Please use "proxy" 
+instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+At line:1 char:66
++ ... rse -Force -ErrorAction SilentlyContinue; npx next build 2>&1 | Out-F ...
++                                               ~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ΓÜá The "middle...leware-to-proxy 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Skipping validation of types
+  Finished TypeScript config validation in 24ms ...
+  Creating an optimized production build ...
+
+-----
+[1m[31mFATAL[39m[0m: An unexpected Turbopack error occurred. A panic log 
+has been written to C:\Users\Admin\AppData\Local\Temp\next-panic-39241c0c940f9e
+71cb503d6472eaf611.log.
+
+To help make Turbopack better, report this error by ]8;;https://bugs.nextjs.or
+g/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20failed%20
+to%20create%20junction%20point%20at%20%22C%3A%5C%5Cvirality%5C%5C.next%5C%5Cnod
+e_modules%5C%5C%40tiptap%5C%5Cextension-underline-0201a54da8d1e341%22%20pointin
+g%20to%20%22C%3A%5C%5Cvirality%5C%5C.next%5C%5Cnode_modules%5C%5C%40tiptap%5C%5
+C..%5C%5C..%5C%5C..%5C%5Cnode_modules%5C%5C%40tiptap%5C%5Cextension-underline%2
+2&body=Turbopack%20version%3A%20%603e37bb42%60%0ANext.js%20version%3A%20%600.0.
+0%60%0A%0AError%20message%3A%0A%60%60%60%0Afailed%20to%20create%20junction%20po
+int%20at%20%22C%3A%5C%5Cvirality%5C%5C.next%5C%5Cnode_modules%5C%5C%40tiptap%5C
+%5Cextension-underline-0201a54da8d1e341%22%20pointing%20to%20%22C%3A%5C%5Cviral
+ity%5C%5C.next%5C%5Cnode_modules%5C%5C%40tiptap%5C%5C..%5C%5C..%5C%5C..%5C%5Cno
+de_modules%5C%5C%40tiptap%5C%5Cextension-underline%22%0A%0ACaused%20by%3A%0A-%2
+0creation%20of%20a%20new%20symbolic%20link%20or%20junction%20point%20failed%3A%
+20The%20system%20cannot%20find%20the%20path%20specified.%20%28os%20error%203%29
+%0A-%20The%20system%20cannot%20find%20the%20path%20specified.%20%28os%20error%2
+03%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace\clicking 
+here.]8;;\
+-----
+
+
+> Build error occurred
+Error [TurbopackInternalError]: failed to create junction point at "C:\\viralit
+y\\.next\\node_modules\\@tiptap\\extension-underline-0201a54da8d1e341" 
+pointing to "C:\\virality\\.next\\node_modules\\@tiptap\\..\\..\\..\\node_modul
+es\\@tiptap\\extension-underline"
+
+Caused by:
+- creation of a new symbolic link or junction point failed: The system cannot 
+find the path specified. (os error 3)
+- The system cannot find the path specified. (os error 3)
+    at ignore-listed frames {
+  type: 'TurbopackInternalError',
+  location: undefined
+}

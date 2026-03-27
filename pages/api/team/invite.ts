@@ -21,8 +21,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash, randomBytes } from 'crypto';
-import { createClient } from '@supabase/supabase-js';
-import { verifyAuthHeader } from '../../../lib/auth/serverValidation';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { checkRateLimit, LOGIN_LIMIT, INVITE_UID_LIMIT } from '../../../lib/auth/rateLimit';
 
 const VALID_ROLES = new Set([
@@ -52,8 +52,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // (e.g. from a deleted account) must be rejected immediately, not within 1h.
   let callerUid: string;
   try {
-    const verified = await verifyAuthHeader(req.headers.authorization, true);
-    callerUid = verified.uid;
+    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
+    callerUid = verified.id;
   } catch {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -82,19 +82,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
-
   // ── 4. Look up caller and resolve their company ───────────────────────────
   // We intentionally look up the role from user_company_roles, NOT from
   // users.role (which is a denormalized column that is often NULL/stale).
   const { data: callerUser } = await supabase
     .from('users')
     .select('id')
-    .eq('firebase_uid', callerUid)
+    .eq('supabase_uid', callerUid)
     .maybeSingle();
 
   if (!callerUser) {
@@ -197,7 +191,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const companyName = (company as any)?.name ?? 'your team';
 
   // ── 9. Send invitation email ──────────────────────────────────────────────
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.omnivyra.com';
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://www.omnivyra.com';
   const inviteLink = `${baseUrl}/auth/accept-invite?token=${rawToken}`;
 
   await sendInviteEmail({ to: normalizedEmail, companyName, inviteLink, role, expiresInDays: INVITE_EXPIRY_DAYS });

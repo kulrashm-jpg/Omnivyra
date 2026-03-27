@@ -228,20 +228,25 @@ async function main() {
 
   const children = [];
 
-  // 2. Start workers
-  console.log('2️⃣  Starting workers...');
-  const workers = spawnProcess(
-    'workers',
-    process.execPath,
-    [tsNodeBin, '--transpile-only', 'backend/queue/startWorkers.ts'],
-    { stdio: ['ignore', 'pipe', 'pipe'] }
-  );
-  children.push(workers);
-  workers.stdout?.on('data', (d) => process.stdout.write(`[workers] ${d}`));
-  workers.stderr?.on('data', (d) => process.stderr.write(`[workers] ${d}`));
+  // 2. Start workers (skipped when ENABLE_AUTO_WORKERS=0)
+  const enableWorkers = process.env.ENABLE_AUTO_WORKERS !== '0';
+  if (enableWorkers) {
+    console.log('2️⃣  Starting workers...');
+    const workers = spawnProcess(
+      'workers',
+      process.execPath,
+      [tsNodeBin, '--transpile-only', 'backend/queue/startWorkers.ts'],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    children.push(workers);
+    workers.stdout?.on('data', (d) => process.stdout.write(`[workers] ${d}`));
+    workers.stderr?.on('data', (d) => process.stderr.write(`[workers] ${d}`));
+  } else {
+    console.log('2️⃣  Workers skipped (ENABLE_AUTO_WORKERS=0)');
+  }
 
   // 3. Start cron (skipped when ENABLE_AUTO_WORKERS=0)
-  const enableCron = process.env.ENABLE_AUTO_WORKERS !== '0';
+  const enableCron = enableWorkers;
   if (enableCron) {
     console.log('3️⃣  Starting cron scheduler...');
     const cron = spawnProcess(

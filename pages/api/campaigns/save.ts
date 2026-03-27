@@ -1,9 +1,15 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -23,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: 'planning',
         current_stage: 'planning',
         timeframe: 'quarter',
-        user_id: '550e8400-e29b-41d4-a716-446655440000',
+        user_id: user.id,
         thread_id: 'thread_' + Date.now(),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()

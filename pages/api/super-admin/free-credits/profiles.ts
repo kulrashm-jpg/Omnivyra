@@ -6,15 +6,11 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 
-const serviceSupabase = () => createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
   if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return true;
@@ -33,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const limitNum = Math.min(200, parseInt(limit, 10));
   const offset = (pageNum - 1) * limitNum;
 
-  const sb = serviceSupabase();
+  const sb = supabase;
 
   let q = sb.from('free_credit_profiles')
     .select('*', { count: 'exact' })

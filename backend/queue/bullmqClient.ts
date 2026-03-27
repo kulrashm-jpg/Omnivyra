@@ -129,8 +129,10 @@ export function getInstrumentedClient(feature: RedisFeature | string): IORedis {
 // Start instrumentation timers once per process.
 // Pass the shared-client factory to avoid a circular import inside the module.
 startInstrumentation(() => getRedisConnection());
-// Start Redis usage-protection polling (60-second loop, best-effort).
-startUsageProtection(() => getRedisConnection());
+// Start Redis usage-protection polling (15-second loop).
+// BUG#21 fix: store the first-poll promise so startWorkers() can await it before
+// accepting any jobs — guarantees protection level is known at worker startup.
+export const usageProtectionReady: Promise<void> = startUsageProtection(() => getRedisConnection());
 startQueueReportFlush(
   () => getRedisConnection(),
   () => getMetricsReport().opsPerMin,
@@ -152,7 +154,7 @@ startMetricsPersistence(
 //
 // Critical queues (posting, publish) are never blocked.
 
-function applyQueueProtection(queue: Queue): Queue {
+export function applyQueueProtection(queue: Queue): Queue {
   const origAdd     = queue.add.bind(queue);
   const origAddBulk = queue.addBulk.bind(queue);
 
@@ -164,9 +166,9 @@ function applyQueueProtection(queue: Queue): Queue {
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (queue as any).add = async (...args: Parameters<typeof origAdd>) => {
+  (queue as any).add = async (...args: any[]) => {
     if (!isQueueAllowed(queue.name)) {
-      const entry: OverflowEntry = { name: args[0], data: args[1], opts: args[2] };
+      const entry: OverflowEntry = { name: args[0] as string, data: args[1], opts: args[2] };
       const stored = storeOverflow(queue.name, entry);
       console.error(JSON.stringify({
         level:   'ERROR',
@@ -182,8 +184,8 @@ function applyQueueProtection(queue: Queue): Queue {
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (queue as any).addBulk = async (...args: Parameters<typeof origAddBulk>) => {
-    const [jobs] = args;
+  (queue as any).addBulk = async (...args: any[]) => {
+    const jobs: OverflowEntry[] = args[0];
 
     if (!isQueueAllowed(queue.name)) {
       // Store all blocked bulk jobs in the overflow buffer
@@ -234,6 +236,8 @@ function applyQueueProtection(queue: Queue): Queue {
 // Queue instance for enqueuing jobs
 let publishQueue: Queue | null = null;
 let engagementPollingQueue: Queue | null = null;
+let leadThreadRecomputeQueue: Queue | null = null;
+let conversationMemoryRebuildQueue: Queue | null = null;
 
 // ── RISK 1: Priority queues (separate AI-heavy from time-critical posting) ────
 let aiHeavyQueue: Queue | null = null;
@@ -311,6 +315,56 @@ export function getEngagementPollingQueue(): Queue {
     applyQueueProtection(engagementPollingQueue);
   }
   return engagementPollingQueue;
+}
+
+/**
+ * Event-driven queue for lead thread score recomputes.
+ * Replaces the 5-second polling loop in cron.ts.
+ * Jobs are deduplicated: a fixed jobId + 200 ms delay coalesces bursts.
+ * attempts: 1, removeOnComplete immediately so jobId is freed for next event.
+ */
+export function getLeadThreadRecomputeQueue(): Queue {
+  if (!leadThreadRecomputeQueue) {
+    leadThreadRecomputeQueue = new Queue('lead-thread-recompute', {
+      connection: getConnectionConfig(),
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: true,
+        removeOnFail: true,
+      },
+    });
+    leadThreadRecomputeQueue.on('error', (err) => {
+      console.error('[lead-thread-recompute] queue error:', err);
+    });
+    instrumentQueue(leadThreadRecomputeQueue);
+    applyQueueProtection(leadThreadRecomputeQueue);
+  }
+  return leadThreadRecomputeQueue;
+}
+
+/**
+ * Event-driven queue for conversation memory rebuilds.
+ * Replaces the 10-second polling loop in cron.ts.
+ * Jobs are deduplicated: a fixed jobId + 200 ms delay coalesces bursts.
+ * attempts: 1, removeOnComplete immediately so jobId is freed for next event.
+ */
+export function getConversationMemoryRebuildQueue(): Queue {
+  if (!conversationMemoryRebuildQueue) {
+    conversationMemoryRebuildQueue = new Queue('conversation-memory-rebuild', {
+      connection: getConnectionConfig(),
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: true,
+        removeOnFail: true,
+      },
+    });
+    conversationMemoryRebuildQueue.on('error', (err) => {
+      console.error('[conversation-memory-rebuild] queue error:', err);
+    });
+    instrumentQueue(conversationMemoryRebuildQueue);
+    applyQueueProtection(conversationMemoryRebuildQueue);
+  }
+  return conversationMemoryRebuildQueue;
 }
 
 /**
@@ -465,6 +519,7 @@ export function createQueue(name: string): Queue {
     },
   });
   instrumentQueue(q);
+  applyQueueProtection(q);  // BUG#9 fix: all queues must be protected
   return q;
 }
 

@@ -1,8 +1,7 @@
 /**
  * Centralised auth middleware for Next.js API routes.
  *
- * ALL authentication is via Firebase ID tokens (RS256, verified by Admin SDK).
- * Supabase is database-only — no supabase.auth.* calls exist here.
+ * ALL authentication is via Supabase JWT tokens (verified by supabase.auth.getUser).
  *
  * Usage:
  *
@@ -18,14 +17,14 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
-import { verifyAuthHeader } from '../../lib/auth/serverValidation';
+import { verifySupabaseAuthHeader } from '../../lib/auth/serverValidation';
 
 // ── Resolved auth identity ────────────────────────────────────────────────────
 
 export interface AuthUser {
-  /** Internal users.id (UUID from our DB, NOT the Firebase UID) */
+  /** Internal users.id (UUID from our DB) */
   id: string;
-  /** Firebase UID — primary identity from Firebase */
+  /** Supabase auth UUID (kept as firebaseUid for interface compatibility) */
   firebaseUid: string;
   email: string;
 }
@@ -33,32 +32,47 @@ export interface AuthUser {
 // ── 1. requireAuth ─────────────────────────────────────────────────────────────
 
 /**
- * Validates the Firebase Bearer token in the Authorization header.
- * Resolves the internal users.id from the firebase_uid.
+ * Validates the Supabase Bearer token in the Authorization header.
+ * Resolves the internal users.id from supabase_uid (falls back to email).
  * Returns the authenticated user or sends 401 and returns null.
  */
 export async function requireAuth(
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<{ user: AuthUser } | null> {
-  let firebaseUid: string;
+  let supabaseUid: string;
   let email: string;
 
   try {
-    const verified = await verifyAuthHeader(req.headers.authorization);
-    firebaseUid = verified.uid;
+    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
+    supabaseUid = verified.id;
     email = verified.email;
   } catch {
     res.status(401).json({ error: 'Authorization required' });
     return null;
   }
 
-  // Resolve internal DB user id
-  const { data: userRow } = await supabase
+  // Resolve internal DB user id — try supabase_uid first, fall back to email
+  let userRow: { id: string; email: string } | null = null;
+  const { data: byUid } = await supabase
     .from('users')
     .select('id, email')
-    .eq('firebase_uid', firebaseUid)
+    .eq('supabase_uid', supabaseUid)
     .maybeSingle();
+  if (byUid) {
+    userRow = byUid as { id: string; email: string };
+  } else {
+    const { data: byEmail } = await supabase
+      .from('users')
+      .select('id, email')
+      .eq('email', email)
+      .maybeSingle();
+    if (byEmail) {
+      userRow = byEmail as { id: string; email: string };
+      // Back-fill supabase_uid
+      await supabase.from('users').update({ supabase_uid: supabaseUid }).eq('id', userRow.id);
+    }
+  }
 
   if (!userRow) {
     res.status(401).json({ error: 'User not found — please complete sign-in' });
@@ -67,9 +81,9 @@ export async function requireAuth(
 
   return {
     user: {
-      id: (userRow as any).id,
-      firebaseUid,
-      email: (userRow as any).email ?? email,
+      id: userRow.id,
+      firebaseUid: supabaseUid, // kept for interface compatibility
+      email: userRow.email ?? email,
     },
   };
 }
@@ -125,7 +139,7 @@ export async function requireCompanyAccess(
 
 /**
  * Verifies the caller is a platform super-admin.
- * Checks user_company_roles.role = 'SUPER_ADMIN' for the Firebase-authenticated user.
+ * Checks user_company_roles.role = 'SUPER_ADMIN' for the authenticated user.
  *
  * Returns { user } on success, sends 401/403 and returns null otherwise.
  */
@@ -161,13 +175,19 @@ export async function requireSuperAdmin(
  */
 export async function resolveActorId(req: NextApiRequest): Promise<string | null> {
   try {
-    const verified = await verifyAuthHeader(req.headers.authorization);
-    const { data: userRow } = await supabase
+    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
+    const { data: byUid } = await supabase
       .from('users')
       .select('id')
-      .eq('firebase_uid', verified.uid)
+      .eq('supabase_uid', verified.id)
       .maybeSingle();
-    return (userRow as any)?.id ?? null;
+    if (byUid) return (byUid as any).id;
+    const { data: byEmail } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', verified.email)
+      .maybeSingle();
+    return (byEmail as any)?.id ?? null;
   } catch {
     return null;
   }

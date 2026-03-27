@@ -63,10 +63,8 @@ function buildTrends(metrics: Awaited<ReturnType<typeof getSystemMetrics>>) {
         : null,
     },
     firebase: {
-      verificationsPerMin: metrics.firebase?.verificationsPerMin ?? 0,
-      errorRate: metrics.firebase && metrics.firebase.tokenVerifications > 0
-        ? metrics.firebase.authErrors / metrics.firebase.tokenVerifications
-        : null,
+      verificationsPerMin: 0,
+      errorRate: null,
     },
     api: {
       callsPerMin:  metrics.api?.callsPerMin  ?? 0,

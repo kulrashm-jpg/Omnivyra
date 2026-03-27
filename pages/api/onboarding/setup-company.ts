@@ -10,16 +10,19 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { randomUUID } from 'crypto';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
   findMatchingCompany,
   extractDomain,
   isFreeEmailDomain,
+  validatePublicWebsite,
 } from '../../../backend/services/companyMatchService';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
+import { grantEarnCredit } from '../../../backend/services/earnCreditsService';
 
 type Result =
   | { companyId: string; selfJoined?: boolean; matchedCompanyName?: string }
@@ -29,10 +32,10 @@ type Result =
 
 /** Returns the display name of the first active COMPANY_ADMIN for a company. */
 async function fetchAdminName(
-  supabase: ReturnType<typeof import('@supabase/supabase-js').createClient>,
+  db: SupabaseClient,
   companyId: string,
 ): Promise<string | null> {
-  const { data: roleRow } = await supabase
+  const { data: roleRow } = await db
     .from('user_company_roles')
     .select('user_id')
     .eq('company_id', companyId)
@@ -41,12 +44,13 @@ async function fetchAdminName(
     .limit(1)
     .maybeSingle();
 
-  if (!roleRow?.user_id) return null;
+  const userId = (roleRow as { user_id: string } | null)?.user_id;
+  if (!userId) return null;
 
-  const { data: adminUser } = await supabase
+  const { data: adminUser } = await db
     .from('users')
     .select('name, email')
-    .eq('id', roleRow.user_id)
+    .eq('id', userId)
     .maybeSingle();
 
   return (
@@ -64,10 +68,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   // Service role bypasses RLS — required for inserts into companies,
   // user_company_roles, company_profiles, and free_credit_profiles.
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const {
@@ -75,14 +75,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     website     = '',
     industry    = '',
     companySize = '',
+    refCode     = '',
   } = body as {
     companyName?: string;
     website?: string;
     industry?: string;
     companySize?: string;
+    refCode?: string;
   };
 
   if (!companyName.trim()) return res.status(400).json({ error: 'companyName is required' });
+
+  // ── Website validation: must be a real public URL ─────────────────────────
+  // Skip for public-email users who join via invite (they don't create a company)
+  const websiteErr = validatePublicWebsite(website.trim());
+  if (websiteErr && !isFreeEmailDomain(extractDomain(user.email ?? '') ?? '')) {
+    return res.status(400).json({ error: websiteErr });
+  }
 
   // ── Domain eligibility gate ───────────────────────────────────────────────
   if (user.email) {
@@ -253,27 +262,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     })();
 
     // ── STEP 1: Domain-first lookup — prevent duplicate companies per domain ──
-    // If a company already exists for this admin email domain, route to self-join
-    // instead of creating a second company. Handles both the pre-check (common
-    // path) and the post-insert race (rare path via unique violation below).
+    // Check website_domain first (www. is stripped so omnivyra.com and
+    // www.omnivyra.com resolve to the same record), then admin_email_domain.
+    const websiteDomainMatch = websiteDomain
+      ? await supabase
+          .from('companies')
+          .select('id, name')
+          .eq('website_domain', websiteDomain)
+          .maybeSingle()
+          .then(r => r.data)
+      : null;
+
+    const adminEmailDomainMatch = adminEmailDomain && !websiteDomainMatch
+      ? await supabase
+          .from('companies')
+          .select('id, name')
+          .eq('admin_email_domain', adminEmailDomain)
+          .maybeSingle()
+          .then(r => r.data)
+      : null;
+
+    const domainLookupResult = websiteDomainMatch ?? adminEmailDomainMatch;
+
     if (adminEmailDomain) {
-      const { data: domainCompany } = await supabase
-        .from('companies')
-        .select('id, name')
-        .eq('admin_email_domain', adminEmailDomain)
-        .maybeSingle();
+      const domainCompany = domainLookupResult;
 
       if (domainCompany) {
         // Domain is already claimed by an existing company.
         // Check if this user is already a member — if so, just return the company.
         const { data: existingRole } = await supabase
           .from('user_company_roles')
-          .select('id')
+          .select('id, status')
           .eq('user_id', user.id)
           .eq('company_id', domainCompany.id)
           .maybeSingle();
 
         if (existingRole) {
+          // If the user was invited (by super admin or company admin), activate them now.
+          const role = existingRole as { id: string; status: string };
+          if (role.status === 'invited') {
+            const now = new Date().toISOString();
+            await supabase
+              .from('user_company_roles')
+              .update({ status: 'active', accepted_at: now, updated_at: now })
+              .eq('id', role.id);
+          }
           return res.status(200).json({ companyId: domainCompany.id });
         }
 
@@ -468,6 +501,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         } catch (creditErr: any) {
           console.error('[setup-company] retroactive credit grant failed:', creditErr.message);
         }
+      }
+    }
+
+    // ── 8. Mark profile_complete in setup progress ────────────────────────────
+    await supabase.from('company_setup_progress').upsert(
+      { company_id: companyId, profile_complete: true, updated_at: now },
+      { onConflict: 'company_id' },
+    );
+
+    // ── 9. Process referral — grant +200 to referrer if valid ─────────────────
+    if (refCode?.trim()) {
+      const code = refCode.trim().toLowerCase();
+      const { data: referral } = await supabase
+        .from('referrals')
+        .select('id, referrer_user_id, referrer_org_id, status')
+        .eq('referral_code', code)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+      if (referral && (referral as any).referrer_user_id !== user.id) {
+        // Mark referral completed
+        await supabase.from('referrals').update({
+          status:          'completed',
+          referee_user_id: user.id,
+          referee_org_id:  companyId,
+          completed_at:    now,
+        }).eq('id', (referral as any).id);
+
+        // Grant +200 credits to the referrer's org
+        await grantEarnCredit({
+          orgId:       (referral as any).referrer_org_id,
+          userId:      (referral as any).referrer_user_id,
+          actionType:  'referral_signup',
+          referenceId: (referral as any).id,
+        });
+
+        // Clean referral code from any stored state (best-effort)
+        // (Frontend clears localStorage after this call succeeds)
       }
     }
 

@@ -5,7 +5,8 @@
  */
 
 import { Queue } from 'bullmq';
-import { getConnectionConfig } from './bullmqClient';
+import { getConnectionConfig, applyQueueProtection } from './bullmqClient';
+import { instrumentQueue } from './queueInstrumentation';
 import { calculateEngagementScore } from '../services/engagementScoreService';
 import { supabase } from '../db/supabaseClient';
 
@@ -23,6 +24,8 @@ export function getEngagementSignalQueue(): Queue {
         removeOnComplete: { count: 1000 },
       },
     });
+    instrumentQueue(engagementSignalQueue);
+    applyQueueProtection(engagementSignalQueue);  // BUG#11 fix
   }
   return engagementSignalQueue;
 }

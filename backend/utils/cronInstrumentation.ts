@@ -279,6 +279,18 @@ export class CronInstrumentation {
     }, HEARTBEAT_MS);
     if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
   }
+
+  /** Disconnect the Redis client and stop timers (for graceful shutdown). */
+  shutdown(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    if (this.redis) {
+      this.redis.quit().catch(() => {});
+      this.redis = null;
+    }
+  }
 }
 
 // ── Singleton (used by cron.ts) ────────────────────────────────────────────────

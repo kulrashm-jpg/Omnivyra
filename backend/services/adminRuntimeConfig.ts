@@ -49,6 +49,14 @@ function getClient(): IORedis {
   return _client;
 }
 
+/** Disconnect the Redis client (for graceful shutdown). */
+export function shutdownAdminRuntimeConfig(): void {
+  if (_client) {
+    _client.quit().catch(() => {});
+    _client = null;
+  }
+}
+
 // ── Redis keys ────────────────────────────────────────────────────────────────
 
 export const CONFIG_KEYS = {
@@ -119,7 +127,9 @@ const DEFAULT_CRON_CONFIG: CronAdminConfig = {
 // ── In-memory cache ───────────────────────────────────────────────────────────
 
 interface CacheEntry<T> { data: T; ts: number }
-const CACHE_TTL_MS = 5 * 60_000; // 5 minutes (was 30s — saves 7,776 ops/day; config changes apply within 5 min)
+// BUG#5 fix: was 5 minutes — too slow for limit changes to apply under high usage.
+// 30 seconds balances Redis I/O savings vs. config freshness.
+const CACHE_TTL_MS = 30_000;   // 30 seconds
 
 let _rlCache:    CacheEntry<RateLimitAdminConfig> | null = null;
 let _queueCache: CacheEntry<QueueAdminConfig>     | null = null;
@@ -131,12 +141,14 @@ function fresh<T>(e: CacheEntry<T> | null): e is CacheEntry<T> {
 
 // ── Loaders ───────────────────────────────────────────────────────────────────
 
-async function readKey<T>(key: string, fallback: T): Promise<T> {
+async function readKey<T extends object>(key: string, fallback: T): Promise<T> {
   try {
     const raw = await getClient().get(key);
     if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as T;
-    return parsed ?? fallback;
+    const parsed = JSON.parse(raw);
+    // BUG#6 fix: reject empty / wrong-type parses instead of silently accepting them.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback;
+    return parsed as T;
   } catch {
     return fallback;
   }
@@ -243,6 +255,66 @@ export async function saveQueueAdminConfig(config: QueueAdminConfig): Promise<vo
 export async function saveCronAdminConfig(config: CronAdminConfig): Promise<void> {
   await getClient().set(CONFIG_KEYS.cronConfig, JSON.stringify(config), 'EX', CONFIG_TTL_SECS);
   _cronCache = null;
+}
+
+// ── Infrastructure Hard Limits ────────────────────────────────────────────────
+
+/**
+ * System-wide infrastructure resource caps.
+ * Set to 0 to fall back to the corresponding env-var default.
+ *
+ * redis.maxCommandsPerDay  overrides UPSTASH_DAILY_REQUEST_LIMIT (0 = env / code default)
+ * redis.maxMemoryBytes     overrides REDIS_MAX_BYTES              (0 = env / code default)
+ * db.maxReadsPerDay        tracked + alerting only; 0 = unlimited
+ * db.maxWritesPerDay       tracked + alerting only; 0 = unlimited
+ * llm.maxTokensPerDay      tracked + alerting only; 0 = unlimited
+ */
+export interface InfraLimitsConfig {
+  v:         1;
+  updatedAt: string;
+  updatedBy: string;
+  redis: {
+    maxCommandsPerDay: number;   // 0 = use env UPSTASH_DAILY_REQUEST_LIMIT
+    maxMemoryBytes:    number;   // 0 = use env REDIS_MAX_BYTES (default 256 MB)
+  };
+  db: {
+    maxReadsPerDay:  number;     // 0 = unlimited (advisory)
+    maxWritesPerDay: number;     // 0 = unlimited (advisory)
+  };
+  llm: {
+    maxTokensPerDay: number;     // 0 = unlimited (advisory)
+  };
+}
+
+export const DEFAULT_INFRA_LIMITS: InfraLimitsConfig = {
+  v: 1,
+  updatedAt: new Date(0).toISOString(),
+  updatedBy: 'system',
+  redis: { maxCommandsPerDay: 0, maxMemoryBytes: 0 },
+  db:    { maxReadsPerDay: 0, maxWritesPerDay: 0 },
+  llm:   { maxTokensPerDay: 0 },
+};
+
+let _infraCache: CacheEntry<InfraLimitsConfig> | null = null;
+
+export async function getInfraLimitsConfig(): Promise<InfraLimitsConfig> {
+  if (fresh(_infraCache)) return _infraCache.data;
+  const data = await readKey<InfraLimitsConfig>(
+    'omnivyra:admin:config:infra_limits',
+    DEFAULT_INFRA_LIMITS,
+  );
+  _infraCache = { data, ts: Date.now() };
+  return data;
+}
+
+export async function saveInfraLimitsConfig(config: InfraLimitsConfig): Promise<void> {
+  await getClient().set(
+    'omnivyra:admin:config:infra_limits',
+    JSON.stringify(config),
+    'EX',
+    CONFIG_TTL_SECS,
+  );
+  _infraCache = null;
 }
 
 // ── Sync runtime helpers (read from in-memory cache only) ────────────────────

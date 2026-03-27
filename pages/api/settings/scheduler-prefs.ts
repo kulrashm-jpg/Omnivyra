@@ -12,26 +12,26 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 const VALID_INTERVALS = [15, 30, 60, 120, 240, 480];
 
-function supabaseAdmin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { user, companyId } = await getSupabaseUserFromRequest(req);
-  if (!user || !companyId) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  const { user } = await getSupabaseUserFromRequest(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const db = supabaseAdmin();
+  const { data: roleRow } = await supabase
+    .from('user_company_roles')
+    .select('company_id')
+    .eq('user_id', user.id)
+    .eq('status', 'active')
+    .limit(1)
+    .maybeSingle();
+  const companyId = (roleRow as any)?.company_id as string | undefined;
+  if (!companyId) return res.status(401).json({ error: 'Unauthorized' });
+
+  const db = supabase;
 
   if (req.method === 'GET') {
     const { data } = await db

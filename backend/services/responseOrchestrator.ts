@@ -126,10 +126,10 @@ export async function orchestrateResponse(
     };
   }
 
-  const { v4: uuidv4 } = await import('uuid');
+  // uuid removed — use crypto.randomUUID()
   const result = await executeAction(
     {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       tenant_id: input.organization_id,
       organization_id: input.organization_id,
       platform: input.platform,

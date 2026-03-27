@@ -58,6 +58,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // Auth check — must be an authenticated user
+  const { getSupabaseUserFromRequest } = await import('@/backend/services/supabaseAuthService');
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   try {
     const action = String((req.body as any)?.action || '').trim() as WorkspaceAction;
     const activity = asObject((req.body as any)?.activity) || {};

@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import { getDailyPlans } from '../../../backend/services/executionPlannerService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';

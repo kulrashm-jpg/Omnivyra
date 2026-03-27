@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { logUsageEvent, resolveLlmCost } from '../usageLedgerService';
+import { trackLlmTokens } from '../../../lib/redis/usageProtection';
 
 const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
@@ -63,6 +64,8 @@ export async function runDiagnosticPrompt<T>(
   const inputTokens = usage?.prompt_tokens ?? 0;
   const outputTokens = usage?.completion_tokens ?? 0;
   const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
+  // BUG#8 fix: advisory LLM token tracking
+  trackLlmTokens(totalTokens);
   const cost = resolveLlmCost('openai', DEFAULT_MODEL, inputTokens, outputTokens);
   void logUsageEvent({
     organization_id: UNKNOWN_ORG,

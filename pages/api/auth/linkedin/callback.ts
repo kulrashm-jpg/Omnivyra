@@ -5,6 +5,7 @@ import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCr
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
+import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -245,6 +246,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // not be stored here; the UI handles missing counts gracefully.
 
     console.log('✅ LinkedIn account saved successfully:', { accountId, accountName });
+
+    if (companyIdUuid && userId) {
+      checkAndGrantSetupCredits(companyIdUuid, userId)
+        .catch(e => console.warn('[linkedin/callback] setup credits check failed:', e?.message));
+    }
 
     const successDest = returnTo || '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';

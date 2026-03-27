@@ -1,7 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getCampaignById } from '../../../backend/db/campaignStore';
-import { v4 as uuidv4 } from 'uuid';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+
 import { fromLegacyRefinements, fromStructuredPlan, blueprintWeeksToLegacyRefinements } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
 import { syncCampaignVersionStage } from '../../../backend/db/campaignVersionStore';
@@ -9,6 +10,11 @@ import { syncCampaignVersionStage } from '../../../backend/db/campaignVersionSto
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -33,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const isValidUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(campaignId);
     if (!isValidUUID) {
       console.log('Invalid UUID format, generating new UUID for campaign');
-      campaignId = uuidv4();
+      campaignId = crypto.randomUUID();
     }
     
     let campaign = await getCampaignById(campaignId, '*');
@@ -53,7 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           timeframe: 'quarter',
           start_date: startDate,
           ai_generated_summary: aiContent || summary,
-          user_id: '550e8400-e29b-41d4-a716-446655440000', // Default user
+          user_id: user.id,
           thread_id: 'thread_' + Date.now(),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()

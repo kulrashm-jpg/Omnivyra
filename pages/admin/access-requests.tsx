@@ -65,7 +65,7 @@ export default function AccessRequestsPage() {
 
     const params = new URLSearchParams({ status: statusFilter, limit: '100' });
     const res = await fetch(`/api/admin/access-requests/list?${params}`, {
-      headers: { Authorization: `Bearer ${session.access_token}` },
+      headers: { Authorization: `Bearer ${token ?? ''}` },
     });
     if (res.status === 403) { router.push('/'); return; }
     const json = await res.json();

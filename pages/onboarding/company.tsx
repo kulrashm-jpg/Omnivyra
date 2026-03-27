@@ -18,8 +18,9 @@ import { useState, useEffect } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { getFirebaseAuth } from '../../lib/firebase';
+import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { getAuthToken } from '../../utils/getAuthToken';
+import { useCompanyContext } from '../../components/CompanyContext';
 
 type Step = 'loading' | 'website' | 'details' | 'saving' | 'joined' | 'company-exists';
 
@@ -64,6 +65,7 @@ function normaliseUrl(raw: string): string {
 
 export default function CompanySetupPage() {
   const router = useRouter();
+  const { refreshCompanies } = useCompanyContext();
 
   const [step, setStep]             = useState<Step>('loading');
   const [session, setSession]       = useState<any>(null);
@@ -80,11 +82,11 @@ export default function CompanySetupPage() {
   /** Display name of the company's admin (name, or email local-part as fallback) */
   const [existingAdminName,   setExistingAdminName]   = useState<string | null>(null);
 
-  // ── Check Firebase auth + existing company + domain match on load ────────
+  // ── Check Supabase session + existing company + domain match on load ─────
   useEffect(() => {
-    const fbUser = getFirebaseAuth().currentUser;
-    if (!fbUser) { router.replace('/login'); return; }
-    setSession({ access_token: null });
+    getSupabaseBrowser().auth.getSession().then(({ data }) => {
+      if (!data.session) { router.replace('/login'); return; }
+    });
 
     getAuthToken().then(async (token) => {
       if (!token) { router.replace('/login'); return; }
@@ -133,6 +135,28 @@ export default function CompanySetupPage() {
     e.preventDefault();
     const url = normaliseUrl(websiteInput);
     if (!url) { setErrorMsg('Please enter your company website.'); return; }
+
+    // Client-side public website validation (mirrors server-side validatePublicWebsite)
+    try {
+      const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+      if (!hostname || !hostname.includes('.')) {
+        setErrorMsg('Please enter a valid website URL with a domain (e.g. yourcompany.com).');
+        return;
+      }
+      if (/^localhost$|^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^0\.0\.0\.0$/.test(hostname)) {
+        setErrorMsg('Please enter a public website URL, not a local or private address.');
+        return;
+      }
+      const FREE_DOMAINS = new Set(['gmail.com','googlemail.com','yahoo.com','outlook.com','hotmail.com','live.com','msn.com','icloud.com','me.com','mac.com','protonmail.com','proton.me','aol.com','mail.com']);
+      if (FREE_DOMAINS.has(hostname)) {
+        setErrorMsg('Please enter your company website, not a personal email provider domain.');
+        return;
+      }
+    } catch {
+      setErrorMsg('Please enter a valid website URL (e.g. yourcompany.com).');
+      return;
+    }
+
     setErrorMsg(null);
     const guessed = guessCompanyName(url);
     setCompanyName(guessed);
@@ -160,11 +184,15 @@ export default function CompanySetupPage() {
           website:     websiteInput,
           industry,
           companySize: teamSize,
+          refCode:     (() => { try { return localStorage.getItem('ref_code') ?? undefined; } catch { return undefined; } })(),
         }),
       });
 
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Failed to create company');
+
+      // Clear referral code after use
+      try { localStorage.removeItem('ref_code'); } catch { /* ignore */ }
 
       if (json.companyExists) {
         // Company already exists — show admin contact info, no self-registration
@@ -178,10 +206,14 @@ export default function CompanySetupPage() {
       if (json.selfJoined) {
         setJoinedCompanyName(json.matchedCompanyName ?? companyName.trim());
         setStep('joined');
+        // Pre-load company data so dashboard has context immediately
+        refreshCompanies().catch(() => {});
         setTimeout(() => router.replace('/dashboard'), 4000);
         return;
       }
 
+      // Pre-load company data so dashboard renders with full context
+      await refreshCompanies().catch(() => {});
       router.replace('/dashboard');
     } catch (err: any) {
       setErrorMsg(err.message ?? 'Something went wrong. Please try again.');

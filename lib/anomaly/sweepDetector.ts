@@ -57,7 +57,7 @@ export async function runAnomalySweep(): Promise<SweepResult> {
 
   // Aggregate counts per auth event type
   const counts: Record<string, number> = {};
-  for (const row of data) {
+  for (const row of (data as Array<{ event: string | null }>)) {
     if (row.event) counts[row.event] = (counts[row.event] ?? 0) + 1;
   }
 

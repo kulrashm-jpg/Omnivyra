@@ -13,7 +13,7 @@
  * - Result includes platform response for deferred processing
  */
 
-import { v4 as uuidv4 } from 'uuid';
+
 import {
   ExtensionCommand,
   CommandStatus,
@@ -156,7 +156,7 @@ export class ExtensionCommandService implements IExtensionCommandService {
       // VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NOW(), NOW() + INTERVAL '15 minutes')
       // RETURNING *
 
-      const commandId = uuidv4();
+      const commandId = crypto.randomUUID();
       const now = new Date();
       const expiresAt = new Date(now.getTime() + 15 * 60 * 1000); // 15 minutes
 

@@ -1,8 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/router';
 import { getAuthToken } from '../utils/getAuthToken';
-import { getCurrentFirebaseUser } from '../lib/auth/emailLink';
-import { getFirebaseAuth } from '../lib/firebase';
-import { onIdTokenChanged, getIdToken, signOut } from 'firebase/auth';
+import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 import { isAccountDeleted } from '../utils/authErrors';
 
 type UserContext = {
@@ -67,7 +66,7 @@ type CompanyContextValue = {
   selectedCompanyName: string;
   isLoading: boolean;
   isAuthenticated: boolean;
-  /** true once the Firebase session has been validated against the backend.
+  /** true once the Supabase session has been validated against the backend.
    *  Consumers should show a loading/blank state until this is true to prevent
    *  a flash of protected or unauthenticated content. */
   authChecked: boolean;
@@ -89,6 +88,7 @@ const resolveStoredCompanyId = (): string => {
 };
 
 export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const router = useRouter();
   const [user, setUser] = useState<UserContext | null>(null);
   const [userName, setUserName] = useState<string>('');
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -136,11 +136,9 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return;
       }
 
-      // Firebase is the sole identity source.
-      // Get a fresh Firebase ID token and call /api/company-profile?mode=list.
       const fbToken = await getAuthToken();
       if (!fbToken) {
-        // No Firebase session — may be content-architect cookie path
+        // No session — may be content-architect cookie path
         const asArchitect = await loadContentArchitectContext();
         if (!asArchitect) {
           setUser(null);
@@ -163,15 +161,21 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         let errData: unknown = null;
         try { errData = await listRes.json(); } catch { /* non-JSON — ignore */ }
 
+        // Don't force sign-out while the auth callback / onboarding flow is
+        // still in progress — the user row may not have been synced yet.
+        const isOnAuthFlow = typeof window !== 'undefined' &&
+          (window.location.pathname.startsWith('/auth/') ||
+           window.location.pathname.startsWith('/onboarding/'));
+
         if (isAccountDeleted(listRes, errData)) {
           // ACCOUNT_DELETED: the DB user was soft-deleted. Force full sign-out
           // so the user cannot linger in a half-authenticated state.
-          try { await signOut(getFirebaseAuth()); } catch { /* ignore */ }
+          try { await getSupabaseBrowser().auth.signOut(); } catch { /* ignore */ }
           setIsAuthenticated(false);
           setAuthChecked(true);
-        } else if (listRes.status === 401) {
-          // Ghost session: Firebase token is valid but DB user no longer exists.
-          try { await signOut(getFirebaseAuth()); } catch { /* ignore */ }
+        } else if (listRes.status === 401 && !isOnAuthFlow) {
+          // Ghost session: token is valid but DB user no longer exists.
+          try { await getSupabaseBrowser().auth.signOut(); } catch { /* ignore */ }
           setIsAuthenticated(false);
         }
         setUser(null);
@@ -206,12 +210,12 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const companyIds = list.map((c) => c.company_id);
       const firstRole = Object.values(rolesMap)[0] || 'COMPANY_ADMIN';
 
-      // Resolve display name from API response or Firebase user
+      // Resolve display name from API response or Supabase user
       let resolvedName = listData?.userName || '';
       if (!resolvedName) {
         try {
-          const fbUser = await getCurrentFirebaseUser();
-          resolvedName = fbUser?.displayName || fbUser?.email?.split('@')[0] || 'User';
+          const { data: { user } } = await getSupabaseBrowser().auth.getUser();
+          resolvedName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
         } catch { resolvedName = 'User'; }
       }
       setUserName(resolvedName);
@@ -292,50 +296,42 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   useEffect(() => {
-    // Firebase is the sole auth source of truth.
-    // onIdTokenChanged fires on mount with the current user AND every time the
-    // Firebase ID token is refreshed (~every 1 hour). This means the backend
-    // probe runs continuously, catching deleted/revoked sessions on any open tab
-    // within one token refresh cycle — not only on initial page load.
-    let fbUnsubscribe: (() => void) | undefined;
-    try {
-      const firebaseAuth = getFirebaseAuth();
-      fbUnsubscribe = onIdTokenChanged(firebaseAuth, async (fbUser) => {
-        if (fbUser) {
-          // Validate the Firebase session against the DB before trusting it.
-          // A ghost session has a valid Firebase token but no DB user row.
+    const supabase = getSupabaseBrowser();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session) {
+        // On INITIAL_SESSION (page load with existing cookie-session) we
+        // validate against the backend so ghost / soft-deleted sessions are
+        // caught early.  For SIGNED_IN (magic-link, password login) we skip
+        // the probe because the callback page hasn't had a chance to call
+        // sync-supabase-user yet — probing would race and 401.
+        // TOKEN_REFRESHED is also safe to skip.
+        if (event === 'INITIAL_SESSION') {
           try {
-            const token = await getIdToken(fbUser, false);
             const probe = await fetch('/api/auth/post-login-route', {
-              headers: { Authorization: `Bearer ${token}` },
+              headers: { Authorization: `Bearer ${session.access_token}` },
             });
             if (probe.status === 401) {
-              // Ghost session detected — force sign out immediately.
-              await signOut(firebaseAuth);
+              await supabase.auth.signOut();
               setIsAuthenticated(false);
               setAuthChecked(true);
               return;
             }
           } catch {
-            // Network error: optimistically allow; refreshCompanies will catch 401 later.
+            // Network error: optimistically allow; refreshCompanies catches 401 later.
           }
-          setIsAuthenticated(true);
-          setAuthChecked(true);
-          return;
         }
-        // No Firebase user — check for content-architect cookie session
-        const asArchitect = await loadContentArchitectContext();
-        setIsAuthenticated(asArchitect);
+        setIsAuthenticated(true);
         setAuthChecked(true);
-      });
-    } catch {
-      // Firebase not initialised — fall through to unauthenticated
-      loadContentArchitectContext().then((asArchitect) => {
-        setIsAuthenticated(asArchitect);
-        setAuthChecked(true);
-      });
-    }
-    return () => { fbUnsubscribe?.(); };
+        return;
+      }
+      // No session — check for content-architect cookie session
+      const asArchitect = await loadContentArchitectContext();
+      setIsAuthenticated(asArchitect);
+      setAuthChecked(true);
+    });
+
+    return () => { subscription.unsubscribe(); };
   }, []);
 
   useEffect(() => {
@@ -350,8 +346,26 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setRolesByCompany({});
       return;
     }
+    // Don't fetch company data while on auth/onboarding pages.
+    // The callback page needs to finish sync-supabase-user before the
+    // company-profile API can find the user.  Fetching prematurely
+    // returns 401 → clears company data → stale context on /dashboard.
+    // Instead, delay until the user navigates to a real protected page
+    // (like /dashboard) — at which point the DB row and company exist.
+    const p = router.pathname;
+    const isAuthFlowPage =
+      p.startsWith('/auth/') ||
+      p.startsWith('/onboarding/') ||
+      p === '/login' ||
+      p === '/signup' ||
+      p === '/create-account';
+    if (isAuthFlowPage) {
+      setIsLoading(false);
+      return;
+    }
     refreshCompanies();
-  }, [isAuthenticated, authChecked]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, authChecked, router.pathname]);
 
   const value = useMemo(
     () => ({

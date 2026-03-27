@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Header from '../components/Header';
-import { getFirebaseAuth } from '../lib/firebase';
+import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 
 type StrategyTemplate = {
   id: string;
@@ -55,9 +55,9 @@ export default function StrategyTemplatesPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    const auth = getFirebaseAuth();
-    const uid = auth.currentUser?.uid || '';
-    setUserId(uid);
+    getSupabaseBrowser().auth.getSession().then(({ data }) => {
+      setUserId(data.session?.user?.id || '');
+    });
   }, []);
 
   const loadTemplates = async () => {

@@ -168,14 +168,10 @@ async function getCompletedStagePlan(runId: string, stage: string): Promise<{ we
 async function assertCampaignValid(campaignId: string): Promise<void> {
   const { data, error } = await supabase
     .from('campaigns')
-    .select('status')
+    .select('id')
     .eq('id', campaignId)
     .maybeSingle();
   if (error || !data) throw new Error('Campaign not found');
-  const status = String((data as { status?: string }).status ?? '').toLowerCase();
-  if (status === 'archived' || status === 'deleted') {
-    throw new Error(`Campaign ${campaignId} is ${status}; cannot continue BOLT execution`);
-  }
 }
 
 async function runSourceRecommendation(
@@ -242,6 +238,7 @@ async function runSourceRecommendation(
       name: title || 'Campaign from themes',
       description: description ?? null,
       user_id: userId ?? null,
+      company_id: companyId ?? null,
       status: 'planning',
       current_stage: 'planning',
       start_date: startDate,
@@ -735,9 +732,10 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
         try {
           await assertCampaignValid(campaignId);
         } catch (guardErr) {
-          const msg = guardErr instanceof Error ? guardErr.message : String(guardErr);
+          const rawMsg = guardErr instanceof Error ? guardErr.message : String(guardErr);
+          const msg = await getUserFriendlyMessage(guardErr, 'campaign').catch(() => rawMsg);
           await updateRun(runId, { status: 'aborted', error_message: msg });
-          await logEvent(runId, stage, 'aborted', { error: msg });
+          await logEvent(runId, stage, 'aborted', { error: rawMsg });
           return;
         }
       }

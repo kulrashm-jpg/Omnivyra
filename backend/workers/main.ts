@@ -28,12 +28,15 @@ validateWorkerEnv();
 
 import os from 'os';
 import { Worker }                    from 'bullmq';
-import { getRedisConfig, getWorker, closeConnections } from '../queue/bullmqClient';
+import { getRedisConfig, getWorker, getConnectionConfig, closeConnections } from '../queue/bullmqClient';
+import { instrumentWorker }          from '../queue/queueInstrumentation';
 import { processPublishJob }         from '../queue/jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from '../queue/jobProcessors/engagementPollingProcessor';
 import { processBoltJob }            from '../queue/jobProcessors/boltProcessor';
 import { getIntelligencePollingWorker } from './intelligencePollingWorker';
 import { processCampaignPlanningJob } from '../queue/jobProcessors/campaignPlanningProcessor';
+import { runLeadThreadRecomputeWorker } from './leadThreadRecomputeWorker';
+import { runConversationMemoryWorker }  from './conversationMemoryWorker';
 import { runCacheWarmup }            from '../services/cacheWarmup';
 import { startAutoScalingMonitor }   from '../services/autoScalingSignal';
 import { getMetricsSnapshot }        from '../services/metricsCollector';
@@ -50,6 +53,31 @@ const engagementWorker  = getWorker('engagement-polling', async () => {
   await processEngagementPollingJob();
 });
 const intelligenceWorker = getIntelligencePollingWorker();
+
+// Event-driven workers — triggered by DB inserts, NOT polling.
+// Use new Worker() directly to avoid the noisy '✅ Job drain completed' log
+// from getWorker()'s catch-all completed handler.
+const leadThreadRecomputeWorker = new Worker(
+  'lead-thread-recompute',
+  async () => { await runLeadThreadRecomputeWorker(); },
+  { connection: getConnectionConfig(), concurrency: 1 },
+);
+leadThreadRecomputeWorker.on('failed', (job, err) =>
+  console.error('[lead-thread-recompute] job failed', { jobId: job?.id, error: err.message }));
+leadThreadRecomputeWorker.on('error', (err) =>
+  console.error('[lead-thread-recompute] worker error:', err));
+instrumentWorker(leadThreadRecomputeWorker);
+
+const conversationMemoryRebuildWorker = new Worker(
+  'conversation-memory-rebuild',
+  async () => { await runConversationMemoryWorker(); },
+  { connection: getConnectionConfig(), concurrency: 1 },
+);
+conversationMemoryRebuildWorker.on('failed', (job, err) =>
+  console.error('[conversation-memory-rebuild] job failed', { jobId: job?.id, error: err.message }));
+conversationMemoryRebuildWorker.on('error', (err) =>
+  console.error('[conversation-memory-rebuild] worker error:', err));
+instrumentWorker(conversationMemoryRebuildWorker);
 
 // Engine worker (LEAD + MARKET_PULSE) — uses shared Redis config
 const engineWorker = new Worker(
@@ -105,7 +133,8 @@ async function main(): Promise<void> {
 
   console.info('[main] all workers running', {
     queues: ['publish', 'bolt-execution', 'engagement-polling',
-             'intelligence-polling', 'ai-heavy', 'engine-jobs'],
+             'intelligence-polling', 'ai-heavy', 'engine-jobs',
+             'lead-thread-recompute', 'conversation-memory-rebuild'],
     boltConcurrency,
     pid: process.pid,
   });
@@ -122,6 +151,8 @@ async function main(): Promise<void> {
       intelligenceWorker.close(),
       engineWorker.close(),
       campaignWorker.close(),
+      leadThreadRecomputeWorker.close(),
+      conversationMemoryRebuildWorker.close(),
     ]);
     await closeConnections();
     console.info('[main] shutdown complete');

@@ -4,6 +4,7 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getActivityFeed } from '../../../backend/services/activityLogger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -11,14 +12,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   try {
-    const { user_id, campaign_id, action_type, entity_type, start_date, end_date, limit, offset } = req.query;
+    const { campaign_id, action_type, entity_type, start_date, end_date, limit, offset } = req.query;
 
-    if (!user_id || typeof user_id !== 'string') {
-      return res.status(400).json({ error: 'user_id is required' });
-    }
-
-    const activities = await getActivityFeed(user_id, {
+    // Always use the authenticated user's own ID — never accept user_id from query (IDOR prevention)
+    const activities = await getActivityFeed(user.id, {
       campaign_id: campaign_id as string,
       action_type: action_type as any,
       entity_type: entity_type as any,
@@ -40,4 +43,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-

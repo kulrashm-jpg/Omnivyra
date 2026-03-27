@@ -92,6 +92,14 @@ function getRlRedis(): IORedis {
   return _rl;
 }
 
+/** Disconnect the rate-limit Redis client (for graceful shutdown). */
+export function shutdownRateLimitRedis(): void {
+  if (_rl) {
+    _rl.quit().catch(() => {});
+    _rl = null;
+  }
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface RateLimitConfig {

@@ -6,7 +6,7 @@ import {
   type AssistContext,
 } from '../../campaigns/CampaignAssistPanel';
 import { useRouter } from 'next/router';
-import { v4 as uuidv4 } from 'uuid';
+
 import type { OpportunityTabProps } from './types';
 import EngineContextPanel from '../EngineContextPanel';
 import UnifiedContextModeSelector, { type ContextMode, type FocusModule } from '../engine-framework/UnifiedContextModeSelector';
@@ -1307,7 +1307,7 @@ Generate strategic campaign pillars to capture this demand.`;
         setExecutionCollapsed(true);
         // Create a campaign when themes are generated so "Build Campaign Blueprint" saves the card to this campaign.
         try {
-          const newCampaignId = uuidv4();
+          const newCampaignId = crypto.randomUUID();
           const createRes = await fetchWithAuth('/api/campaigns', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

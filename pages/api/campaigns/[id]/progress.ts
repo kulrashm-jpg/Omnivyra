@@ -4,16 +4,11 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { ALL_ROLES } from '../../../../backend/services/rbacService';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { resolveEffectiveCampaignRole, type CampaignAuthContext } from '../../../../backend/services/campaignRoleService';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {

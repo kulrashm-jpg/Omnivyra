@@ -7,12 +7,7 @@
  */
 
 import dns from 'dns/promises';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+import { supabase } from '../db/supabaseClient';
 
 // Known forwarding MX hostname fragments
 const FORWARDING_MX_PATTERNS = [

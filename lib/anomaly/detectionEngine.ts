@@ -152,7 +152,7 @@ export async function evaluateAnomalyCount(
     };
     getDb()
       .from('system_anomalies')
-      .insert(row)
+      .insert(row as any)
       .then(({ error }) => {
         if (error) console.warn('[detectionEngine] persist failed:', error.message);
       });

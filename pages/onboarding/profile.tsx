@@ -2,16 +2,17 @@
 
 /**
  * /onboarding/profile
- * Final onboarding step — captures user details after phone verification.
- * Reads firebase data from sessionStorage, collects name/job title/industry,
- * then calls /api/onboarding/complete to create the account and grant credits.
+ *
+ * First onboarding step after Supabase auth.
+ * Collects name / job title / industry, then calls /api/onboarding/complete
+ * which creates the company, grants 300 free credits, and sets up roles.
  */
 
 import { useState, useEffect } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { getFirebaseAuth } from '../../lib/firebase';
+import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 
 const INDUSTRIES = [
   'Technology', 'Marketing & Advertising', 'E-commerce & Retail',
@@ -30,87 +31,55 @@ export default function ProfilePage() {
   const [industry, setIndustry] = useState('');
   const [loading, setLoading]   = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [session, setSession]   = useState<any>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
 
-  // Require Firebase auth
+  // Require Supabase session
   useEffect(() => {
-    const fbUser = getFirebaseAuth().currentUser;
-    if (!fbUser) {
-      router.replace('/create-account');
-      return;
-    }
-    setSession(fbUser);
+    getSupabaseBrowser().auth.getSession().then(({ data }) => {
+      if (!data.session) {
+        router.replace('/create-account');
+        return;
+      }
+      setAccessToken(data.session.access_token);
+    });
   }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!fullName.trim()) { setErrorMsg('Please enter your full name.'); return; }
+    if (!accessToken) { setErrorMsg('Session expired. Please sign in again.'); return; }
 
     setLoading(true);
     setErrorMsg(null);
 
-    // Read firebase data saved by phone.tsx
-    const phoneNumber      = sessionStorage.getItem('onboarding_phone') ?? '';
-    const firebaseUid      = sessionStorage.getItem('onboarding_firebase_uid') ?? '';
-    const firebaseIdToken  = sessionStorage.getItem('onboarding_firebase_token') ?? '';
-    const companyName      = sessionStorage.getItem('onboarding_company_name') ?? '';
-    const goals            = sessionStorage.getItem('intent_goals') ?? '';
-    const team             = sessionStorage.getItem('intent_team') ?? '';
-    const challenge        = sessionStorage.getItem('intent_challenge') ?? '';
-
-    if (!phoneNumber || !firebaseUid || !firebaseIdToken) {
-      setErrorMsg('Session expired. Please start over.');
-      setLoading(false);
-      return;
-    }
-
     try {
-      // After phone OTP, getFirebaseAuth().currentUser is the phone-auth user (no email claim).
-      // The email-link user's token was saved to sessionStorage by verify.tsx.
-      const firebaseToken = sessionStorage.getItem('emailFirebaseToken');
-      if (!firebaseToken) {
-        setErrorMsg('Session expired. Please start the verification process again.');
-        setLoading(false);
-        return;
-      }
-      const resp = await fetch('/api/onboarding/complete', {
+      const resp = await fetch('/api/onboarding/profile', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${firebaseToken}`,
+          Authorization:  `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
-          phoneNumber,
-          firebaseUid,
-          firebaseIdToken,
-          companyName,
-          fullName:         fullName.trim(),
-          jobTitle:         jobTitle.trim(),
-          industry:         industry || null,
-          intentGoals:      goals ? goals.split(',') : [],
-          intentTeam:       team,
-          intentChallenges: challenge ? challenge.split(',') : [],
+          name:     fullName.trim(),
+          jobTitle: jobTitle.trim(),
+          industry: industry.trim(),
         }),
       });
 
       const json = await resp.json();
 
       if (!resp.ok) {
-        if (resp.status === 409) {
-          setErrorMsg(json.error);
-          setStep('error');
-          return;
-        }
-        throw new Error(json.error ?? 'Failed to complete onboarding');
+        if (resp.status === 409) { setErrorMsg(json.error); setStep('error'); return; }
+        throw new Error(json.error ?? 'Failed to save profile');
       }
 
-      // Clear all onboarding sessionStorage
-      ['onboarding_phone','onboarding_firebase_uid','onboarding_firebase_token',
-       'onboarding_company_name','intent_goals','intent_team','intent_challenge']
+      // Clear intent data
+      ['intent_goals', 'intent_team', 'intent_challenge']
         .forEach(k => sessionStorage.removeItem(k));
 
       setStep('done');
-      setTimeout(() => router.push('/dashboard'), 1200);
+      const dest = json.route ?? '/onboarding/company';
+      setTimeout(() => router.push(dest), 1200);
     } catch (err: any) {
       setErrorMsg(err.message ?? 'Something went wrong. Please try again.');
     } finally {
@@ -120,23 +89,17 @@ export default function ProfilePage() {
 
   return (
     <>
-      <Head>
-        <title>Complete Profile | Omnivyra</title>
-      </Head>
+      <Head><title>Complete Profile | Omnivyra</title></Head>
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
         <header className="border-b border-gray-100 bg-white/95">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
-            <Link href="/">
-              <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
-            </Link>
-            {step === 'form' && (
-              <span className="text-xs text-[#6B7C93]">Almost done</span>
-            )}
+            <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
+            {step === 'form' && <span className="text-xs text-[#6B7C93]">Step 1 of 2</span>}
           </div>
           <div className="h-0.5 w-full bg-gray-100">
             <div className="h-0.5 bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] transition-all duration-500"
-              style={{ width: step === 'done' ? '100%' : '90%' }} />
+              style={{ width: step === 'done' ? '50%' : '25%' }} />
           </div>
         </header>
 
@@ -146,15 +109,13 @@ export default function ProfilePage() {
             {step === 'form' && (
               <div className="animate-fadeIn">
                 <div className="mb-8 text-center">
-                  <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] text-2xl shadow-lg">
-                    👤
-                  </div>
+                  <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] text-2xl shadow-lg">👤</div>
                   <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]"
                     style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
                     Complete your profile
                   </h1>
                   <p className="mt-2 text-sm leading-relaxed text-[#6B7C93]">
-                    Help us personalise your experience.
+                    Help us personalise your experience and claim your 300 free credits.
                   </p>
                 </div>
 
@@ -163,47 +124,30 @@ export default function ProfilePage() {
                     <label htmlFor="fullName" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
                       Full name <span className="text-red-500">*</span>
                     </label>
-                    <input
-                      id="fullName"
-                      type="text"
-                      autoFocus
-                      autoComplete="name"
-                      placeholder="Jane Smith"
-                      value={fullName}
+                    <input id="fullName" type="text" autoFocus autoComplete="name"
+                      placeholder="Jane Smith" value={fullName}
                       onChange={e => setFullName(e.target.value)}
-                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
-                    />
+                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]" />
                   </div>
 
                   <div>
                     <label htmlFor="jobTitle" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
                       Job title <span className="text-[#6B7C93] font-normal">(optional)</span>
                     </label>
-                    <input
-                      id="jobTitle"
-                      type="text"
-                      autoComplete="organization-title"
-                      placeholder="Head of Marketing"
-                      value={jobTitle}
+                    <input id="jobTitle" type="text" autoComplete="organization-title"
+                      placeholder="Head of Marketing" value={jobTitle}
                       onChange={e => setJobTitle(e.target.value)}
-                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
-                    />
+                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]" />
                   </div>
 
                   <div>
                     <label htmlFor="industry" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
                       Industry <span className="text-[#6B7C93] font-normal">(optional)</span>
                     </label>
-                    <select
-                      id="industry"
-                      value={industry}
-                      onChange={e => setIndustry(e.target.value)}
-                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] outline-none transition focus:border-[#0A66C2]"
-                    >
+                    <select id="industry" value={industry} onChange={e => setIndustry(e.target.value)}
+                      className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] outline-none transition focus:border-[#0A66C2]">
                       <option value="">Select your industry</option>
-                      {INDUSTRIES.map(i => (
-                        <option key={i} value={i}>{i}</option>
-                      ))}
+                      {INDUSTRIES.map(i => <option key={i} value={i}>{i}</option>)}
                     </select>
                   </div>
 
@@ -211,11 +155,8 @@ export default function ProfilePage() {
                     <p className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">{errorMsg}</p>
                   )}
 
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
+                  <button type="submit" disabled={loading || !accessToken}
+                    className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed">
                     {loading ? 'Setting up your account…' : 'Claim 300 free credits →'}
                   </button>
                 </form>
@@ -229,16 +170,14 @@ export default function ProfilePage() {
                   <p className="text-xs font-semibold uppercase tracking-widest text-white/60">Credits claimed</p>
                   <p className="mt-2 text-6xl font-bold">300</p>
                   <p className="mt-2 text-sm font-medium text-[#3FA9F5]">free credits · expires in 14 days</p>
-                  <p className="mt-4 text-sm text-white/70">
-                    Welcome, {fullName.split(' ')[0]}! Your workspace is ready.
-                  </p>
+                  <p className="mt-4 text-sm text-white/70">Welcome, {fullName.split(' ')[0]}!</p>
                 </div>
                 <div className="space-y-2">
-                  <p className="text-sm text-[#6B7C93]">Redirecting to your dashboard…</p>
+                  <p className="text-sm text-[#6B7C93]">Setting up your workspace…</p>
                   <div className="flex justify-center gap-1">
-                    <div className="h-1 w-1 rounded-full bg-[#0A66C2] animate-pulse" />
-                    <div className="h-1 w-1 rounded-full bg-[#0A66C2] animate-pulse" style={{ animationDelay: '0.2s' }} />
-                    <div className="h-1 w-1 rounded-full bg-[#0A66C2] animate-pulse" style={{ animationDelay: '0.4s' }} />
+                    {[0, 0.2, 0.4].map((d, i) => (
+                      <div key={i} className="h-1 w-1 rounded-full bg-[#0A66C2] animate-pulse" style={{ animationDelay: `${d}s` }} />
+                    ))}
                   </div>
                 </div>
               </div>
@@ -261,10 +200,7 @@ export default function ProfilePage() {
       </div>
 
       <style jsx>{`
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(8px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         .animate-fadeIn { animation: fadeIn 0.25s ease both; }
       `}</style>
     </>

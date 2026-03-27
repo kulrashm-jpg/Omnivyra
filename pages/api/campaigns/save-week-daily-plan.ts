@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { updateActivity } from '../../../backend/services/executionPlannerService';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];

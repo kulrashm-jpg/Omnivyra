@@ -9,6 +9,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
+import { grantEarnCredit } from '@/backend/services/earnCreditsService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   console.log('[schedule] method:', req.method, 'url:', req.url);
@@ -271,6 +273,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(500).json({ error: insertErr.message });
       }
       scheduledPostId = inserted?.id ?? null;
+    }
+
+    // Enqueue the job to fire at the exact scheduled_for time.
+    // Falls back gracefully: duplicate → already queued, past → safety-net cron handles it.
+    if (scheduledPostId) {
+      try {
+        await enqueueScheduledPostAt(
+          scheduledPostId,
+          userId,
+          String(socialAccountId ?? ''),
+          scheduledFor.toISOString(),
+        );
+      } catch (enqErr: any) {
+        // Non-fatal: the 4-hour safety-net cron will recover missed posts
+        console.warn('[schedule] enqueueScheduledPostAt failed (non-fatal):', enqErr?.message);
+      }
+    }
+
+    // ── First campaign published → +200 credits (fire-and-forget) ────────────
+    if (scheduledPostId && companyId) {
+      grantEarnCredit({
+        orgId:       companyId,
+        userId,
+        actionType:  'first_campaign_published',
+        referenceId: companyId,   // one grant per org, referenceId = orgId
+      }).catch(e => console.warn('[schedule] earn-credit grant failed (non-fatal):', e?.message));
     }
 
     return res.status(200).json({ success: true, scheduled_post_id: scheduledPostId });

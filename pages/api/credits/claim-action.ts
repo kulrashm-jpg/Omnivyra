@@ -17,7 +17,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase as serviceSb } from '@/backend/db/supabaseClient';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
@@ -49,10 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { category } = body as { category: string };
 
   // ── STEP 4: Load active reward amounts from DB with fallback ─────────────
-  const serviceSb = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+
   const { data: configRows } = await serviceSb
     .from('free_credit_config')
     .select('category, credits')
@@ -72,7 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Insert claim — UNIQUE(user_id, category) will reject duplicates
-    const { error: claimErr } = await supabase.from('free_credit_claims').insert({
+    const { error: claimErr } = await serviceSb.from('free_credit_claims').insert({
       user_id:         user.id,
       category,
       credits_granted: credits,
@@ -86,14 +83,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Get org to apply credit transaction
-    const { data: membership } = await supabase
+    const { data: membership } = await serviceSb
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', user.id)
       .limit(1)
       .maybeSingle();
 
-    const orgId = membership?.company_id ?? null;
+    const orgId = (membership as any)?.company_id ?? null;
     if (orgId) {
       try {
         await createCredit({
@@ -104,13 +101,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           referenceId:    `${user.id}:${category}`,
           note:           `Free credits — ${category.replace(/_/g, ' ')}`,
           performedBy:    user.id,
-          // Permanently unique per user+category — mirrors the DB UNIQUE constraint
           idempotencyKey: makeIdempotencyKey(user.id, `earn:${category}`, orgId),
         });
       } catch (creditErr: any) {
         console.error('[credits/claim-action] credit grant failed:', creditErr.message);
         // Roll back the claim so the user can retry
-        await supabase.from('free_credit_claims').delete()
+        await serviceSb.from('free_credit_claims').delete()
           .eq('user_id', user.id).eq('category', category);
         return res.status(500).json({ error: 'Credit grant failed. Please try again.' });
       }

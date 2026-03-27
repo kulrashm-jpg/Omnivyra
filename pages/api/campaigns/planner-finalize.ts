@@ -7,7 +7,7 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
+
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getCampaignById } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -260,7 +260,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let campaignId = existingCampaignId && typeof existingCampaignId === 'string' ? existingCampaignId : null;
 
     if (!campaignId) {
-      campaignId = uuidv4();
+      campaignId = crypto.randomUUID();
       const summary = ideaTitle || JSON.stringify(strategy_context).slice(0, 200) + '...';
       const { data: newCampaign, error: createErr } = await supabase
         .from('campaigns')

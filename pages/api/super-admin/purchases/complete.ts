@@ -13,18 +13,11 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
 import { isContentArchitectSession } from '../../../../backend/services/contentArchitectService';
 import { completePurchase, failPurchase } from '../../../../backend/services/purchaseService';
-
-function serviceSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
-}
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
   if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return true;
@@ -59,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!credits || credits <= 0) return res.status(400).json({ error: 'credits must be positive' });
     if (!package_id && !plan_id) return res.status(400).json({ error: 'package_id or plan_id is required' });
 
-    const sb = serviceSupabase();
+    const sb = supabase;
     const { data, error } = await sb
       .from('credit_purchases')
       .insert({

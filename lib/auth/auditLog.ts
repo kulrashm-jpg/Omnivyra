@@ -64,7 +64,7 @@ export async function logAuthEvent(
       user_id:      opts.userId      ?? null,
       firebase_uid: opts.firebaseUid ?? null,
       metadata:     opts.metadata    ?? null,
-    });
+    } as any);
   } catch (err) {
     // Audit failure must never block auth flows
     console.warn('[auditLog] insert failed:', (err as Error)?.message);

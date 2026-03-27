@@ -5,6 +5,7 @@ import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCr
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
+import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -126,6 +127,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await setToken(accountId, tokenObj);
 
     console.log('✅ Instagram account saved successfully:', { accountId, accountName });
+
+    if (companyId && userId) {
+      checkAndGrantSetupCredits(companyId, userId)
+        .catch(e => console.warn('[instagram/callback] setup credits check failed:', e?.message));
+    }
 
     const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';

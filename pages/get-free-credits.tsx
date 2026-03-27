@@ -277,16 +277,16 @@ export default function GetFreeCreditsPage() {
                 </div>
               </div>
 
-              {/* CTA */}
-              <div className="mt-8">
+              {/* CTA — redirect to create-account */}
+              <div className="mt-8 text-center">
                 <Link
-                  href={`/create-account?goals=${q1.join(',')}&team=${q2}&challenge=${q3.join(',')}`}
-                  className="block w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-8 py-4 text-center text-base font-semibold text-white shadow-[0_4px_20px_rgba(10,102,194,0.4)] transition hover:opacity-95"
+                  href="/create-account"
+                  className="inline-block w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-8 py-4 text-center text-base font-semibold text-white shadow-[0_4px_20px_rgba(10,102,194,0.4)] transition hover:opacity-95"
                 >
-                  Create Account &amp; Claim Credits
+                  Claim Credits &amp; Create Account
                 </Link>
                 <p className="mt-3 text-center text-xs text-[#6B7C93]">
-                  No credit card required &middot; Takes under 60 seconds
+                  No credit card required
                 </p>
               </div>
             </div>

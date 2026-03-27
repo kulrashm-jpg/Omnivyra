@@ -5,22 +5,12 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
 
 async function getUser(req: NextApiRequest) {
   const token = (req.headers.authorization ?? '').replace('Bearer ', '').trim();
   if (!token) return null;
-  const anon = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } },
-  );
-  const { data: { user } } = await anon.auth.getUser(token);
+  const { data: { user } } = await supabaseAdmin.auth.getUser(token);
   return user ?? null;
 }
 

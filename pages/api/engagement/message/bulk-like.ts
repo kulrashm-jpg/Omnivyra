@@ -5,7 +5,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { v4 as uuidv4 } from 'uuid';
+
 import { resolveUserContext, enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole } from '../../../../backend/services/rbacService';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
@@ -50,7 +50,7 @@ async function likeMessage(
 
   const result = await executeAction(
     {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       tenant_id: organizationId,
       organization_id: organizationId,
       platform: platform || 'linkedin',

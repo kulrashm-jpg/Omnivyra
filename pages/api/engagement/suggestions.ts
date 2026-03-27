@@ -6,7 +6,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { v4 as uuidv4 } from 'uuid';
+
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getControls } from '../../../backend/services/engagementGovernanceService';
 import { generateReplySuggestions } from '../../../backend/services/engagementAiAssistantService';
@@ -73,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const suggestions = padded.slice(0, Math.max(3, padded.length)).map((r, i) => ({
-      id: `sug-${uuidv4()}`,
+      id: `sug-${crypto.randomUUID()}`,
       text: (r.text ?? '').toString().trim() || FALLBACK_SUGGESTIONS[i % FALLBACK_SUGGESTIONS.length],
       explanation_tag: r.tone ? ` ${r.tone}` : undefined,
     }));

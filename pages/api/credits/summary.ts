@@ -19,7 +19,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase as sb } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 // ── Health thresholds (aligned with creditAlertService) ───────────────────────
@@ -76,11 +76,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Service role for all DB reads (bypasses RLS on credit tables)
-  const sb = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
-
   try {
     const now        = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();

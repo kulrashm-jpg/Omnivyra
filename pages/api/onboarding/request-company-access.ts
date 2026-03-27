@@ -9,7 +9,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -18,22 +18,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
-
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-  const { companyId, fullName, department, email } = body as {
+  const { companyId, fullName, department } = body as {
     companyId:   string;
     fullName:    string;
     department?: string;
-    email:       string;
   };
+
+  // Derive email from authenticated session — never trust client-supplied email
+  const email = user.email;
 
   if (!companyId)      return res.status(400).json({ error: 'companyId is required' });
   if (!fullName?.trim()) return res.status(400).json({ error: 'fullName is required' });
-  if (!email?.trim())    return res.status(400).json({ error: 'email is required' });
+  if (!email)            return res.status(400).json({ error: 'User email not available in session' });
 
   // Verify the company exists
   const { data: company } = await supabase

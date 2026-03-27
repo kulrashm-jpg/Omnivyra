@@ -5,8 +5,14 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { assignWeek, updateWeekStatus } from '../../../backend/services/teamService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   if (req.method === 'POST') {
     try {
       const { campaign_id, week_number, assigned_to_user_id, assigned_by_user_id } = req.body;

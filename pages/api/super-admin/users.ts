@@ -4,7 +4,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { Role, ALL_ROLES } from '../../../backend/services/rbacService';
-import { getFirebaseAdmin } from '../../../lib/firebaseAdmin';
+
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 
 const requireSuperAdminAccess = async (
@@ -297,7 +297,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const companyIds = Array.from(new Set(rows.map((row) => row.company_id).filter(Boolean)));
 
     const [usersResult, companiesResult, profilesResult] = await Promise.all([
-      supabase.from('users').select('id, email, created_at'),
+      supabase.from('users').select('id, email, created_at').eq('is_deleted', false),
       companyIds.length > 0
         ? supabase.from('companies').select('id, name').in('id', companyIds)
         : Promise.resolve({ data: [], error: null }),
@@ -392,6 +392,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
       }
 
+      // 0. Validate that the target company actually exists.
+      //    A missing companies row means the company was never properly created
+      //    (dangling company_profiles artefact) — assigning a role to it would
+      //    create an orphaned role that breaks the user's onboarding.
+      const { data: companyRow, error: companyCheckErr } = await supabase
+        .from('companies')
+        .select('id')
+        .eq('id', companyId)
+        .maybeSingle();
+      if (companyCheckErr) {
+        return res.status(500).json({ error: 'FAILED_TO_VALIDATE_COMPANY', details: companyCheckErr.message });
+      }
+      if (!companyRow) {
+        return res.status(404).json({ error: 'COMPANY_NOT_FOUND', details: `Company ${companyId} does not exist. The company must be created first before users can be assigned to it.` });
+      }
+
       // 1. Find or create user row by email (no Supabase auth.admin)
       const { id: userId, error: userErr } = await findOrCreateUserByEmail(normalizedEmail);
       if (userErr === 'ACCOUNT_DELETED') {
@@ -420,37 +436,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Non-fatal: user row and role are created; email will need resend
       }
 
-      // Send sign-in link email via Firebase (same mechanism as the login page).
-      // Firebase handles email delivery — no third-party mailer needed.
+      // Send magic-link invite via Supabase Auth (replaces Firebase email sign-in).
       try {
-        const firebaseApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
         const reqHost = req.headers.host ?? '';
         const isLocal = reqHost.startsWith('localhost') || reqHost.startsWith('127.');
         const appUrl = isLocal
           ? `http://${reqHost}`
-          : (process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.omnivyra.com').replace(/\/$/, '');
-        if (firebaseApiKey) {
-          const fbRes = await fetch(
-            `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${firebaseApiKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                requestType: 'EMAIL_SIGNIN',
-                email: normalizedEmail,
-                continueUrl: `${appUrl}/auth/verify`,
-                canHandleCodeInApp: true,
-              }),
-            },
-          );
-          if (!fbRes.ok) {
-            const fbErr = await fbRes.json().catch(() => ({}));
-            console.warn('[super-admin/users] Firebase email send failed:', fbErr);
-          } else {
-            console.log(`[super-admin/users] Sign-in link sent to ${normalizedEmail}`);
-          }
+          : (process.env.NEXT_PUBLIC_APP_URL ?? 'https://www.omnivyra.com').replace(/\/$/, '');
+        const { error: magicErr } = await supabase.auth.admin.generateLink({
+          type: 'magiclink',
+          email: normalizedEmail,
+          options: { redirectTo: `${appUrl}/auth/callback` },
+        });
+        if (magicErr) {
+          console.warn('[super-admin/users] Supabase magic-link send failed:', magicErr.message);
         } else {
-          console.warn('[super-admin/users] NEXT_PUBLIC_FIREBASE_API_KEY not set — skipping email');
+          console.log(`[super-admin/users] Invite magic-link sent to ${normalizedEmail}`);
         }
       } catch (emailErr) {
         console.warn('[super-admin/users] Failed to send invitation email:', emailErr);
@@ -537,10 +538,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('user_id', userId)
       .eq('company_id', companyId)
       .select('user_id, company_id, status, role')
-      .single();
+      .maybeSingle();
 
-    if (error || !data) {
-      return res.status(500).json({ error: 'FAILED_TO_UPDATE_USER' });
+    if (error) {
+      console.error('[super-admin/users] PATCH error:', error.message);
+      return res.status(500).json({ error: 'FAILED_TO_UPDATE_USER', details: error.message });
+    }
+    if (!data) {
+      return res.status(404).json({ error: 'USER_NOT_FOUND', details: `No role record found for user ${userId} in company ${companyId}` });
     }
 
     await insertAuditLog({
@@ -622,7 +627,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Step A: look up the user row to get firebase_uid
       const { data: userRecord, error: lookupError } = await supabase
         .from('users')
-        .select('id, firebase_uid')
+        .select('id, supabase_uid, firebase_uid')
         .eq('id', userId)
         .maybeSingle();
 
@@ -631,30 +636,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: lookupError.message });
       }
 
-      const firebaseUid: string | null = (userRecord as any)?.firebase_uid ?? null;
+      // Only use supabase_uid — firebase_uid is a legacy column and cannot be used
+      // with supabase.auth.admin.deleteUser(). Using it would cause a silent 404 or error.
+      const supabaseUid: string | null = (userRecord as any)?.supabase_uid ?? null;
 
-      // Step B: revoke refresh tokens + delete from Firebase Auth.
-      //
-      //   revokeRefreshTokens() is called FIRST so that post-login-route (which uses
-      //   checkRevoked=true) immediately rejects this user's tokens — no 1-hour window.
-      //   deleteUser() removes the Firebase account entirely.
-      //   Both calls tolerate auth/user-not-found (idempotent — already gone).
-      //   Any other Firebase error aborts the entire flow to avoid ghost sessions.
-      if (firebaseUid) {
+      // Step B: delete from Supabase Auth.
+      //   Removes the auth account entirely so the user cannot sign in.
+      //   Tolerates user-not-found (idempotent — already gone).
+      if (supabaseUid) {
         try {
-          await getFirebaseAdmin().auth().revokeRefreshTokens(firebaseUid);
-          await getFirebaseAdmin().auth().deleteUser(firebaseUid);
-          console.log('[super-admin/users] DELETE - revoked + deleted Firebase Auth user', { userId, firebaseUid });
-        } catch (authError: any) {
-          if (authError.code !== 'auth/user-not-found') {
-            console.error('[super-admin/users] DELETE - Firebase Auth operation failed:', authError.message);
+          const { error: authError } = await supabase.auth.admin.deleteUser(supabaseUid);
+          if (authError && !authError.message?.includes('not found')) {
+            console.error('[super-admin/users] DELETE - Supabase Auth deleteUser failed:', authError.message);
             return res.status(500).json({
               error: 'FAILED_TO_DELETE_FROM_AUTH',
               details: authError.message,
             });
           }
-          // auth/user-not-found: already absent from Firebase — safe to continue.
-          console.warn('[super-admin/users] DELETE - Firebase user not found, continuing', { firebaseUid });
+          console.log('[super-admin/users] DELETE - deleted Supabase Auth user', { userId, supabaseUid });
+        } catch (authError: any) {
+          console.error('[super-admin/users] DELETE - Supabase Auth operation failed:', authError.message);
+          return res.status(500).json({
+            error: 'FAILED_TO_DELETE_FROM_AUTH',
+            details: authError.message,
+          });
         }
       }
 
@@ -668,24 +673,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const updatedInTable = !userError && userData && userData.length > 0;
       if (userError) {
-        // CRITICAL: Firebase Auth user was deleted/revoked but the DB soft-delete failed.
-        // The user cannot sign in (Firebase account gone), but the DB row still appears active.
+        // CRITICAL: Supabase Auth user was deleted but the DB soft-delete failed.
+        // The user cannot sign in (auth account gone), but the DB row still appears active.
         // This row must be manually soft-deleted to restore data consistency.
         console.error(JSON.stringify({
           level:   'CRITICAL',
-          event:   'firebase_deleted_db_softdelete_failed',
+          event:   'auth_deleted_db_softdelete_failed',
           userId,
-          firebaseUid,
+          supabaseUid,
           error:   userError.message,
           action:  `Manual fix: UPDATE users SET is_deleted=true, deleted_at=now() WHERE id='${userId}'`,
         }));
         return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: userError.message });
       }
 
-      if (!updatedInTable && !firebaseUid) {
+      if (!updatedInTable && !supabaseUid) {
         return res.status(404).json({
           error: 'USER_NOT_FOUND',
-          details: `User ${userId} not found in users table or Firebase Auth`,
+          details: `User ${userId} not found in users table or Supabase Auth`,
         });
       }
 
@@ -696,7 +701,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq('user_id', userId);
 
       if (rolesError) {
-        // Non-fatal: Firebase + users row are already handled; log and continue.
+        // Non-fatal: auth + users row are already handled; log and continue.
         console.warn('[super-admin/users] DELETE - failed to deactivate roles:', rolesError.message);
       }
 
@@ -707,8 +712,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       void logAuthEvent('user_deleted', {
         userId,
-        firebaseUid: firebaseUid ?? undefined,
-        metadata: { deleted_by: 'super_admin', firebase_deleted: !!firebaseUid },
+        metadata: { deleted_by: 'super_admin', supabase_uid: supabaseUid },
       });
 
       return res.status(200).json({ success: true, message: 'User deleted from system' });

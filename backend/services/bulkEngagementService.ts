@@ -3,7 +3,7 @@
  * Execute bulk reply actions with safety limits.
  */
 
-import { v4 as uuidv4 } from 'uuid';
+
 import { supabase } from '../db/supabaseClient';
 import { executeAction } from './communityAiActionExecutor';
 import { listPlaybooks } from './playbooks/playbookService';
@@ -48,7 +48,7 @@ export async function sendReply(
 
   const result = await executeAction(
     {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       tenant_id: organizationId,
       organization_id: organizationId,
       platform: platform || 'linkedin',

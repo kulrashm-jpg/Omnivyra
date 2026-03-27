@@ -56,6 +56,40 @@ export function isFreeEmailDomain(domain: string): boolean {
   return FREE_EMAIL_DOMAINS.has(domain.toLowerCase().trim());
 }
 
+const PRIVATE_DOMAIN_PATTERNS = [
+  /^localhost$/,
+  /^127\./,
+  /^10\./,
+  /^192\.168\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^0\.0\.0\.0$/,
+];
+
+/**
+ * Validates that a website URL is a real public URL, not localhost/IP/email domain.
+ * Returns null if valid, or an error message string if invalid.
+ */
+export function validatePublicWebsite(website: string): string | null {
+  if (!website?.trim()) return 'Company website is required.';
+  let hostname: string;
+  try {
+    const url = website.trim().startsWith('http') ? website.trim() : `https://${website.trim()}`;
+    hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return 'Please enter a valid website URL (e.g. yourcompany.com).';
+  }
+  if (!hostname || !hostname.includes('.')) {
+    return 'Please enter a valid website URL with a domain (e.g. yourcompany.com).';
+  }
+  if (PRIVATE_DOMAIN_PATTERNS.some(p => p.test(hostname))) {
+    return 'Please enter a public website URL, not a local or private address.';
+  }
+  if (isFreeEmailDomain(hostname)) {
+    return 'Please enter your company website, not a personal email provider domain.';
+  }
+  return null;
+}
+
 /** Normalise a company name for fuzzy comparison (strips legal suffixes). */
 function normaliseName(name: string): string {
   return name

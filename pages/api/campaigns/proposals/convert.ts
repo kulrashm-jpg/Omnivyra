@@ -4,7 +4,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { v4 as uuidv4 } from 'uuid';
+
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
@@ -71,7 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
   });
 
-  const campaignId = uuidv4();
+  const campaignId = crypto.randomUUID();
   const startDate = new Date();
   startDate.setHours(0, 0, 0, 0);
 

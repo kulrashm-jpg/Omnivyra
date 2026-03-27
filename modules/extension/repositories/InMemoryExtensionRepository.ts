@@ -9,7 +9,7 @@
  * @date 2025-Q2
  */
 
-import { v4 as uuid } from 'uuid';
+
 import {
   ExtensionEventRow,
   ExtensionCommandRow,
@@ -44,7 +44,7 @@ export class InMemoryExtensionRepository implements IExtensionRepository {
   async createEvent(
     event: Omit<ExtensionEventRow, 'id' | 'created_at'>
   ): Promise<ExtensionEventRow> {
-    const id = uuid();
+    const id = crypto.randomUUID();
     const row: ExtensionEventRow = {
       id,
       ...event,
@@ -96,7 +96,7 @@ export class InMemoryExtensionRepository implements IExtensionRepository {
   async createCommand(
     command: Omit<ExtensionCommandRow, 'id' | 'created_at'>
   ): Promise<ExtensionCommandRow> {
-    const id = uuid();
+    const id = crypto.randomUUID();
     const row: ExtensionCommandRow = {
       id,
       ...command,

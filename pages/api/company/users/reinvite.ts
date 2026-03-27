@@ -1,21 +1,15 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
-import { verifyAuthHeader } from '../../../../lib/auth/serverValidation';
+import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
+import { verifySupabaseAuthHeader } from '../../../../lib/auth/serverValidation';
 import { randomBytes, createHash } from 'crypto';
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { persistSession: false, autoRefreshToken: false } },
-);
 
 async function getActorUserId(req: NextApiRequest): Promise<string | null> {
   try {
-    const verified = await verifyAuthHeader(req.headers.authorization);
+    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
     const { data } = await supabaseAdmin
       .from('users')
       .select('id')
-      .eq('firebase_uid', verified.uid)
+      .or(`supabase_uid.eq.${verified.id},email.eq.${verified.email.toLowerCase()}`)
       .maybeSingle();
     return (data as any)?.id ?? null;
   } catch {

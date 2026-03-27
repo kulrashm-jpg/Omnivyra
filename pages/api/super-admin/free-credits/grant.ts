@@ -8,16 +8,12 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 
-const serviceSupabase = () => createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return 'cookie';
@@ -53,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!reason) return res.status(400).json({ error: 'reason is required' });
   if (!VALID_CATEGORIES.includes(category as any)) return res.status(400).json({ error: 'Invalid category' });
 
-  const sb = serviceSupabase();
+  const sb = supabase;
   const grantedBy = adminId === 'cookie' ? null : adminId;
 
   // ── 1. Log grant record FIRST — the grantId becomes the idempotency anchor ─

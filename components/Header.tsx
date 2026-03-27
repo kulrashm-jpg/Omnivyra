@@ -4,8 +4,7 @@ import { useRouter } from 'next/router';
 import { Menu, X } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import { useCompanyIntegrations } from '@/hooks/useCompanyIntegrations';
-import { getFirebaseAuth } from '../lib/firebase';
-import { signOut } from 'firebase/auth';
+import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 import { CreditMeter } from './ui/CreditMeter';
 import PlatformIcon from './ui/PlatformIcon';
 import { useCredits } from '@/hooks/useCredits';
@@ -54,12 +53,8 @@ const Header: React.FC = () => {
   const handleLogout = async () => {
     setIsSigningOut(true);
     try {
-      await signOut(getFirebaseAuth());
+      await getSupabaseBrowser().auth.signOut();
     } catch { /* already signed out */ }
-    // Clear any Supabase session remnants from localStorage
-    Object.keys(localStorage).forEach((k) => {
-      if (k.startsWith('sb-') || k.startsWith('supabase')) localStorage.removeItem(k);
-    });
     window.location.href = '/login';
   };
 

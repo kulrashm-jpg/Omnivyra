@@ -264,41 +264,7 @@ function estimateVercel(api: SystemMetrics['api']): ServiceCost {
   };
 }
 
-function estimateFirebase(firebase: SystemMetrics['firebase']): ServiceCost {
-  const notes: string[] = [];
-  const breakdown: Record<string, number> = {};
-  const hasData = !!(firebase && firebase.tokenVerifications > 0);
-
-  if (!hasData) {
-    notes.push('No Firebase auth activity observed');
-    return { service: 'Firebase Auth', estimatedMonthly: 0, breakdown, notes, hasData };
-  }
-
-  // Estimate monthly active users: verifications/month × 0.1 (sessions per MAU)
-  const verificationsPerMonth = toMonthly(firebase!.verificationsPerMin);
-  const estimatedMau = Math.round(verificationsPerMonth * 0.10);
-  const authCost = aboveFreeTier(estimatedMau, RATES.firebase.freeMauPerMonth, RATES.firebase.extraPer1000Mau / 1_000);
-  breakdown['auth_mau'] = authCost;
-
-  if (authCost === 0) {
-    notes.push(`~${estimatedMau.toLocaleString()} est. MAU — within free 50K tier`);
-  } else {
-    const billable = Math.max(0, estimatedMau - RATES.firebase.freeMauPerMonth);
-    notes.push(`~${billable.toLocaleString()} MAU above free tier`);
-  }
-
-  if (firebase!.authErrors > 0) {
-    notes.push(`${firebase!.authErrors} auth errors — review token issuance`);
-  }
-
-  return {
-    service: 'Firebase Auth',
-    estimatedMonthly: authCost,
-    breakdown,
-    notes,
-    hasData,
-  };
-}
+// Firebase removed — auth is now Supabase only
 
 function estimateRailway(): ServiceCost {
   const cpuCost = RATES.railway.cpuPerVcpuHour * RATES.railway.assumedVcpu * RATES.railway.hoursPerMonth;
@@ -468,7 +434,6 @@ export function estimateCost(metrics: SystemMetrics): CostEstimate {
     estimateRedis(metrics.redis),
     estimateSupabase(metrics.supabase),
     estimateVercel(metrics.api),
-    estimateFirebase(metrics.firebase),
     estimateRailway(),
     estimateAiApis(metrics.external),
   ];

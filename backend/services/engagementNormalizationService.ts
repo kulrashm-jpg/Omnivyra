@@ -11,6 +11,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import { recordMetric } from './systemHealthMetricsService';
+import { getConversationMemoryRebuildQueue } from '../queue/bullmqClient';
 
 export type NormalizedAuthorInput = {
   platform: string;
@@ -456,6 +457,16 @@ export async function insertMessage(input: NormalizedMessageInput): Promise<stri
           },
           { onConflict: 'thread_id', ignoreDuplicates: false }
         );
+      // Fire a BullMQ drain job immediately (200 ms debounce via fixed jobId).
+      // If a drain is already queued/active, this is a no-op.
+      try {
+        await getConversationMemoryRebuildQueue().add('rebuild', {}, {
+          jobId: 'drain',
+          delay: 200,
+        });
+      } catch {
+        // Non-fatal — the safety-net cron handles any missed events
+      }
       const { incrementReplyFollowup } = await import('./responsePerformanceService');
       await incrementReplyFollowup(thread_id, platformCreatedAt);
     } catch (err) {

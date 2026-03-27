@@ -1,13 +1,5 @@
 import type { NextApiRequest } from 'next';
-import { createClient } from '@supabase/supabase-js';
-import { verifyFirebaseIdToken } from '../../lib/firebaseAdmin';
-
-// Database-only client — no auth calls
-const db = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { persistSession: false, autoRefreshToken: false } },
-);
+import { supabase as db } from '../db/supabaseClient';
 
 export const extractAccessToken = (req: NextApiRequest): string | null => {
   const authHeader = req.headers.authorization || '';
@@ -18,63 +10,47 @@ export const extractAccessToken = (req: NextApiRequest): string | null => {
   return null;
 };
 
+/**
+ * Verify a Supabase access token and resolve the matching public.users row.
+ * Returns { id, email } where id is the public.users UUID (not the auth UUID).
+ */
 export const getSupabaseUserFromRequest = async (
-  req: NextApiRequest
+  req: NextApiRequest,
 ): Promise<{ user: { id: string; email?: string | null } | null; error: string | null }> => {
   const token = extractAccessToken(req);
-  if (!token) {
-    return { user: null, error: 'MISSING_AUTH' };
-  }
+  if (!token) return { user: null, error: 'MISSING_AUTH' };
 
-  // ── Verify Firebase ID token ──────────────────────────────────────────────
-  let firebaseUid: string | null = null;
-  let firebaseEmail: string | null = null;
+  // Verify the Supabase JWT and get the auth user
+  const { data: { user: authUser }, error: authErr } = await db.auth.getUser(token);
+  if (authErr || !authUser) return { user: null, error: 'INVALID_AUTH' };
 
-  try {
-    const decoded = await verifyFirebaseIdToken(token);
-    firebaseUid = decoded.uid;
-    firebaseEmail = decoded.email ?? null;
-  } catch {
-    return { user: null, error: 'INVALID_AUTH' };
-  }
+  const supabaseUid = authUser.id;
+  const email       = authUser.email ?? null;
 
-  if (!firebaseUid) {
-    return { user: null, error: 'INVALID_AUTH' };
-  }
-
-  // ── Look up user row by firebase_uid ──────────────────────────────────────
+  // Fast path: look up by supabase_uid
   const { data: uidRow } = await db
     .from('users')
     .select('id, email, is_deleted')
-    .eq('firebase_uid', firebaseUid)
+    .eq('supabase_uid', supabaseUid)
     .maybeSingle();
 
   if (uidRow) {
-    if ((uidRow as any).is_deleted) {
-      // User was soft-deleted — treat as non-existent to prevent ghost access.
-      return { user: null, error: 'ACCOUNT_DELETED' };
-    }
+    if ((uidRow as any).is_deleted) return { user: null, error: 'ACCOUNT_DELETED' };
     return { user: { id: (uidRow as any).id, email: (uidRow as any).email }, error: null };
   }
 
-  // ── Email fallback — firebase_uid not yet written (race on first login) ───
-  if (firebaseEmail) {
+  // Fallback: look up by email (supabase_uid not yet stamped — race on first login)
+  if (email) {
     const { data: emailRow } = await db
       .from('users')
       .select('id, email, is_deleted')
-      .eq('email', firebaseEmail)
+      .eq('email', email.toLowerCase())
       .maybeSingle();
 
     if (emailRow) {
-      if ((emailRow as any).is_deleted) {
-        return { user: null, error: 'ACCOUNT_DELETED' };
-      }
-      // Back-fill firebase_uid so future calls hit the fast path
-      await db
-        .from('users')
-        .update({ firebase_uid: firebaseUid })
-        .eq('id', (emailRow as any).id);
-
+      if ((emailRow as any).is_deleted) return { user: null, error: 'ACCOUNT_DELETED' };
+      // Back-fill supabase_uid so future calls hit the fast path
+      await db.from('users').update({ supabase_uid: supabaseUid }).eq('id', (emailRow as any).id);
       return { user: { id: (emailRow as any).id, email: (emailRow as any).email }, error: null };
     }
   }

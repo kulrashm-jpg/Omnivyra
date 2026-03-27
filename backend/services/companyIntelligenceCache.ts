@@ -42,6 +42,14 @@ function getRedisClient(): IORedis | null {
   }
 }
 
+/** Disconnect the Redis client (for graceful shutdown). */
+export function shutdownCompanyIntelligenceCache(): void {
+  if (redisClient) {
+    redisClient.quit().catch(() => {});
+    redisClient = null;
+  }
+}
+
 async function isRedisOk(): Promise<boolean> {
   const client = getRedisClient();
   if (!client) return false;

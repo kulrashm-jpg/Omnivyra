@@ -43,5 +43,5 @@ export const requireManageConnectors = async (
     res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
   }
-  return { userId: data.user.id, role };
+  return { userId: user.id, role };
 };

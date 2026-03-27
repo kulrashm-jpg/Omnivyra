@@ -14,7 +14,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { getHourlyBaseline } from '../../../lib/anomaly/baselineService';
@@ -32,19 +32,10 @@ const requireSuperAdmin = async (
   return false;
 };
 
-function getAdminClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   if (!(await requireSuperAdmin(req, res))) return;
 
-  const supabase = getAdminClient();
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
   const since1h  = new Date(Date.now() -       60 * 60 * 1_000).toISOString();
   const since5m  = new Date(Date.now() -        5 * 60 * 1_000).toISOString();

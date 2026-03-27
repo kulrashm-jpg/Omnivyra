@@ -3,7 +3,7 @@
  * Generates stage-aware suggestions per week; stored in campaign_recommendation_weeks.
  */
 
-import { v4 as uuidv4 } from 'uuid';
+
 import { supabase } from '../db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from './campaignBlueprintService';
 import { getProfile } from './companyProfileService';
@@ -28,7 +28,7 @@ export async function generateCampaignRecommendations(input: {
   companyId: string;
 }): Promise<{ sessionId: string; weeks: RecommendationWeekInput[] }> {
   const { campaignId, companyId } = input;
-  const sessionId = uuidv4();
+  const sessionId = crypto.randomUUID();
 
   const blueprint = await getUnifiedCampaignBlueprint(campaignId);
   const { data: campaign } = await supabase

@@ -173,21 +173,7 @@ function detectHighWriteRatio({ metrics }: DetectionContext): Insight | null {
   return null;
 }
 
-function detectHighAuthLoad({ metrics, baselines }: DetectionContext): Insight | null {
-  const verifyPerMin = metrics.firebase?.verificationsPerMin ?? 0;
-  const apiPerMin    = metrics.api?.callsPerMin ?? 0;
-  const thresh       = thresholds(baselines?.authVerifyPerMin?.mean, 5, 20);
-
-  if (verifyPerMin > thresh.warn && apiPerMin > 0 && verifyPerMin / apiPerMin > 0.8) {
-    return {
-      summary: `Firebase token verifications (${verifyPerMin}/min) match API requests (${apiPerMin}/min) — decoded tokens are not being reused`,
-      action:  'Cache the decoded DecodedIdToken in request context (e.g., AsyncLocalStorage or middleware) to avoid redundant verifyIdToken calls per request',
-      level:   'warn',
-      tags:    ['firebase', 'api'],
-    };
-  }
-  return null;
-}
+// detectHighAuthLoad removed — Firebase auth replaced by Supabase JWT
 
 function detectExternalApiErrors({ metrics }: DetectionContext): Insight | null {
   const services  = metrics.external?.topServices ?? [];
@@ -307,7 +293,6 @@ export function deriveInsights(
     detectQueuePressure(ctx),
     detectSupabaseErrors(ctx),
     detectHighWriteRatio(ctx),
-    detectHighAuthLoad(ctx),
     detectExternalApiErrors(ctx),
     detectApiLatencySpike(ctx),
     detectDominantCostDriver(ctx),
