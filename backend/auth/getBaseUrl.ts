@@ -14,9 +14,10 @@ import type { NextApiRequest } from 'next';
  */
 export function getBaseUrl(req: NextApiRequest): string {
   if (process.env.NEXT_PUBLIC_APP_URL) {
-    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '');
+    // Normalize: lowercase the entire URL (host names are case-insensitive per RFC)
+    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '').toLowerCase();
   }
   const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim() || 'http';
-  const host = (req.headers['x-forwarded-host'] as string) || (req.headers.host as string) || 'localhost:3000';
+  const host = ((req.headers['x-forwarded-host'] as string) || (req.headers.host as string) || 'localhost:3000').toLowerCase();
   return `${proto}://${host}`;
 }
