@@ -16,6 +16,7 @@ import type { CampaignValidation } from '../../backend/lib/validation/campaignVa
 import type { PaidRecommendation } from '../../backend/lib/ads/paidAmplificationEngine';
 import type { SimulatorBasePlan } from '../../backend/lib/simulation/scenarioSimulator';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 
 export interface FinalizeSectionProps {
   companyId?: string | null;
@@ -62,6 +63,18 @@ export function FinalizeSection({
           : (strat.target_audience ?? ''),
       }
     : null;
+  const handoff = buildPlannerExecutionHandoff({
+    skeleton_confirmed: state.skeleton_confirmed,
+    strategy_confirmed: state.strategy_confirmed,
+    idea_spine: state.idea_spine ?? null,
+    strategy_context: strat ?? null,
+    strategic_card: state.strategic_card ?? null,
+    strategic_themes: state.strategic_themes ?? [],
+    company_context_mode: state.campaign_design?.company_context_mode ?? 'full_company_context',
+    focus_modules: state.campaign_design?.focus_modules ?? [],
+    platform_content_requests: state.platform_content_requests ?? null,
+    calendar_plan: state.execution_plan?.calendar_plan ?? state.calendar_plan ?? null,
+  });
   const spine = state.campaign_design?.idea_spine;
   const hasRefinedTitle = Boolean((spine?.refined_title ?? spine?.title ?? '').trim());
   const hasRefinedDescription = Boolean((spine?.refined_description ?? spine?.description ?? '').trim());
@@ -73,7 +86,9 @@ export function FinalizeSection({
     strat?.posting_frequency != null && typeof strat.posting_frequency === 'object' && !Array.isArray(strat.posting_frequency);
   const calendarPlan = state.execution_plan?.calendar_plan ?? state.calendar_plan;
   const hasSkeleton = Array.isArray(calendarPlan?.activities) && calendarPlan.activities.length > 0;
+  const hasConfirmedFlow = handoff.skeleton_confirmed && handoff.strategy_confirmed;
   const canFinalize =
+    hasConfirmedFlow &&
     hasStrategy &&
     hasRefinedTitle &&
     hasRefinedDescription &&
@@ -117,8 +132,10 @@ export function FinalizeSection({
           idea_spine: spine,
           strategy_context: stratForApi,
           campaign_direction: spine?.selected_angle ?? undefined,
-          company_context_mode: state.campaign_design?.company_context_mode ?? 'full_company_context',
-          focus_modules: state.campaign_design?.focus_modules,
+          company_context_mode: handoff.company_context_mode,
+          focus_modules: handoff.focus_modules,
+          prefilledPlanning: buildPlannerPrefilledPlanning(handoff),
+          execution_handoff: handoff,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -152,6 +169,7 @@ export function FinalizeSection({
   const handleFinalize = async () => {
     if (!companyId || !canFinalize) {
       if (!companyId) setFinalizeError('Select a company first.');
+      else if (!hasConfirmedFlow) setFinalizeError('Confirm both Skeleton and Strategy before finalizing.');
       else if (!hasStrategy) setFinalizeError('Set duration, platforms, and posting frequency in Parameters.');
       else if (!hasRefinedTitle || !hasRefinedDescription) setFinalizeError('Complete Campaign Context with title and description.');
       else if (!hasSelectedAngle) setFinalizeError('Click Refine with AI and select a campaign direction.');
@@ -161,10 +179,9 @@ export function FinalizeSection({
     setFinalizing(true);
     setFinalizeError(null);
     try {
-      const res = await fetch('/api/campaigns/planner-finalize', {
+      const res = await fetchWithAuth('/api/campaigns/planner-finalize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           companyId,
           idea_spine: spine,
@@ -175,6 +192,7 @@ export function FinalizeSection({
           account_context: state.account_context ?? null,
           campaign_validation: campaignValidation ?? null,
           paid_recommendation: paidRecommendation ?? null,
+          execution_handoff: handoff,
           ...(calendarPlan ? { calendar_plan: calendarPlan } : {}),
           ...(ENABLE_UNIFIED_CAMPAIGN_WIZARD
             ? {

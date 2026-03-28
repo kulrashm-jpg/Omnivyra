@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCampaignResume } from '../../hooks/useCampaignResume';
+import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 
 /** Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc. */
 function RepurposeDots({ index, total, contentType }: { index: number; total: number; contentType?: string }) {
@@ -310,9 +311,9 @@ export default function CampaignCalendarPage() {
         // Fallback: when blueprint has no daily_execution_items, use daily-plans (e.g. AI-created daily plan)
         if (mapped.length === 0) {
           const [dailyRes, campaignRes] = await Promise.all([
-            fetch(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(campaignId)}`),
+            fetchWithAuth(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(campaignId)}`),
             companyId
-              ? fetch(`/api/campaigns?type=campaign&campaignId=${encodeURIComponent(campaignId)}&companyId=${encodeURIComponent(companyId)}`)
+              ? fetchWithAuth(`/api/campaigns?type=campaign&campaignId=${encodeURIComponent(campaignId)}&companyId=${encodeURIComponent(companyId)}`)
               : Promise.resolve(null),
           ]);
           let campaignStartDate: string | null = null;
@@ -684,7 +685,7 @@ export default function CampaignCalendarPage() {
     setRescheduleError(null);
     try {
       const companyId = typeof router.query.companyId === 'string' ? router.query.companyId : '';
-      const res = await fetch('/api/schedule/reschedule', {
+      const res = await fetchWithAuth('/api/schedule/reschedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scheduled_post_id: rescheduleTarget.scheduledPostId, new_date: rescheduleDate, companyId }),
@@ -1130,4 +1131,3 @@ export default function CampaignCalendarPage() {
     </div>
   );
 }
-

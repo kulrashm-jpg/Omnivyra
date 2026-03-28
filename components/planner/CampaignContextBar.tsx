@@ -205,10 +205,9 @@ export function CampaignContextBar({
     let cancelled = false;
     setSuggestionsLoading(true);
     setSuggestionsError(null);
-    fetch('/api/planner/suggest-campaigns', {
+    fetchWithAuth('/api/planner/suggest-campaigns', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ companyId }),
     })
       .then(async (res) => {

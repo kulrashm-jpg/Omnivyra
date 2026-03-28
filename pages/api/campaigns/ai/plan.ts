@@ -24,6 +24,7 @@ import {
   getLatestCampaignContextForCompany,
   type PreviousCampaignContext,
 } from '../../../../backend/services/campaignContextService';
+import type { PlannerExecutionHandoff } from '../../../../lib/plannerExecutionHandoff';
 
 // ---------------------------------------------------------------------------
 // Module-level TTL cache for per-company campaign context lookups.
@@ -72,9 +73,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       campaign_direction: bodyCampaignDirection,
       platform_content_requests: bodyPlatformContentRequests,
       campaign_type: bodyCampaignType,
+      execution_handoff: bodyExecutionHandoff,
       account_context: bodyAccountContext,
       previous_performance_insights: bodyPreviousPerformanceInsights,
     } = body;
+
+    const plannerExecutionHandoff =
+      bodyExecutionHandoff && typeof bodyExecutionHandoff === 'object' && !Array.isArray(bodyExecutionHandoff)
+        ? (bodyExecutionHandoff as PlannerExecutionHandoff)
+        : null;
+    const effectiveIdeaSpine =
+      bodyIdeaSpine && typeof bodyIdeaSpine === 'object' && !Array.isArray(bodyIdeaSpine)
+        ? bodyIdeaSpine
+        : plannerExecutionHandoff?.idea_spine ?? null;
+    const effectiveStrategyContext =
+      bodyStrategyContext && typeof bodyStrategyContext === 'object' && !Array.isArray(bodyStrategyContext)
+        ? bodyStrategyContext
+        : plannerExecutionHandoff?.strategy_context ?? null;
+    const effectivePlatformContentRequests =
+      bodyPlatformContentRequests && typeof bodyPlatformContentRequests === 'object' && !Array.isArray(bodyPlatformContentRequests)
+        ? bodyPlatformContentRequests
+        : plannerExecutionHandoff?.platform_content_requests ?? null;
 
     const conversationHistory = Array.isArray(bodyConversationHistory)
       ? bodyConversationHistory
@@ -85,8 +104,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let mode = bodyMode;
     let message = typeof bodyMessage === 'string' ? bodyMessage : '';
 
-    if ((!message || message.length < 10) && bodyIdeaSpine && typeof bodyIdeaSpine === 'object') {
-      const spine = bodyIdeaSpine as Record<string, unknown>;
+    if ((!message || message.length < 10) && effectiveIdeaSpine && typeof effectiveIdeaSpine === 'object') {
+      const spine = effectiveIdeaSpine as Record<string, unknown>;
       const parts = [spine.refined_title, spine.refined_description, spine.title, spine.description]
         .filter((s) => typeof s === 'string' && String(s).trim())
         .map((s) => String(s).trim());
@@ -104,7 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       mode = mode ?? 'generate_plan';
       const lastUser = [...conversationHistory].reverse().find((m: any) => m?.type === 'user' || m?.role === 'user');
       const lastUserText = lastUser && (typeof (lastUser as any).message === 'string' ? (lastUser as any).message : typeof (lastUser as any).content === 'string' ? (lastUser as any).content : null);
-      message = message || lastUserText || 'Yes, generate my full 12-week plan now.';
+      message = message || lastUserText || 'Yes, generate my full 4-week plan now.';
     }
 
     const collectedPlanningContext =
@@ -123,7 +142,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!resolvedCompanyId) {
         return res.status(400).json({ error: 'companyId is required for plan preview' });
       }
-      const spine = bodyIdeaSpine ?? undefined;
+      const spine = effectiveIdeaSpine ?? undefined;
       const spineObj = spine && typeof spine === 'object' && !Array.isArray(spine) ? (spine as Record<string, unknown>) : null;
       const refinedTitle =
         (typeof spineObj?.refined_title === 'string' ? spineObj.refined_title.trim() : '') ||
@@ -135,10 +154,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!refinedTitle) {
         return res.status(400).json({ error: 'idea_spine.refined_title or idea_spine.title is required for plan preview' });
       }
-      if (!bodyStrategyContext || typeof bodyStrategyContext !== 'object' || Array.isArray(bodyStrategyContext)) {
+      if (!effectiveStrategyContext || typeof effectiveStrategyContext !== 'object' || Array.isArray(effectiveStrategyContext)) {
         return res.status(400).json({ error: 'strategy_context is required for plan preview' });
       }
-      const strat = bodyStrategyContext as Record<string, unknown>;
+      const strat = effectiveStrategyContext as Record<string, unknown>;
       const durationWeeks = Number(strat.duration_weeks);
       const platforms = Array.isArray(strat.platforms) ? strat.platforms : [];
       const postingFreq = strat.posting_frequency;
@@ -180,7 +199,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (previewMode) {
       const resolvedCompanyId = typeof companyId === 'string' ? companyId.trim() : '';
-      const spine = bodyIdeaSpine ?? undefined;
+      const spine = effectiveIdeaSpine ?? undefined;
       const spineObj = spine && typeof spine === 'object' && !Array.isArray(spine) ? (spine as Record<string, unknown>) : null;
       const selectedAngle =
         spineObj && typeof spineObj.selected_angle === 'string' ? spineObj.selected_angle : typeof bodyCampaignDirection === 'string' ? bodyCampaignDirection : null;
@@ -218,8 +237,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         try {
           const commands = await extractPlannerCommands(message, calPlan, resolvedCompanyId);
           const platform_content_requests =
-            body.platform_content_requests && typeof body.platform_content_requests === 'object' && !Array.isArray(body.platform_content_requests)
-              ? (body.platform_content_requests as Record<string, Record<string, number>>)
+            effectivePlatformContentRequests && typeof effectivePlatformContentRequests === 'object' && !Array.isArray(effectivePlatformContentRequests)
+              ? (effectivePlatformContentRequests as Record<string, Record<string, number>>)
               : null;
           const updated = applyPlannerCommands(commands, calPlan, platform_content_requests ?? undefined);
           return res.status(200).json({ plan: { calendar_plan: updated } });
@@ -233,9 +252,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       try {
-        const strat = bodyStrategyContext as Record<string, unknown>;
+        const strat = (effectiveStrategyContext ?? {}) as Record<string, unknown>;
         const strategyContext = {
-          duration_weeks: Number(strat.duration_weeks) || 12,
+          duration_weeks: Number(strat.duration_weeks) || 4,
           platforms: Array.isArray(strat.platforms) ? strat.platforms as string[] : ['linkedin'],
           posting_frequency: (strat.posting_frequency && typeof strat.posting_frequency === 'object' && !Array.isArray(strat.posting_frequency))
             ? (strat.posting_frequency as Record<string, number>)
@@ -255,8 +274,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           description: spineObj?.description != null ? String(spineObj.description) : null,
         };
         const platform_content_requests =
-          body.platform_content_requests && typeof body.platform_content_requests === 'object' && !Array.isArray(body.platform_content_requests)
-            ? (body.platform_content_requests as Record<string, Record<string, number>>)
+          effectivePlatformContentRequests && typeof effectivePlatformContentRequests === 'object' && !Array.isArray(effectivePlatformContentRequests)
+            ? (effectivePlatformContentRequests as Record<string, Record<string, number>>)
             : undefined;
         const campaign_type =
           body.campaign_type === 'TEXT' || body.campaign_type === 'CREATOR' || body.campaign_type === 'HYBRID'
@@ -355,8 +374,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : undefined;
 
     const campaignDirectionFromTemp =
-      bodyIdeaSpine && typeof bodyIdeaSpine === 'object' && !Array.isArray(bodyIdeaSpine)
-        ? (bodyIdeaSpine as { selected_angle?: string | null }).selected_angle
+      effectiveIdeaSpine && typeof effectiveIdeaSpine === 'object' && !Array.isArray(effectiveIdeaSpine)
+        ? (effectiveIdeaSpine as { selected_angle?: string | null }).selected_angle
         : typeof bodyCampaignDirection === 'string'
           ? bodyCampaignDirection
           : null;
@@ -629,11 +648,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const effectiveDurationWeeks =
       typeof durationWeeks === 'number'
         ? durationWeeks
-        : bodyStrategyContext &&
-            typeof bodyStrategyContext === 'object' &&
-            typeof (bodyStrategyContext as Record<string, unknown>).duration_weeks === 'number'
-          ? (bodyStrategyContext as { duration_weeks: number }).duration_weeks
-          : 12;
+        : effectiveStrategyContext &&
+            typeof effectiveStrategyContext === 'object' &&
+            typeof (effectiveStrategyContext as Record<string, unknown>).duration_weeks === 'number'
+          ? (effectiveStrategyContext as { duration_weeks: number }).duration_weeks
+          : 4;
 
     // ── Previous campaign context (generate_plan only, non-fatal) ────────────
     // Auto-fetch the most recent completed campaign context for this company so

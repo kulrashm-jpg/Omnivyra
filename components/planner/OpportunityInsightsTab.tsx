@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Target, Check, X, Loader2, Sparkles } from 'lucide-react';
+import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 
 export interface OpportunityInsightsTabProps {
   companyId?: string | null;
@@ -50,7 +51,7 @@ export function OpportunityInsightsTab({
     });
     if (campaignId) params.set('campaignId', campaignId);
 
-    fetch(`/api/engagement/opportunity-radar?${params}`, { credentials: 'include' })
+    fetchWithAuth(`/api/engagement/opportunity-radar?${params}`)
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -77,10 +78,9 @@ export function OpportunityInsightsTab({
     if (!campaignId) return;
     setApplyingId(oppId);
     try {
-      const res = await fetch('/api/campaigns/planner/apply-opportunity', {
+      const res = await fetchWithAuth('/api/campaigns/planner/apply-opportunity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ campaignId, opportunityId: oppId, companyId }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to apply');
@@ -96,10 +96,9 @@ export function OpportunityInsightsTab({
   const handleIgnore = async (oppId: string) => {
     setIgnoringId(oppId);
     try {
-      const res = await fetch('/api/campaigns/planner/ignore-opportunity', {
+      const res = await fetchWithAuth('/api/campaigns/planner/ignore-opportunity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ opportunityId: oppId, companyId }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to ignore');

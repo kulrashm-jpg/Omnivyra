@@ -8,6 +8,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronUp, Clock, Layers, MessageSquare, Play, Target, Users } from 'lucide-react';
 import { usePlannerSession } from './plannerSessionStore';
+import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 
 export interface CampaignHealthPanelProps {
   /** Campaign ID; panel only fetches when present (persisted reports only) */
@@ -122,7 +123,7 @@ export function CampaignHealthPanel({ campaignId, companyId, onError }: Campaign
       return;
     }
     setLoading(true);
-    fetch(`/api/campaigns/${encodeURIComponent(campaignId)}/health`, { credentials: 'include' })
+    fetchWithAuth(`/api/campaigns/${encodeURIComponent(campaignId)}/health`)
       .then((res) => res.json())
       .then((data) => {
         if (data.error) {

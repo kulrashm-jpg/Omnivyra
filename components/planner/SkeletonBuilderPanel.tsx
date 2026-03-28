@@ -14,8 +14,9 @@ import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { PlatformContentMatrix } from './PlatformContentMatrix';
 import ChatVoiceButton from '../ChatVoiceButton';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 
-const DEFAULT_DURATION_WEEKS = 6;
+const DEFAULT_DURATION_WEEKS = 4;
 const DURATION_OPTIONS = [1, 2, 4, 6, 8, 10, 12] as const;
 
 function defaultStartDate(): string {
@@ -100,14 +101,23 @@ export function SkeletonBuilderPanel({
     setScheduleError(null);
     try {
       const spine = state.campaign_design?.idea_spine;
-      const stratForApi = {
+      const mergedStrategyContext = {
         ...strategyFromMatrix,
-        target_audience: Array.isArray(strategyFromMatrix.target_audience)
-          ? strategyFromMatrix.target_audience.filter(Boolean).join(', ')
-          : (strategyFromMatrix.target_audience ?? ''),
         ...(prev?.selected_aspects?.length ? { selected_aspects: prev.selected_aspects } : {}),
         ...(prev?.selected_offerings?.length ? { selected_offerings: prev.selected_offerings } : {}),
       };
+      const handoff = buildPlannerExecutionHandoff({
+        skeleton_confirmed: state.skeleton_confirmed,
+        strategy_confirmed: state.strategy_confirmed,
+        idea_spine: spine,
+        strategy_context: mergedStrategyContext,
+        strategic_card: state.strategic_card,
+        strategic_themes: state.strategic_themes,
+        company_context_mode: state.campaign_design?.company_context_mode,
+        focus_modules: state.campaign_design?.focus_modules,
+        platform_content_requests,
+        calendar_plan: state.calendar_plan ?? state.execution_plan?.calendar_plan,
+      });
       const body: Record<string, unknown> = {
         preview_mode: true,
         mode: 'generate_plan',
@@ -115,18 +125,17 @@ export function SkeletonBuilderPanel({
           .filter(Boolean).join('\n\n') || 'Generate campaign plan.',
         companyId,
         idea_spine: spine,
-        strategy_context: stratForApi,
+        strategy_context: handoff.strategy_context,
         campaign_direction: spine?.selected_angle ?? 'EDUCATION',
-        company_context_mode: state.campaign_design?.company_context_mode ?? 'full_company_context',
-        focus_modules: state.campaign_design?.focus_modules,
+        company_context_mode: handoff.company_context_mode,
+        focus_modules: handoff.focus_modules,
         campaign_type: state.campaign_type ?? 'TEXT',
         account_context: state.account_context,
+        execution_handoff: handoff,
+        prefilledPlanning: buildPlannerPrefilledPlanning(handoff),
       };
       if (platform_content_requests && Object.keys(platform_content_requests).length > 0) {
         body.platform_content_requests = platform_content_requests;
-      }
-      if (state.strategic_themes && state.strategic_themes.length > 0) {
-        body.prefilledPlanning = { strategic_themes: state.strategic_themes.map((t) => t.title) };
       }
       const res = await fetchWithAuth('/api/campaigns/ai/plan', {
         method: 'POST',
@@ -232,13 +241,10 @@ export function SkeletonBuilderPanel({
       } else {
         // No skeleton yet — generate one from scratch
         const spine = state.campaign_design?.idea_spine;
-        const stratForApi = prev ? {
+        const strategyContext = prev ? {
           ...prev,
           duration_weeks: durationWeeks,
           planned_start_date: startDate,
-          target_audience: Array.isArray(prev.target_audience)
-            ? prev.target_audience.filter(Boolean).join(', ')
-            : (prev.target_audience ?? ''),
         } : {
           duration_weeks: durationWeeks,
           planned_start_date: startDate,
@@ -248,18 +254,32 @@ export function SkeletonBuilderPanel({
           campaign_goal: '',
           target_audience: '',
         };
+        const handoff = buildPlannerExecutionHandoff({
+          skeleton_confirmed: state.skeleton_confirmed,
+          strategy_confirmed: state.strategy_confirmed,
+          idea_spine: spine,
+          strategy_context: strategyContext,
+          strategic_card: state.strategic_card,
+          strategic_themes: state.strategic_themes,
+          company_context_mode: state.campaign_design?.company_context_mode,
+          focus_modules: state.campaign_design?.focus_modules,
+          platform_content_requests,
+          calendar_plan: state.calendar_plan ?? state.execution_plan?.calendar_plan,
+        });
         const body: Record<string, unknown> = {
           preview_mode: true,
           mode: 'generate_plan',
           message: text,
           companyId,
           idea_spine: spine,
-          strategy_context: stratForApi,
+          strategy_context: handoff.strategy_context,
           campaign_direction: spine?.selected_angle ?? 'EDUCATION',
-          company_context_mode: state.campaign_design?.company_context_mode ?? 'full_company_context',
-          focus_modules: state.campaign_design?.focus_modules,
+          company_context_mode: handoff.company_context_mode,
+          focus_modules: handoff.focus_modules,
           campaign_type: state.campaign_type ?? 'TEXT',
           account_context: state.account_context,
+          execution_handoff: handoff,
+          prefilledPlanning: buildPlannerPrefilledPlanning(handoff),
         };
         if (platform_content_requests && Object.keys(platform_content_requests).length > 0) {
           body.platform_content_requests = platform_content_requests;
@@ -393,7 +413,7 @@ export function SkeletonBuilderPanel({
                 {flatActivities().length === 0 ? (
                   <>
                     <p>Describe the skeleton you want to generate:</p>
-                    <p className="text-gray-300 italic">&quot;6-week LinkedIn &amp; Instagram campaign, 3 posts per week&quot;</p>
+                    <p className="text-gray-300 italic">&quot;4-week LinkedIn &amp; Instagram campaign, 3 posts per week&quot;</p>
                   </>
                 ) : (
                   <>

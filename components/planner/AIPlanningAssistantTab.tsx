@@ -9,13 +9,14 @@ import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { Send, Loader2 } from 'lucide-react';
 import ChatVoiceButton from '../ChatVoiceButton';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 
 export interface AIPlanningAssistantTabProps {
   companyId?: string | null;
 }
 
 export function AIPlanningAssistantTab({ companyId }: AIPlanningAssistantTabProps) {
-  const { state, setCampaignStructure, setCalendarPlan, setRecommendedSuggestions, setStrategicThemes } = usePlannerSession();
+  const { state, setCampaignStructure, setCalendarPlan, setRecommendedSuggestions, setStrategicThemes, setStrategicCard } = usePlannerSession();
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,24 +49,30 @@ export function AIPlanningAssistantTab({ companyId }: AIPlanningAssistantTabProp
 
     try {
       if (isThemeRequest) {
-        const stratForApi = strat
-          ? {
-              ...strat,
-              target_audience: Array.isArray(strat.target_audience)
-                ? strat.target_audience.filter(Boolean).join(', ')
-                : (strat.target_audience ?? ''),
-            }
-          : null;
-        const res = await fetch('/api/planner/generate-themes', {
+        const handoff = buildPlannerExecutionHandoff({
+          skeleton_confirmed: state.skeleton_confirmed,
+          strategy_confirmed: state.strategy_confirmed,
+          idea_spine: spine,
+          strategy_context: strat,
+          strategic_card: state.strategic_card,
+          strategic_themes: state.strategic_themes,
+          company_context_mode: state.campaign_design?.company_context_mode,
+          focus_modules: state.campaign_design?.focus_modules,
+          platform_content_requests: state.platform_content_requests,
+          calendar_plan: calendarPlan,
+        });
+        const res = await fetchWithAuth('/api/planner/generate-themes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
           body: JSON.stringify({
             companyId,
             idea_spine: spine,
-            strategy_context: stratForApi,
+            strategy_context: handoff.strategy_context,
+            company_context_mode: handoff.company_context_mode,
+            focus_modules: handoff.focus_modules,
             trend_context: state.campaign_design?.trend_context ?? state.trend_context ?? undefined,
-            duration_weeks: stratForApi?.duration_weeks ?? strat?.duration_weeks ?? 6,
+            duration_weeks: handoff.strategy_context?.duration_weeks ?? 4,
+            execution_handoff: handoff,
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -74,12 +81,22 @@ export function AIPlanningAssistantTab({ companyId }: AIPlanningAssistantTabProp
         const themes: StrategicThemeEntry[] = raw
           .map((t: unknown, i: number) => {
             if (t && typeof t === 'object' && 'week' in t && 'title' in t)
-              return { week: Number((t as { week: unknown }).week) || i + 1, title: String((t as { title: unknown }).title ?? '') };
+              return {
+                week: Number((t as { week: unknown }).week) || i + 1,
+                title: String((t as { title: unknown }).title ?? ''),
+                phase_label: 'phase_label' in t ? String((t as { phase_label?: unknown }).phase_label ?? '') : undefined,
+                objective: 'objective' in t ? String((t as { objective?: unknown }).objective ?? '') : undefined,
+                content_focus: 'content_focus' in t ? String((t as { content_focus?: unknown }).content_focus ?? '') : undefined,
+                cta_focus: 'cta_focus' in t ? String((t as { cta_focus?: unknown }).cta_focus ?? '') : undefined,
+              };
             if (typeof t === 'string') return { week: i + 1, title: t };
             return null;
           })
           .filter((x): x is StrategicThemeEntry => x !== null && x.title.trim() !== '');
         if (themes.length > 0) {
+          if (data?.strategic_card && typeof data.strategic_card === 'object' && !Array.isArray(data.strategic_card)) {
+            setStrategicCard(data.strategic_card);
+          }
           setStrategicThemes(themes);
           setHistory((h) => [...h, { role: 'assistant', text: `Generated ${themes.length} weekly themes. You can apply them in the Strategy tab and then generate your skeleton.` }]);
         } else {
@@ -90,14 +107,18 @@ export function AIPlanningAssistantTab({ companyId }: AIPlanningAssistantTabProp
       }
 
       const usePlannerCommand = hasCalendarPlan && calendarPlan;
-      const stratForApi = strat
-        ? {
-            ...strat,
-            target_audience: Array.isArray(strat.target_audience)
-              ? strat.target_audience.filter(Boolean).join(', ')
-              : (strat.target_audience ?? ''),
-          }
-        : null;
+      const handoff = buildPlannerExecutionHandoff({
+        skeleton_confirmed: state.skeleton_confirmed,
+        strategy_confirmed: state.strategy_confirmed,
+        idea_spine: spine,
+        strategy_context: strat,
+        strategic_card: state.strategic_card,
+        strategic_themes: state.strategic_themes,
+        company_context_mode: state.campaign_design?.company_context_mode,
+        focus_modules: state.campaign_design?.focus_modules,
+        platform_content_requests: state.platform_content_requests,
+        calendar_plan: calendarPlan,
+      });
       const sourceIds = state.source_ids ?? {};
       const body: Record<string, unknown> = {
         preview_mode: true,
@@ -105,10 +126,12 @@ export function AIPlanningAssistantTab({ companyId }: AIPlanningAssistantTabProp
         message: text,
         companyId,
         idea_spine: spine,
-        strategy_context: stratForApi,
+        strategy_context: handoff.strategy_context,
         campaign_direction: spine?.selected_angle ?? 'EDUCATION',
-        company_context_mode: state.campaign_design?.company_context_mode ?? 'full_company_context',
-        focus_modules: state.campaign_design?.focus_modules,
+        company_context_mode: handoff.company_context_mode,
+        focus_modules: handoff.focus_modules,
+        execution_handoff: handoff,
+        prefilledPlanning: buildPlannerPrefilledPlanning(handoff),
         ...(sourceIds.source_opportunity_id ? { opportunity_id: sourceIds.source_opportunity_id } : {}),
         ...(sourceIds.opportunity_score != null ? { opportunity_score: sourceIds.opportunity_score } : {}),
       };
@@ -155,7 +178,7 @@ export function AIPlanningAssistantTab({ companyId }: AIPlanningAssistantTabProp
       <div className="flex-1 overflow-y-auto space-y-3 mb-3">
         {history.length === 0 && (
           <p className="text-sm text-gray-500">
-            Ask for a campaign plan. Example: &quot;Generate a 12-week LinkedIn campaign with 3 posts per week.&quot; Or: &quot;Generate themes&quot; / &quot;Suggest themes&quot; for weekly themes.
+            Ask for a campaign plan. Example: &quot;Generate a 4-week LinkedIn campaign with 3 posts per week.&quot; Or: &quot;Generate themes&quot; / &quot;Suggest themes&quot; for weekly themes.
           </p>
         )}
         {history.map((entry, i) => (

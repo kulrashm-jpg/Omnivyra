@@ -506,7 +506,7 @@ export default function ActivityWorkspacePage() {
     const params = new URLSearchParams({ companyId });
     if (payload.campaignId) params.set('campaignId', payload.campaignId);
     if (activityId) params.set('activityId', activityId);
-    fetch(`/api/engagement/campaign-signals?${params}`, { credentials: 'include' })
+    apiFetch(`/api/engagement/campaign-signals?${params}`)
       .then((r) => (r.ok ? r.json() : { signals: [] }))
       .then((data) => {
         if (!cancelled) setCommunitySignals(data?.signals ?? []);
@@ -543,7 +543,7 @@ export default function ActivityWorkspacePage() {
       return;
     }
     let cancelled = false;
-    fetch(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(campaignId)}`, { credentials: 'include' })
+    apiFetch(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(campaignId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((profile) => {
         if (!cancelled && profile) setStrategicMemoryProfile(profile);
@@ -572,7 +572,9 @@ export default function ActivityWorkspacePage() {
 
     const load = async () => {
       try {
-        const raw = typeof window !== 'undefined' ? window.sessionStorage.getItem(workspaceKey) : null;
+        const raw = typeof window !== 'undefined'
+          ? (window.sessionStorage.getItem(workspaceKey) ?? window.localStorage.getItem(workspaceKey))
+          : null;
         if (raw) {
           const parsed = JSON.parse(raw) as WorkspacePayload;
           if (!cancelled) {
@@ -595,7 +597,7 @@ export default function ActivityWorkspacePage() {
             params.set('campaignId', queryCampaignId);
             params.set('executionId', queryExecutionId);
           }
-          const res = await fetch(`/api/activity-workspace/resolve?${params}`, { credentials: 'include' });
+          const res = await apiFetch(`/api/activity-workspace/resolve?${params}`);
           if (!cancelled && res.ok) {
             const data = await res.json();
             const resolvedPayload = data?.payload;
@@ -605,6 +607,7 @@ export default function ActivityWorkspacePage() {
               const key = data?.workspaceKey || workspaceKey;
               try {
                 window.sessionStorage.setItem(key, JSON.stringify(resolvedPayload));
+                window.localStorage.setItem(key, JSON.stringify(resolvedPayload));
               } catch (_) {}
             }
           }
@@ -637,6 +640,7 @@ export default function ActivityWorkspacePage() {
     }
     try {
       window.sessionStorage.setItem(workspaceKey, JSON.stringify({ ...(payload || {}), schedules }));
+      window.localStorage.setItem(workspaceKey, JSON.stringify({ ...(payload || {}), schedules }));
     } catch (_) {}
   }, [payload, schedules, isLoaded, workspaceKey]);
 
@@ -1006,8 +1010,8 @@ export default function ActivityWorkspacePage() {
       try {
         setIsHydratingContext(true);
         const [weeklyRes, dailyRes] = await Promise.all([
-          fetch(`/api/campaigns/get-weekly-plans?campaignId=${encodeURIComponent(campaignId)}`),
-          fetch(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(campaignId)}`),
+          apiFetch(`/api/campaigns/get-weekly-plans?campaignId=${encodeURIComponent(campaignId)}`),
+          apiFetch(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(campaignId)}`),
         ]);
 
         const weeklyData = weeklyRes.ok ? await weeklyRes.json().catch(() => []) : [];
@@ -2455,10 +2459,9 @@ export default function ActivityWorkspacePage() {
                                         setImprovedByScheduleId((prev) => ({ ...prev, [item.id]: true }));
                                         const cid = payload?.campaignId ?? '';
                                         if (cid) {
-                                          fetch('/api/intelligence/strategic-memory', {
+                                          apiFetch('/api/intelligence/strategic-memory', {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
-                                            credentials: 'include',
                                             body: JSON.stringify({
                                               campaign_id: cid,
                                               execution_id: payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id,
@@ -2467,7 +2470,7 @@ export default function ActivityWorkspacePage() {
                                               accepted: true,
                                             }),
                                           })
-                                            .then((r) => r.ok && fetch(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(cid)}`, { credentials: 'include' }))
+                                            .then((r) => r.ok && apiFetch(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(cid)}`))
                                             .then((r) => (r && r.ok ? r.json() : null))
                                             .then((profile) => profile && setStrategicMemoryProfile(profile))
                                             .catch(() => {});
@@ -2692,4 +2695,3 @@ export default function ActivityWorkspacePage() {
 export async function getServerSideProps() {
   return { props: {} };
 }
-

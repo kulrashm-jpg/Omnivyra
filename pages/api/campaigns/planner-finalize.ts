@@ -132,7 +132,7 @@ function buildStructuredWeeksFromStrategy(
   strategy: { duration_weeks?: number; platforms?: string[]; posting_frequency?: Record<string, number>; content_mix?: string[]; campaign_goal?: string; target_audience?: string },
   ideaTitle?: string
 ): unknown[] {
-  const duration = Math.max(1, Math.min(52, Number(strategy?.duration_weeks) || 12));
+  const duration = Math.max(1, Math.min(52, Number(strategy?.duration_weeks) || 4));
   const platforms = Array.isArray(strategy?.platforms) && strategy.platforms.length > 0
     ? strategy.platforms.map((p) => String(p).toLowerCase().replace(/^twitter$/i, 'x'))
     : ['linkedin'];
@@ -169,6 +169,59 @@ function buildStructuredWeeksFromStrategy(
   return weeks;
 }
 
+function buildPlannerExecutionConfig(params: {
+  startDate: string;
+  durationWeeks: number;
+  companyContextMode?: unknown;
+  focusModules?: unknown;
+  crossPlatformSharing?: unknown;
+}): Record<string, unknown> {
+  const { startDate, durationWeeks, companyContextMode, focusModules, crossPlatformSharing } = params;
+  const config: Record<string, unknown> = {
+    tentative_start: startDate,
+    duration_weeks: durationWeeks,
+  };
+  if (typeof companyContextMode === 'string' && companyContextMode.trim()) {
+    config.company_context_mode = companyContextMode.trim();
+  }
+  if (Array.isArray(focusModules)) {
+    const modules = focusModules.map((value) => String(value || '').trim()).filter(Boolean);
+    if (modules.length > 0) config.focus_modules = modules;
+  }
+  if (crossPlatformSharing && typeof crossPlatformSharing === 'object' && !Array.isArray(crossPlatformSharing)) {
+    const cps = crossPlatformSharing as { enabled?: unknown; mode?: unknown };
+    config.cross_platform_sharing = {
+      enabled: cps.enabled !== false,
+      mode: cps.mode === 'unique' ? 'unique' : 'shared',
+    };
+  }
+  return config;
+}
+
+function buildPlannerVersionSnapshot(params: {
+  campaign: Record<string, unknown>;
+  handoff: Record<string, unknown>;
+  executionConfig: Record<string, unknown>;
+  planningContext: Record<string, unknown>;
+}): Record<string, unknown> {
+  const { campaign, handoff, executionConfig, planningContext } = params;
+  const snapshot: Record<string, unknown> = {
+    campaign,
+    source_strategic_theme:
+      handoff.strategic_card && typeof handoff.strategic_card === 'object' && !Array.isArray(handoff.strategic_card)
+        ? handoff.strategic_card
+        : null,
+    planner_execution_handoff: handoff,
+    execution_config: executionConfig,
+    planning_context: planningContext,
+    mode: 'planner',
+  };
+  if (executionConfig.cross_platform_sharing) {
+    snapshot.cross_platform_sharing = executionConfig.cross_platform_sharing;
+  }
+  return snapshot;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -186,6 +239,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       idea_spine,
       strategy_context,
       campaignId: existingCampaignId,
+      execution_handoff,
       cross_platform_sharing,
       calendar_plan: bodyCalendarPlan,
       // Context snapshot fields — populated by FinalizeSection when preview was run first
@@ -199,6 +253,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     if (!strategy_context || typeof strategy_context !== 'object') {
       return res.status(400).json({ error: 'strategy_context is required' });
+    }
+
+    if (
+      !execution_handoff ||
+      typeof execution_handoff !== 'object' ||
+      Array.isArray(execution_handoff) ||
+      (execution_handoff as { skeleton_confirmed?: unknown }).skeleton_confirmed !== true ||
+      (execution_handoff as { strategy_confirmed?: unknown }).strategy_confirmed !== true
+    ) {
+      return res.status(400).json({
+        error: 'Skeleton and Strategy must both be confirmed before finalizing.',
+      });
     }
 
     // STEP 8: Validate calendar_plan before committing when provided
@@ -256,6 +322,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (typeof strat?.planned_start_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(strat.planned_start_date.trim())
         ? strat.planned_start_date.trim()
         : null) ?? new Date().toISOString().split('T')[0];
+    const handoff = execution_handoff as Record<string, unknown>;
+    const executionConfig = buildPlannerExecutionConfig({
+      startDate,
+      durationWeeks,
+      companyContextMode: handoff.company_context_mode,
+      focusModules: handoff.focus_modules,
+      crossPlatformSharing: cross_platform_sharing,
+    });
+    const planningContext: Record<string, unknown> = {
+      skeleton_confirmed: true,
+      strategy_confirmed: true,
+      strategic_themes: Array.isArray(handoff.strategic_themes) ? handoff.strategic_themes : [],
+      platform_content_requests:
+        handoff.platform_content_requests && typeof handoff.platform_content_requests === 'object' && !Array.isArray(handoff.platform_content_requests)
+          ? handoff.platform_content_requests
+          : null,
+    };
+    if (handoff.strategy_context && typeof handoff.strategy_context === 'object' && !Array.isArray(handoff.strategy_context)) {
+      planningContext.strategy_context = handoff.strategy_context;
+    }
+    if (handoff.idea_spine && typeof handoff.idea_spine === 'object' && !Array.isArray(handoff.idea_spine)) {
+      planningContext.idea_spine = handoff.idea_spine;
+    }
 
     let campaignId = existingCampaignId && typeof existingCampaignId === 'string' ? existingCampaignId : null;
 
@@ -286,14 +375,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(500).json({ error: 'Failed to create campaign', details: createErr.message });
       }
 
-      const snapshot: Record<string, unknown> = { campaign: newCampaign };
-      if (cross_platform_sharing != null && typeof cross_platform_sharing === 'object' && !Array.isArray(cross_platform_sharing)) {
-        const cps = cross_platform_sharing as { enabled?: boolean; mode?: string };
-        snapshot.cross_platform_sharing = {
-          enabled: cps.enabled !== false,
-          mode: cps.mode === 'unique' ? 'unique' : 'shared',
-        };
-      }
+      const snapshot = buildPlannerVersionSnapshot({
+        campaign: newCampaign as Record<string, unknown>,
+        handoff,
+        executionConfig,
+        planningContext,
+      });
       const { error: cvErr } = await supabase.from('campaign_versions').insert({
         company_id: companyId,
         campaign_id: campaignId,
@@ -318,6 +405,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .from('campaigns')
           .update({ start_date: startDate, duration_weeks: durationWeeks, updated_at: new Date().toISOString() })
           .eq('id', campaignId);
+      }
+
+      const { data: latestVersion } = await supabase
+        .from('campaign_versions')
+        .select('id, campaign_snapshot')
+        .eq('company_id', companyId)
+        .eq('campaign_id', campaignId)
+        .order('version', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestVersion) {
+        const currentSnapshot = ((latestVersion as { campaign_snapshot?: unknown }).campaign_snapshot as Record<string, unknown>) || {};
+        const nextSnapshot = {
+          ...currentSnapshot,
+          ...buildPlannerVersionSnapshot({
+            campaign: {
+              ...(currentSnapshot.campaign && typeof currentSnapshot.campaign === 'object' && !Array.isArray(currentSnapshot.campaign)
+                ? (currentSnapshot.campaign as Record<string, unknown>)
+                : {}),
+              id: campaignId,
+              name: currentSnapshot?.campaign && typeof currentSnapshot.campaign === 'object' && (currentSnapshot.campaign as { name?: unknown }).name
+                ? (currentSnapshot.campaign as { name?: unknown }).name
+                : ideaTitle || 'Planner Campaign',
+              description: currentSnapshot?.campaign && typeof currentSnapshot.campaign === 'object' && (currentSnapshot.campaign as { description?: unknown }).description
+                ? (currentSnapshot.campaign as { description?: unknown }).description
+                : ideaTitle || null,
+            },
+            handoff,
+            executionConfig,
+            planningContext: {
+              ...(currentSnapshot.planning_context && typeof currentSnapshot.planning_context === 'object' && !Array.isArray(currentSnapshot.planning_context)
+                ? (currentSnapshot.planning_context as Record<string, unknown>)
+                : {}),
+              ...planningContext,
+            },
+          }),
+        };
+        const { error: versionUpdateError } = await supabase
+          .from('campaign_versions')
+          .update({ campaign_snapshot: nextSnapshot })
+          .eq('id', (latestVersion as { id: string }).id);
+        if (versionUpdateError) {
+          console.warn('[planner-finalize] campaign_versions snapshot update failed:', versionUpdateError.message);
+        }
       }
     }
 

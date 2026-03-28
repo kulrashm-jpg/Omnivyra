@@ -73,6 +73,7 @@ export function StrategyTab({
     setIdeaSpine,
     setStrategyContext,
     setStrategicThemes,
+    setStrategicCard,
     clearStrategicThemes,
     setSourceIds,
     setPlannerEntryMode,
@@ -130,7 +131,7 @@ export function StrategyTab({
     const allowed = new Set(offeringsForSelectedAspects);
     const next = selectedOfferings.filter((o) => allowed.has(o));
     if (next.length !== selectedOfferings.length) {
-      const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+      const base = strat ?? { duration_weeks: 4, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
       setStrategyContext({ ...base, selected_offerings: next });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -140,12 +141,12 @@ export function StrategyTab({
     const err = validateGoals(goals);
     if (err) { setGoalError(err); return; }
     setGoalError(null);
-    const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+    const base = strat ?? { duration_weeks: 4, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
     setStrategyContext({ ...base, campaign_goal: goals.filter(Boolean).join(', ') });
   };
 
   const applyAudience = (audience: string[]) => {
-    const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+    const base = strat ?? { duration_weeks: 4, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
     setStrategyContext({ ...base, target_audience: audience });
   };
 
@@ -157,14 +158,14 @@ export function StrategyTab({
   };
 
   const toggleAspect = (aspect: string) => {
-    const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+    const base = strat ?? { duration_weeks: 4, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
     const set = new Set(selectedAspects);
     if (set.has(aspect)) set.delete(aspect); else set.add(aspect);
     setStrategyContext({ ...base, selected_aspects: Array.from(set) });
   };
 
   const toggleOffering = (offering: string) => {
-    const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+    const base = strat ?? { duration_weeks: 4, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
     const set = new Set(selectedOfferings);
     if (set.has(offering)) set.delete(offering); else set.add(offering);
     setStrategyContext({ ...base, selected_offerings: Array.from(set) });
@@ -208,10 +209,9 @@ export function StrategyTab({
     let cancelled = false;
     setSuggestionsLoading(true);
     setSuggestionsError(null);
-    fetch('/api/planner/suggest-campaigns', {
+    fetchWithAuth('/api/planner/suggest-campaigns', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ companyId }),
     })
       .then(async (res) => {
@@ -244,7 +244,7 @@ export function StrategyTab({
       refined_title: s.suggested_campaign_title,
       refined_description: s.topic,
     });
-    const base = strat ?? { duration_weeks: 12, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
+    const base = strat ?? { duration_weeks: 4, platforms: [], posting_frequency: {}, content_mix: [], campaign_goal: '', target_audience: '' };
     setStrategyContext({ ...base, duration_weeks: s.suggested_duration });
     setStrategicThemes(s.themes);
     setSourceIds({ source_opportunity_id: s.id, opportunity_score: s.opportunity_score ?? undefined });
@@ -266,16 +266,15 @@ export function StrategyTab({
     setThemesError(null);
     setGeneratedThemes([]);
     try {
-      const res = await fetch('/api/planner/generate-themes', {
+      const res = await fetchWithAuth('/api/planner/generate-themes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           companyId,
           idea_spine: spine,
           strategy_context: stratForThemes,
           trend_context: state.campaign_design?.trend_context ?? state.trend_context ?? undefined,
-          duration_weeks: stratForThemes?.duration_weeks ?? 6,
+          duration_weeks: stratForThemes?.duration_weeks ?? 4,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -298,6 +297,9 @@ export function StrategyTab({
           return null;
         })
         .filter((x): x is StrategicThemeEntry => x !== null && x.title.trim() !== '');
+      if (data?.strategic_card && typeof data.strategic_card === 'object' && !Array.isArray(data.strategic_card)) {
+        setStrategicCard(data.strategic_card);
+      }
       setGeneratedThemes(themes);
     } catch (e) {
       setThemesError(e instanceof Error ? e.message : 'Could not generate themes');

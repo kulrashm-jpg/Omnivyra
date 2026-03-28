@@ -11,6 +11,7 @@ import UnifiedContextModeSelector, {
   type ContextMode,
   type FocusModule,
 } from '../recommendations/engine-framework/UnifiedContextModeSelector';
+import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 
 const TO_UNIFIED: Record<string, ContextMode> = {
   full_company_context: 'FULL',
@@ -51,10 +52,6 @@ export function StrategySetupPanel({ companyId }: StrategySetupPanelProps) {
     },
     [setCampaignDesign]
   );
-
-  const fetchWithAuth = useCallback((input: RequestInfo, init?: RequestInit) => {
-    return fetch(input, { ...init, credentials: 'include' });
-  }, []);
 
   return (
     <div className="flex flex-col h-full overflow-y-auto p-4 space-y-4">

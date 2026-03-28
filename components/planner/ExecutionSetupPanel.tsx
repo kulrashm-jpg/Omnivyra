@@ -8,8 +8,9 @@ import { usePlannerSession, type StrategyContext } from './plannerSessionStore';
 import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { PlatformContentMatrix } from './PlatformContentMatrix';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 
-const DEFAULT_DURATION_WEEKS = 6;
+const DEFAULT_DURATION_WEEKS = 4;
 const DURATION_OPTIONS = [1, 2, 4, 6, 8, 10, 12] as const;
 
 function defaultStartDate(): string {
@@ -80,12 +81,18 @@ export function ExecutionSetupPanel({ companyId, onGenerate }: ExecutionSetupPan
     setLoading(true);
     setError(null);
     try {
-      const stratForApi = {
-        ...strategyFromMatrix,
-        target_audience: Array.isArray(strategyFromMatrix.target_audience)
-          ? strategyFromMatrix.target_audience.filter(Boolean).join(', ')
-          : (strategyFromMatrix.target_audience ?? ''),
-      };
+      const handoff = buildPlannerExecutionHandoff({
+        skeleton_confirmed: state.skeleton_confirmed,
+        strategy_confirmed: state.strategy_confirmed,
+        idea_spine: spine,
+        strategy_context: strategyFromMatrix,
+        strategic_card: state.strategic_card,
+        strategic_themes: state.strategic_themes,
+        company_context_mode: state.campaign_design?.company_context_mode,
+        focus_modules: state.campaign_design?.focus_modules,
+        platform_content_requests,
+        calendar_plan: state.calendar_plan ?? state.execution_plan?.calendar_plan,
+      });
       const body: Record<string, unknown> = {
         preview_mode: true,
         mode: 'generate_plan',
@@ -93,18 +100,17 @@ export function ExecutionSetupPanel({ companyId, onGenerate }: ExecutionSetupPan
           .filter(Boolean).join('\n\n') || 'Generate campaign plan.',
         companyId,
         idea_spine: spine,
-        strategy_context: stratForApi,
+        strategy_context: handoff.strategy_context,
         campaign_direction: spine?.selected_angle ?? 'EDUCATION',
-        company_context_mode: state.campaign_design?.company_context_mode ?? 'full_company_context',
-        focus_modules: state.campaign_design?.focus_modules,
+        company_context_mode: handoff.company_context_mode,
+        focus_modules: handoff.focus_modules,
         campaign_type: state.campaign_type ?? 'TEXT',
         account_context: state.account_context,
+        execution_handoff: handoff,
+        prefilledPlanning: buildPlannerPrefilledPlanning(handoff),
       };
       if (platform_content_requests && Object.keys(platform_content_requests).length > 0) {
         body.platform_content_requests = platform_content_requests;
-      }
-      if (state.strategic_themes && state.strategic_themes.length > 0) {
-        body.prefilledPlanning = { strategic_themes: state.strategic_themes.map((t) => t.title) };
       }
       const res = await fetchWithAuth('/api/campaigns/ai/plan', {
         method: 'POST',

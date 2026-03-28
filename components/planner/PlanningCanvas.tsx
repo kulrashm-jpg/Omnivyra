@@ -262,9 +262,8 @@ export function PlanningCanvas({ campaignId, companyId, collapsed, onToggleColla
     };
     try {
       if (typeof window !== 'undefined') {
-        if (campaignId) {
-          window.sessionStorage.setItem(workspaceKey, JSON.stringify(payload));
-        } else {
+        window.sessionStorage.setItem(workspaceKey, JSON.stringify(payload));
+        if (!campaignId) {
           window.localStorage.setItem(workspaceKey, JSON.stringify(payload));
         }
         window.open(`/activity-workspace?workspaceKey=${encodeURIComponent(workspaceKey)}`, '_blank');

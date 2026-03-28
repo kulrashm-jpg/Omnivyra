@@ -28,6 +28,7 @@ import { weeksToCalendarPlan } from '../components/planner/calendarPlanConverter
 import styles from '../styles/planner-layout.module.css';
 import { useCampaignResume } from '../hooks/useCampaignResume';
 import { AccountContext } from '../backend/types/accountContext';
+import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 
 interface CampaignPlannerLayoutProps {
   companyId?: string | null;
@@ -61,7 +62,7 @@ function CampaignPlannerLayout({
     if (!companyId) return;
     const justConnected = typeof router.query.connected === 'string';
     if (!state.account_context || justConnected) {
-      fetch(`/api/account-context/analyze?companyId=${companyId}${justConnected ? '&refresh=1' : ''}`)
+      fetchWithAuth(`/api/account-context/analyze?companyId=${companyId}${justConnected ? '&refresh=1' : ''}`)
         .then(res => {
           if (!res.ok) return null;
           return res.json() as Promise<AccountContext>;
@@ -343,9 +344,7 @@ function PlanLoader({
       return;
     }
     let cancelled = false;
-    fetch(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`, {
-      credentials: 'include',
-    })
+    fetchWithAuth(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Failed to load plan'))))
       .then((data) => {
         if (cancelled) return;

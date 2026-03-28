@@ -10,6 +10,7 @@ import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { buildPlannerExecutionHandoff } from '../../lib/plannerExecutionHandoff';
 
 export interface CalendarPlannerStepProps {
   /** Plan from retrieve-plan API (when campaignId exists) */
@@ -43,10 +44,7 @@ export function CalendarPlannerStep({
     if (campaignId && companyId) {
       setLoading(true);
       setError(null);
-      fetch(
-        `/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`,
-        { credentials: 'include' }
-      )
+      fetchWithAuth(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`)
         .then((res) => res.ok ? res.json() : Promise.reject(new Error('Failed to load plan')))
         .then((data) => {
           const weeks =
@@ -140,7 +138,20 @@ export function CalendarPlannerStep({
   const hasRefinedTitle = Boolean((spine?.refined_title ?? '').trim());
   const hasRefinedDescription = Boolean((spine?.refined_description ?? '').trim());
   const hasSelectedAngle = Boolean((spine?.selected_angle ?? '').trim());
-  const canFinalize = hasStrategy && hasRefinedTitle && hasRefinedDescription && hasSelectedAngle;
+  const handoff = buildPlannerExecutionHandoff({
+    skeleton_confirmed: state.skeleton_confirmed,
+    strategy_confirmed: state.strategy_confirmed,
+    idea_spine: state.idea_spine ?? null,
+    strategy_context: state.execution_plan?.strategy_context ?? null,
+    strategic_card: state.strategic_card ?? null,
+    strategic_themes: state.strategic_themes ?? [],
+    company_context_mode: state.campaign_design?.company_context_mode ?? 'full_company_context',
+    focus_modules: state.campaign_design?.focus_modules ?? [],
+    platform_content_requests: state.platform_content_requests ?? null,
+    calendar_plan: state.execution_plan?.calendar_plan ?? state.calendar_plan ?? null,
+  });
+  const hasConfirmedFlow = handoff.skeleton_confirmed && handoff.strategy_confirmed;
+  const canFinalize = hasConfirmedFlow && hasStrategy && hasRefinedTitle && hasRefinedDescription && hasSelectedAngle;
   const canGeneratePreview =
     canFinalize && hasDurationWeeks && hasPlatforms && hasPostingFrequency;
 
@@ -148,6 +159,8 @@ export function CalendarPlannerStep({
     if (!companyId || !canFinalize) {
       if (!companyId) {
         setFinalizeError('Select a company first.');
+      } else if (!hasConfirmedFlow) {
+        setFinalizeError('Confirm both Skeleton and Strategy before finalizing.');
       } else if (!hasStrategy) {
         setFinalizeError('Complete the strategy step first.');
       } else if (!hasRefinedTitle || !hasRefinedDescription) {
@@ -162,15 +175,15 @@ export function CalendarPlannerStep({
     setFinalizing(true);
     setFinalizeError(null);
     try {
-      const res = await fetch('/api/campaigns/planner-finalize', {
+      const res = await fetchWithAuth('/api/campaigns/planner-finalize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           companyId,
           idea_spine: state.campaign_design?.idea_spine,
           strategy_context: state.execution_plan?.strategy_context,
           campaignId: campaignId || undefined,
+          execution_handoff: handoff,
           ...(ENABLE_UNIFIED_CAMPAIGN_WIZARD
             ? (() => {
                 const wizard = createCampaignWizardStore(campaignId ?? undefined).getState();

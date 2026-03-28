@@ -10,6 +10,7 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { generateRichThemesForCampaignWeeks } from '../../../backend/services/strategicThemeEngine';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { buildPlannerStrategicCard, type PlannerStrategicSourceMode } from '../../../lib/plannerStrategicCard';
+import type { PlannerExecutionHandoff } from '../../../lib/plannerExecutionHandoff';
 
 type IdeaSpine = {
   title?: string | null;
@@ -51,7 +52,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { companyId, idea_spine, strategy_context, trend_context, duration_weeks, theme_source, alternatives } = req.body || {};
+    const { companyId, idea_spine, strategy_context, trend_context, duration_weeks, theme_source, alternatives, execution_handoff } = req.body || {};
     if (!companyId || typeof companyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required' });
     }
@@ -64,12 +65,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
 
-    const duration = Number(strategy_context?.duration_weeks ?? duration_weeks ?? 6);
+    const handoff =
+      execution_handoff && typeof execution_handoff === 'object' && !Array.isArray(execution_handoff)
+        ? (execution_handoff as PlannerExecutionHandoff)
+        : null;
+    const effectiveIdeaSpine =
+      idea_spine && typeof idea_spine === 'object' && !Array.isArray(idea_spine)
+        ? (idea_spine as IdeaSpine)
+        : handoff?.idea_spine ?? null;
+    const effectiveStrategyContext =
+      strategy_context && typeof strategy_context === 'object' && !Array.isArray(strategy_context)
+        ? (strategy_context as StrategyContext)
+        : (handoff?.strategy_context as StrategyContext | null | undefined) ?? null;
+
+    const duration = Number(effectiveStrategyContext?.duration_weeks ?? duration_weeks ?? 4);
     const weeks = Math.max(1, Math.min(24, Math.round(duration)));
 
     // Resolve theme_source: 'ai' | 'trend' | 'both' (default: 'ai')
     const source: PlannerStrategicSourceMode =
-      theme_source === 'trend' ? 'trend' : theme_source === 'both' ? 'both' : theme_source === 'blog' ? 'blog' : 'ai';
+      theme_source === 'trend'
+        ? 'trend'
+        : theme_source === 'both'
+        ? 'both'
+        : theme_source === 'blog'
+        ? 'blog'
+        : handoff?.strategic_card?.source_mode === 'trend' || handoff?.strategic_card?.source_mode === 'both' || handoff?.strategic_card?.source_mode === 'blog'
+        ? handoff.strategic_card.source_mode
+        : 'ai';
 
     // Resolve trend topic
     let trendTopic: string | null = null;
@@ -93,7 +115,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Resolve AI topic from idea_spine
-    const spine = idea_spine as IdeaSpine | null | undefined;
+    const spine = effectiveIdeaSpine as IdeaSpine | null | undefined;
     const aiTopic = [spine?.refined_title, spine?.title, spine?.refined_description, spine?.description]
       .filter((s) => typeof s === 'string' && String(s).trim())
       .map((s) => String(s).trim())[0] ?? null;
@@ -117,14 +139,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    const goal = typeof strategy_context?.campaign_goal === 'string' ? strategy_context.campaign_goal.trim() : null;
-    const audience = toList(strategy_context?.target_audience);
-    const keyMessage = typeof strategy_context?.key_message === 'string' ? strategy_context.key_message.trim() : null;
-    const aspects = Array.isArray(strategy_context?.selected_aspects)
-      ? strategy_context.selected_aspects.map((value) => String(value || '').trim()).filter(Boolean)
+    const goal = typeof effectiveStrategyContext?.campaign_goal === 'string' ? effectiveStrategyContext.campaign_goal.trim() : null;
+    const audience = toList(effectiveStrategyContext?.target_audience);
+    const keyMessage = typeof effectiveStrategyContext?.key_message === 'string' ? effectiveStrategyContext.key_message.trim() : null;
+    const aspects = Array.isArray(effectiveStrategyContext?.selected_aspects)
+      ? effectiveStrategyContext.selected_aspects.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
-    const offerings = Array.isArray(strategy_context?.selected_offerings)
-      ? strategy_context.selected_offerings.map((value) => String(value || '').trim()).filter(Boolean)
+    const offerings = Array.isArray(effectiveStrategyContext?.selected_offerings)
+      ? effectiveStrategyContext.selected_offerings.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
     const enrichedTopic = [
       genTopic,
@@ -149,7 +171,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         strategic_card: buildPlannerStrategicCard({
           sourceMode: source,
           ideaSpine: spine,
-          strategyContext: strategy_context as StrategyContext | null | undefined,
+          strategyContext: effectiveStrategyContext,
           trendContext: trendCtx,
           themes: setA,
         }),
@@ -163,7 +185,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       strategic_card: buildPlannerStrategicCard({
         sourceMode: source,
         ideaSpine: spine,
-        strategyContext: strategy_context as StrategyContext | null | undefined,
+        strategyContext: effectiveStrategyContext,
         trendContext: trendCtx,
         themes,
       }),

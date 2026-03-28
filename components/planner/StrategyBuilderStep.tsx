@@ -14,8 +14,8 @@ function toCanonicalPlatform(p: string): CanonicalPlatform | null {
   if (v === 'x') return 'twitter';
   return CANONICAL_VALUES.has(v) ? (v as CanonicalPlatform) : null;
 }
-const CONTENT_MIX_OPTIONS = ['post', 'video', 'blog', 'carousel', 'story', 'thread', 'short'];
-const DURATION_OPTIONS = [6, 8, 12, 16];
+const CONTENT_MIX_OPTIONS = ['post', 'video', 'carousel', 'story', 'thread', 'short'];
+const DURATION_OPTIONS = [1, 2, 4, 6, 8, 10, 12];
 
 export interface StrategyBuilderStepProps {
   onComplete?: (output: StrategyContext) => void;
@@ -24,7 +24,7 @@ export interface StrategyBuilderStepProps {
 export function StrategyBuilderStep({ onComplete }: StrategyBuilderStepProps) {
   const { state, setStrategyContext } = usePlannerSession();
   const prev = state.execution_plan?.strategy_context;
-  const [duration_weeks, setDurationWeeks] = useState(prev?.duration_weeks ?? 12);
+  const [duration_weeks, setDurationWeeks] = useState(prev?.duration_weeks ?? 4);
   const [platforms, setPlatforms] = useState<string[]>(() => {
     const raw = prev?.platforms ?? [];
     return raw.map(toCanonicalPlatform).filter((p): p is CanonicalPlatform => p != null);
