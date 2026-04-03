@@ -52,7 +52,7 @@ const parseUsageUserId = (value: string) => {
   return { kind: 'unknown' as const, feature: null, companyId: null, userId: value };
 };
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined);
@@ -561,5 +561,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default handler;

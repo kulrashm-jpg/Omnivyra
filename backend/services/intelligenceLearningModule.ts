@@ -30,7 +30,6 @@ import {
   computeAndPersistQualityMetrics,
   getQualityMetrics,
 } from './intelligenceQualityEngine';
-import { getLearningForCompany } from './learningOrchestrationService';
 
 export { MAX_WEIGHT_CHANGE, ADJUSTMENT_MIN, ADJUSTMENT_MAX };
 
@@ -47,7 +46,12 @@ export type { QualityMetrics } from './intelligenceQualityEngine';
  * Process learning: outcomes, feedback, learning adjustments, theme reinforcement.
  */
 export async function processLearning(companyId: string) {
-  const { learning, theme_reinforcement } = await getLearningForCompany(companyId);
+  const [outcomes, feedback, learning, theme_reinforcement] = await Promise.all([
+    getOutcomeHistory(companyId),
+    getFeedbackForCompany(companyId),
+    computeLearningForCompany(companyId),
+    computeThemeReinforcement(companyId),
+  ]);
   return { learning, theme_reinforcement };
 }
 

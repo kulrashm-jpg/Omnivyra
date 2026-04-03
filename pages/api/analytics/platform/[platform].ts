@@ -1,3 +1,4 @@
+
 /**
  * Analytics API - Get platform performance
  * GET /api/analytics/platform/[platform]
@@ -44,4 +45,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-

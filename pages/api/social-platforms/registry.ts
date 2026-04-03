@@ -1,3 +1,4 @@
+
 /**
  * GET /api/social-platforms/registry
  *

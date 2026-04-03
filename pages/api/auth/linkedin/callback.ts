@@ -6,6 +6,16 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
+import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
+
+/** Derives base URL from the actual request host — never the NEXT_PUBLIC_APP_URL env var.
+ *  This ensures the redirect_uri used in token exchange exactly matches what was sent
+ *  in the authorization request, even when NEXT_PUBLIC_APP_URL points to production. */
+function getRequestBaseUrl(req: NextApiRequest): string {
+  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
+  const host = (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string) || 'localhost:3000';
+  return `${proto}://${host}`;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -45,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         code: code as string,
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
-        redirect_uri: `${getBaseUrl(req)}/api/auth/linkedin/callback`,
+        redirect_uri: `${getRequestBaseUrl(req)}/api/auth/linkedin/callback`,
       }),
     });
 
@@ -250,6 +260,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (companyIdUuid && userId) {
       checkAndGrantSetupCredits(companyIdUuid, userId)
         .catch(e => console.warn('[linkedin/callback] setup credits check failed:', e?.message));
+    }
+
+    // If this request came from the Community AI connector flow, also save to
+    // community_ai_platform_tokens and redirect back to the connectors page.
+    const { flow: stateFlow, tenantId: stateTenantId } = decodeOAuthState(state as string);
+    if (stateFlow === 'community-ai' && stateTenantId) {
+      await saveCommunityAiToken(stateTenantId, stateTenantId, 'linkedin', {
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token || null,
+        expires_at: expiresAt,
+        connected_by_user_id: userId,
+      });
+      console.info('[connector_audit]', JSON.stringify({ user_id: userId, company_id: stateTenantId, platform: 'linkedin', action: 'connect' }));
+      const communityDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/community-ai/connectors';
+      return res.redirect(`${communityDest}?connected=linkedin&status=success`);
     }
 
     const successDest = returnTo || '/social-platforms';

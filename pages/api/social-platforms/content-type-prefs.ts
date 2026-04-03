@@ -1,3 +1,4 @@
+
 /**
  * GET  /api/social-platforms/content-type-prefs?companyId=...
  *   Returns platform_content_type_prefs (Record<platform, string[]>) for the company.

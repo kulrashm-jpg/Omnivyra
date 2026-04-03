@@ -1,3 +1,4 @@
+
 /**
  * POST /api/onboarding/validate-company-name
  *

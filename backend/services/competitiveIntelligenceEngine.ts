@@ -4,6 +4,11 @@
  */
 
 import type { CompanyIntelligenceInsights } from './companyIntelligenceAggregator';
+import {
+  archiveDecisionScope,
+  createDecisionObjects,
+  type PersistedDecisionObject,
+} from './decisionObjectService';
 
 export type CompetitiveSignalType =
   | 'product_launch'
@@ -91,4 +96,63 @@ export function detectCompetitiveIntelligence(
   return signals
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 15);
+}
+
+export async function persistCompetitiveIntelligenceDecisions(params: {
+  companyId: string;
+  insights: CompanyIntelligenceInsights;
+}): Promise<PersistedDecisionObject[]> {
+  const signals = detectCompetitiveIntelligence(params.insights);
+
+  await archiveDecisionScope({
+    company_id: params.companyId,
+    report_tier: 'growth',
+    source_service: 'competitiveIntelligenceEngine',
+    entity_type: 'global',
+    entity_id: null,
+    changed_by: 'system',
+  });
+
+  if (signals.length === 0) return [];
+
+  const decisions = signals.map((signal) => {
+    const issueType =
+      signal.signal_type === 'market_expansion'
+        ? 'missed_market_capture'
+        : signal.signal_type === 'strategy_shift'
+          ? 'competitor_gap'
+          : 'competitor_dominance';
+
+    return {
+      company_id: params.companyId,
+      report_tier: 'growth' as const,
+      source_service: 'competitiveIntelligenceEngine',
+      entity_type: 'global' as const,
+      entity_id: null,
+      issue_type: issueType,
+      title: `Competitive signal: ${signal.signal_type}`,
+      description: signal.summary,
+      evidence: {
+        signal_type: signal.signal_type,
+        confidence: signal.confidence,
+        supporting_signals: signal.supporting_signals,
+      },
+      impact_traffic: 36,
+      impact_conversion: 42,
+      impact_revenue: 44,
+      priority_score: Math.max(45, Math.min(90, Math.round(signal.confidence * 100))),
+      effort_score: 24,
+      confidence_score: Math.max(0.4, Math.min(1, signal.confidence)),
+      recommendation: 'Counter competitor movement with targeted positioning and differentiated channel execution.',
+      action_type: 'adjust_strategy',
+      action_payload: {
+        optimization_focus: 'competitive_response',
+        signal_type: signal.signal_type,
+      },
+      status: 'open' as const,
+      last_changed_by: 'system' as const,
+    };
+  });
+
+  return createDecisionObjects(decisions);
 }

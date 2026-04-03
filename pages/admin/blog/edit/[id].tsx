@@ -5,7 +5,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../../../components/blog/BlogEditorForm';
-import { BlogQualityPanel } from '../../../../components/blog/BlogQualityPanel';
+import { BlogQualityPanel, type ImproveArea } from '../../../../components/blog/BlogQualityPanel';
 import { Loader2 } from 'lucide-react';
 import type { MediaBlockItem } from '../../../../components/blog/BlogMediaBlock';
 import type { ContentBlock } from '../../../../lib/blog/blockTypes';
@@ -29,6 +29,94 @@ export default function AdminBlogEditPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveState, setLiveState] = useState<BlogFormState | null>(null);
+  const [editorPatch, setEditorPatch] = useState<Partial<BlogFormState> | null>(null);
+  const [improvingArea, setImprovingArea] = useState<ImproveArea | null>(null);
+
+  const jumpToImproveArea = (area: ImproveArea) => {
+    const byArea: Record<ImproveArea, { sectionId: string; focusId?: string }> = {
+      structure: { sectionId: 'blog-section-content' },
+      depth:     { sectionId: 'blog-section-content' },
+      geo:       { sectionId: 'blog-section-content' },
+      linking:   { sectionId: 'blog-section-content' },
+      seo:       { sectionId: 'blog-section-seo', focusId: 'blog-input-seo-title' },
+    };
+
+    const target = byArea[area];
+    const sectionEl = document.getElementById(target.sectionId);
+    if (sectionEl) sectionEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    if (target.focusId) {
+      const inputEl = document.getElementById(target.focusId) as HTMLInputElement | HTMLTextAreaElement | null;
+      if (inputEl) window.setTimeout(() => inputEl.focus(), 280);
+    }
+  };
+
+  const autoImproveArea = async (area: ImproveArea) => {
+    if (!liveState || improvingArea) return;
+    setImprovingArea(area);
+    setError(null);
+
+    try {
+      const fallbackCompanyId = typeof window !== 'undefined' ? (localStorage.getItem('selected_company_id') || '') : '';
+      const companyId = (typeof post?.company_id === 'string' ? post.company_id : fallbackCompanyId);
+      if (!companyId) {
+        jumpToImproveArea(area);
+        setError('Company context is required for AI improvement.');
+        return;
+      }
+
+      const resp = await fetch('/api/content/improve-draft', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          area,
+          contentType: 'blog',
+          draft: {
+            title: liveState.title,
+            excerpt: liveState.excerpt,
+            seo_meta_title: liveState.seo_meta_title,
+            seo_meta_description: liveState.seo_meta_description,
+            tags: liveState.tags,
+            content_blocks: liveState.content_blocks,
+          },
+        }),
+      });
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data?.error || 'AI improvement failed');
+
+      const updated = data?.updated as Partial<BlogFormState> | undefined;
+      if (updated) {
+        setEditorPatch({
+          title: typeof updated.title === 'string' ? updated.title : liveState.title,
+          excerpt: typeof updated.excerpt === 'string' ? updated.excerpt : liveState.excerpt,
+          seo_meta_title: typeof updated.seo_meta_title === 'string' ? updated.seo_meta_title : liveState.seo_meta_title,
+          seo_meta_description: typeof updated.seo_meta_description === 'string' ? updated.seo_meta_description : liveState.seo_meta_description,
+          tags: Array.isArray(updated.tags) ? updated.tags : liveState.tags,
+          content_blocks: Array.isArray(updated.content_blocks)
+            ? updated.content_blocks
+            : liveState.content_blocks,
+        });
+      }
+
+      const delta = Number(data?.scoreDelta || 0);
+      const after = Number(data?.afterScore || 0);
+      if (delta > 0) {
+        setError(null);
+      }
+      jumpToImproveArea(area);
+      if (delta <= 0) {
+        setError(`AI improvements applied for ${area}. Score is ${after}/100 — run again or adjust manually for bigger gains.`);
+      }
+    } catch (e) {
+      jumpToImproveArea(area);
+      setError(e instanceof Error ? e.message : 'AI improvement failed');
+    } finally {
+      setImprovingArea(null);
+    }
+  };
 
   useEffect(() => {
     if (!id || !allowed) return;
@@ -166,6 +254,7 @@ export default function AdminBlogEditPage() {
                 submitLabel="Save changes"
                 isSaving={isSaving}
                 onStateChange={setLiveState}
+                externalPatch={editorPatch}
               />
             </div>
 
@@ -181,6 +270,9 @@ export default function AdminBlogEditPage() {
                     seo_meta_description: liveState.seo_meta_description,
                     tags:                 liveState.tags,
                   }}
+                  onImprove={jumpToImproveArea}
+                  onAutoImprove={autoImproveArea}
+                  improvingArea={improvingArea}
                 />
               )}
             </div>

@@ -34,6 +34,7 @@ const CONDITIONAL_TYPES = new Set([
 ]);
 const AI_AUTOMATED_TYPES = new Set([
   'text', 'post', 'article', 'thread', 'story', 'tweet', 'blog', 'update', 'comment', 'reply',
+  'newsletter', 'white_paper', 'short_story', 'poll',
 ]);
 
 /**

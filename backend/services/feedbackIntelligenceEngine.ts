@@ -1,10 +1,17 @@
 /**
  * Feedback Intelligence Engine
- * Analyzes engagement signals and generates actionable insights.
- * Does not modify intelligence pipeline.
+ * Converts engagement signals into auditable decision objects.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { assertBackgroundJobContext } from './intelligenceExecutionContext';
+import { enforceDecisionGenerationThrottle } from './decisionGenerationControlService';
+import {
+  archiveDecisionScope,
+  listDecisionObjects,
+  replaceDecisionObjectsForSource,
+  type PersistedDecisionObject,
+} from './decisionObjectService';
+import { loadNormalizedFeedbackSignals } from './normalizeFeedbackSignalsService';
 
 type SignalRow = {
   id: string;
@@ -14,145 +21,229 @@ type SignalRow = {
   engagement_count: number;
 };
 
-type PostRow = {
-  id: string;
-  company_id: string | null;
-  platform: string | null;
+
+type FeedbackDecisionDraft = {
+  issue_type: string;
+  title: string;
+  description: string;
+  evidence: Record<string, unknown>;
+  impact_traffic: number;
+  impact_conversion: number;
+  impact_revenue: number;
+  priority_score: number;
+  effort_score: number;
+  confidence_score: number;
+  recommendation: string;
+  action_type: string;
+  action_payload: Record<string, unknown>;
 };
 
-/**
- * Load engagement signals from the last 7 days.
- */
-async function loadRecentSignals(): Promise<SignalRow[]> {
-  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from('engagement_signals')
-    .select('id, post_id, platform, engagement_type, engagement_count')
-    .gte('captured_at', since);
-
-  if (error) throw new Error(`Failed to load engagement_signals: ${error.message}`);
-  return (data ?? []) as SignalRow[];
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-/**
- * Load post -> company mapping.
- */
-async function loadPostCompanies(postIds: string[]): Promise<Map<string, string>> {
-  if (postIds.length === 0) return new Map();
-  const { data, error } = await supabase
-    .from('community_posts')
-    .select('id, company_id')
-    .in('id', postIds);
-
-  if (error) return new Map();
-  const map = new Map<string, string>();
-  for (const r of (data ?? []) as PostRow[]) {
-    if (r.company_id) map.set(r.id, r.company_id);
-  }
-  return map;
+function clampConfidence(value: number): number {
+  return Math.max(0, Math.min(1, Number(value.toFixed(2))));
 }
 
-/**
- * Generate insight from aggregated engagement data.
- */
-function generateInsight(
-  type: string,
-  summary: string,
-  impactScore: number
-): { insight_type: string; insight_summary: string; impact_score: number } {
+function buildPlatformPerformanceDecision(
+  platform: string,
+  competitorPlatform: string,
+  ratio: number,
+  totalEngagement: number,
+  signalCount: number
+): FeedbackDecisionDraft {
+  const impactRevenue = clampPercent(Math.min(95, 35 + ratio * 18));
+  const impactConversion = clampPercent(Math.min(90, 30 + ratio * 14));
+  const impactTraffic = clampPercent(Math.min(85, 25 + ratio * 10));
+  const confidence = clampConfidence(Math.min(0.92, 0.55 + ratio * 0.08));
+
   return {
-    insight_type: type,
-    insight_summary: summary,
-    impact_score: Math.min(1, Math.max(0, impactScore)),
+    issue_type: 'platform_performance_gap',
+    title: `${platform} is outperforming ${competitorPlatform}`,
+    description: `${platform} engagement is ${ratio.toFixed(1)}x higher than ${competitorPlatform}, indicating a distribution and budget allocation opportunity.`,
+    evidence: {
+      winning_platform: platform,
+      trailing_platform: competitorPlatform,
+      engagement_ratio: Number(ratio.toFixed(2)),
+      total_engagement: totalEngagement,
+      signal_count: signalCount,
+    },
+    impact_traffic: impactTraffic,
+    impact_conversion: impactConversion,
+    impact_revenue: impactRevenue,
+    priority_score: clampPercent((impactRevenue * confidence) + 8),
+    effort_score: 28,
+    confidence_score: confidence,
+    recommendation: `Shift more distribution and campaign emphasis toward ${platform} while testing whether ${competitorPlatform} needs a different message or format.`,
+    action_type: 'fix_distribution',
+    action_payload: {
+      target_platform: platform,
+      deprioritized_platform: competitorPlatform,
+      reason: 'engagement_outperformance',
+    },
   };
+}
+
+function buildContentPerformanceDecision(
+  commentRate: number,
+  comments: number,
+  likes: number
+): FeedbackDecisionDraft {
+  const discussionLed = commentRate > 0.1;
+  const recommendation = discussionLed
+    ? 'Turn recent thought-leadership patterns into repeatable content themes and repurpose the strongest discussion starters.'
+    : 'Rework educational posts to create stronger prompts, clearer positioning, and more conversation-driven CTAs.';
+  const confidence = clampConfidence(Math.min(0.9, 0.5 + commentRate * 1.8));
+  const impactRevenue = clampPercent(Math.min(82, 22 + commentRate * 260));
+  const impactConversion = clampPercent(Math.min(78, 20 + commentRate * 220));
+  const impactTraffic = clampPercent(Math.min(74, 18 + commentRate * 180));
+
+  return {
+    issue_type: discussionLed ? 'content_discussion_strength' : 'content_gap',
+    title: discussionLed ? 'Discussion-led content is outperforming' : 'Engagement is not converting into discussion',
+    description: discussionLed
+      ? 'Posts that trigger conversation are creating stronger audience intent signals than passive engagement alone.'
+      : 'Likes are outpacing comments, which suggests the content is getting attention without generating enough active intent.',
+    evidence: {
+      comment_rate: Number(commentRate.toFixed(3)),
+      comments,
+      likes,
+      dominant_pattern: discussionLed ? 'discussion_led' : 'passive_engagement',
+    },
+    impact_traffic: impactTraffic,
+    impact_conversion: impactConversion,
+    impact_revenue: impactRevenue,
+    priority_score: clampPercent((impactConversion * confidence) + 12),
+    effort_score: 22,
+    confidence_score: confidence,
+    recommendation,
+    action_type: 'improve_content',
+    action_payload: {
+      optimization_focus: discussionLed ? 'scale_discussion_format' : 'increase_comment_rate',
+      comments,
+      likes,
+    },
+  };
+}
+
+function buildCompanyDecisionDrafts(signals: SignalRow[]): FeedbackDecisionDraft[] {
+  const byPlatform = new Map<string, number>();
+  const byType = new Map<string, number>();
+
+  for (const signal of signals) {
+    byPlatform.set(signal.platform, (byPlatform.get(signal.platform) ?? 0) + signal.engagement_count);
+    byType.set(signal.engagement_type, (byType.get(signal.engagement_type) ?? 0) + signal.engagement_count);
+  }
+
+  const totalEngagement = [...byType.values()].reduce((sum, value) => sum + value, 0);
+  if (totalEngagement === 0) return [];
+
+  const drafts: FeedbackDecisionDraft[] = [];
+  const platforms = [...byPlatform.entries()].sort((left, right) => right[1] - left[1]);
+
+  if (platforms.length >= 2) {
+    const [top, second] = platforms;
+    const ratio = top[1] / Math.max(second[1], 1);
+    drafts.push(buildPlatformPerformanceDecision(top[0], second[0], ratio, totalEngagement, signals.length));
+  }
+
+  const comments = byType.get('comments') ?? 0;
+  const likes = byType.get('likes') ?? 0;
+  if (likes > 0) {
+    drafts.push(buildContentPerformanceDecision(comments / likes, comments, likes));
+  }
+
+  return drafts;
 }
 
 export type GenerateFeedbackInsightsResult = {
   signals_analyzed: number;
-  insights_created: number;
-  insights_skipped: number;
+  decisions_created: number;
+  decisions_archived: number;
+  companies_processed: number;
 };
 
-/**
- * Generate feedback intelligence from engagement signals.
- */
 export async function generateFeedbackInsights(): Promise<GenerateFeedbackInsightsResult> {
-  const signals = await loadRecentSignals();
-  const postIds = [...new Set(signals.map((s) => s.post_id))];
-  const postToCompany = await loadPostCompanies(postIds);
+  assertBackgroundJobContext('feedbackIntelligenceEngine');
 
+  const normalizedSignals = await loadNormalizedFeedbackSignals(7);
   const byCompany = new Map<string, SignalRow[]>();
-  for (const s of signals) {
-    const companyId = postToCompany.get(s.post_id);
-    if (!companyId) continue;
-    const arr = byCompany.get(companyId) ?? [];
-    arr.push(s);
-    byCompany.set(companyId, arr);
+
+  for (const signal of normalizedSignals) {
+    const companySignals = byCompany.get(signal.company_id) ?? [];
+    companySignals.push({
+      id: signal.id,
+      post_id: signal.post_id,
+      platform: signal.platform,
+      engagement_type: signal.engagement_type,
+      engagement_count: signal.engagement_count,
+    });
+    byCompany.set(signal.company_id, companySignals);
   }
 
-  let insightsCreated = 0;
-  let insightsSkipped = 0;
+  let decisionsCreated = 0;
+  let decisionsArchived = 0;
 
-  for (const [companyId, companySignals] of byCompany) {
-    const byPlatform = new Map<string, number>();
-    const byType = new Map<string, number>();
+  for (const [companyId, companySignals] of byCompany.entries()) {
+    await enforceDecisionGenerationThrottle(companyId, 'feedbackIntelligenceEngine');
+    const drafts = buildCompanyDecisionDrafts(companySignals);
 
-    for (const s of companySignals) {
-      byPlatform.set(s.platform, (byPlatform.get(s.platform) ?? 0) + s.engagement_count);
-      byType.set(s.engagement_type, (byType.get(s.engagement_type) ?? 0) + s.engagement_count);
-    }
-
-    const totalEng = [...byType.values()].reduce((a, b) => a + b, 0);
-    if (totalEng === 0) continue;
-
-    const platforms = [...byPlatform.entries()].sort((a, b) => b[1] - a[1]);
-    if (platforms.length >= 2) {
-      const [top, second] = platforms;
-      const ratio = top[1] / (second[1] || 1);
-      const insight = generateInsight(
-        'platform_performance',
-        `${top[0]} engagement ${ratio.toFixed(1)}x higher than ${second[0]} for SaaS themes`,
-        Math.min(0.9, 0.5 + ratio * 0.1)
-      );
-      const { error } = await supabase.from('feedback_intelligence').insert({
-        signal_id: companySignals[0]?.id ?? null,
+    if (drafts.length === 0) {
+      await archiveDecisionScope({
         company_id: companyId,
-        insight_type: insight.insight_type,
-        insight_summary: insight.insight_summary,
-        impact_score: insight.impact_score,
+        report_tier: 'growth',
+        source_service: 'feedbackIntelligenceEngine',
+        entity_type: 'global',
+        entity_id: null,
+        changed_by: 'system',
       });
-      if (!error) insightsCreated++;
-      else if (error.code !== '23503') throw new Error(`feedback_intelligence insert failed: ${error.message}`);
-      else insightsSkipped++;
+      decisionsArchived += 1;
+      continue;
     }
 
-    const comments = byType.get('comments') ?? 0;
-    const likes = byType.get('likes') ?? 0;
-    if (likes > 0) {
-      const commentRate = comments / likes;
-      const insight = generateInsight(
-        'content_performance',
-        commentRate > 0.1
-          ? 'Thought leadership posts drive higher discussion rate'
-          : 'Educational frameworks produce highest engagement',
-        Math.min(0.9, 0.5 + commentRate)
-      );
-      const { error } = await supabase.from('feedback_intelligence').insert({
-        signal_id: companySignals[0]?.id ?? null,
+    const persisted = await replaceDecisionObjectsForSource(
+      drafts.map((draft) => ({
         company_id: companyId,
-        insight_type: insight.insight_type,
-        insight_summary: insight.insight_summary,
-        impact_score: insight.impact_score,
-      });
-      if (!error) insightsCreated++;
-      else if (error.code !== '23503') throw new Error(`feedback_intelligence insert failed: ${error.message}`);
-      else insightsSkipped++;
-    }
+        report_tier: 'growth',
+        source_service: 'feedbackIntelligenceEngine',
+        entity_type: 'global',
+        entity_id: null,
+        issue_type: draft.issue_type,
+        title: draft.title,
+        description: draft.description,
+        evidence: draft.evidence,
+        impact_traffic: draft.impact_traffic,
+        impact_conversion: draft.impact_conversion,
+        impact_revenue: draft.impact_revenue,
+        priority_score: draft.priority_score,
+        effort_score: draft.effort_score,
+        confidence_score: draft.confidence_score,
+        recommendation: draft.recommendation,
+        action_type: draft.action_type,
+        action_payload: draft.action_payload,
+        status: 'open',
+        last_changed_by: 'system',
+      }))
+    );
+
+    decisionsCreated += persisted.length;
   }
 
   return {
-    signals_analyzed: signals.length,
-    insights_created: insightsCreated,
-    insights_skipped: insightsSkipped,
+    signals_analyzed: normalizedSignals.length,
+    decisions_created: decisionsCreated,
+    decisions_archived: decisionsArchived,
+    companies_processed: byCompany.size,
   };
+}
+
+export async function getLatestFeedbackDecisions(companyId: string): Promise<PersistedDecisionObject[]> {
+  return listDecisionObjects({
+    viewName: 'growth_view',
+    companyId,
+    sourceService: 'feedbackIntelligenceEngine',
+    status: ['open'],
+    limit: 50,
+  });
 }

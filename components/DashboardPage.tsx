@@ -11,6 +11,7 @@ import { getStageLabelWithDuration } from '../backend/types/CampaignStage';
 import { navigateToCampaign, buildResumeUrl, loadCampaignResume } from '../lib/campaignResumeStore';
 import FloatingChatPanel, { type CollaborationMessage } from './collaboration/FloatingChatPanel';
 import DayDetailPanel, { type DayActivity } from './collaboration/DayDetailPanel';
+import ReportAutomationActivityFeed from './dashboard/ReportAutomationActivityFeed';
 
 interface Campaign {
   id: string;
@@ -38,6 +39,21 @@ interface DashboardStats {
   totalContent: number;
   publishedContent: number;
 }
+
+type CompanyProfileReview = {
+  due: boolean;
+  pending_confirmation: boolean;
+  last_confirmed_at: string | null;
+  next_confirmation_due_at: string | null;
+  confirmation_interval_days: number;
+  facts_present: boolean;
+};
+
+type CompanyFactSnapshot = {
+  team_size?: string | null;
+  founded_year?: string | null;
+  revenue_range?: string | null;
+};
 
 type CalendarExecutionStage =
   | 'weekly_planning'
@@ -111,7 +127,14 @@ export default function DashboardPage() {
   }, [isLoading, authChecked, isAuthenticated, companies.length, router]);
   const canCreateCampaign = hasPermission('CREATE_CAMPAIGN');
   const canScheduleContent = hasPermission('SCHEDULE_CONTENT');
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(() => {
+    // Allow deep-linking to a specific tab via ?tab=calendar etc.
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search).get('tab');
+      if (p === 'calendar' || p === 'campaigns' || p === 'team' || p === 'analytics' || p === 'integrations') return p;
+    }
+    return 'overview';
+  });
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [stats, setStats] = useState<DashboardStats>({
     totalCampaigns: 0,
@@ -153,6 +176,9 @@ export default function DashboardPage() {
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [pendingDeleteCampaignId, setPendingDeleteCampaignId] = useState<string | null>(null);
   const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
+  const [companyProfileReview, setCompanyProfileReview] = useState<CompanyProfileReview | null>(null);
+  const [companyFactSnapshot, setCompanyFactSnapshot] = useState<CompanyFactSnapshot | null>(null);
+  const [showCompanyFactReviewPrompt, setShowCompanyFactReviewPrompt] = useState(false);
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
   const isCompanyAdmin = (userRole || '').toString() === 'COMPANY_ADMIN';
 
@@ -161,6 +187,34 @@ export default function DashboardPage() {
     const t = window.setTimeout(() => setNotice(null), 3200);
     return () => window.clearTimeout(t);
   }, [notice]);
+
+  useEffect(() => {
+    if (!selectedCompanyId || !isCompanyAdmin) {
+      setCompanyProfileReview(null);
+      setCompanyFactSnapshot(null);
+      setShowCompanyFactReviewPrompt(false);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}&includeCompleteness=0`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (cancelled) return;
+        setCompanyProfileReview((data?.company_profile_review ?? null) as CompanyProfileReview | null);
+        setCompanyFactSnapshot((data?.profile?.report_settings?.company_facts ?? null) as CompanyFactSnapshot | null);
+        setShowCompanyFactReviewPrompt(Boolean(data?.company_profile_review?.pending_confirmation));
+      } catch {
+        // ignore reminder load failures on dashboard
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCompanyId, isCompanyAdmin]);
 
   const CAMPAIGN_STAGES = [
     { id: 'all', label: 'All' },
@@ -981,6 +1035,64 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />
+      {showCompanyFactReviewPrompt && isCompanyAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-amber-200 p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+                  Company Admin Confirmation
+                </div>
+                <h2 className="mt-3 text-xl font-semibold text-slate-900">
+                  Review your company facts
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Reports are using company-fit signals for competitor selection. Please confirm these facts so benchmarking stays aligned to the right peer group.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCompanyFactReviewPrompt(false)}
+                className="text-slate-400 hover:text-slate-700"
+                aria-label="Close company facts reminder"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              <div>Team size: <span className="font-medium">{companyFactSnapshot?.team_size || 'Missing'}</span></div>
+              <div className="mt-1">Founded year: <span className="font-medium">{companyFactSnapshot?.founded_year || 'Missing'}</span></div>
+              <div className="mt-1">Revenue range: <span className="font-medium">{companyFactSnapshot?.revenue_range || 'Missing'}</span></div>
+              <div className="mt-3 text-xs text-slate-500">
+                {companyProfileReview?.next_confirmation_due_at
+                  ? `Due since ${new Date(companyProfileReview.next_confirmation_due_at).toLocaleDateString()}.`
+                  : 'No admin confirmation recorded yet.'}
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowCompanyFactReviewPrompt(false)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Remind me later
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCompanyFactReviewPrompt(false);
+                  router.push('/company-profile');
+                }}
+                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600"
+              >
+                Review now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {notice && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-4">
           <div
@@ -1177,6 +1289,8 @@ export default function DashboardPage() {
                 );
               })}
             </div>
+
+            <ReportAutomationActivityFeed companyId={selectedCompanyId || null} />
             
             {/* Campaigns List Section */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">

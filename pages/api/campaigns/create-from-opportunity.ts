@@ -1,3 +1,4 @@
+
 /**
  * POST /api/campaigns/create-from-opportunity
  * Create a campaign from a campaign opportunity (intelligence pipeline).
@@ -8,7 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { generateCampaignFromOpportunity } from '../../../backend/services/opportunityCampaignGenerator';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -57,5 +58,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default handler;

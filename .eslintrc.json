@@ -1,9 +1,22 @@
 {
   "extends": ["next/core-web-vitals"],
+  "plugins": ["runtime-enforcement"],
   "rules": {
     "react/no-unescaped-entities": "warn",
     "react-hooks/exhaustive-deps": "warn",
-    "@next/next/no-img-element": "warn"
+    "@next/next/no-img-element": "warn",
+    "runtime-enforcement/no-forbidden-imports-in-edge": "error",
+    "runtime-enforcement/no-fs-in-api-routes": "error",
+    "runtime-enforcement/no-direct-process-env": "warn"
   },
-  "ignorePatterns": [".next/", "node_modules/", "out/", "backend/tests/", "test-file.js", "utils/project-protector.js", "utils/protector.js"]
+  "ignorePatterns": [".next/", "node_modules/", "out/", "backend/tests/", "test-file.js", "utils/project-protector.js", "utils/protector.js"],
+  "overrides": [
+    {
+      "files": ["pages/api/**/*.ts", "pages/api/**/*.tsx"],
+      "rules": {
+        "runtime-enforcement/no-forbidden-imports-in-edge": "error",
+        "runtime-enforcement/no-fs-in-api-routes": "error"
+      }
+    }
+  ]
 }

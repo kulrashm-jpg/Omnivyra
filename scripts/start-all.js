@@ -51,6 +51,7 @@ const REDIS_WAIT_MS = parseInt(process.env.REDIS_WAIT_MS || '5000', 10);
 const REDIS_RETRY_INTERVAL_MS = 500;
 const AUTO_START_REDIS = process.env.DEV_AUTO_START_REDIS === '1';
 const FALLBACK_APP_ONLY = process.env.DEV_FALLBACK_APP_ONLY !== '0'; // default true
+const FORCE_UNLOCK_NEXT = process.env.DEV_FORCE_UNLOCK_NEXT === '1';
 
 function parseRedisUrl(url) {
   if (url.includes('://')) {
@@ -131,6 +132,54 @@ function spawnProcess(name, command, args, opts = {}) {
   return child;
 }
 
+function cleanNextCache() {
+  const cleanScript = path.join(process.cwd(), 'scripts', 'clean.js');
+  try {
+    execSync(`${process.execPath} "${cleanScript}"`, { stdio: 'ignore' });
+    console.log('   🧹 Cleaned build artifacts before startup.\n');
+  } catch {
+    console.log('   ⚠️  Pre-start clean encountered issues; continuing startup.\n');
+  }
+}
+
+function cleanupStaleNextLockArtifacts() {
+  const lockPaths = [
+    path.join(process.cwd(), '.next', 'dev', 'lock'),
+    path.join(process.cwd(), '.next', 'dev', 'trace'),
+  ];
+
+  for (const target of lockPaths) {
+    try {
+      if (!fs.existsSync(target)) continue;
+      fs.rmSync(target, { force: true });
+      console.log(`   🧽 Removed stale Next artifact: ${path.relative(process.cwd(), target)}`);
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      const isAccessDenied =
+        message.toLowerCase().includes('access is denied') ||
+        message.toLowerCase().includes('eperm') ||
+        message.toLowerCase().includes('eacces');
+
+      if (isAccessDenied && FORCE_UNLOCK_NEXT) {
+        try {
+          execSync('taskkill /F /IM node.exe', { stdio: 'ignore' });
+          fs.rmSync(target, { force: true });
+          console.log(`   🧽 Force-unlocked and removed: ${path.relative(process.cwd(), target)}`);
+          continue;
+        } catch {}
+      }
+
+      if (isAccessDenied) {
+        console.warn(`   ⚠️  Could not remove ${path.relative(process.cwd(), target)} (access denied).`);
+        console.warn('      Close old dev terminals and run:');
+        console.warn('      taskkill /F /IM node.exe && rmdir /s /q .next');
+      } else {
+        console.warn(`   ⚠️  Could not remove ${path.relative(process.cwd(), target)}: ${message}`);
+      }
+    }
+  }
+}
+
 function tryStartRedisViaDocker() {
   const config = parseRedisUrl(REDIS_URL);
   if (config.host !== 'localhost' && config.host !== '127.0.0.1') {
@@ -159,10 +208,16 @@ function tryStartRedisViaDocker() {
 
 async function runAppOnly(children) {
   console.log('\n⚠️  Running Next.js only (no workers). BOLT and background jobs will not work.\n');
+  cleanNextCache();
+  cleanupStaleNextLockArtifacts();
   console.log('   App: http://localhost:3000');
   console.log('   To enable workers: start Redis and run npm run dev:full\n');
-  const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev'], {
-    env: { ...process.env, ENABLE_AUTO_WORKERS: '0' },
+  const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev', '--webpack'], {
+    env: {
+      ...process.env,
+      ENABLE_AUTO_WORKERS: '0',
+      ENABLE_REDIS_USAGE_MONITORING: process.env.ENABLE_REDIS_USAGE_MONITORING || '0',
+    },
   });
   children.push(nextProc);
   nextProc.on('exit', (code) => process.exit(code ?? 0));
@@ -266,11 +321,13 @@ async function main() {
   await new Promise((r) => setTimeout(r, 2000));
 
   // 4. Start Next.js (foreground - user sees this)
+  cleanNextCache();
+  cleanupStaleNextLockArtifacts();
   console.log('4️⃣  Starting Next.js dev server...\n');
   console.log('   App: http://localhost:3000');
   console.log('   Press Ctrl+C to stop all services\n');
 
-  const next = spawnProcess('next', process.execPath, [nextBin, 'dev'], {
+  const next = spawnProcess('next', process.execPath, [nextBin, 'dev', '--webpack'], {
     env: { ...process.env, ENABLE_AUTO_WORKERS: '0' },
   });
   children.push(next);

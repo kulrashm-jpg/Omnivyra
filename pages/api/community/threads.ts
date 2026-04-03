@@ -1,3 +1,4 @@
+
 /**
  * Community Threads API
  * Returns multi-part threads from community_threads.
@@ -6,6 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -18,6 +20,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const companyId = (req.query.companyId as string)?.trim() || user?.defaultCompanyId;
     const postId = (req.query.postId as string)?.trim();
     const threadType = (req.query.threadType as string)?.trim();
+
+    if (companyId) {
+      const companyContext = await requireCompanyContext({ req, res, companyId });
+      if (!companyContext) return;
+    }
 
     let query = supabase
       .from('community_threads')

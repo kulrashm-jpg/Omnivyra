@@ -38,6 +38,17 @@ const TARGET_AUDIENCE_OPTIONS = [
   'Sales Teams', 'Product Managers', 'Developers', 'General Consumers',
 ] as const;
 
+const CONTENT_FORMAT_OPTIONS = [
+  'Short-form Video (Reels / TikTok)',
+  'Long-form Video (YouTube)',
+  'Carousel Post',
+  'Static Image / Infographic',
+  'Newsletter / Email',
+  'Podcast / Audio',
+  'Live / Webinar',
+  'Thread (Twitter/X)',
+] as const;
+
 function toList(val: string | string[] | undefined | null): string[] {
   if (!val) return [];
   if (Array.isArray(val)) return val.filter((s) => typeof s === 'string' && s.trim());
@@ -140,6 +151,12 @@ export function CampaignContextBar({
   const applyAudience = (vals: string[]) => {
     const base = strat ?? DEFAULT_STRATEGY_BASE;
     setStrategyContext({ ...base, target_audience: vals });
+  };
+
+  const contentFormatList: string[] = (strat as { content_formats?: string[] } | null)?.content_formats ?? [];
+  const applyContentFormats = (vals: string[]) => {
+    const base = strat ?? DEFAULT_STRATEGY_BASE;
+    setStrategyContext({ ...base, content_formats: vals } as never);
   };
 
   const keyMessage = (strat as { key_message?: string } | null)?.key_message ?? '';
@@ -333,6 +350,22 @@ export function CampaignContextBar({
               placeholder="Select target audience..."
               className="w-full"
               size="sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Content Format
+              <span className="ml-1 text-gray-400 font-normal">(pick up to 2)</span>
+            </label>
+            <MultiSelectDropdown
+              options={CONTENT_FORMAT_OPTIONS.map((v) => ({ value: v, label: v }))}
+              values={contentFormatList}
+              onChange={applyContentFormats}
+              placeholder="Select content formats..."
+              className="w-full"
+              size="sm"
+              maxSelections={2}
             />
           </div>
 

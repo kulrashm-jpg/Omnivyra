@@ -17,6 +17,7 @@
 import axios from 'axios';
 import { getToken, setToken, TokenObject } from './tokenStore';
 import { supabase } from '../db/supabaseClient';
+import { config } from '@/config';
 
 /**
  * Refresh token for LinkedIn
@@ -30,8 +31,8 @@ export async function refreshLinkedInToken(
     return null;
   }
 
-  const clientId = process.env.LINKEDIN_CLIENT_ID;
-  const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
+  const clientId = config.LINKEDIN_CLIENT_ID;
+  const clientSecret = config.LINKEDIN_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
     console.error('❌ LinkedIn credentials not configured');
@@ -99,8 +100,8 @@ export async function refreshTwitterToken(
     return null;
   }
 
-  const clientId = process.env.TWITTER_CLIENT_ID || process.env.X_CLIENT_ID;
-  const clientSecret = process.env.TWITTER_CLIENT_SECRET || process.env.X_CLIENT_SECRET;
+  const clientId = config.TWITTER_CLIENT_ID || config.X_CLIENT_ID;
+  const clientSecret = config.TWITTER_CLIENT_SECRET || config.X_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
     console.error('❌ Twitter credentials not configured');
@@ -163,8 +164,8 @@ export async function refreshFacebookToken(
   socialAccountId: string,
   currentToken: TokenObject
 ): Promise<TokenObject | null> {
-  const appId = process.env.FACEBOOK_APP_ID;
-  const appSecret = process.env.FACEBOOK_APP_SECRET;
+  const appId = config.FACEBOOK_APP_ID;
+  const appSecret = config.FACEBOOK_APP_SECRET;
 
   if (!appId || !appSecret) {
     console.error('❌ Facebook credentials not configured');

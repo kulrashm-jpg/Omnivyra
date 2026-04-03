@@ -34,12 +34,22 @@ const REPURPOSE_LIMIT: Record<DensityLevel, number> = {
 /**
  * Repurpose graph: content_type → derivative content types.
  * Fallback when platform cascade does not apply.
+ *
+ * Long-form anchor content (article, newsletter, white_paper, short_story) repurposes down
+ * to shorter text formats. Carousel/video derivatives are excluded here — boltTextOnly
+ * filtering handles that separately.
  */
 const REPURPOSE_GRAPH: Record<string, string[]> = {
-  blog: ['linkedin_post', 'thread', 'carousel'],
+  // Long-form anchors → shorter text derivatives
+  white_paper:  ['article', 'thread', 'post'],
+  article:      ['thread', 'post'],
+  newsletter:   ['post', 'thread'],
+  short_story:  ['post'],
+  blog:         ['linkedin_post', 'thread', 'carousel'],
+  // Short-form
   linkedin_post: ['carousel'],
-  thread: ['carousel'],
-  carousel: ['short_video'],
+  thread:        ['carousel'],
+  carousel:      ['short_video'],
 };
 
 /** Platform-aware repurpose mapping: primary_platform → [(target_platform, target_content_type), ...] */
@@ -366,7 +376,9 @@ export function expandRepurposeGraph<T extends RepurposeSlotInput>(
     );
     const ct = (slot.content_type ?? 'post').trim().toLowerCase();
     const isAnchor =
-      slot.is_anchor_content ?? (ct === 'blog' || ct === 'article' || ct === 'long_video');
+      slot.is_anchor_content ??
+      (ct === 'blog' || ct === 'article' || ct === 'long_video' ||
+       ct === 'white_paper' || ct === 'newsletter' || ct === 'short_story');
     const amplificationScore = computeContentAmplificationScore(
       slot.content_type ?? 'post',
       slot.platform,

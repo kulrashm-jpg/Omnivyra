@@ -1,7 +1,7 @@
 /**
  * Intelligence Simulation Module
  * Consolidates: strategySimulationEngine, scenarioModelEngine, impactForecastEngine,
- * strategyComparisonEngine, simulationOrchestrationService
+ * strategyComparisonEngine
  *
  * Responsibilities: simulation, scenario modeling, impact forecasting, strategy comparison.
  * Safeguard: max_simulation_runs_per_hour = 10

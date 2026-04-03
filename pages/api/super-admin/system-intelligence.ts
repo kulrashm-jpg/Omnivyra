@@ -1,3 +1,4 @@
+
 /**
  * GET /api/super-admin/system-intelligence
  *
@@ -62,10 +63,7 @@ function buildTrends(metrics: Awaited<ReturnType<typeof getSystemMetrics>>) {
         ? metrics.supabase.errors / (metrics.supabase.reads + metrics.supabase.writes)
         : null,
     },
-    firebase: {
-      verificationsPerMin: 0,
-      errorRate: null,
-    },
+    // Firebase removed: using Supabase auth exclusively
     api: {
       callsPerMin:  metrics.api?.callsPerMin  ?? 0,
       errorRate:    metrics.api?.errorRate    ?? null,

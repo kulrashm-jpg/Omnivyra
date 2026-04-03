@@ -44,7 +44,7 @@ const requirePlaybookAccess = async (
 const canManagePlaybooks = (role: Role | 'SUPER_ADMIN') =>
   role === 'SUPER_ADMIN' || role === Role.COMPANY_ADMIN;
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined);
@@ -110,5 +110,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default handler;

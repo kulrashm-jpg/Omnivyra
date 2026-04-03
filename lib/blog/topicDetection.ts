@@ -169,7 +169,13 @@ export function buildTopicClusters(
 
 // ── Content gap analysis ───────────────────────────────────────────────────────
 
-const PILLAR_TOPICS = [
+/**
+ * Platform-level default pillar topics.
+ * Used ONLY for the Super Admin public blog.
+ * Company Admin must supply company-specific pillars from company_blog_pillars table.
+ * This constant must NOT be used as a silent fallback for Company Admin.
+ */
+export const PLATFORM_DEFAULT_PILLARS: { name: string; slug: string }[] = [
   { name: 'AI Marketing Strategy',      slug: 'ai-marketing-strategy' },
   { name: 'Campaign Execution',         slug: 'campaign-execution' },
   { name: 'Content Distribution',       slug: 'content-distribution' },
@@ -194,17 +200,48 @@ export interface ContentGap {
   relatedTo: string[];
 }
 
+/**
+ * Returned by detectContentGaps().
+ *
+ * warning === 'NO_PILLAR_TOPICS_DEFINED' when the caller passed an empty
+ * pillarTopics array. In that case gaps is always [].
+ * The caller MUST surface this state to the user — do not silently ignore it.
+ */
+export type ContentGapWarning = 'NO_PILLAR_TOPICS_DEFINED';
+
+export interface ContentGapResult {
+  gaps:     ContentGap[];
+  warning?: ContentGapWarning;
+}
+
+/**
+ * Detects content gaps against a provided pillar topic list.
+ *
+ * pillarTopics must be explicitly provided by the caller:
+ *   - Super Admin:     pass PLATFORM_DEFAULT_PILLARS
+ *   - Company Admin:   pass rows from company_blog_pillars for that company
+ *
+ * If pillarTopics is empty, returns { gaps: [], warning: 'NO_PILLAR_TOPICS_DEFINED' }.
+ * The caller is responsible for communicating the empty-pillars state to the user.
+ * This function will NEVER silently substitute a default.
+ */
 export function detectContentGaps(
-  clusters:     TopicCluster[],
+  clusters:      TopicCluster[],
   existingPosts: ExistingPostMeta[],
-): ContentGap[] {
+  pillarTopics:  { name: string; slug: string }[],
+): ContentGapResult {
+  // No pillars configured → explicit warning, never a silent empty
+  if (pillarTopics.length === 0) {
+    return { gaps: [], warning: 'NO_PILLAR_TOPICS_DEFINED' };
+  }
+
   const coveredTerms = new Set(
     clusters.flatMap((c) => tokenize(c.name)),
   );
 
   const gaps: ContentGap[] = [];
 
-  for (const pillar of PILLAR_TOPICS) {
+  for (const pillar of pillarTopics) {
     const tokens = tokenize(pillar.name);
     const overlap = tokens.filter((t) => coveredTerms.has(t)).length;
     const isCovered = overlap >= Math.ceil(tokens.length * 0.5);
@@ -245,7 +282,7 @@ export function detectContentGaps(
       });
     });
 
-  return gaps.slice(0, 10);
+  return { gaps: gaps.slice(0, 10) };
 }
 
 // ── Writing recommendations ────────────────────────────────────────────────────

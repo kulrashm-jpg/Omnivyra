@@ -1,3 +1,4 @@
+
 /**
  * GET /api/companies/[id]/outcome-history?limit=<n>
  * Returns historical outcome snapshots for CPO trend display.

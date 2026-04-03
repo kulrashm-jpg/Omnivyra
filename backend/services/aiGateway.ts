@@ -71,6 +71,9 @@ const FEATURE_AREA_MAP: Record<string, string> = {
 
   // Blog Generation
   blogGeneration:                    'Blog Generation',
+
+  // Blog Optimization (Regeneration Engine)
+  blogOptimization:                  'Blog Generation',
 };
 
 type GatewayMetadata = {

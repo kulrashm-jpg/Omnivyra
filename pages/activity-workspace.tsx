@@ -693,6 +693,8 @@ export default function ActivityWorkspacePage() {
   const executionMode = String((dailyRaw?.execution_mode ?? '') as string).trim() || inferExecutionMode(contentType);
   // Show creator panel for CREATOR_REQUIRED (video/reel/short) AND CONDITIONAL_AI (carousel/image/infographic)
   const isCreatorActivity = executionMode === 'CREATOR_REQUIRED' || executionMode === 'CONDITIONAL_AI';
+  // creator_card is built by generate-weekly-structure and stored inside the dailyExecutionItem content blob
+  const creatorCard = asObject((dailyRaw as any)?.creator_card);
   const creatorAsset = asObject(dailyRaw?.creator_asset);
   const hasCreatorAsset = Boolean(
     creatorAsset &&
@@ -1975,6 +1977,74 @@ export default function ActivityWorkspacePage() {
           </div>
         ) : (
         <>
+        {isCreatorActivity ? (
+        /* ── Creator Brief ─────────────────────────────────────────────── */
+        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-gray-900">Creator Brief</h2>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 uppercase tracking-wide">
+              {contentType.charAt(0).toUpperCase() + contentType.slice(1)}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+            <div>
+              <div className="text-gray-500">Content theme</div>
+              <div className="text-gray-900">{String(creatorCard?.theme || topicText || payload.topic || payload.title || '—')}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Objective</div>
+              <div className="text-gray-900">{String(creatorCard?.objective || intent?.objective || writerBrief?.topicGoal || '—')}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Target audience</div>
+              <div className="text-gray-900">{String(creatorCard?.target_audience || writerBrief?.whoAreWeWritingFor || intent?.target_audience || '—')}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Desired action (CTA)</div>
+              <div className="text-gray-900">{String((creatorCard?.intent as any)?.cta_type || writerBrief?.desiredAction || intent?.cta_type || '—')}</div>
+            </div>
+            <div className="md:col-span-2">
+              <div className="text-gray-500">Platforms</div>
+              <div className="text-gray-900">
+                {suggestedPlatforms.length > 0 ? suggestedPlatforms.map((p) => labelize(p)).join(', ') : '—'}
+              </div>
+            </div>
+            {(creatorCard?.keywords as string[] | undefined)?.length ? (
+              <div className="md:col-span-2">
+                <div className="text-gray-500">Keywords</div>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {(creatorCard.keywords as string[]).map((k) => (
+                    <span key={k} className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">{k}</span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {(creatorCard?.hashtags as string[] | undefined)?.length ? (
+              <div className="md:col-span-2">
+                <div className="text-gray-500">Suggested hashtags</div>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {(creatorCard.hashtags as string[]).map((h) => (
+                    <span key={h} className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">{h.startsWith('#') ? h : `#${h}`}</span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {creatorCard?.instructions_for_creator && (
+            <div className="border-t border-gray-100 pt-3">
+              <div className="text-gray-500 text-sm mb-1">Instructions for creator</div>
+              <div className="text-sm text-gray-800 whitespace-pre-wrap">{String(creatorCard.instructions_for_creator)}</div>
+            </div>
+          )}
+          {!creatorCard?.instructions_for_creator && creatorCard?.summary && (
+            <div className="border-t border-gray-100 pt-3">
+              <div className="text-gray-500 text-sm mb-1">Content brief</div>
+              <div className="text-sm text-gray-800 whitespace-pre-wrap">{String(creatorCard.summary)}</div>
+            </div>
+          )}
+        </div>
+        ) : (
+        /* ── Writer Context ─────────────────────────────────────────────── */
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
           <h2 className="text-lg font-semibold text-gray-900">Writer Context</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
@@ -2018,6 +2088,7 @@ export default function ActivityWorkspacePage() {
             </div>
           )}
         </div>
+        )}
 
         {isCreatorActivity && (
           <CreatorContentPanel

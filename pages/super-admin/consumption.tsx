@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
-import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag, Server, Database, BarChart3, SlidersHorizontal } from 'lucide-react';
+import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag, Server, Database, BarChart, SlidersHorizontal } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { getAuthToken } from '../../utils/getAuthToken';
 import LLMConsumptionPanel from '../../components/super-admin/LLMConsumptionPanel';
@@ -356,7 +356,7 @@ export default function ConsumptionPage() {
             <div className="space-y-0">
               <div className="border-b border-slate-200 pb-8">
                 <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-3">
-                  <BarChart3 className="w-5 h-5 text-indigo-600" />
+                  <BarChart className="w-5 h-5 text-indigo-600" />
                   Plan Analytics
                 </h3>
                 <PlanAnalyticsPanel />

@@ -25,6 +25,7 @@ import { generateCommunityThreads } from '../services/threadEngine';
 import { captureEngagementSignals } from '../services/engagementCaptureService';
 import { generateFeedbackInsights } from '../services/feedbackIntelligenceEngine';
 import { computeThemeRelevanceForCompany } from '../services/companyTrendRelevanceEngine';
+import { runInBackgroundJobContext } from '../services/intelligenceExecutionContext';
 import {
   getGlobalConfig,
   getCompanyOverride,
@@ -506,7 +507,11 @@ export async function runEngagementCapture() {
  * Call every 6 hours (e.g. from cron).
  */
 export async function runFeedbackIntelligenceEngine() {
-  return runWithConfig('feedback_intelligence', null, () => generateFeedbackInsights());
+  return runWithConfig(
+    'feedback_intelligence',
+    null,
+    () => runInBackgroundJobContext('scheduler.feedbackIntelligence', () => generateFeedbackInsights())
+  );
 }
 
 /**

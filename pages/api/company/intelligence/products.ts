@@ -7,6 +7,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
+import { requireCompanyContext } from '../../../../backend/services/companyContextGuardService';
 import {
   getCompanyProducts,
   createProduct,
@@ -30,9 +31,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
+    const companyContext = await requireCompanyContext({ req, res, companyId: companyId.trim() });
+    if (!companyContext) return;
+
     switch (req.method) {
       case 'GET': {
-        const products = await getCompanyProducts(companyId);
+        const products = await getCompanyProducts(companyContext.companyId);
         return res.status(200).json({ products });
       }
       case 'POST': {
@@ -40,7 +44,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (!body?.product_name?.trim()) {
           return res.status(400).json({ error: 'product_name is required' });
         }
-        const product = await createProduct(companyId, body.product_name);
+        const product = await createProduct(companyContext.companyId, body.product_name);
         return res.status(201).json({ product });
       }
       case 'PUT': {

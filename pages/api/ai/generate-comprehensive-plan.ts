@@ -107,5 +107,3 @@ async function generateComprehensivePlan(params: any) {
     weeklyPlans: enhancedPlans
   };
 }
-
-

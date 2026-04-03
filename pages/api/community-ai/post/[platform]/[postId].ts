@@ -50,4 +50,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     execution_links: omnivyra.execution_links,
   });
 }
-

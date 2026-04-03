@@ -1,3 +1,4 @@
+
 /**
  * POST /api/campaigns/validate-frequency
  * Validates campaign frequency during configuration (early validation).

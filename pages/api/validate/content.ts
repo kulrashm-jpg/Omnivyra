@@ -1,3 +1,4 @@
+
 // API Endpoint for Content Validation
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getPlatformRules } from '@/backend/services/platformIntelligenceService';
@@ -79,26 +80,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

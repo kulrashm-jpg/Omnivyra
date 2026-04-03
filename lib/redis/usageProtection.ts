@@ -1,5 +1,6 @@
 /**
  * Redis usage protection — three-tier graceful degradation.
+ * 🔒 NODE RUNTIME ONLY — enforced at module load
  *
  * Monitors two independent usage axes every 60 s and uses the higher of the
  * two to set the protection level:
@@ -44,13 +45,18 @@
  *
  * Env vars:
  *   REDIS_MAX_BYTES                — fallback maxmemory (bytes); default 256 MB
- *   UPSTASH_DAILY_REQUEST_LIMIT    — daily command cap; default 10 000 (free tier)
+ *   UPSTASH_DAILY_REQUEST_LIMIT    — daily command cap; default 25 000
  *   REDIS_OVERFLOW_CAP_PER_QUEUE   — max buffered jobs per queue; default 200
  */
+
+// 🔴 ENFORCE: This module requires Node.js runtime
+import { enforceNodeRuntime } from '@/lib/runtime/guard';
+enforceNodeRuntime('lib/redis/usageProtection');
 
 import IORedis from 'ioredis';
 import * as fs from 'fs';
 import * as path from 'path';
+import { recordPollingMetricsUpdate } from '@/lib/redis/healthMetrics';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -282,12 +288,34 @@ async function loadDailyBaseline(redis: IORedis, totalNow: number): Promise<numb
   }
 }
 
-// Overflow buffer
-const OVERFLOW_CAP = parseInt(process.env.REDIS_OVERFLOW_CAP_PER_QUEUE ?? '200', 10);
+// Overflow buffer - Use lazy initialization to avoid circular dependencies
+let _OVERFLOW_CAP: number | undefined;
+function getOverflowCap(): number {
+  if (_OVERFLOW_CAP === undefined) {
+    try {
+      const { config } = require('@/config');
+      _OVERFLOW_CAP = parseInt(config.REDIS_OVERFLOW_CAP_PER_QUEUE ?? '200', 10);
+    } catch {
+      _OVERFLOW_CAP = 200; // fallback
+    }
+  }
+  return _OVERFLOW_CAP;
+}
+
 const _overflow    = new Map<string, OverflowEntry[]>();
 const _drainCbs    = new Map<string, DrainCallback>();
 
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
+
+// ── POLLING HEALTH METRICS (NEW) ───────────────────────────────────────────
+// Track polling success/failure for diagnostics
+let _pollSuccessCount     = 0;        // successful polls
+let _pollFailureCount     = 0;        // failed polls (after max retries)
+let _consecutiveFailures  = 0;        // consecutive failures (resets on success)
+let _lastSuccessfulPoll   = new Date(0).toISOString();  // ISO timestamp of last successful poll
+let _lastErrorMessage     = '';       // most recent error (for debugging)
+let _lastErrorLoggedAt    = 0;        // timestamp of last logged error (prevents spam)
+const POLL_ERROR_LOG_COOLDOWN_MS = 60_000;  // rate limit: log max once per minute
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -363,12 +391,12 @@ export function storeOverflow(queueName: string, entry: OverflowEntry): boolean 
     buf = [];
     _overflow.set(queueName, buf);
   }
-  if (buf.length >= OVERFLOW_CAP) {
+  if (buf.length >= getOverflowCap()) {
     console.error(JSON.stringify({
       level:  'ERROR',
       event:  'queue_overflow_buffer_full',
       queue:  queueName,
-      cap:    OVERFLOW_CAP,
+      cap:    getOverflowCap(),
       job:    entry.name,
       reason: 'overflow_cap_reached_job_dropped',
     }));
@@ -517,14 +545,51 @@ function logTransition(prev: UsageLevel, next: UsageLevel): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Core poll
+// Core poll with retry logic
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function poll(getRedis: () => IORedis): Promise<void> {
+/**
+ * Attempt a single poll with retry logic and exponential backoff.
+ * - Max 3 retries on connection errors
+ * - Exponential backoff: 50ms, 100ms, 200ms
+ * - Tracks polling health metrics for diagnostics
+ * - Never tries to reconnect terminal state (end) — uses safe factory
+ */
+async function pollWithRetry(getRedis: () => IORedis, attempt: number = 0): Promise<void> {
+  const MAX_RETRIES = 3;
+  const BASE_BACKOFF_MS = 50;
+
   let redis: IORedis;
   try { redis = getRedis(); } catch { return; }
 
   try {
+    // Check connection state before polling
+    // States: 'ready' (✅ OK), 'connecting'/'reconnecting' (⏳ wait), 'close' (🔄 auto-reconnect), 'end' (⚠️ recreate)
+    const status = (redis as any).status;
+    
+    // Terminal state check - if we reach here with 'end', something went wrong
+    // The safe factory should have caught this, but be defensive
+    if (status === 'end') {
+      // Import here to avoid circular dependency
+      const { getRedisClient } = require('./client');
+      const freshClient = getRedisClient();
+      console.warn('[redis.usageProtection] Got fresh client after terminal state detected', {
+        previousStatus: status,
+        newStatus: (freshClient as any).status,
+      });
+      redis = freshClient;
+    }
+
+    // Do not poll if connection is not ready or pending connection
+    const newStatus = (redis as any).status;
+    if (newStatus !== 'ready' && newStatus !== 'connecting' && newStatus !== 'reconnecting') {
+      // 'close' state will auto-reconnect, so skip this poll but don't error
+      if (newStatus === 'close') {
+        return; // Silently skip, next poll will retry
+      }
+      throw new Error(`Connection not ready: status=${newStatus}`);
+    }
+
     // Refresh admin-configured infra limits (single GET, low overhead)
     try {
       const raw = await redis.get('omnivyra:admin:config:infra_limits');
@@ -594,10 +659,88 @@ async function poll(getRedis: () => IORedis): Promise<void> {
       _notifiedAt = Date.now();
       await writeAdminAlert(redis, false);
     }
+
+    // Mark as initialized and increase success counter
     _initialized = true;   // BUG#3 fix: mark that at least one poll completed
+    _pollSuccessCount++;
+    _consecutiveFailures = 0;  // Reset failure counter on success
+    _lastSuccessfulPoll = new Date().toISOString();
+    _lastErrorMessage = '';  // clear error state on success
+
+    // Record metrics update for monitoring freshness tracking
+    recordPollingMetricsUpdate();
+
+    // Structured logging for polling success
+    console.log(JSON.stringify({
+      level: 'INFO',
+      event: 'redis_poll_success',
+      timestamp: new Date().toISOString(),
+      successRate: _pollSuccessCount > 0 ? ((_pollSuccessCount / (_pollSuccessCount + _pollFailureCount)) * 100).toFixed(2) : '0.00',
+      totalPolls: _pollSuccessCount + _pollFailureCount,
+      usageLevel: _level,
+      memoryPct: _memory.usagePct,
+      requestsPct: _requests.usagePct,
+    }));
+
   } catch (err) {
-    console.warn('[redis][usageProtection] poll error:', (err as Error)?.message);
+    const errorMsg = (err as Error)?.message ?? String(err);
+    _lastErrorMessage = errorMsg;
+
+    // TERMINAL STATE: Do not retry, let factory handle it
+    const isTerminalState = errorMsg.includes('status=end');
+    if (isTerminalState) {
+      _pollFailureCount++;
+      _consecutiveFailures++;
+      console.error('[redis.usageProtection] Terminal state detected (client end), polling skipped', {
+        timestamp: new Date().toISOString(),
+        error: errorMsg,
+      });
+      return; // Don't retry terminal state, exit gracefully
+    }
+
+    // Retry logic for transient connection errors
+    const isTransientConnectionError = errorMsg.includes('Connection') ||
+                               errorMsg.includes('ECONNREFUSED') ||
+                               errorMsg.includes('ECONNRESET') ||
+                               errorMsg.includes('closed') ||
+                               errorMsg.includes('not ready');
+
+    if (isTransientConnectionError && attempt < MAX_RETRIES) {
+      // Exponential backoff: 50ms, 100ms, 200ms
+      const backoffMs = BASE_BACKOFF_MS * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      // Retry the poll
+      return pollWithRetry(getRedis, attempt + 1);
+    }
+
+    // After max retries or non-connection error, record failure
+    _pollFailureCount++;
+    _consecutiveFailures++;
+
+    // Rate-limit error logging to prevent spam
+    const now = Date.now();
+    if (now - _lastErrorLoggedAt > POLL_ERROR_LOG_COOLDOWN_MS) {
+      _lastErrorLoggedAt = now;
+      console.warn('[redis.usageProtection] poll error: ' + errorMsg + ' (attempt ' + (attempt + 1) + '/' + 3 + ')');
+      
+      // Structured logging for polling failures
+      console.warn(JSON.stringify({
+        level: 'WARN',
+        event: 'redis_poll_failure',
+        timestamp: new Date().toISOString(),
+        error: errorMsg,
+        attempt: attempt + 1,
+        maxAttempts: 3,
+        consecutiveFailures: _consecutiveFailures,
+        totalFailures: _pollFailureCount,
+        successRate: _pollSuccessCount > 0 ? ((_pollSuccessCount / (_pollSuccessCount + _pollFailureCount)) * 100).toFixed(2) : '0.00',
+      }));
+    }
   }
+}
+
+async function poll(getRedis: () => IORedis): Promise<void> {
+  return pollWithRetry(getRedis, 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -673,6 +816,25 @@ export function getUsageLevel(): UsageLevel {
 }
 
 /**
+ * Get polling health metrics for diagnostics and monitoring.
+ * Tracks polling success/failure rates, last successful poll, and recent errors.
+ */
+export function getPollingHealthMetrics() {
+  const totalPolls = _pollSuccessCount + _pollFailureCount;
+  return {
+    pollsSucceeded:       _pollSuccessCount,
+    pollsFailed:          _pollFailureCount,
+    totalPolls,
+    successRate:          totalPolls > 0 ? Math.round((_pollSuccessCount / totalPolls) * 10_000) / 100 : 0,  // percentage
+    consecutiveFailures:  _consecutiveFailures,
+    lastSuccessfulPoll:   _lastSuccessfulPoll,
+    lastErrorMessage:     _lastErrorMessage,
+    lastErrorLoggedAt:    new Date(_lastErrorLoggedAt).toISOString(),
+    errorLogCooldownMs:   POLL_ERROR_LOG_COOLDOWN_MS,
+  };
+}
+
+/**
  * Returns false when the queue should be blocked due to Redis pressure.
  * Critical queues (posting, publish) are never blocked.
  */
@@ -741,16 +903,23 @@ export function isCronJobAllowedByUsage(
  * BUG#1+#25 fix: Returns a promise that resolves after the FIRST poll completes
  * so callers can await it before enqueuing jobs. Poll interval reduced from
  * 60 s → 15 s so the protection level goes stale for at most 15 s instead of 60 s.
+ *
+ * POLLING STABILITY FIX:
+ * - Only ONE polling interval is created (idempotent check prevents duplicates)
+ * - Connection state is checked before each poll attempt
+ * - Retry logic with exponential backoff for transient connection errors
+ * - Error logging is rate-limited (max once per minute) to prevent spam
+ * - Polling health metrics are tracked for diagnostics
  */
 export function startUsageProtection(getRedis: () => IORedis): Promise<void> {
-  if (_pollTimer) return Promise.resolve();  // already running
+  if (_pollTimer) return Promise.resolve();  // already running — IDEMPOTENT
 
   // BUG#24 fix: warn loudly at startup if critical env vars are missing so
   // operators don't rely on wrong defaults that cause premature throttling.
   if (!process.env.REDIS_MAX_BYTES && !process.env.UPSTASH_DAILY_REQUEST_LIMIT) {
     process.stderr.write(
       `⚠️  [redis][usageProtection] Neither REDIS_MAX_BYTES nor UPSTASH_DAILY_REQUEST_LIMIT\n` +
-      `   is set. Using defaults: 256 MB memory cap, 500,000 commands/day.\n` +
+      `   is set. Using defaults: 256 MB memory cap, 25,000 commands/day.\n` +
       `   Set these in .env to match your actual Redis tier.\n`,
     );
   } else if (!process.env.REDIS_MAX_BYTES) {
@@ -762,9 +931,10 @@ export function startUsageProtection(getRedis: () => IORedis): Promise<void> {
 
   const firstPoll = poll(getRedis);   // awaitable first poll
 
+  // Single polling timer with retry logic inside poll()
   _pollTimer = setInterval(() => {
-    poll(getRedis).catch(() => {});
-  }, 15_000);   // BUG#25 fix: was 60 s — stale window now ≤15 s
+    poll(getRedis).catch(() => {});  // poll() handles all errors internally
+  }, 300_000);  // 5 min interval — INFO every 5 min = ~864 cmds/day (well within 10k daily limit)
 
   if (typeof _pollTimer.unref === 'function') _pollTimer.unref();
 
@@ -772,7 +942,10 @@ export function startUsageProtection(getRedis: () => IORedis): Promise<void> {
 }
 
 export function stopUsageProtection(): void {
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+  if (_pollTimer) {
+    clearInterval(_pollTimer);
+    _pollTimer = null;
+  }
 }
 
 /**

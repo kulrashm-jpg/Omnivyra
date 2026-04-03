@@ -6,11 +6,12 @@
 import { Worker, Job } from 'bullmq';
 import { ingestSignals } from '../services/intelligenceIngestionModule';
 import type { IntelligencePollingJobPayload } from '../queue/intelligencePollingQueue';
+import { config } from '@/config';
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
-const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
-const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
+const REDIS_URL = config.REDIS_URL;
+const REDIS_HOST = config.REDIS_HOST;
+const REDIS_PORT = config.REDIS_PORT;
+const REDIS_PASSWORD = config.REDIS_PASSWORD;
 
 function getConnection() {
   if (REDIS_URL && REDIS_URL.includes('://')) {
@@ -98,6 +99,8 @@ export function getIntelligencePollingWorker(): Worker {
         max: 10,
         duration: 60_000,
       },
+      drainDelay: 300,
+      stalledInterval: 1_800_000,
     }
   );
 

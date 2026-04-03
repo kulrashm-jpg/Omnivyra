@@ -1,3 +1,4 @@
+
 /**
  * GET /api/auth/check-domain?domain=example.com
  *

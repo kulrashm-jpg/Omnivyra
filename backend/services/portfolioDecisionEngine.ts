@@ -16,6 +16,8 @@ import { evaluateCampaignDecision } from './campaignDecisionEngine';
 import { getAutonomousSettings } from './autonomousCampaignAgent';
 import { logDecision } from './autonomousDecisionLogger';
 import { deductCreditsAwaited as deductCredits } from './creditExecutionService';
+import { archiveDecisionScope, createDecisionObjects, type PersistedDecisionObject } from './decisionObjectService';
+import { loadNormalizedPortfolioInputs } from './normalizePortfolioInputsService';
 import type { RiskTolerance } from './autonomousCampaignAgent';
 
 export type CampaignPortfolioItem = {
@@ -65,16 +67,15 @@ const RISK_ALLOCATION_WEIGHTS: Record<RiskTolerance, { top: number; mid: number;
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function evaluatePortfolioDecision(companyId: string): Promise<PortfolioDecision | null> {
-  // Load all active campaigns
-  const { data: activeCampaigns } = await supabase
-    .from('campaigns')
-    .select('id, name')
-    .eq('company_id', companyId)
-    .in('status', ['active', 'scheduled', 'execution_ready', 'twelve_week_plan']);
-
-  if (!activeCampaigns?.length || activeCampaigns.length < 2) {
-    return null; // Portfolio decisions need ≥ 2 campaigns
+  const normalizedCampaigns = await loadNormalizedPortfolioInputs(companyId);
+  if (!normalizedCampaigns?.length || normalizedCampaigns.length < 2) {
+    return null; // Portfolio decisions need >= 2 campaigns
   }
+
+  const activeCampaigns = normalizedCampaigns.map((row) => ({
+    id: row.campaign_id,
+    name: row.campaign_name,
+  }));
 
   const settings = await getAutonomousSettings(companyId);
   const riskMode: RiskTolerance = settings?.risk_tolerance ?? 'balanced';
@@ -196,4 +197,112 @@ export async function evaluatePortfolioDecision(companyId: string): Promise<Port
     total_budget_label: 'See individual campaign ad recommendations',
     risk_mode:          riskMode,
   };
+}
+
+export async function generatePortfolioDecisionObjects(companyId: string): Promise<PersistedDecisionObject[]> {
+  await archiveDecisionScope({
+    company_id: companyId,
+    report_tier: 'growth',
+    source_service: 'portfolioDecisionEngine',
+    entity_type: 'global',
+    entity_id: null,
+    changed_by: 'system',
+  });
+
+  const decision = await evaluatePortfolioDecision(companyId);
+  if (!decision) return [];
+
+  const topAllocation = decision.budget_allocations[0];
+  const pauseCount = decision.rebalance_actions.filter((action) => action.action_type === 'pause_campaign').length;
+
+  const drafts = [
+    {
+      company_id: companyId,
+      report_tier: 'growth' as const,
+      source_service: 'portfolioDecisionEngine',
+      entity_type: 'global' as const,
+      entity_id: null,
+      issue_type: 'roi_inefficiency',
+      title: 'Portfolio ROI efficiency can be improved through rebalancing',
+      description: 'Current campaign mix can increase return by shifting allocation to stronger performers.',
+      evidence: {
+        risk_mode: decision.risk_mode,
+        top_allocation: topAllocation,
+        campaign_count: decision.campaigns.length,
+      },
+      impact_traffic: 24,
+      impact_conversion: 52,
+      impact_revenue: 58,
+      priority_score: 66,
+      effort_score: 26,
+      confidence_score: 0.8,
+      recommendation: 'Reallocate budget toward top-ranked performers while reducing low-performing spend.',
+      action_type: 'adjust_strategy',
+      action_payload: {
+        optimization_focus: 'roi_inefficiency',
+      },
+      status: 'open' as const,
+      last_changed_by: 'system' as const,
+    },
+    {
+      company_id: companyId,
+      report_tier: 'growth' as const,
+      source_service: 'portfolioDecisionEngine',
+      entity_type: 'global' as const,
+      entity_id: null,
+      issue_type: 'allocation_gap',
+      title: 'Campaign allocation concentration differs from performance hierarchy',
+      description: 'Portfolio weighting does not fully match measured campaign rank and engagement quality.',
+      evidence: {
+        budget_allocations: decision.budget_allocations,
+        campaign_ranks: decision.campaigns.map((campaign) => ({
+          campaign_id: campaign.campaign_id,
+          rank: campaign.performance_rank,
+          engagement_rate: campaign.engagement_rate,
+        })),
+      },
+      impact_traffic: 18,
+      impact_conversion: 48,
+      impact_revenue: 54,
+      priority_score: 63,
+      effort_score: 22,
+      confidence_score: 0.78,
+      recommendation: 'Align allocation model to performance rank and update quarterly guardrails.',
+      action_type: 'adjust_strategy',
+      action_payload: {
+        optimization_focus: 'allocation_gap',
+      },
+      status: 'open' as const,
+      last_changed_by: 'system' as const,
+    },
+    {
+      company_id: companyId,
+      report_tier: 'growth' as const,
+      source_service: 'portfolioDecisionEngine',
+      entity_type: 'global' as const,
+      entity_id: null,
+      issue_type: 'spend_misalignment',
+      title: 'Spend posture is misaligned with execution risk profile',
+      description: 'Pause and reduce actions indicate current spending exceeds execution quality for parts of the portfolio.',
+      evidence: {
+        rebalance_actions: decision.rebalance_actions,
+        pause_count: pauseCount,
+      },
+      impact_traffic: 14,
+      impact_conversion: 44,
+      impact_revenue: 50,
+      priority_score: Math.max(52, Math.min(82, 58 + pauseCount * 5)),
+      effort_score: 20,
+      confidence_score: 0.76,
+      recommendation: 'Constrain spend in campaigns with execution risk until reliability recovers.',
+      action_type: 'adjust_strategy',
+      action_payload: {
+        optimization_focus: 'spend_misalignment',
+      },
+      status: 'open' as const,
+      last_changed_by: 'system' as const,
+    },
+  ];
+
+  return createDecisionObjects(drafts);
 }

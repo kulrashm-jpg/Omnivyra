@@ -1,3 +1,4 @@
+
 /**
  * Link Media to Post API
  * POST /api/media/link
@@ -34,4 +35,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-

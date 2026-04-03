@@ -31,3 +31,4 @@ export {
   PLATFORM_VARIANTS_SYSTEM,
   getContentBlueprintPromptWithFingerprint,
 } from './contentGeneration.prompt';
+export { CONTENT_TYPE_SYSTEM_PROMPTS } from './contentGenerationPromptsV3';

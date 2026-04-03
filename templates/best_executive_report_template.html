@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Best Executive Report</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    :root { --bg:#eef2ff; --paper:#fff; --ink:#111827; --muted:#667085; --line:#dbe4f0; --navy:#111c44; --blue:#3b82f6; --blue-soft:#eff6ff; --mint:#ecfdf5; }
+    body { font-family:"Trebuchet MS",Arial,sans-serif; background:linear-gradient(180deg,#f7f9ff 0%,var(--bg) 100%); color:var(--ink); padding:24px; max-width:1020px; margin:0 auto; line-height:1.5; }
+    h1,h2,h3,p,li,span,div { word-break:normal; overflow-wrap:break-word; hyphens:none; }
+    .report { background:var(--paper); border-radius:28px; overflow:hidden; border:1px solid var(--line); box-shadow:0 20px 50px rgba(17,24,39,.08); }
+    .hero { background:linear-gradient(135deg,var(--navy) 0%,#1f3a8a 100%); color:#fff; padding:34px; }
+    .hero-top { display:flex; justify-content:space-between; gap:18px; align-items:start; margin-bottom:24px; }
+    .hero-kicker { font-size:12px; letter-spacing:.14em; text-transform:uppercase; font-weight:800; color:#bfdbfe; margin-bottom:12px; }
+    .hero h1 { font-size:36px; line-height:1.08; margin-bottom:10px; max-width:14ch; }
+    .hero p { color:#dbeafe; max-width:52ch; font-size:15px; }
+    .hero-score { min-width:180px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); border-radius:22px; padding:20px; text-align:center; }
+    .hero-score strong { display:block; font-size:64px; line-height:1; margin-bottom:8px; }
+    .hero-score span { color:#cbd5e1; font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+    .hero-meta { display:flex; flex-wrap:wrap; gap:10px; }
+    .hero-meta span { padding:8px 12px; border-radius:999px; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.14); color:#dbeafe; font-size:12px; font-weight:700; }
+    .section { padding:28px 34px; border-bottom:1px solid var(--line); }
+    .section:last-child { border-bottom:0; }
+    .section h2 { font-size:22px; margin-bottom:16px; }
+    .executive-strip { background:var(--blue-soft); border-left:4px solid var(--blue); border-radius:16px; padding:18px 20px; max-width:64ch; }
+    .executive-strip p { color:#1d4ed8; font-size:15px; }
+    .dashboard { display:grid; grid-template-columns:1.1fr .9fr; gap:16px; }
+    .visual-card,.insight-card,.priority-grid article { background:#fff; border:1px solid var(--line); border-radius:18px; padding:18px; }
+    .visual-stage { height:250px; border-radius:14px; border:1px dashed #93c5fd; background:radial-gradient(circle at 20% 20%,rgba(59,130,246,.14),transparent 22%),linear-gradient(180deg,#f8fbff 0%,#fff 100%); margin-bottom:12px; position:relative; }
+    .visual-stage::after { content:"{{visual_title}}"; position:absolute; top:14px; left:14px; color:#1d4ed8; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.08em; }
+    .insight-list,.priority-list { list-style:none; display:grid; gap:12px; }
+    .insight-list li,.priority-list li { background:#f8fafc; border-radius:14px; padding:14px 16px; }
+    .insight-list strong,.priority-list strong { display:block; font-size:14px; margin-bottom:6px; }
+    .insight-list span,.priority-list span,.visual-card p,.closing p { color:var(--muted); font-size:13px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+    .priority-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+    .priority-grid article { background:linear-gradient(180deg,#fff 0%,#f8fafc 100%); }
+    .priority-grid em { display:inline-flex; width:36px; height:36px; border-radius:50%; background:var(--navy); color:#fff; align-items:center; justify-content:center; font-style:normal; font-weight:800; margin-bottom:12px; }
+    .closing { background:var(--mint); border-radius:18px; padding:22px; display:flex; justify-content:space-between; align-items:center; gap:18px; }
+    .closing p { color:#166534; margin-top:8px; max-width:50ch; }
+    .closing strong { background:#166534; color:#fff; border-radius:999px; padding:11px 16px; white-space:nowrap; }
+    @media (max-width:860px) { body{padding:12px;} .hero-top,.dashboard,.priority-grid{display:block;} .hero-score,.insight-card,.priority-grid article{margin-top:16px;} .closing{flex-direction:column; align-items:flex-start;} }
+  </style>
+</head>
+<body>
+  <div class="report">
+    <section class="hero">
+      <div class="hero-top">
+        <div><div class="hero-kicker">Best / Executive</div><h1>{{company_name}} Executive Report</h1><p>{{executive_summary}}</p></div>
+        <div class="hero-score"><strong>{{overall_score}}</strong><span>Executive Score</span></div>
+      </div>
+      <div class="hero-meta"><span>{{website_url}}</span><span>{{report_date}}</span><span>{{primary_focus}}</span></div>
+    </section>
+    <section class="section"><h2>Executive Readout</h2><div class="executive-strip"><p>{{score_summary}}</p></div></section>
+    <section class="section">
+      <h2>Evidence</h2>
+      <div class="dashboard">
+        <article class="visual-card"><div class="visual-stage"></div><p>{{visual_summary}}</p></article>
+        <article class="insight-card"><ul class="insight-list"><li><strong>{{insight_title_1}}</strong><span>{{insight_text_1}}</span></li><li><strong>{{insight_title_2}}</strong><span>{{insight_text_2}}</span></li><li><strong>{{insight_title_3}}</strong><span>{{insight_text_3}}</span></li></ul></article>
+      </div>
+    </section>
+    <section class="section">
+      <h2>Executive Priorities</h2>
+      <div class="priority-grid">
+        <article><em>1</em><ul class="priority-list"><li><strong>{{action_1_title}}</strong><span>{{action_1_text}}</span></li></ul></article>
+        <article><em>2</em><ul class="priority-list"><li><strong>{{action_2_title}}</strong><span>{{action_2_text}}</span></li></ul></article>
+        <article><em>3</em><ul class="priority-list"><li><strong>{{action_3_title}}</strong><span>{{action_3_text}}</span></li></ul></article>
+      </div>
+    </section>
+    <section class="section"><div class="closing"><div><h2>{{cta_title}}</h2><p>{{cta_text}}</p></div><strong>{{cta_label}}</strong></div></section>
+  </div>
+</body>
+</html>

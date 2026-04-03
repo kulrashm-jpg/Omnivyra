@@ -1,0 +1,408 @@
+# Redis Infrastructure Monitoring - Prometheus Alert Rules
+# Generated: March 28, 2026
+# Priority: CRITICAL - Prevents silent Redis failures
+
+# Load this file into Prometheus:
+# Copy to: /etc/prometheus/rules/redis-infra-alerts.yml
+# Then add to prometheus.yml:
+#   rule_files:
+#     - "rules/redis-infra-alerts.yml"
+
+---
+
+groups:
+  - name: redis_infra_health
+    interval: 30s
+    rules:
+      
+      # ──────────────────────────────────────────────────────────────────────
+      # PRIORITY 1: MEMORY PRESSURE ALERTS
+      # ──────────────────────────────────────────────────────────────────────
+
+      - alert: RedisMemoryUsageWarning
+        expr: |
+          (redis_memory_used_bytes / redis_memory_limit_bytes) > 0.70
+        for: 2m
+        labels:
+          severity: warning
+          component: redis
+          category: memory
+        annotations:
+          summary: "Redis memory usage at {{ $value | humanizePercentage }}"
+          description: |
+            Redis memory usage is {{ $value | humanizePercentage }}.
+            At current rate, will hit 80% in ~5-10 minutes.
+            
+            ACTION:
+            1. Check redis-cli INFO memory
+            2. Look for large key patterns
+            3. Consider evicting old keys or increasing memory limit
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-MEMORY-PRESSURE
+
+      - alert: RedisMemoryUsageHigh
+        expr: |
+          (redis_memory_used_bytes / redis_memory_limit_bytes) > 0.80
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+          category: memory
+        annotations:
+          summary: "Redis memory high at {{ $value | humanizePercentage }}"
+          description: |
+            Redis memory usage at {{ $value | humanizePercentage }}.
+            High risk of OOM and data eviction.
+            
+            ACTION (IMMEDIATE):
+            1. Page SRE on-call
+            2. Check for memory leak or key accumulation
+            3. Clear old keys or restart Redis
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-MEMORY-PRESSURE
+
+      - alert: RedisMemoryFull
+        expr: |
+          (redis_memory_used_bytes / redis_memory_limit_bytes) > 0.95
+        for: 30s
+        labels:
+          severity: critical
+          component: redis
+          category: memory
+          pagerduty: immediate
+        annotations:
+          summary: "Redis CRITICAL - Memory nearly full ({{ $value | humanizePercentage }})"
+          description: |
+            Redis memory is {{ $value | humanizePercentage }} FULL.
+            System at imminent risk of OOM.
+            Data eviction likely happening NOW.
+            
+            ACTION (EMERGENCY):
+            1. IMMEDIATE: Page on-call SRE
+            2. Consider emergency restart
+            3. Check circuit breaker status
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-OOM-EMERGENCY
+
+      - alert: RedisEvictionDetected
+        expr: |
+          rate(redis_evicted_keys_total[5m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+          category: data_loss
+        annotations:
+          summary: "Redis evicting keys at {{ $value }}/sec (DATA LOSS)"
+          description: |
+            Redis is evicting {{ $value }} keys/sec due to memory pressure.
+            This means data is being LOST silently.
+            
+            Affected features:
+            - Rate limiter tokens may disappear mid-request
+            - Queue keys may be evicted
+            - Credit entries may be lost
+            
+            ACTION (IMMEDIATE):
+            1. Page SRE on-call
+            2. Investigate what keys are being evicted
+            3. Either increase memory or clear old data
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-EVICTION
+
+      - alert: RedisExpiredKeysHigh
+        expr: |
+          rate(redis_expired_keys_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+          component: redis
+          category: memory
+        annotations:
+          summary: "Redis expiring {{ $value }}/sec keys (high TTL churn)"
+          description: |
+            Redis is expiring {{ $value }} keys/sec.
+            High churn rate may indicate memory cleanup working overtime.
+            Monitor for sustained high eviction.
+
+      # ──────────────────────────────────────────────────────────────────────
+      # PRIORITY 2: CONNECTION POOL ALERTS
+      # ──────────────────────────────────────────────────────────────────────
+
+      - alert: RedisConnectionPoolWarning
+        expr: |
+          (redis_connected_clients / redis_maxclients) > 0.70
+        for: 5m
+        labels:
+          severity: warning
+          component: redis
+          category: connections
+        annotations:
+          summary: "Redis connection pool {{ $value | humanizePercentage }} utilized"
+          description: |
+            Redis connection pool is {{ $value | humanizePercentage }} full.
+            Approaching capacity limit.
+            
+            Current connections: {{ $value }}
+            Max connections: {{ limit }}
+            
+            ACTION:
+            1. Check for connection leaks in applicaton
+            2. Review pool sizing settings
+            3. Consider increasing maxclients if load is normal
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-CONNECTIONS
+
+      - alert: RedisConnectionPoolHigh
+        expr: |
+          (redis_connected_clients / redis_maxclients) > 0.85
+        for: 3m
+        labels:
+          severity: critical
+          component: redis
+          category: connections
+        annotations:
+          summary: "Redis connection pool HIGH at {{ $value | humanizePercentage }}"
+          description: |
+            Redis connection pool at {{ $value | humanizePercentage }}.
+            Very little headroom remaining.
+            
+            ACTION (URGENT):
+            1. Page SRE
+            2. Investigate connection leak in code
+            3. May need to restart applications to close leaked connections
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-CONNECTIONS
+
+      - alert: RedisConnectionPoolExhausted
+        expr: |
+          (redis_connected_clients / redis_maxclients) > 0.95
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+          category: connections
+          pagerduty: immediate
+        annotations:
+          summary: "Redis connection pool EXHAUSTED ({{ $value | humanizePercentage }})"
+          description: |
+            Redis connection pool is EXHAUSTED.
+            New requests will be blocked waiting for available connection.
+            
+            ACTION (EMERGENCY):
+            1. IMMEDIATE: Page on-call SRE
+            2. Consider circuit breaker activation
+            3. Force close idle connections if possible
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-CONNECTION-EXHAUSTED
+
+      # ──────────────────────────────────────────────────────────────────────
+      # PRIORITY 3: COMMAND ERROR ALERTS
+      # ──────────────────────────────────────────────────────────────────────
+
+      - alert: RedisCommandErrorsWarning
+        expr: |
+          (rate(redis_command_errors_total[5m]) / rate(redis_commands_total[5m])) > 0.01
+        for: 3m
+        labels:
+          severity: warning
+          component: redis
+          category: errors
+        annotations:
+          summary: "Redis command error rate at {{ $value | humanizePercentage }}"
+          description: |
+            Redis command error rate is {{ $value | humanizePercentage }}.
+            
+            This means {{ $value | humanizePercentage }} of commands are failing.
+            Common causes:
+            - Connection issues
+            - Memory pressure (OOM errors)
+            - Authentication problems
+            - Timeout errors
+            
+            ACTION:
+            1. Check error logs for specific error types
+            2. Verify Redis is responding normally
+            3. Check network connectivity
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-COMMAND-ERRORS
+
+      - alert: RedisCommandErrorsCritical
+        expr: |
+          (rate(redis_command_errors_total[5m]) / rate(redis_commands_total[5m])) > 0.03
+        for: 2m
+        labels:
+          severity: critical
+          component: redis
+          category: errors
+        annotations:
+          summary: "Redis command ERROR RATE CRITICAL: {{ $value | humanizePercentage }}"
+          description: |
+            Redis command error rate at {{ $value | humanizePercentage }}.
+            More than 3% of commands are failing.
+            
+            This indicates a serious Redis problem:
+            - Rate limiter may not be working correctly
+            - Credit checks may fail
+            - Queue operations may timeout
+            
+            ACTION (URGENT):
+            1. Page SRE immediately
+            2. Check redis-cli COMMAND to see what's failing
+            3. May need to restart Redis
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-COMMAND-ERRORS
+
+      - alert: RedisAuthenticationFailures
+        expr: |
+          increase(redis_command_errors_total{error_type="AUTH"}[5m]) > 10
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+          category: auth
+        annotations:
+          summary: "Redis authentication failures: {{ $value }} in 5m"
+          description: |
+            Redis is rejecting {{ $value }} authentication attempts.
+            
+            Possible causes:
+            - Credentials rotated but not updated in config
+            - Redis password changed
+            - Wrong credentials in environment variables
+            
+            ACTION (IMMEDIATE):
+            1. Page SRE
+            2. Verify REDIS_URL credentials
+            3. Check Redis password configuration
+            4. If credentials recently changed, may need to redeploy
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-AUTH-FAILURE
+
+      - alert: RedisTimeoutErrors
+        expr: |
+          increase(redis_command_errors_total{error_type="TIMEOUT"}[5m]) > 20
+        for: 2m
+        labels:
+          severity: warning
+          component: redis
+          category: latency
+        annotations:
+          summary: "Redis timeout errors: {{ $value }} in 5m"
+          description: |
+            {{ $value }} commands timed out in last 5 minutes.
+            
+            This indicates:
+            - Redis is slow responding
+            - Network latency to Redis is high
+            - Redis may be overloaded
+            
+            ACTION:
+            1. Check Redis latency (redis-cli --latency)
+            2. Monitor memory and CPU usage
+            3. Consider increasing timeout settings if transient
+
+      - alert: RedisNetworkErrors
+        expr: |
+          increase(redis_command_errors_total{error_type="NETWORK"}[5m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+          category: network
+        annotations:
+          summary: "Redis network errors: {{ $value }} in 5m"
+          description: |
+            {{ $value }} network errors connecting to Redis.
+            
+            Could indicate:
+            - Redis server is down
+            - Network connectivity issue
+            - Firewall blocking connection
+            - Application deployed to wrong region
+            
+            ACTION (URGENT):
+            1. Page SRE
+            2. Verify redis-cli can connect
+            3. Check network connectivity
+            4. Check Redis server status
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-NETWORK-ERROR
+
+      # ──────────────────────────────────────────────────────────────────────
+      # COMPOSITE ALERTS (Multi-Metric)
+      # ──────────────────────────────────────────────────────────────────────
+
+      - alert: RedisSystemUnderStress
+        expr: |
+          (
+            (redis_memory_used_bytes / redis_memory_limit_bytes) > 0.75
+            AND
+            (redis_connected_clients / redis_maxclients) > 0.75
+            AND
+            (rate(redis_command_errors_total[5m]) / rate(redis_commands_total[5m])) > 0.01
+          )
+        for: 3m
+        labels:
+          severity: critical
+          component: redis
+          category: system_health
+        annotations:
+          summary: "Redis system under HIGH STRESS (memory+connections+errors all elevated)"
+          description: |
+            Multiple Redis health indicators show stress:
+            - Memory {{ memory_usage }}% full
+            - Connections {{ conn_usage }}% of limit
+            - Error rate {{ error_rate }}%
+            
+            System may cascade to failure if load continues.
+            
+            ACTION (URGENT):
+            1. Page SRE on-call
+            2. Consider graceful degradation or shutdown
+            3. Investigate root cause of all three issues
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-SYSTEM-STRESS
+
+      - alert: RedisCircuitBreakerMayOpen
+        expr: |
+          (redis_memory_used_bytes / redis_memory_limit_bytes) > 0.80
+          OR
+          (redis_connected_clients / redis_maxclients) > 0.90
+          OR
+          (rate(redis_command_errors_total[1m]) / rate(redis_commands_total[1m])) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+          category: circuit_breaker
+          pagerduty: immediate
+        annotations:
+          summary: "Redis conditions may trigger circuit breaker"
+          description: |
+            One or more Redis conditions are critical enough to trigger
+            system circuit breaker:
+            
+            - Memory: {{ memory }}%
+            - Connections: {{ connections }}%
+            - Error rate: {{ error_rate }}%
+            
+            If circuit breaker opens, users will be rate limited/rejected.
+            
+            ACTION (EMERGENCY):
+            1. IMMEDIATE: Page on-call SRE
+            2. Take immediate corrective action
+            3. Monitor circuit breaker status
+            
+            Runbook: https://ops-wiki/runbooks/REDIS-CIRCUIT-BREAKER
+
+      # ──────────────────────────────────────────────────────────────────────
+      # ALERTING PLATFORM INTEGRATION
+      # ──────────────────────────────────────────────────────────────────────
+
+      # For each rule with pagerduty: immediate label,
+      # configure AlertManager to route to:
+      # - Slack #sre-emergency
+      # - PagerDuty (immediate, don't wait for ack)
+      # - Page on-call SRE
+

@@ -4,7 +4,13 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import type { StrategicRecommendation } from './strategicRecommendationEngine';
+
+export type RecommendationPersistenceInput = {
+  recommendation_type: string;
+  action_summary: string | null;
+  supporting_signals: unknown;
+  confidence_score: number | null;
+};
 
 export type PersistedRecommendation = {
   id: string;
@@ -21,7 +27,7 @@ export type PersistedRecommendation = {
  */
 export async function persistRecommendation(
   companyId: string,
-  recommendation: StrategicRecommendation
+  recommendation: RecommendationPersistenceInput
 ): Promise<PersistedRecommendation> {
   const { data, error } = await supabase
     .from('intelligence_recommendations')

@@ -1,3 +1,4 @@
+
 /**
  * GET /api/admin/opportunity-engine-health
  * Returns observability metrics for the engagement opportunity engine.

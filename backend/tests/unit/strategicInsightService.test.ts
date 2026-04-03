@@ -1,153 +1,69 @@
-/**
- * Unit tests for Strategic Insight Engine
- */
-
+import { runInBackgroundJobContext } from '../../services/intelligenceExecutionContext';
 import {
   generateStrategicInsights,
   type StrategicInsightInput,
 } from '../../services/strategicInsightService';
 
+jest.mock('../../services/marketingMemoryService', () => ({
+  getMarketingMemoriesByType: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('../../services/decisionObjectService', () => ({
+  archiveDecisionScope: jest.fn().mockResolvedValue(undefined),
+  getLatestDecisionObjectsForSource: jest.fn().mockResolvedValue(null),
+  replaceDecisionObjectsForSource: jest.fn(async (inputs: any[]) =>
+    inputs.map((input, index) => ({
+      ...input,
+      id: `00000000-0000-0000-0000-00000000000${index + 1}`,
+      execution_score: 2.5,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      resolved_at: null,
+      ignored_at: null,
+    }))
+  ),
+}));
+
+const COMPANY_ID = '11111111-1111-4111-8111-111111111111';
+const CAMPAIGN_ID = '22222222-2222-4222-8222-222222222222';
+
 describe('strategicInsightService', () => {
-  it('returns report with report_id, generated_at, campaign_id, company_id, insights', async () => {
+  it('returns decision objects only', async () => {
     const input: StrategicInsightInput = {
-      company_id: 'c-1',
-      campaign_id: 'camp-1',
-      campaign_health_report: null,
-      engagement_health_report: { engagement_rate: 0.1 },
-      trend_signals: [],
-      inbox_signals: [],
-    };
-    const report = await generateStrategicInsights(input);
-    expect(report).toMatchObject({
-      campaign_id: 'camp-1',
-      company_id: 'c-1',
-      insights: expect.any(Array),
-    });
-    expect(report.report_id).toBeDefined();
-    expect(report.generated_at).toBeDefined();
-    expect(typeof report.report_id).toBe('string');
-    expect(typeof report.generated_at).toBe('string');
-  });
-
-  it('generates CTA/metadata insight when has_metadata_issues and low reply rate', async () => {
-    const input: StrategicInsightInput = {
-      company_id: 'c-1',
-      campaign_id: 'camp-1',
-      campaign_health_report: {
-        health_flags: { has_metadata_issues: true },
-        health_score: 55,
-      },
-      engagement_health_report: { engagement_rate: 0.02 },
-      trend_signals: [],
-      inbox_signals: [],
-    };
-    const report = await generateStrategicInsights(input);
-    const ctaInsight = report.insights.find(
-      (i) => i.insight_type === 'engagement_risk' && i.title.includes('CTA')
-    );
-    expect(ctaInsight).toBeDefined();
-    expect(ctaInsight?.confidence).toBeGreaterThanOrEqual(0);
-    expect(ctaInsight?.confidence).toBeLessThanOrEqual(1);
-    expect(ctaInsight?.recommended_action).toBeDefined();
-  });
-
-  it('generates market_opportunity when trend topic not in narrative', async () => {
-    const input: StrategicInsightInput = {
-      company_id: 'c-1',
-      campaign_id: 'camp-1',
-      campaign_health_report: { health_summary: 'fitness wellness', top_issue_categories: [] },
-      engagement_health_report: { engagement_rate: 0.1 },
-      trend_signals: [
-        { snapshot: { emerging_trends: [{ topic: 'AI automation' }] } },
-      ],
-      inbox_signals: [],
-    };
-    const report = await generateStrategicInsights(input);
-    const opp = report.insights.find(
-      (i) => i.insight_type === 'market_opportunity' && i.summary.toLowerCase().includes('ai automation')
-    );
-    expect(opp).toBeDefined();
-    expect(opp?.confidence).toBeGreaterThanOrEqual(0);
-    expect(opp?.confidence).toBeLessThanOrEqual(1);
-  });
-
-  it('sorts insights by impact_score DESC then confidence DESC', async () => {
-    const input: StrategicInsightInput = {
-      company_id: 'c-1',
-      campaign_id: 'camp-1',
+      company_id: COMPANY_ID,
+      campaign_id: CAMPAIGN_ID,
       campaign_health_report: {
         health_flags: { has_metadata_issues: true },
         health_score: 35,
       },
       engagement_health_report: { engagement_rate: 0.01 },
-      trend_signals: [
-        { snapshot: { emerging_trends: [{ topic: 'Web3' }] } },
-      ],
-      inbox_signals: [{ thread_id: 't1' }],
+      trend_signals: [{ snapshot: { emerging_trends: [{ topic: 'AI automation' }] } }],
+      inbox_signals: [{ thread_id: 't-1' }],
     };
-    const report = await generateStrategicInsights(input);
-    for (let i = 1; i < report.insights.length; i++) {
-      const prev = report.insights[i - 1];
-      const curr = report.insights[i];
-      const impactOk = (prev.impact_score ?? 0) >= (curr.impact_score ?? 0);
-      const confOk =
-        prev.impact_score === curr.impact_score
-          ? prev.confidence >= curr.confidence
-          : true;
-      expect(impactOk && confOk).toBe(true);
-    }
+
+    const decisions = await runInBackgroundJobContext('test.strategic', () => generateStrategicInsights(input));
+    expect(Array.isArray(decisions)).toBe(true);
+    expect(decisions.length).toBeGreaterThan(0);
+    expect(decisions[0]).toMatchObject({
+      company_id: COMPANY_ID,
+      entity_type: 'campaign',
+      entity_id: CAMPAIGN_ID,
+      source_service: 'strategicInsightService',
+      report_tier: 'growth',
+      status: 'open',
+    });
   });
 
-  it('includes impact_score (0–100) and insight_category on each insight', async () => {
+  it('rejects non-background execution', async () => {
     const input: StrategicInsightInput = {
-      company_id: 'c-1',
-      campaign_id: 'camp-1',
-      campaign_health_report: {
-        health_flags: { has_metadata_issues: true },
-        health_score: 40,
-      },
-      engagement_health_report: { engagement_rate: 0.01 },
-      trend_signals: [{ snapshot: { emerging_trends: [{ topic: 'X' }] } }],
-      inbox_signals: [{ thread_id: 't1' }],
+      company_id: COMPANY_ID,
+      campaign_id: CAMPAIGN_ID,
+      campaign_health_report: null,
+      engagement_health_report: { engagement_rate: 0.1 },
+      trend_signals: [],
+      inbox_signals: [],
     };
-    const report = await generateStrategicInsights(input);
-    const allowedCategories = new Set([
-      'campaign_structure',
-      'audience_behavior',
-      'market_trend',
-      'engagement_performance',
-      'content_strategy',
-    ]);
-    for (const i of report.insights) {
-      expect(typeof i.impact_score).toBe('number');
-      expect(i.impact_score).toBeGreaterThanOrEqual(0);
-      expect(i.impact_score).toBeLessThanOrEqual(100);
-      expect(allowedCategories.has(i.insight_category)).toBe(true);
-    }
-  });
 
-  it('uses allowed insight_type values only', async () => {
-    const allowed = new Set([
-      'campaign_direction',
-      'content_strategy',
-      'audience_shift',
-      'market_opportunity',
-      'engagement_risk',
-    ]);
-    const input: StrategicInsightInput = {
-      company_id: 'c-1',
-      campaign_id: 'camp-1',
-      campaign_health_report: {
-        health_flags: { has_metadata_issues: true },
-        health_score: 40,
-      },
-      engagement_health_report: { engagement_rate: 0.01 },
-      trend_signals: [{ snapshot: { emerging_trends: [{ topic: 'X' }] } }],
-      inbox_signals: [{ thread_id: 't1' }],
-    };
-    const report = await generateStrategicInsights(input);
-    for (const i of report.insights) {
-      expect(allowed.has(i.insight_type)).toBe(true);
-    }
+    await expect(generateStrategicInsights(input)).rejects.toThrow('background job context');
   });
 });

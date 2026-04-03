@@ -1,3 +1,4 @@
+
 /**
  * GET /api/engagement/integrations
  * Returns configured social platforms for the company (from social_accounts + user_company_roles).

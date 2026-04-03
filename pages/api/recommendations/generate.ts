@@ -8,7 +8,7 @@ import { generateRecommendation } from '../../../backend/services/aiGateway';
 import { getStrategyHistoryForCompany } from '../../../backend/services/strategyHistoryService';
 import { formatForUserOutput } from '../../../backend/utils/refineUserFacingResponse';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -493,5 +493,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default handler;

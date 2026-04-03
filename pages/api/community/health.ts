@@ -1,3 +1,4 @@
+
 /**
  * Community Health API — read-only conversation health metrics.
  * Data from: post_comments, comment_replies, comment_flags, community_ai_actions, scheduled_posts.

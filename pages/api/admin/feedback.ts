@@ -1,3 +1,4 @@
+
 /**
  * GET   /api/admin/feedback          — list all feedback submissions (super admin)
  * PATCH /api/admin/feedback?id=<id>  — approve or reject a submission

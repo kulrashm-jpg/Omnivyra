@@ -1,3 +1,4 @@
+
 /**
  * Community Posts API
  * Returns platform-ready posts from community_posts.
@@ -6,6 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -23,10 +25,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'companyId required' });
     }
 
+    const companyContext = await requireCompanyContext({ req, res, companyId });
+    if (!companyContext) return;
+
     let query = supabase
       .from('community_posts')
       .select('id, narrative_id, platform, post_content, post_type, scheduled_at, published_at, created_at')
-      .eq('company_id', companyId)
+      .eq('company_id', companyContext.companyId)
       .order('created_at', { ascending: false })
       .limit(limit);
 

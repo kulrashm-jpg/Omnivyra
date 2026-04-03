@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { trackDbOp } from '../../lib/redis/usageProtection';
+import { config } from '@/config';
 
 // Load .env.local for server (helps during Next.js hot reload / env reload)
 dotenv.config({ path: `${process.cwd()}/.env.local` });
@@ -19,8 +20,8 @@ let _client: SupabaseClient | null = null;
 function getAdminClient(): SupabaseClient {
   if (_client) return _client;
 
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = config.SUPABASE_URL;
+  const key = config.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url) {
     throw new Error('SUPABASE_URL is missing in environment variables. Set SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL in .env.local');

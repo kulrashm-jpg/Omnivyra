@@ -96,6 +96,20 @@ const RULES: Record<string, ContentTypeRules> = {
     structure_template: 'subject_hook → intro → body_sections → cta',
     target_word_count: [300, 600],
   },
+  short_story: {
+    max_sentences_per_paragraph: 4,
+    requires_hook: true,
+    requires_cta: false,
+    structure_template: 'hook → rising_tension → resolution → optional_reflection',
+    target_word_count: [300, 500],
+  },
+  white_paper: {
+    max_sentences_per_paragraph: 4,
+    requires_hook: true,
+    requires_cta: true,
+    structure_template: 'executive_summary → problem_statement → evidence_sections → solution_framework → conclusion',
+    target_word_count: [700, 1000],
+  },
   story: {
     max_sentences_per_paragraph: 1,
     requires_hook: false,

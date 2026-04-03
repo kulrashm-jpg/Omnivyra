@@ -7,6 +7,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
+import { requireCompanyContext } from '../../../../backend/services/companyContextGuardService';
 import {
   getCompanyTopics,
   createTopic,
@@ -30,9 +31,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
+    const companyContext = await requireCompanyContext({ req, res, companyId: companyId.trim() });
+    if (!companyContext) return;
+
     switch (req.method) {
       case 'GET': {
-        const topics = await getCompanyTopics(companyId);
+        const topics = await getCompanyTopics(companyContext.companyId);
         return res.status(200).json({ topics });
       }
       case 'POST': {
@@ -40,7 +44,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (!body?.topic?.trim()) {
           return res.status(400).json({ error: 'topic is required' });
         }
-        const topic = await createTopic(companyId, body.topic);
+        const topic = await createTopic(companyContext.companyId, body.topic);
         return res.status(201).json({ topic });
       }
       case 'PUT': {

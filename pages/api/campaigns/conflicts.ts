@@ -1,3 +1,4 @@
+
 /**
  * Campaign Conflict Detection API
  * GET /api/campaigns/conflicts
@@ -49,4 +50,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-

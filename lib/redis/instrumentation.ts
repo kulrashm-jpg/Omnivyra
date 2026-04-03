@@ -1,5 +1,6 @@
 /**
  * Redis command instrumentation layer.
+ * 🔒 NODE RUNTIME ONLY — enforced at module load
  *
  * How it works:
  *   1. `createInstrumentedClient(redis, feature)` wraps any IORedis-compatible
@@ -14,6 +15,10 @@
  *   queue | rate_limit | ai_cache | intelligence_cache | strategy_index
  *   metrics | cron | external_api_cache | shared
  */
+
+// 🔴 ENFORCE: This module requires Node.js runtime
+import { enforceNodeRuntime } from '@/lib/runtime/guard';
+enforceNodeRuntime('lib/redis/instrumentation');
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -46,6 +51,30 @@ export interface RedisMetricsReport {
   peakWindows:  Array<{ ts: string; opsPerMin: number }>;
   /** Memory used by Redis in bytes (injected externally from INFO memory) */
   storageBytesUsed: number;
+
+  // ── INFRA HEALTH METRICS (NEW) ──────────────────────────────────────────
+  /** Total commands executed successfully */
+  commandsSucceeded: number;
+  /** Total commands that failed */
+  commandsFailed: number;
+  /** Error rate as percentage (0-100) */
+  errorRatePercent: number;
+  /** Breakdown of errors by type */
+  errorsByType: Record<string, number>;
+  /** Memory pressure metrics */
+  memory?: {
+    usedBytes: number;
+    maxBytes: number;
+    usagePercent: number;
+    evictedKeys: number;
+    expiredKeys: number;
+  };
+  /** Connection pool metrics */
+  connections?: {
+    active: number;
+    max: number;
+    utilizationPercent: number;
+  };
 }
 
 /**
@@ -55,6 +84,59 @@ export interface RedisMetricsReport {
 export function parseRedisInfoMemory(infoOutput: string): number {
   const match = infoOutput.match(/^used_memory:(\d+)/m);
   return match ? parseInt(match[1], 10) : 0;
+}
+
+/**
+ * Classify a Redis error into a known category for tracking.
+ */
+function classifyRedisError(error: unknown): string {
+  const err = error as any;
+  if (err?.message?.includes('WRONGPASS') || err?.message?.includes('NOAUTH')) return 'AUTH';
+  if (err?.message?.includes('TIMEOUT') || err?.code === 'ETIMEDOUT') return 'TIMEOUT';
+  if (err?.message?.includes('OOM')) return 'OOM';
+  if (err?.message?.includes('NOSCRIPT')) return 'SCRIPT';
+  if (err?.code === 'ECONNREFUSED' || err?.code === 'ECONNRESET' || err?.message?.includes('Connection closed')) return 'NETWORK';
+  return 'OTHER';
+}
+
+/**
+ * Record a command execution error for metrics.
+ */
+export function recordCommandError(error: unknown): void {
+  commandsFailed++;
+  const errorType = classifyRedisError(error);
+  errorCounters[errorType] = (errorCounters[errorType] ?? 0) + 1;
+}
+
+/**
+ * Record a successful command execution.
+ */
+export function recordCommandSuccess(): void {
+  commandsSucceeded++;
+}
+
+/**
+ * Update Redis infrastructure metrics from INFO command output.
+ * Called periodically (e.g., every minute) to refresh memory/connection data.
+ */
+export function updateRedisInfoMetrics(infoMemory: string, infoClients: string): void {
+  // Parse memory info
+  const memoryMatch = infoMemory.match(/^used_memory:(\d+)/m);
+  const maxmemoryMatch = infoMemory.match(/^maxmemory:(\d+)/m);
+  const evictedMatch = infoMemory.match(/^evicted_keys:(\d+)/m);
+  
+  if (memoryMatch) redisMemoryUsed = parseInt(memoryMatch[1], 10);
+  if (maxmemoryMatch) redisMemoryMax = parseInt(maxmemoryMatch[1], 10);
+  if (evictedMatch) redisEvictedKeys = parseInt(evictedMatch[1], 10);
+
+  // Parse client connection info
+  const connectedMatch = infoClients.match(/^connected_clients:(\d+)/m);
+  const maxclientsMatch = infoClients.match(/^maxclients:(\d+)/m);
+  const expiredMatch = infoMemory.match(/^expired_keys:(\d+)/m);
+
+  if (connectedMatch) redisConnectedClients = parseInt(connectedMatch[1], 10);
+  if (maxclientsMatch) redisMaxClients = parseInt(maxclientsMatch[1], 10);
+  if (expiredMatch) redisExpiredKeys = parseInt(expiredMatch[1], 10);
 }
 
 // ── Commands to track ─────────────────────────────────────────────────────────
@@ -108,6 +190,26 @@ const TRACKED_COMMANDS = new Set([
 const counters   = new Map<string, FeatureMetrics>();
 const opTimeline: number[] = [];   // last 60 s of timestamps
 const peakLog: Array<{ ts: number; opsPerMin: number }> = []; // 5-min peaks
+
+// ── ERROR TRACKING (NEW) ───────────────────────────────────────────────────
+const errorCounters: Record<string, number> = {
+  'AUTH': 0,
+  'TIMEOUT': 0,
+  'OOM': 0,
+  'NETWORK': 0,
+  'SCRIPT': 0,
+  'OTHER': 0,
+};
+let commandsSucceeded = 0;
+let commandsFailed = 0;
+
+// ── REDIS INFO STATE (NEW) ────────────────────────────────────────────────
+let redisMemoryUsed = 0;
+let redisMemoryMax = 0;
+let redisEvictedKeys = 0;
+let redisExpiredKeys = 0;
+let redisConnectedClients = 0;
+let redisMaxClients = 0;
 
 const OPS_WINDOW_MS = 60_000;
 let   windowStart   = Date.now();
@@ -194,6 +296,14 @@ export function getMetricsReport(): RedisMetricsReport {
     .slice(-12)
     .map(p => ({ ts: new Date(p.ts).toISOString(), opsPerMin: p.opsPerMin }));
 
+  // Calculate error rate
+  const totalCommands = commandsSucceeded + commandsFailed;
+  const errorRatePercent = totalCommands > 0 ? (commandsFailed / totalCommands) * 100 : 0;
+
+  // Build infra metrics
+  const memoryPercent = redisMemoryMax > 0 ? (redisMemoryUsed / redisMemoryMax) * 100 : 0;
+  const connectionPercent = redisMaxClients > 0 ? (redisConnectedClients / redisMaxClients) * 100 : 0;
+
   return {
     windowStart:      new Date(windowStart).toISOString(),
     windowEnd:        new Date(now).toISOString(),
@@ -205,6 +315,26 @@ export function getMetricsReport(): RedisMetricsReport {
     topCommands,
     peakWindows,
     storageBytesUsed: 0,   // populated externally by system-intelligence handler
+    
+    // ── INFRA HEALTH METRICS (NEW) ──────────────────────────────────────
+    commandsSucceeded,
+    commandsFailed,
+    errorRatePercent,
+    errorsByType: { ...errorCounters },
+    
+    memory: redisMemoryMax > 0 ? {
+      usedBytes: redisMemoryUsed,
+      maxBytes: redisMemoryMax,
+      usagePercent: memoryPercent,
+      evictedKeys: redisEvictedKeys,
+      expiredKeys: redisExpiredKeys,
+    } : undefined,
+    
+    connections: redisMaxClients > 0 ? {
+      active: redisConnectedClients,
+      max: redisMaxClients,
+      utilizationPercent: connectionPercent,
+    } : undefined,
   };
 }
 
@@ -215,6 +345,13 @@ export function resetCounters(): void {
   globalTotal       = 0;
   peakOpsPerMin     = 0;
   windowStart       = Date.now();
+  
+  // Reset error counters for new window
+  commandsSucceeded = 0;
+  commandsFailed = 0;
+  for (const key in errorCounters) {
+    errorCounters[key] = 0;
+  }
 }
 
 // ── Proxy factory ─────────────────────────────────────────────────────────────
@@ -233,7 +370,20 @@ export function createInstrumentedClient<T extends object>(redis: T, feature: st
         if (typeof v === 'function' && TRACKED_COMMANDS.has(p)) {
           return (...args: unknown[]) => {
             recordOp(feature, p);
-            return (v as (...a: unknown[]) => unknown).apply(t, args);
+            try {
+              const result = (v as (...a: unknown[]) => unknown).apply(t, args);
+              // Handle promises from async commands
+              if (result && typeof (result as any).catch === 'function') {
+                return (result as Promise<unknown>)
+                  .then(r => { recordCommandSuccess(); return r; })
+                  .catch(e => { recordCommandError(e); throw e; });
+              }
+              recordCommandSuccess();
+              return result;
+            } catch (err) {
+              recordCommandError(err);
+              throw err;
+            }
           };
         }
         return v;
@@ -257,7 +407,20 @@ export function createInstrumentedClient<T extends object>(redis: T, feature: st
       if (TRACKED_COMMANDS.has(prop)) {
         return (...args: unknown[]) => {
           recordOp(feature, prop);
-          return (val as (...a: unknown[]) => unknown).apply(target, args);
+          try {
+            const result = (val as (...a: unknown[]) => unknown).apply(target, args);
+            // Handle promises from async commands
+            if (result && typeof (result as any).catch === 'function') {
+              return (result as Promise<unknown>)
+                .then(r => { recordCommandSuccess(); return r; })
+                .catch(e => { recordCommandError(e); throw e; });
+            }
+            recordCommandSuccess();
+            return result;
+          } catch (err) {
+            recordCommandError(err);
+            throw err;
+          }
         };
       }
 
@@ -278,22 +441,36 @@ let _persistTimer: ReturnType<typeof setInterval> | null = null;
  *                        Passed in to avoid a circular dependency with bullmqClient.
  */
 export function startInstrumentation(
-  getRedisClient: () => { set(k: string, v: string, ex: 'EX', ttl: number): Promise<unknown> },
+  getRedisClient: () => {
+    set(k: string, v: string, ex: 'EX', ttl: number): Promise<unknown>;
+  },
 ): void {
   if (_flushTimer) return; // already running
 
   // ── 60-second structured log flush ──────────────────────────────────────
+  // Note: INFO is NOT collected here — usageProtection polls it every 5 min,
+  // avoiding duplicate commands against the 10k/day Upstash limit.
   _flushTimer = setInterval(() => {
     const r = getMetricsReport();
     if (r.totalOps === 0) return;
+
     console.log(JSON.stringify({
       level:        'INFO',
       event:        'redis_metrics_flush',
       total_ops:    r.totalOps,
       ops_per_min:  r.opsPerMin,
       peak_ops_min: r.peakOpsPerMin,
+      commands_succeeded: r.commandsSucceeded,
+      commands_failed: r.commandsFailed,
+      error_rate_percent: r.errorRatePercent.toFixed(2),
+      memory_usage_percent: r.memory?.usagePercent.toFixed(1) ?? 'unknown',
+      connection_utilization_percent: r.connections?.utilizationPercent.toFixed(1) ?? 'unknown',
       top_features: r.topFeatures.slice(0, 5),
       top_commands: r.topCommands.slice(0, 5),
+      top_errors: Object.entries(r.errorsByType)
+        .filter(([_, count]) => count > 0)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3),
       ts:           r.windowEnd,
     }));
   }, 60_000);

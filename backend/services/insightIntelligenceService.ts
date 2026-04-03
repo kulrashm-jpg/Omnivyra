@@ -1,11 +1,17 @@
 /**
  * Insight Intelligence Service
  *
- * Generates engagement insights by comparing opportunity counts:
- * last 7 days vs previous 7 days. Stores evidence from real discussions.
+ * Generates canonical decision objects from engagement opportunity trends.
  */
 
 import { supabase } from '../db/supabaseClient';
+import {
+  archiveDecisionScope,
+  listDecisionObjects,
+  replaceDecisionObjectsForSource,
+  type PersistedDecisionObject,
+} from './decisionObjectService';
+import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 
 const INSIGHT_TYPES = [
   { type: 'competitor_complaints_increase', oppType: 'competitor_complaint', label: 'Competitor complaints' },
@@ -14,24 +20,7 @@ const INSIGHT_TYPES = [
   { type: 'problem_discussion_spike', oppType: 'problem_discussion', label: 'Problem discussions' },
 ] as const;
 
-export type InsightWithEvidence = {
-  id: string;
-  insight_type: string;
-  insight_title: string;
-  insight_summary: string;
-  metric_value: number;
-  previous_value: number;
-  change_percentage: number | null;
-  evidence_count: number;
-  evidence: Array<{
-    thread_id: string;
-    message_id: string;
-    author_name: string | null;
-    platform: string;
-    text_snippet: string | null;
-  }>;
-  created_at: string | null;
-};
+export type InsightWithEvidence = PersistedDecisionObject;
 
 async function countOpportunities(
   organizationId: string,
@@ -56,134 +45,34 @@ function changePercent(current: number, previous: number): number | null {
   return Math.round(((current - previous) / previous) * 100);
 }
 
-/**
- * Generate insights for an organization. Compare last 7 vs previous 7 days.
- */
-export async function generateInsights(organizationId: string): Promise<{
-  created: number;
-  errors: string[];
-}> {
-  const errors: string[] = [];
-  let created = 0;
-  const now = new Date();
-  const last7End = new Date(now);
-  const last7Start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const prev7End = last7Start;
-  const prev7Start = new Date(prev7End.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-  const last7StartIso = last7Start.toISOString();
-  const last7EndIso = last7End.toISOString();
-  const prev7StartIso = prev7Start.toISOString();
-  const prev7EndIso = prev7End.toISOString();
-
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  await supabase
-    .from('engagement_insights')
-    .delete()
-    .eq('organization_id', organizationId)
-    .lt('created_at', sevenDaysAgo);
-
-  for (const { type, oppType, label } of INSIGHT_TYPES) {
-    try {
-      const current = await countOpportunities(
-        organizationId,
-        oppType,
-        last7StartIso,
-        last7EndIso
-      );
-      const previous = await countOpportunities(
-        organizationId,
-        oppType,
-        prev7StartIso,
-        prev7EndIso
-      );
-
-      const change = changePercent(current, previous);
-      const title =
-        type === 'competitor_complaints_increase'
-          ? `${label} ↑ ${change ?? 0}% this week`
-          : type === 'buying_intent_detected'
-            ? `${label} detected in ${current} discussions`
-            : `${label} ↑ ${change ?? 0}% this week`;
-      const summary = `Last 7 days: ${current}. Previous 7 days: ${previous}.`;
-
-      const { data: opps } = await supabase
-        .from('engagement_opportunities')
-        .select('id, source_thread_id, source_message_id, platform')
-        .eq('organization_id', organizationId)
-        .eq('opportunity_type', oppType)
-        .gte('detected_at', last7StartIso)
-        .lt('detected_at', last7EndIso)
-        .limit(10);
-
-      const evidenceRows = (opps ?? []) as Array<{
-        id: string;
-        source_thread_id: string;
-        source_message_id: string;
-        platform?: string;
-      }>;
-      const messageIds = evidenceRows.map((o) => o.source_message_id);
-      const threadIds = [...new Set(evidenceRows.map((o) => o.source_thread_id))];
-
-      const { data: messages } = await supabase
-        .from('engagement_messages')
-        .select('id, thread_id, content, author_id')
-        .in('id', messageIds);
-
-      const authorIds = [...new Set((messages ?? []).map((m: { author_id?: string }) => m.author_id).filter(Boolean))];
-      const { data: authors } = await supabase
-        .from('engagement_authors')
-        .select('id, username, display_name')
-        .in('id', authorIds);
-      const authorMap = new Map(
-        (authors ?? []).map((a: { id: string; username?: string; display_name?: string }) => [
-          a.id,
-          (a as { display_name?: string }).display_name ?? (a as { username?: string }).username ?? 'Unknown',
-        ])
-      );
-
-      const { data: insightRow, error: insError } = await supabase
-        .from('engagement_insights')
-        .insert({
-          organization_id: organizationId,
-          insight_type: type,
-          insight_title: title,
-          insight_summary: summary,
-          metric_value: current,
-          previous_value: previous,
-          change_percentage: change,
-          evidence_count: evidenceRows.length,
-        })
-        .select('id')
-        .single();
-
-      if (insError) {
-        errors.push(insError.message);
-        continue;
-      }
-      const insightId = (insightRow as { id: string })?.id;
-      if (!insightId) continue;
-
-      for (const msg of messages ?? []) {
-        const m = msg as { id: string; thread_id: string; content?: string; author_id?: string };
-        const authorName = m.author_id ? authorMap.get(m.author_id) ?? null : null;
-        const oppRow = evidenceRows.find((e) => e.source_message_id === m.id);
-        const platform = oppRow?.platform ?? (await getPlatformForThread(m.thread_id)) ?? 'unknown';
-        await supabase.from('engagement_insight_evidence').insert({
-          insight_id: insightId,
-          thread_id: m.thread_id,
-          message_id: m.id,
-          author_name: authorName,
-          platform,
-          text_snippet: (m.content ?? '').toString().slice(0, 200),
-        });
-      }
-    } catch (err) {
-      errors.push(err instanceof Error ? err.message : String(err));
-    }
+function buildRecommendation(type: string): string {
+  switch (type) {
+    case 'competitor_complaints_increase':
+      return 'Create competitor-switch messaging and acquisition campaigns while complaint volume is elevated.';
+    case 'buying_intent_detected':
+      return 'Route buying-intent conversations into lead capture and direct response offers immediately.';
+    case 'recommendation_trend':
+      return 'Publish recommendation-led assets that answer repeated buyer questions directly.';
+    case 'problem_discussion_spike':
+      return 'Turn repeated pain-point discussions into solution-first content and conversion paths.';
+    default:
+      return 'Review the demand signal and convert it into an executable growth action.';
   }
+}
 
-  return { created, errors };
+function buildActionType(type: string): string {
+  switch (type) {
+    case 'competitor_complaints_increase':
+      return 'launch_campaign';
+    case 'buying_intent_detected':
+      return 'capture_leads';
+    case 'recommendation_trend':
+      return 'improve_content';
+    case 'problem_discussion_spike':
+      return 'improve_content';
+    default:
+      return 'launch_campaign';
+  }
 }
 
 async function getPlatformForThread(threadId: string): Promise<string | null> {
@@ -195,47 +84,144 @@ async function getPlatformForThread(threadId: string): Promise<string | null> {
   return (data as { platform?: string })?.platform ?? null;
 }
 
-/**
- * Get insights for organization with evidence.
- */
-export async function getInsights(organizationId: string): Promise<InsightWithEvidence[]> {
-  const { data: insights, error } = await supabase
-    .from('engagement_insights')
-    .select('id, insight_type, insight_title, insight_summary, metric_value, previous_value, change_percentage, evidence_count, created_at')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false })
-    .limit(20);
+export async function generateInsights(organizationId: string): Promise<{
+  created: number;
+  errors: string[];
+}> {
+  assertBackgroundJobContext('insightIntelligenceService');
+  const errors: string[] = [];
+  const now = new Date();
+  const last7End = new Date(now);
+  const last7Start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const prev7End = last7Start;
+  const prev7Start = new Date(prev7End.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-  if (error) {
-    console.warn('[insightIntelligence] getInsights error', error.message);
-    return [];
+  const last7StartIso = last7Start.toISOString();
+  const last7EndIso = last7End.toISOString();
+  const prev7StartIso = prev7Start.toISOString();
+  const prev7EndIso = prev7End.toISOString();
+
+  const pendingDecisions = [];
+
+  for (const { type, oppType, label } of INSIGHT_TYPES) {
+    try {
+      const current = await countOpportunities(organizationId, oppType, last7StartIso, last7EndIso);
+      const previous = await countOpportunities(organizationId, oppType, prev7StartIso, prev7EndIso);
+      const change = changePercent(current, previous);
+      const title = type === 'buying_intent_detected'
+        ? `${label} detected in ${current} discussions`
+        : `${label} up ${change ?? 0}% this week`;
+      const summary = `Last 7 days: ${current}. Previous 7 days: ${previous}.`;
+
+      const { data: opportunities } = await supabase
+        .from('engagement_opportunities')
+        .select('id, source_thread_id, source_message_id, platform')
+        .eq('organization_id', organizationId)
+        .eq('opportunity_type', oppType)
+        .gte('detected_at', last7StartIso)
+        .lt('detected_at', last7EndIso)
+        .limit(10);
+
+      const evidenceRows = (opportunities ?? []) as Array<{
+        id: string;
+        source_thread_id: string;
+        source_message_id: string;
+        platform?: string;
+      }>;
+      const messageIds = evidenceRows.map((row) => row.source_message_id);
+      const { data: messages } = await supabase
+        .from('engagement_messages')
+        .select('id, thread_id, content, author_id')
+        .in('id', messageIds);
+
+      const authorIds = [...new Set((messages ?? []).map((row: { author_id?: string }) => row.author_id).filter(Boolean))];
+      const { data: authors } = await supabase
+        .from('engagement_authors')
+        .select('id, username, display_name')
+        .in('id', authorIds);
+      const authorMap = new Map(
+        (authors ?? []).map((author: { id: string; username?: string; display_name?: string }) => [
+          author.id,
+          author.display_name ?? author.username ?? 'Unknown',
+        ])
+      );
+
+      const evidence = [];
+      for (const msg of messages ?? []) {
+        const message = msg as { id: string; thread_id: string; content?: string; author_id?: string };
+        const authorName = message.author_id ? authorMap.get(message.author_id) ?? null : null;
+        const opportunity = evidenceRows.find((row) => row.source_message_id === message.id);
+        const platform = opportunity?.platform ?? (await getPlatformForThread(message.thread_id)) ?? 'unknown';
+        evidence.push({
+          thread_id: message.thread_id,
+          message_id: message.id,
+          author_name: authorName,
+          platform,
+          text_snippet: (message.content ?? '').toString().slice(0, 200),
+        });
+      }
+
+      pendingDecisions.push({
+        company_id: organizationId,
+        report_tier: 'growth' as const,
+        source_service: 'insightIntelligenceService',
+        entity_type: 'global' as const,
+        entity_id: null,
+        issue_type: type,
+        title,
+        description: summary,
+        evidence: {
+          metric_value: current,
+          previous_value: previous,
+          change_percentage: change,
+          evidence,
+          opportunity_type: oppType,
+        },
+        impact_traffic: Math.min(100, Math.max(5, current * 5)),
+        impact_conversion: Math.min(100, Math.max(10, current * 7)),
+        impact_revenue: Math.min(100, Math.max(10, current * 6)),
+        priority_score: Math.min(100, Math.max(15, current * 6)),
+        effort_score: 20,
+        confidence_score: evidence.length > 0 ? 0.9 : 0.65,
+        recommendation: buildRecommendation(type),
+        action_type: buildActionType(type),
+        action_payload: {
+          opportunity_type: oppType,
+          current,
+          previous,
+          change_percentage: change,
+        },
+        status: 'open' as const,
+      });
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err));
+    }
   }
 
-  const result: InsightWithEvidence[] = [];
-  for (const ins of insights ?? []) {
-    const { data: evRows } = await supabase
-      .from('engagement_insight_evidence')
-      .select('thread_id, message_id, author_name, platform, text_snippet')
-      .eq('insight_id', (ins as { id: string }).id);
-
-    result.push({
-      id: (ins as { id: string }).id,
-      insight_type: (ins as { insight_type: string }).insight_type,
-      insight_title: (ins as { insight_title: string }).insight_title,
-      insight_summary: (ins as { insight_summary?: string }).insight_summary ?? '',
-      metric_value: Number((ins as { metric_value: number }).metric_value ?? 0),
-      previous_value: Number((ins as { previous_value: number }).previous_value ?? 0),
-      change_percentage: (ins as { change_percentage?: number }).change_percentage ?? null,
-      evidence_count: (ins as { evidence_count: number }).evidence_count ?? 0,
-      evidence: (evRows ?? []).map((e: Record<string, unknown>) => ({
-        thread_id: String(e.thread_id),
-        message_id: String(e.message_id),
-        author_name: (e.author_name as string) ?? null,
-        platform: String(e.platform ?? ''),
-        text_snippet: (e.text_snippet as string) ?? null,
-      })),
-      created_at: (ins as { created_at?: string }).created_at ?? null,
+  if (pendingDecisions.length === 0) {
+    await archiveDecisionScope({
+      company_id: organizationId,
+      report_tier: 'growth',
+      source_service: 'insightIntelligenceService',
+      entity_type: 'global',
+      entity_id: null,
+      changed_by: 'system',
     });
+    return { created: 0, errors };
   }
-  return result;
+
+  const persisted = await replaceDecisionObjectsForSource(pendingDecisions);
+  return { created: persisted.length, errors };
+}
+
+export async function getInsights(organizationId: string): Promise<InsightWithEvidence[]> {
+  return listDecisionObjects({
+    viewName: 'growth_view',
+    companyId: organizationId,
+    sourceService: 'insightIntelligenceService',
+    entityType: 'global',
+    entityId: null,
+    status: ['open'],
+    limit: 20,
+  });
 }

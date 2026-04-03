@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { getAuthToken } from '../utils/getAuthToken';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
@@ -98,6 +98,9 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  // Track whether we've already fetched company data for the current auth session,
+  // so re-navigating between pages doesn't trigger repeated refreshCompanies() calls.
+  const companiesLoadedRef = useRef(false);
 
   const selectedCompanyName = useMemo(() => {
     const match = companies.find((company) => company.company_id === selectedCompanyId);
@@ -337,6 +340,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     if (!authChecked) return;
     if (!isAuthenticated) {
+      companiesLoadedRef.current = false; // reset so next login re-fetches
       setIsLoading(false);
       setUser(null);
       setUserName('');
@@ -356,6 +360,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const isAuthFlowPage =
       p.startsWith('/auth/') ||
       p.startsWith('/onboarding/') ||
+      p.startsWith('/super-admin/') ||
       p === '/login' ||
       p === '/signup' ||
       p === '/create-account';
@@ -363,6 +368,12 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setIsLoading(false);
       return;
     }
+    // Only fetch once per auth session. Subsequent pathname changes (normal
+    // in-app navigation) must not re-run refreshCompanies() — that would set
+    // isLoading=true on every route transition and cause the loading spinner
+    // to flash on every page change.
+    if (companiesLoadedRef.current) return;
+    companiesLoadedRef.current = true;
     refreshCompanies();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, authChecked, router.pathname]);

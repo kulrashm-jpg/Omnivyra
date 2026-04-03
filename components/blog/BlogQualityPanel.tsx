@@ -13,6 +13,8 @@ import type { ContentBlock } from '../../lib/blog/blockTypes';
 import type { FormMeta } from '../../lib/blog/blogValidation';
 import { calculateQualityScore, getPublishBlockers } from '../../lib/blog/blogValidation';
 
+export type ImproveArea = 'structure' | 'depth' | 'seo' | 'geo' | 'linking';
+
 // ── Score colour ──────────────────────────────────────────────────────────────
 
 function scoreColour(n: number): string {
@@ -49,15 +51,18 @@ function Section({
   score,
   max,
   colour,
+  onImprove,
   children,
 }: {
   title: string;
   score: number;
   max: number;
   colour: string;
+  onImprove?: () => void;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
+  const needsImprovement = score < max;
   return (
     <div className="border border-gray-100 rounded-xl overflow-hidden">
       <button
@@ -78,6 +83,17 @@ function Section({
         </div>
       </button>
       {open && <div className="px-3 py-2.5 space-y-1.5">{children}</div>}
+      {open && needsImprovement && onImprove && (
+        <div className="px-3 pb-3">
+          <button
+            type="button"
+            onClick={onImprove}
+            className="w-full rounded-lg border border-[#0B5ED7]/30 bg-[#0B5ED7]/5 px-2.5 py-1.5 text-[11px] font-semibold text-[#0B5ED7] hover:bg-[#0B5ED7]/10"
+          >
+            Improve This Section
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -114,9 +130,15 @@ function CheckRow({
 export function BlogQualityPanel({
   blocks,
   formState,
+  onImprove,
+  onAutoImprove,
+  improvingArea,
 }: {
   blocks: ContentBlock[];
   formState: FormMeta;
+  onImprove?: (area: ImproveArea) => void;
+  onAutoImprove?: (area: ImproveArea) => void;
+  improvingArea?: ImproveArea | null;
 }) {
   const score = useMemo(
     () => calculateQualityScore(blocks, formState),
@@ -127,6 +149,13 @@ export function BlogQualityPanel({
   const warnings = score.issues.filter((i) => i.severity === 'warning');
   const { meta, breakdown } = score;
   const colour = scoreColour(score.total);
+  const weakAreas = ([
+    ['structure', breakdown.structure, 25, 'Structure'],
+    ['depth', breakdown.depth, 25, 'Content Depth'],
+    ['seo', breakdown.seo, 25, 'SEO'],
+    ['geo', breakdown.geo, 15, 'GEO Readiness'],
+    ['linking', breakdown.linking, 10, 'Internal Linking'],
+  ] as [ImproveArea, number, number, string][]).filter(([, val, max]) => val < max);
 
   return (
     <div className="space-y-3">
@@ -198,10 +227,36 @@ export function BlogQualityPanel({
             )}
           </div>
         )}
+
+        {weakAreas.length > 0 && (onImprove || onAutoImprove) && (
+          <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Improve Score Fast</p>
+            <div className="space-y-1.5">
+              {weakAreas.slice(0, 3).map(([area, val, max, label]) => (
+                <button
+                  key={area}
+                  type="button"
+                  onClick={() => (onAutoImprove ? onAutoImprove(area) : onImprove?.(area))}
+                  disabled={!!improvingArea}
+                  className="flex w-full items-center justify-between rounded-md border border-gray-200 px-2.5 py-1.5 text-left text-[11px] text-gray-700 hover:border-[#0B5ED7]/40 hover:bg-[#0B5ED7]/5"
+                >
+                  <span>{improvingArea === area ? 'Improving with AI...' : `Improve ${label}`}</span>
+                  <span className="text-[10px] text-gray-400">{val}/{max}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Structure check ──────────────────────────────────────────────── */}
-      <Section title="Structure" score={breakdown.structure} max={25} colour={scoreColour(Math.round(breakdown.structure / 25 * 100))}>
+      <Section
+        title="Structure"
+        score={breakdown.structure}
+        max={25}
+        colour={scoreColour(Math.round((breakdown.structure / 25) * 100))}
+        onImprove={(onAutoImprove || onImprove) ? () => (onAutoImprove ? onAutoImprove('structure') : onImprove?.('structure')) : undefined}
+      >
         <CheckRow ok={meta.h2Count >= 3}   label={`H2 sections: ${meta.h2Count} / 3 required`} warn={meta.h2Count < 3} />
         <CheckRow ok={meta.hasKeyInsights} label="Key Insights block filled"   warn={!meta.hasKeyInsights} />
         <CheckRow ok={meta.hasSummary}     label="Summary block filled"         warn={!meta.hasSummary} />
@@ -212,23 +267,37 @@ export function BlogQualityPanel({
       </Section>
 
       {/* ── Content depth ────────────────────────────────────────────────── */}
-      <Section title="Content Depth" score={breakdown.depth} max={25} colour={scoreColour(Math.round(breakdown.depth / 25 * 100))}>
+      <Section
+        title="Content Depth"
+        score={breakdown.depth}
+        max={25}
+        colour={scoreColour(Math.round((breakdown.depth / 25) * 100))}
+        onImprove={(onAutoImprove || onImprove) ? () => (onAutoImprove ? onAutoImprove('depth') : onImprove?.('depth')) : undefined}
+      >
         <CheckRow
           ok={meta.wordCount >= 800}
           warn={meta.wordCount < 800}
           label={`${meta.wordCount} words (target: 800+)`}
         />
         <CheckRow
-          ok={meta.shortParaCount === 0}
-          warn={meta.shortParaCount > 0}
-          label={meta.shortParaCount === 0
-            ? 'All sections have enough depth'
-            : `${meta.shortParaCount} thin section${meta.shortParaCount > 1 ? 's' : ''} (< 50 words)`}
+          ok={meta.shortParaCount === 0 && meta.wordCount >= 800}
+          warn={meta.shortParaCount > 0 || meta.wordCount < 800}
+          label={meta.shortParaCount > 0
+            ? `${meta.shortParaCount} thin section${meta.shortParaCount > 1 ? 's' : ''} (< 50 words)`
+            : (meta.wordCount < 800
+              ? 'No thin sections, but overall length is low — add/expand sections for depth'
+              : 'All sections have enough depth')}
         />
       </Section>
 
       {/* ── SEO check ────────────────────────────────────────────────────── */}
-      <Section title="SEO" score={breakdown.seo} max={25} colour={scoreColour(Math.round(breakdown.seo / 25 * 100))}>
+      <Section
+        title="SEO"
+        score={breakdown.seo}
+        max={25}
+        colour={scoreColour(Math.round((breakdown.seo / 25) * 100))}
+        onImprove={(onAutoImprove || onImprove) ? () => (onAutoImprove ? onAutoImprove('seo') : onImprove?.('seo')) : undefined}
+      >
         <CheckRow
           ok={formState.title.length >= 20 && formState.title.length <= 70}
           warn={formState.title.length > 0 && (formState.title.length < 20 || formState.title.length > 70)}
@@ -247,7 +316,13 @@ export function BlogQualityPanel({
       </Section>
 
       {/* ── GEO readiness ────────────────────────────────────────────────── */}
-      <Section title="GEO Readiness" score={breakdown.geo} max={15} colour={scoreColour(Math.round(breakdown.geo / 15 * 100))}>
+      <Section
+        title="GEO Readiness"
+        score={breakdown.geo}
+        max={15}
+        colour={scoreColour(Math.round((breakdown.geo / 15) * 100))}
+        onImprove={(onAutoImprove || onImprove) ? () => (onAutoImprove ? onAutoImprove('geo') : onImprove?.('geo')) : undefined}
+      >
         <CheckRow ok={meta.hasKeyInsights} warn={!meta.hasKeyInsights} label="Key Insights (AI extraction target)" />
         <CheckRow ok={meta.hasSummary}     warn={!meta.hasSummary}     label="Article Summary (LLM-readable)" />
         <CheckRow ok={meta.h2Count >= 3}   warn={meta.h2Count < 3}     label="Structured sections (H2 anchors)" />
@@ -259,7 +334,13 @@ export function BlogQualityPanel({
       </Section>
 
       {/* ── Linking ──────────────────────────────────────────────────────── */}
-      <Section title="Internal Linking" score={breakdown.linking} max={10} colour={scoreColour(Math.round(breakdown.linking / 10 * 100))}>
+      <Section
+        title="Internal Linking"
+        score={breakdown.linking}
+        max={10}
+        colour={scoreColour(Math.round((breakdown.linking / 10) * 100))}
+        onImprove={(onAutoImprove || onImprove) ? () => (onAutoImprove ? onAutoImprove('linking') : onImprove?.('linking')) : undefined}
+      >
         <CheckRow
           ok={meta.internalLinks >= 2}
           warn={meta.internalLinks < 2}

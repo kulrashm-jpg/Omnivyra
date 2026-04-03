@@ -1,15 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
+import { requireManageConnectors } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
-
-const buildState = (value: Record<string, string>) => {
-  const json = JSON.stringify(value);
-  return Buffer.from(json, 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-};
+import { encodeOAuthState } from '../../../../../backend/auth/oauthState';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -32,13 +24,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'LinkedIn OAuth not configured. Super Admin must configure platform_oauth_configs or env vars.' });
   }
 
-  const redirectUri = getCommunityAiConnectorCallbackUrl('linkedin');
+  // Derive callback URL from the actual request host so localhost and production
+  // both resolve to a URL that is already registered in the LinkedIn app.
+  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
+  const host = (req.headers['x-forwarded-host'] as string | undefined) || req.headers.host || 'localhost:3000';
+  const redirectUri = `${proto}://${host}/api/auth/linkedin/callback`;
+
   const redirectTo =
     typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';
-  const state = buildState({
-    tenant_id: tenantId,
-    organization_id: organizationId,
-    redirect: redirectTo,
+
+  // Embed flow marker + tenant context so the shared callback knows to also
+  // save to community_ai_platform_tokens and redirect to the connectors page.
+  const state = encodeOAuthState({
+    companyId: organizationId,
+    userId: access.userId,
+    tenantId: organizationId,
+    flow: 'community-ai',
+    returnTo: redirectTo,
   });
 
   const params = new URLSearchParams({

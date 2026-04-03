@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, Settings } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import { useCompanyIntegrations } from '@/hooks/useCompanyIntegrations';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
@@ -85,6 +85,7 @@ const Header: React.FC = () => {
           {/* Desktop nav */}
           <div className="hidden md:flex items-center gap-1.5 flex-wrap">
             <button onClick={() => router.push('/dashboard')} className={navBtnClass}>Home</button>
+            <button onClick={() => router.push('/command-center')} className={navBtnClass} title="Setup wizard for your account">Command Center</button>
             <button onClick={() => router.push('/campaign-proposals')} className={navBtnClass}>Campaign Proposals</button>
             <button onClick={() => router.push('/community-ai')} className={navBtnClass}>Engagement Center</button>
             <button onClick={() => router.push('/blogs')} className={navBtnClass}>Blog</button>
@@ -93,6 +94,16 @@ const Header: React.FC = () => {
             )}
             {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={navBtnClass}>Usage</button>
+            )}
+            {isCompanyAdmin && (
+              <button
+                onClick={() => router.push('/settings/company-admin-access')}
+                className="flex items-center gap-1.5 bg-slate-900 text-white px-3 py-2 rounded-xl font-semibold hover:bg-slate-800 transition-colors text-sm"
+                title="Company Admin settings"
+              >
+                <Settings className="h-4 w-4" />
+                Settings
+              </button>
             )}
             {isAuthenticated && (
               <button
@@ -157,6 +168,7 @@ const Header: React.FC = () => {
         {mobileMenuOpen && (
           <div className="md:hidden mt-3 pb-2 space-y-1.5 border-t border-gray-200 pt-3">
             <button onClick={() => router.push('/dashboard')} className={mobileNavBtnClass}>Home</button>
+            <button onClick={() => router.push('/command-center')} className={mobileNavBtnClass}>Command Center</button>
             <button onClick={() => router.push('/campaign-proposals')} className={mobileNavBtnClass}>Campaign Proposals</button>
             <button onClick={() => router.push('/community-ai')} className={mobileNavBtnClass}>Engagement Center</button>
             <button onClick={() => router.push('/blogs')} className={mobileNavBtnClass}>Blog</button>
@@ -165,6 +177,15 @@ const Header: React.FC = () => {
             )}
             {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={mobileNavBtnClass}>Usage</button>
+            )}
+            {isCompanyAdmin && (
+              <button
+                onClick={() => router.push('/settings/company-admin-access')}
+                className="w-full text-left flex items-center gap-2 bg-slate-900 text-white px-4 py-3 rounded-xl font-semibold hover:bg-slate-800 transition-colors text-sm"
+              >
+                <Settings className="h-4 w-4" />
+                Company Admin Settings
+              </button>
             )}
             {isAuthenticated && (
               <button

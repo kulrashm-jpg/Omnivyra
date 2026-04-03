@@ -1,3 +1,4 @@
+
 /**
  * POST /api/campaigns/run-preplanning
  * Stage 11: Pre-planning gate — run duration evaluation without committing.
@@ -15,7 +16,7 @@ import { recordGovernanceEvent } from '../../../backend/services/GovernanceEvent
 import { generatePrePlanningExplanation } from '../../../backend/services/aiGateway';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -215,5 +216,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default handler;

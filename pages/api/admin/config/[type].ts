@@ -1,3 +1,4 @@
+
 /**
  * GET  /api/admin/config/:type  — read config
  * POST /api/admin/config/:type  — update config (with audit log)

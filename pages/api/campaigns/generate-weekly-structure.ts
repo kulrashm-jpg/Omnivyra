@@ -467,6 +467,10 @@ export interface GenerateWeeklyStructureInput {
   campaign_start_date?: string;
   /** When true (BOLT), restrict to text content only: post, blog, article, story, thread, poll. Exclude video, carousel, reels, etc. */
   bolt_text_only?: boolean;
+  /** Per-format post count from user selection e.g. { article: 2, newsletter: 1 }. Overrides equal-distribution fallback. */
+  format_frequency?: Record<string, number>;
+  /** Whether content is shared across platforms (same_day_per_topic) or unique per platform (staggered). */
+  cross_platform_sharing?: boolean | { enabled: boolean };
 }
 
 /** Core logic for generating weekly structure. Callable from API or BOLT pipeline. */
@@ -500,16 +504,32 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     adaptive_performance_insights: adaptiveInsightsBody,
     campaign_start_date: campaignStartDateFromInput,
     bolt_text_only: boltTextOnlyBody,
+    format_frequency: formatFrequencyBody,
+    cross_platform_sharing: crossPlatformSharingBody,
   } = body || {};
-  const boltTextOnly = Boolean(boltTextOnlyBody ?? boltRunId);
+  // Only default to text-only when bolt_text_only is explicitly passed.
+  // Do NOT default to true just because bolt_run_id is set — creator campaigns run via BOLT too.
+  const boltTextOnly = boltTextOnlyBody != null ? Boolean(boltTextOnlyBody) : false;
     const eligiblePlatforms: string[] | undefined =
       Array.isArray(eligiblePlatformsBody) && eligiblePlatformsBody.length > 0
         ? eligiblePlatformsBody.map((p: unknown) => String(p).toLowerCase().replace(/^twitter$/i, 'x'))
         : undefined;
     const postsPerWeek: number | undefined =
       postsPerWeekBody != null && Number.isFinite(Number(postsPerWeekBody))
-        ? Math.max(2, Math.min(7, Math.floor(Number(postsPerWeekBody))))
+        ? Math.max(2, Math.min(14, Math.floor(Number(postsPerWeekBody))))  // raised from 7→14 to handle multi-format totals
         : undefined;
+  // Resolve format_frequency: Record<string, number> or null
+  const formatFrequency: Record<string, number> | null =
+    formatFrequencyBody && typeof formatFrequencyBody === 'object' && !Array.isArray(formatFrequencyBody)
+      ? (formatFrequencyBody as Record<string, number>)
+      : null;
+  // Resolve cross_platform_sharing: true = shared (same day), false = unique (staggered)
+  const crossPlatformShared: boolean =
+    typeof crossPlatformSharingBody === 'boolean'
+      ? crossPlatformSharingBody
+      : typeof crossPlatformSharingBody === 'object' && crossPlatformSharingBody !== null
+        ? Boolean((crossPlatformSharingBody as { enabled?: boolean }).enabled)
+        : true; // default: shared (BOLT default behaviour)
     const autoRebalance = Boolean(auto_rebalance);
     const autoOptimizeDistribution = Boolean(auto_optimize_distribution);
     const enableCampaignWaves = Boolean(enable_campaign_waves);
@@ -642,7 +662,11 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
             : null;
       const distributionMode =
         fromStrategy?.distributionMode ??
-        (distribution_mode === 'same_day_per_topic' ? 'same_day_per_topic' : 'staggered');
+        (distribution_mode === 'same_day_per_topic'
+          ? 'same_day_per_topic'
+          : crossPlatformShared
+            ? 'same_day_per_topic'   // shared: all platforms get content on the same day
+            : 'staggered');          // unique: each platform gets its own day slot
       const topicOrderRaw: string[] = Array.isArray(weekBlueprint.topics)
       ? weekBlueprint.topics.map((t) => String((t as any)?.topicTitle ?? '').trim()).filter(Boolean)
       : Array.isArray(weekBlueprint.topics_to_cover)
@@ -737,9 +761,16 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       const platforms = synthPlatforms.length > 0
         ? synthPlatforms
         : (eligiblePlatforms && eligiblePlatforms.length > 0 ? eligiblePlatforms.slice(0, 2) : ['linkedin']);
-      const contentTypes = (Array.isArray(weekBlueprint.content_type_mix) && weekBlueprint.content_type_mix.length > 0
-        ? weekBlueprint.content_type_mix
-        : ['post']
+      // User's explicit format_frequency keys take precedence over AI-generated content_type_mix.
+      // This ensures the distribution strictly honours what the user selected on the strategy page.
+      const userFormats = formatFrequency && Object.keys(formatFrequency).length > 0
+        ? Object.keys(formatFrequency).map((t) => t.trim().toLowerCase()).filter(Boolean)
+        : null;
+      const contentTypes = (
+        userFormats ??
+        (Array.isArray(weekBlueprint.content_type_mix) && weekBlueprint.content_type_mix.length > 0
+          ? weekBlueprint.content_type_mix
+          : ['post'])
       ).map((t) => String(t || '').trim().toLowerCase()).filter(Boolean);
       const totalCount = postsPerWeek ?? Math.max(
         2,
@@ -755,9 +786,13 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         : [String(weekBlueprint.phase_label || weekBlueprint.primary_objective || `Week ${weekNumber} content`).trim()];
       const ctaType = String(weekBlueprint.cta_type || 'Engage').trim() || 'Engage';
       const objective = String(weekBlueprint.primary_objective || weekBlueprint.phase_label || 'Build brand awareness').trim() || 'Build brand awareness';
-      const countPerType = Math.max(1, Math.round(totalCount / contentTypes.length));
+      const defaultCountPerType = Math.max(1, Math.round(totalCount / contentTypes.length));
       let synthGlobalIdx = (weekNumber - 1) * totalCount;
       for (const contentType of contentTypes) {
+        // Honour per-format frequency from user selection; fall back to equal distribution
+        const countPerType = formatFrequency?.[contentType] != null
+          ? Math.max(1, Math.round(Number(formatFrequency[contentType])))
+          : defaultCountPerType;
         const topic_slots: Array<{ topic: string | null; global_progression_index: number; intent: any }> = [];
         for (let k = 0; k < countPerType; k++) {
           synthGlobalIdx++;

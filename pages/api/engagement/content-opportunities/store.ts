@@ -1,3 +1,4 @@
+
 /**
  * POST /api/engagement/content-opportunities/store
  * Persist a content opportunity (skip if duplicate within 7 days).

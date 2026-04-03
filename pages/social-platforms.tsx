@@ -406,7 +406,7 @@ export default function SocialPlatformsPage() {
     setTimeout(runNext, 2000); // start after page settles
   }, [platforms]);
 
-  // Handle OAuth callback redirect
+  // Handle OAuth callback redirect (same-tab legacy flow)
   useEffect(() => {
     const { connected, success, error } = router.query;
     if (connected && success === 'true') {
@@ -419,17 +419,36 @@ export default function SocialPlatformsPage() {
     }
   }, [router.query]);
 
+  // Refresh when a connector OAuth completes in a popup tab
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'omnivyra_connector_connected') {
+        loadStatus();
+        const platform = e.newValue?.split(':')[0] || 'account';
+        notify('success', `${platform} connected successfully!`);
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [loadStatus]);
+
   const handleConnect = async (p: PlatformStatus) => {
     if (!p.auth_path) return;
+    // Route through community-ai connectors so one OAuth connect writes to both
+    // social_accounts (publishing) and community_ai_platform_tokens (engagement).
+    if (selectedCompanyId) {
+      const redirect = encodeURIComponent('/social-platforms');
+      const tid = encodeURIComponent(selectedCompanyId);
+      window.open(`/api/community-ai/connectors/${p.platform_key}/auth?tenant_id=${tid}&organization_id=${tid}&redirect=${redirect}`, '_blank');
+      return;
+    }
+    // Fallback: legacy per-user flow (no company context)
     const params = new URLSearchParams({ returnTo: '/social-platforms' });
-    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
     try {
       const { supabase: sbClient } = await import('../utils/supabaseClient');
       const { data } = await sbClient.auth.getSession();
       if (data.session?.user?.id) params.set('userId', data.session.user.id);
     } catch { /* non-fatal */ }
-    // Navigate same-window — popup would be blocked by browsers after an async await,
-    // and the callback already redirects back to /social-platforms on success/error.
     window.location.href = `${p.auth_path}?${params.toString()}`;
   };
 

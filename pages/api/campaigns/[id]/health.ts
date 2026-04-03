@@ -1,3 +1,4 @@
+
 /**
  * GET /api/campaigns/[id]/health
  * Returns persisted report_json only. No fallback reconstruction.

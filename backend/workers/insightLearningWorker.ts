@@ -6,6 +6,8 @@
 
 import { supabase } from '../db/supabaseClient';
 import { generateInsights } from '../services/insightIntelligenceService';
+import { runInBackgroundJobContext } from '../services/intelligenceExecutionContext';
+import { enforceDecisionGenerationThrottle } from '../services/decisionGenerationControlService';
 
 export async function runInsightLearningWorker(): Promise<{
   organizations_processed: number;
@@ -25,7 +27,8 @@ export async function runInsightLearningWorker(): Promise<{
 
   for (const orgId of orgIds) {
     try {
-      const result = await generateInsights(orgId);
+      await enforceDecisionGenerationThrottle(orgId, 'insightLearningWorker');
+      const result = await runInBackgroundJobContext('insight_learning_worker', async () => generateInsights(orgId));
       organizationsProcessed++;
       insightsCreated += result.created;
       if (result.errors.length > 0) {

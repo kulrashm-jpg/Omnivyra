@@ -85,8 +85,31 @@ export function getConnectionConfig() {
 
 // Redis connection instance (shared across Queue/Worker)
 let redisConnection: IORedis | null = null;
+let redisInfraStarted = false;
+let usageProtectionReadyPromise: Promise<void> = Promise.resolve();
+
+function ensureRedisInfraStarted(): void {
+  if (redisInfraStarted) return;
+  redisInfraStarted = true;
+
+  startInstrumentation(() => getRedisConnection());
+  usageProtectionReadyPromise = startUsageProtection(() => getRedisConnection());
+  startQueueReportFlush(
+    () => getRedisConnection(),
+    () => getMetricsReport().opsPerMin,
+  );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  startMetricsPersistence(
+    () => getRedisConnection() as any,
+    getSystemMetrics,
+    (metrics) => { try { return estimateCost(metrics); } catch { return null; } },
+  );
+}
 
 function getRedisConnection(): IORedis {
+  ensureRedisInfraStarted();
+
   if (!redisConnection) {
     redisConnection = new IORedis({
       host: redisConfig.host,
@@ -126,25 +149,12 @@ export function getInstrumentedClient(feature: RedisFeature | string): IORedis {
   return createInstrumentedClient(getRedisConnection(), feature);
 }
 
-// Start instrumentation timers once per process.
-// Pass the shared-client factory to avoid a circular import inside the module.
-startInstrumentation(() => getRedisConnection());
-// Start Redis usage-protection polling (15-second loop).
-// BUG#21 fix: store the first-poll promise so startWorkers() can await it before
-// accepting any jobs — guarantees protection level is known at worker startup.
-export const usageProtectionReady: Promise<void> = startUsageProtection(() => getRedisConnection());
-startQueueReportFlush(
-  () => getRedisConnection(),
-  () => getMetricsReport().opsPerMin,
-);
-
-// Start 5-minute system metrics persistence to Redis.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-startMetricsPersistence(
-  () => getRedisConnection() as any,
-  getSystemMetrics,
-  (metrics) => { try { return estimateCost(metrics); } catch { return null; } },
-);
+// Usage protection readiness is now lazy and starts only when Redis-backed
+// queue/worker functionality is used.
+export function getUsageProtectionReady(): Promise<void> {
+  ensureRedisInfraStarted();
+  return usageProtectionReadyPromise;
+}
 
 // ── Usage-protection queue guard ──────────────────────────────────────────────
 //
@@ -411,7 +421,6 @@ export function getWorker(
   processor: (job: any) => Promise<void>,
   opts?: { concurrency?: number }
 ): Worker {
-  const connection = getRedisConnection();
   const concurrency = opts?.concurrency ?? 5;
   const worker = new Worker(queueName, processor, {
     connection: getConnectionConfig(),
@@ -420,6 +429,10 @@ export function getWorker(
       max: 10,
       duration: 1000,
     },
+    // Reduce idle Redis polling — default drainDelay=5s × 8 workers = ~138k cmds/day.
+    // 300s drainDelay + 30-min stalledInterval keeps this under ~2.7k cmds/day.
+    drainDelay: 300,
+    stalledInterval: 1_800_000,
   });
 
   worker.on('completed', (job) => {
@@ -609,5 +622,5 @@ export function createWorker(
 export function makeStableJobId(prefix: string, payload: Record<string, unknown>): string {
   const sorted = JSON.stringify(payload, Object.keys(payload).sort());
   const hash = createHash('sha256').update(`${prefix}:${sorted}`).digest('hex').slice(0, 16);
-  return `${prefix}:${hash}`;
+  return `${prefix}-${hash}`;
 }

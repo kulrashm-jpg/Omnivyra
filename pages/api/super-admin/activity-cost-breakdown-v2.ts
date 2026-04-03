@@ -1,3 +1,4 @@
+
 /**
  * Activity Cost Breakdown API - v2 (Database Backed)
  * 
@@ -13,6 +14,8 @@
  * - Campaign cost aggregation
  * - Multi-company cost isolation
  */
+
+export const runtime = 'nodejs';
 
 import { supabase } from '@/backend/db/supabaseClient';
 import { NextApiRequest, NextApiResponse } from 'next';

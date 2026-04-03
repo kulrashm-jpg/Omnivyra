@@ -134,7 +134,7 @@ const BUYING_PATTERNS    = [/\bhow (do|can) I (buy|get|purchase|sign up|start)\b
 
 /**
  * Extract planning-loop signals from recent community engagement for an account.
- * Injects into PlanningInput.engagement_insights before the next campaign cycle.
+ * Injects into PlanningInput.community_signals before the next campaign cycle.
  */
 export async function generateEngagementInsights(accountId: string): Promise<PlanningEngagementInsights> {
   const now = new Date().toISOString();

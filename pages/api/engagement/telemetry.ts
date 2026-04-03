@@ -1,3 +1,4 @@
+
 /**
  * POST /api/engagement/telemetry
  * Records engagement interaction events.

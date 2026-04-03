@@ -96,8 +96,24 @@ export default function CommunityAiConnectors() {
     if (error) setErrorMessage(decodeURIComponent(error));
     const connected = typeof router.query.connected === 'string' ? router.query.connected : null;
     const status = typeof router.query.status === 'string' ? router.query.status : null;
-    if (connected && status === 'success') fetchStatus();
+    const successLegacy = router.query.success === 'true';
+    if (connected && (status === 'success' || successLegacy)) {
+      fetchStatus();
+      // Notify the original tab (which opened this as a popup) that connection succeeded
+      try { localStorage.setItem('omnivyra_connector_connected', `${connected}:${Date.now()}`); } catch {}
+      // Close this tab if it was opened by window.open (i.e. is a popup tab)
+      if (typeof window !== 'undefined' && window.opener) window.close();
+    }
   }, [router.query, fetchStatus]);
+
+  // Listen for successful connections completed in other tabs (popup OAuth flow)
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'omnivyra_connector_connected') fetchStatus();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [fetchStatus]);
 
   const linkForPlatform = (platform: string) => {
     if (!tenantId) return '#';
@@ -189,13 +205,16 @@ export default function CommunityAiConnectors() {
                   <td className="px-3 py-2">{entry.expires_at || '—'}</td>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap gap-2">
-                      <a
-                        className="px-2 py-1 text-xs rounded border border-indigo-500 text-indigo-600"
-                        href={linkForPlatform(entry.platform)}
-                        aria-disabled={!tenantId}
+                      <button
+                        className="px-2 py-1 text-xs rounded border border-indigo-500 text-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!tenantId}
+                        onClick={() => {
+                          if (!tenantId) return;
+                          window.open(linkForPlatform(entry.platform), '_blank');
+                        }}
                       >
                         Connect {entry.displayName}
-                      </a>
+                      </button>
                       <button
                         className="px-2 py-1 text-xs rounded border border-gray-300 text-gray-600"
                         onClick={() => handleDisconnect(entry.platform)}

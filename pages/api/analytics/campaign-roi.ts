@@ -6,7 +6,22 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
-import { getCampaignRoiIntelligence } from '../../../backend/services/CampaignRoiIntelligenceService';
+import { supabase } from '../../../backend/db/supabaseClient';
+import {
+  composeCampaignOptimizationView,
+  composeDecisionIntelligence,
+} from '../../../backend/services/decisionComposerService';
+import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
+
+type CampaignRoiIntelligence = {
+  campaignId: string;
+  roiScore: number;
+  performanceScore: number;
+  governanceStabilityScore: number;
+  executionReliabilityScore: number;
+  optimizationSignal: 'STABLE' | 'AT_RISK' | 'HIGH_POTENTIAL';
+  recommendation?: string;
+};
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -19,7 +34,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'campaignId is required' });
   }
 
-  const intelligence = await getCampaignRoiIntelligence(campaignId);
+  const { data: campaignRow, error: campaignError } = await supabase
+    .from('campaigns')
+    .select('company_id')
+    .eq('id', campaignId)
+    .maybeSingle();
+
+  if (campaignError || !campaignRow?.company_id) {
+    return res.status(404).json({ error: 'Campaign not found' });
+  }
+
+  const composition = await runInApiReadContext('campaignRoiApi', async () =>
+    composeDecisionIntelligence({
+      companyId: campaignRow.company_id,
+      reportTier: 'deep',
+      entityType: 'campaign',
+      entityId: campaignId,
+      status: ['open'],
+    })
+  );
+
+  const optimization = composeCampaignOptimizationView(campaignId, composition);
+  const intelligence: CampaignRoiIntelligence = {
+    campaignId,
+    roiScore: optimization.roi.roiScore,
+    performanceScore: optimization.roi.performanceScore,
+    governanceStabilityScore: optimization.roi.governanceStabilityScore,
+    executionReliabilityScore: optimization.roi.executionReliabilityScore,
+    optimizationSignal: optimization.roi.optimizationSignal,
+    recommendation: optimization.roi.recommendation,
+  };
   return res.status(200).json(intelligence);
 }
 

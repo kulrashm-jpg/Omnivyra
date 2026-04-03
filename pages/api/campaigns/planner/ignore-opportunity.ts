@@ -1,3 +1,4 @@
+
 /**
  * POST /api/campaigns/planner/ignore-opportunity
  * Marks an opportunity as ignored.

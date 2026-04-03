@@ -1,3 +1,4 @@
+
 /**
  * POST /api/planner/skeleton-command
  * Modifies an existing calendar skeleton via natural language.
@@ -98,7 +99,7 @@ function applyRemoveFilter(actList: Activity[], filter: RemoveFilter): Set<strin
   return new Set(matched.map((a) => a.execution_id ?? '').filter(Boolean));
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -307,5 +308,3 @@ Use null in delete_filter for fields not specified. Use [] for unused arrays.`;
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed' });
   }
 }
-
-export default handler;

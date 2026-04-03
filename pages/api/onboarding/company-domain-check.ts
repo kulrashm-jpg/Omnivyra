@@ -1,3 +1,4 @@
+
 /**
  * GET /api/onboarding/company-domain-check
  *

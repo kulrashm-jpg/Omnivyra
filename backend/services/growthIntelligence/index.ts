@@ -5,6 +5,7 @@
  */
 
 export { getGrowthIntelligenceSummary } from './growthIntelligenceService';
+export { generateGrowthIntelligenceDecisions } from './growthIntelligenceService';
 export { resolveCampaignIdsForCompany } from './growthIntelligenceService';
 export { getContentVelocityMetrics } from './metrics/contentVelocity';
 export { getPublishingSuccessMetrics } from './metrics/publishingSuccess';

@@ -18,6 +18,12 @@ import { getPlatformBenchmark } from './globalPatternService';
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 import { rankPlatformsByPerformance } from './platformPerformanceRanker';
 import { deductCreditsIfValueAwaited } from './creditExecutionService';
+import {
+  archiveDecisionScope,
+  replaceDecisionObjectsForSource,
+  type PersistedDecisionObject,
+} from './decisionObjectService';
+import { loadNormalizedCompetitorSignals } from './normalizeCompetitorSignalsService';
 
 export type CompetitorSignal = {
   competitor_name: string;
@@ -212,4 +218,124 @@ export async function fetchCompetitorSignals(
     ...base,
     prompt_context: buildPromptContext(base),
   };
+}
+
+export async function generateCompetitorIntelligenceDecisionObjects(companyId: string): Promise<PersistedDecisionObject[]> {
+  await archiveDecisionScope({
+    company_id: companyId,
+    report_tier: 'growth',
+    source_service: 'competitorIntelligenceService',
+    entity_type: 'global',
+    entity_id: null,
+    changed_by: 'system',
+  });
+
+  const [intel, normalized] = await Promise.all([
+    fetchCompetitorSignals(companyId),
+    loadNormalizedCompetitorSignals(companyId, 90),
+  ]);
+
+  const mentionCount = normalized.reduce((sum, signal) => sum + Number(signal.mention_count ?? 0), 0);
+  const negativeBenchmarkCount = normalized.filter(
+    (signal) => signal.signal_type === 'benchmark' && (signal.benchmark_gap < 0 || signal.benchmark_label === 'below')
+  ).length;
+  const competitorCount = new Set(normalized.map((signal) => signal.competitor_name).filter(Boolean)).size;
+
+  const drafts = [];
+
+  if (negativeBenchmarkCount > 0) {
+    drafts.push({
+      company_id: companyId,
+      report_tier: 'growth' as const,
+      source_service: 'competitorIntelligenceService',
+      entity_type: 'global' as const,
+      entity_id: null,
+      issue_type: 'competitor_gap',
+      title: 'Competitive benchmark gap detected',
+      description: 'Platform benchmark signals indicate performance gaps against market competitors.',
+      evidence: {
+        negative_benchmark_count: negativeBenchmarkCount,
+        benchmark_gaps: intel.benchmark_gaps,
+      },
+      impact_traffic: 34,
+      impact_conversion: 52,
+      impact_revenue: 50,
+      priority_score: 66,
+      effort_score: 24,
+      confidence_score: 0.8,
+      recommendation: 'Close platform-level benchmark gaps with differentiated format and distribution strategy.',
+      action_type: 'adjust_strategy',
+      action_payload: {
+        optimization_focus: 'competitor_gap',
+      },
+      status: 'open' as const,
+      last_changed_by: 'system' as const,
+    });
+  }
+
+  if (mentionCount >= 6 || competitorCount >= 3) {
+    drafts.push({
+      company_id: companyId,
+      report_tier: 'growth' as const,
+      source_service: 'competitorIntelligenceService',
+      entity_type: 'global' as const,
+      entity_id: null,
+      issue_type: 'competitor_dominance',
+      title: 'Competitor attention share is elevated',
+      description: 'Community and benchmark signals indicate competitor dominance pressure.',
+      evidence: {
+        mention_count: mentionCount,
+        competitor_count: competitorCount,
+      },
+      impact_traffic: 38,
+      impact_conversion: 48,
+      impact_revenue: 54,
+      priority_score: 68,
+      effort_score: 30,
+      confidence_score: 0.77,
+      recommendation: 'Deploy differentiated narrative and channel moves in areas where competitors dominate attention.',
+      action_type: 'adjust_strategy',
+      action_payload: {
+        optimization_focus: 'competitor_dominance',
+      },
+      status: 'open' as const,
+      last_changed_by: 'system' as const,
+    });
+  }
+
+  if (intel.trending_formats.length >= 3 && negativeBenchmarkCount >= 1) {
+    drafts.push({
+      company_id: companyId,
+      report_tier: 'growth' as const,
+      source_service: 'competitorIntelligenceService',
+      entity_type: 'global' as const,
+      entity_id: null,
+      issue_type: 'missed_market_capture',
+      title: 'Missed market capture in competitor-active formats',
+      description: 'Trending competitor formats are advancing while current benchmark position remains below parity.',
+      evidence: {
+        trending_formats: intel.trending_formats,
+        benchmark_gaps: intel.benchmark_gaps,
+      },
+      impact_traffic: 42,
+      impact_conversion: 44,
+      impact_revenue: 52,
+      priority_score: 67,
+      effort_score: 22,
+      confidence_score: 0.76,
+      recommendation: 'Increase share of voice in fast-moving formats where benchmark underperformance is concentrated.',
+      action_type: 'fix_distribution',
+      action_payload: {
+        optimization_focus: 'market_capture',
+      },
+      status: 'open' as const,
+      last_changed_by: 'system' as const,
+    });
+  }
+
+  if (drafts.length === 0) {
+    return [];
+  }
+
+  return replaceDecisionObjectsForSource(drafts);
 }

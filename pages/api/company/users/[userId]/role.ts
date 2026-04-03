@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../../backend/db/supabaseClient';
+import { requireCompanyContext } from '../../../../../backend/services/companyContextGuardService';
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
 import { getUserRole, isSuperAdmin, Role } from '../../../../../backend/services/rbacService';
 
@@ -82,7 +83,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'companyId and role are required' });
   }
 
-  const access = await ensureCompanyAdminAccess(req, res, String(companyId));
+  const companyContext = await requireCompanyContext({ req, res, companyId: String(companyId).trim() });
+  if (!companyContext) return;
+
+  const access = await ensureCompanyAdminAccess(req, res, companyContext.companyId);
   if (!access) return;
 
   const desiredRole = String(role).toUpperCase();

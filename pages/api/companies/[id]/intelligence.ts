@@ -1,3 +1,4 @@
+
 /**
  * GET /api/companies/:id/intelligence
  *

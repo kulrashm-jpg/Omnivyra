@@ -1,3 +1,4 @@
+
 /**
  * POST /api/campaigns/update-duration
  * User requests duration change. Runs constraint evaluation.
@@ -15,7 +16,7 @@ import { normalizeExecutionState } from '../../../backend/governance/ExecutionSt
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -202,5 +203,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default handler;

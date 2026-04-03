@@ -38,6 +38,12 @@ export interface BlogGenerationInput {
   tone?:            string;
   goal_type?:       string;
   selected_angle?:  BlogAngle;             // chosen angle from angle-picker step
+  /**
+   * Pre-formatted writing style instructions block from WritingStyleEngine.
+   * Injected as a WRITING STYLE GUIDE section in the user prompt.
+   * Build with: buildFormattedStyleInstructions(profile) from lib/content/writingStyleEngine
+   */
+  writingStyleInstructions?: string;
 }
 
 export interface SeriesSummary {
@@ -61,15 +67,23 @@ export interface BlogGenerationOutput {
 // ── ANGLE PROMPTS ─────────────────────────────────────────────────────────────
 
 export function buildAnglesSystemPrompt(): string {
-  return `You are a B2B content strategist. Given a topic, you generate three distinct editorial angles:
+  const currentYear = new Date().getFullYear();
+  const nextYear    = currentYear + 1;
+  return `You are a B2B content strategist writing for ${currentYear}. Given a topic, you generate three distinct editorial angles:
 
 1. ANALYTICAL  — data-driven, examines patterns, evidence, and causality
 2. CONTRARIAN  — challenges conventional wisdom, exposes flawed assumptions
 3. STRATEGIC   — frames the topic as a business lever; connects it to measurable outcomes
 
+## TEMPORAL RULES (non-negotiable)
+- The current year is ${currentYear}. Write for the present and near future (${currentYear}–${nextYear}).
+- NEVER anchor titles or content to past years (e.g., 2023, 2024). Do not use phrases like "in 2023" or "last year".
+- Reference what is happening NOW or what practitioners should do going forward.
+- If citing a trend, frame it as current reality or emerging direction — not historical recap.
+
 For each angle, produce:
-- A specific, compelling article title (not generic, not clickbait)
-- A 1–2 sentence angle summary describing the argument direction
+- A specific, compelling article title (not generic, not clickbait, no past year in the title)
+- A 1–2 sentence angle summary describing the argument direction for a ${currentYear} audience
 - A single hook sentence that would open the article (not a question)
 
 Return ONLY valid JSON — no markdown, no prose:
@@ -102,20 +116,40 @@ Return ONLY valid JSON — no markdown, no prose:
 }
 
 export function buildAnglesUserPrompt(input: BlogGenerationInput): string {
-  const lines: string[] = [`TOPIC: ${input.topic}`];
+  const currentYear = new Date().getFullYear();
+  const lines: string[] = [
+    `CURRENT YEAR: ${currentYear} — all angles must reflect present-day or forward-looking market reality.`,
+    `TOPIC: ${input.topic}`,
+  ];
 
   if (input.intent)  lines.push(`INTENT: ${input.intent}`);
   if (input.cluster) lines.push(`CLUSTER: ${input.cluster}`);
+  if (input.tone)    lines.push(`TONE: ${input.tone}`);
 
-  if (input.answers && Object.keys(input.answers).length > 0) {
-    const contextParts: string[] = [];
-    if (input.answers.audience) contextParts.push(`Audience: ${input.answers.audience}`);
-    if (input.answers.industry) contextParts.push(`Industry: ${input.answers.industry}`);
-    if (input.answers.depth)    contextParts.push(`Depth: ${input.answers.depth}`);
-    if (contextParts.length)    lines.push(`CONTEXT: ${contextParts.join(' | ')}`);
-  }
+  const a = input.answers ?? {};
 
-  lines.push('\nGenerate 3 distinct editorial angles for this topic.');
+  // Audience & industry
+  const contextParts: string[] = [];
+  if (a.audience) contextParts.push(`Audience: ${a.audience}`);
+  if (a.industry) contextParts.push(`Industry: ${a.industry}`);
+  if (a.depth)    contextParts.push(`Depth: ${a.depth}`);
+  if (a.reader_stage) contextParts.push(`Reader stage: ${a.reader_stage}`);
+  if (contextParts.length) lines.push(`CONTEXT: ${contextParts.join(' | ')}`);
+
+  // Company context — makes angles specific to this business
+  if (a.company_context)  lines.push(`COMPANY CONTEXT: ${a.company_context}`);
+  if (a.current_content)  lines.push(`EXISTING CONTENT GAPS: ${a.current_content}`);
+  if (a.writing_style)    lines.push(`WRITING STYLE: ${a.writing_style}`);
+
+  // Directional inputs — these must shape the angles directly
+  if (a.uniqueness_directive)  lines.push(`UNIQUENESS DIRECTIVE (angles must honour this): ${a.uniqueness_directive}`);
+  if (a.must_include_points)   lines.push(`MUST-INCLUDE POINTS (weave into each angle): ${a.must_include_points}`);
+  if (a.campaign_objective)    lines.push(`CAMPAIGN OBJECTIVE: ${a.campaign_objective}`);
+  if (a.trend_context)         lines.push(`TREND CONTEXT: ${a.trend_context}`);
+  if (a.cta_preference)        lines.push(`CTA STYLE: ${a.cta_preference}`);
+  if (a.target_word_count)     lines.push(`TARGET LENGTH: ${a.target_word_count} words`);
+
+  lines.push('\nGenerate 3 distinct editorial angles for this topic. Each angle title and summary must be specifically tailored to the context above — not generic.');
   return lines.join('\n');
 }
 
@@ -150,7 +184,9 @@ export function validateAnglesOutput(raw: unknown): BlogAngle[] | null {
 // ── FULL GENERATION PROMPTS ───────────────────────────────────────────────────
 
 export function buildGenerationSystemPrompt(): string {
-  return `You are a senior B2B content strategist and writer for a marketing intelligence platform.
+  const currentYear = new Date().getFullYear();
+  const nextYear    = currentYear + 1;
+  return `You are a senior B2B content strategist and writer for a marketing intelligence platform. Today is ${currentYear}.
 
 Your task: generate a complete, publication-ready blog post that reads like it was written by a genuine expert — not by AI.
 
@@ -160,7 +196,9 @@ Your task: generate a complete, publication-ready blog post that reads like it w
 2. **No filler**: Every sentence must earn its place. Cut anything that sounds like padding.
 3. **Narrative construction**: Build an argument progressively. Each section must logically lead to the next.
 4. **Thought leadership tone**: Analytical, direct, opinionated where evidence supports it. Not promotional. Never use: "game-changing", "revolutionary", "leverage", "synergy".
-5. **Structure is mandatory** — follow it exactly:
+5. **Write for NOW**: The current year is ${currentYear}. All content must reflect the current state of the market or what is emerging in ${currentYear}–${nextYear}. Do NOT write about past trends, past years, or historical recaps. Readers know what happened in 2022 or 2023 — they need to know what to do today and what's coming next.
+6. **No year-anchored titles**: Never put a past year (e.g., 2023, 2024) in the title or H2 headings. If a year is needed, use ${currentYear} or ${nextYear}.
+7. **Structure is mandatory** — follow it exactly:
    - Key Insights block (3–5 bullet points, for scanners)
    - Hook intro (100–150 words, opens with a sharp insight, problem, or counterintuitive claim — NOT a question)
    - 3–5 H2 sections (each 200–350 words, builds on the previous)
@@ -199,7 +237,10 @@ Do NOT use: <div>, <span>, <table>, inline styles, class attributes (except the 
 }
 
 export function buildGenerationUserPrompt(input: BlogGenerationInput): string {
-  const lines: string[] = [];
+  const currentYear = new Date().getFullYear();
+  const lines: string[] = [
+    `CURRENT YEAR: ${currentYear} — write for present-day and near-future market reality. Do not anchor content to past years.`,
+  ];
 
   // If a specific angle was selected, lead with it
   if (input.selected_angle) {
@@ -253,6 +294,16 @@ export function buildGenerationUserPrompt(input: BlogGenerationInput): string {
       depth:    'Depth level',
       tone:     'Tone preference',
       examples: 'Examples / data to include',
+      target_word_count: 'Target word count',
+      reader_stage: 'Reader stage',
+      cta_preference: 'CTA preference',
+      uniqueness_directive: 'Uniqueness directive',
+      must_include_points: 'Must-include points',
+      campaign_objective: 'Campaign objective',
+      trend_context: 'Trend context',
+      company_context: 'Company context',
+      current_content: 'Current content coverage',
+      writing_style: 'Writing style guidance',
     };
     for (const [key, value] of Object.entries(input.answers)) {
       if (value.trim()) lines.push(`  ${labelMap[key] ?? key}: ${value.trim()}`);
@@ -260,6 +311,13 @@ export function buildGenerationUserPrompt(input: BlogGenerationInput): string {
   }
 
   if (input.tone) lines.push(`TONE: ${input.tone}`);
+
+  // ── Writing style guide from WritingStyleEngine ───────────────────────────
+  if (input.writingStyleInstructions) {
+    lines.push(`\n${input.writingStyleInstructions}`);
+  }
+
+  const targetWords = input.answers?.target_word_count ? String(input.answers.target_word_count).trim() : '';
 
   lines.push(`
 REQUIREMENTS:
@@ -269,6 +327,7 @@ REQUIREMENTS:
 - Each H2 section must end with a clear takeaway sentence
 - References must be real (well-known publications, research firms, or reputable platforms)
 - key_insights must be standalone — a reader who only reads them should understand the article's core value
+${targetWords ? `- Target article length: approximately ${targetWords} words (±10%)` : ''}
 
 Generate the complete blog post now.`);
 
@@ -294,6 +353,35 @@ export function validateGenerationOutput(raw: unknown): BlogGenerationOutput | n
   if (!title || !content_html) return null;
 
   return { title, excerpt, content_html, tags, category, seo_meta_title, seo_meta_description, key_insights };
+}
+
+// ── Fallback angles ───────────────────────────────────────────────────────────
+
+export function buildFallbackAngles(topic: string): BlogAngle[] {
+  const short = topic.length > 50 ? topic.slice(0, 50) + '…' : topic;
+  return [
+    {
+      type:          'analytical',
+      label:         'Analytical',
+      title:         `The Data Behind ${short}`,
+      angle_summary: 'Examines the evidence, patterns, and causal relationships that explain why this matters.',
+      hook:          'The numbers tell a story most practitioners are too busy to read.',
+    },
+    {
+      type:          'contrarian',
+      label:         'Contrarian',
+      title:         `Why Everything You Know About ${short} Is Wrong`,
+      angle_summary: 'Challenges the dominant narrative and exposes the assumptions that lead teams astray.',
+      hook:          'The prevailing advice on this topic has a quiet but expensive flaw.',
+    },
+    {
+      type:          'strategic',
+      label:         'Strategic',
+      title:         `How to Turn ${short} Into a Competitive Advantage`,
+      angle_summary: 'Connects the topic directly to business outcomes and shows leaders how to act on it.',
+      hook:          'Most companies treat this as a tactic. The ones winning treat it as infrastructure.',
+    },
+  ];
 }
 
 // ── Deterministic fallback ────────────────────────────────────────────────────

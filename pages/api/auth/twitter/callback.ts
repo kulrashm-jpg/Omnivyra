@@ -7,6 +7,13 @@ import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
+import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
+
+function getRequestBaseUrl(req: NextApiRequest): string {
+  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
+  const host = (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string) || 'localhost:3000';
+  return `${proto}://${host}`;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,8 +21,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error } = req.query;
-  const { returnTo: returnToEarly } = decodeOAuthState(state as string);
-  const errDest = (returnToEarly && returnToEarly.startsWith('/')) ? returnToEarly : '/social-platforms';
+  const { returnTo: returnToEarly, flow: earlyFlow } = decodeOAuthState(state as string);
+  const errDest = earlyFlow === 'community-ai'
+    ? ((returnToEarly && returnToEarly.startsWith('/')) ? returnToEarly : '/community-ai/connectors')
+    : ((returnToEarly && returnToEarly.startsWith('/')) ? returnToEarly : '/social-platforms');
 
   if (error) {
     return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
@@ -38,13 +47,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       `${oauthCredentials.client_id}:${oauthCredentials.client_secret}`
     ).toString('base64');
 
+    const { companyId: earlyCompanyId, codeVerifier: earlyCodeVerifier } = decodeOAuthState(state as string);
+
     const tokenResponse = await axios.post(
       'https://api.twitter.com/2/oauth2/token',
       new URLSearchParams({
         code: code as string,
         grant_type: 'authorization_code',
-        redirect_uri: `${getBaseUrl(req)}/api/auth/twitter/callback`,
-        code_verifier: '', // Add if using PKCE
+        redirect_uri: `${getRequestBaseUrl(req)}/api/auth/twitter/callback`,
+        // Use PKCE code_verifier when present (community-ai flow encodes it in state)
+        code_verifier: earlyCodeVerifier || '',
       }),
       {
         headers: {
@@ -68,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const userProfile = { data: profileResponse.data.data };
 
-    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
+    const { companyId, userId: stateUserId, returnTo, flow: stateFlow, tenantId: stateTenantId } = decodeOAuthState(state as string);
 
     // Get authenticated user — prefer cookie session, fall back to userId encoded in state
     const { user: sessionUser } = await getSupabaseUserFromRequest(req);
@@ -158,6 +170,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .catch(e => console.warn('[twitter/callback] setup credits check failed:', e?.message));
     }
 
+    // If this request came from the Community AI connector flow, also save to
+    // community_ai_platform_tokens and redirect back to the connectors page.
+    if (stateFlow === 'community-ai' && stateTenantId) {
+      await saveCommunityAiToken(stateTenantId, stateTenantId, 'twitter', {
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token || null,
+        expires_at: expiresAt,
+        connected_by_user_id: userId,
+      });
+      console.info('[connector_audit]', JSON.stringify({ user_id: userId, company_id: stateTenantId, platform: 'twitter', action: 'connect' }));
+      const communityDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/community-ai/connectors';
+      return res.redirect(`${communityDest}?connected=twitter&status=success`);
+    }
+
     const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
     return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
@@ -167,22 +193,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

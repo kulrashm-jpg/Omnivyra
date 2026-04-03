@@ -201,6 +201,7 @@ export default function SuperAdminPanel() {
   const [expandedApiId, setExpandedApiId] = useState<string | null>(null);
   const [apiEnvForm, setApiEnvForm] = useState<Record<string, any>>({ api_key_env_name: '', is_active: true });
   const [savingApiEnv, setSavingApiEnv] = useState(false);
+  const [apiEnvSaveError, setApiEnvSaveError] = useState<string | null>(null);
   const [checkingApiId, setCheckingApiId] = useState<string | null>(null);
   const [apiCheckResults, setApiCheckResults] = useState<Record<string, { ok: boolean; detail: string; checked_at: string }>>({});
   const [showCreateCompanyModal, setShowCreateCompanyModal] = useState(false);
@@ -256,6 +257,9 @@ export default function SuperAdminPanel() {
             return next;
           });
         }
+      } else if (r.status === 403) {
+        window.location.href = '/super-admin/login';
+        return;
       }
     } catch (e) { console.error('Failed to load platform OAuth configs', e); }
     finally { setLoadingSocialPlatforms(false); }
@@ -302,6 +306,8 @@ export default function SuperAdminPanel() {
         setOauthSaveMsg({ platform: platformKey, type: 'success', text: 'Saved successfully' });
         loadSocialPlatforms();
         setExpandedPlatform(null);
+      } else if (r.status === 403) {
+        window.location.href = '/super-admin/login';
       } else {
         const err = await r.json().catch(() => ({}));
         setOauthSaveMsg({ platform: platformKey, type: 'error', text: err.error || 'Failed to save' });
@@ -314,14 +320,64 @@ export default function SuperAdminPanel() {
   };
 
   useEffect(() => {
+    // Auth guard: probe the platform-oauth-configs endpoint (accepts both
+    // super_admin_session cookie and Supabase Bearer token).
+    // Redirect to login immediately if neither is present.
+    fetchWithAuth('/api/super-admin/platform-oauth-configs')
+      .then((r) => {
+        if (r.status === 403) {
+          window.location.href = '/super-admin/login';
+        }
+      })
+      .catch(() => {
+        window.location.href = '/super-admin/login';
+      });
     loadSuperAdminData();
   }, []);
+
+  // Canonical base_urls for known APIs — used to auto-fix stale entries in DB.
+  // These must be valid GET endpoints so the Check button works correctly.
+  const CANONICAL_BASE_URLS: Record<string, string> = {
+    // LLM
+    'OpenAI (GPT-4o)':         'https://api.openai.com/v1/models',
+    'Anthropic Claude':        'https://api.anthropic.com/v1/models',
+    'Google Gemini':           'https://generativelanguage.googleapis.com/v1beta/models',
+    'Groq':                    'https://api.groq.com/openai/v1/models',
+    'Mistral AI':              'https://api.mistral.ai/v1/models',
+    'Cohere':                  'https://api.cohere.ai/v2/models',
+    // Image
+    'DALL-E (OpenAI)':         'https://api.openai.com/v1/models',
+    'Stability AI':            'https://api.stability.ai/v1/engines/list',
+    'Replicate':               'https://api.replicate.com/v1/collections',
+    'fal.ai':                  'https://rest.alpha.fal.ai/v1/models',
+    // Others
+    'Apify':                   'https://api.apify.com/v2/users/me',
+    'Browserless':             'https://chrome.browserless.io/json/version',
+    'Perplexity AI':           'https://api.perplexity.ai/models',
+  };
 
   const loadCatalogApis = async () => {
     setLoadingCatalogApis(true);
     try {
       const r = await fetchWithAuth('/api/external-apis?scope=platform');
-      if (r.ok) { const d = await r.json(); setCatalogApis(d.apis || []); }
+      if (!r.ok) return;
+      const d = await r.json();
+      const apis: any[] = d.apis || [];
+      setCatalogApis(apis);
+
+      // Auto-fix any stored entries whose base_url is outdated (e.g. /v1 → /v1/models)
+      for (const api of apis) {
+        const canonical = CANONICAL_BASE_URLS[api.name];
+        if (canonical && api.base_url !== canonical) {
+          fetchWithAuth(`/api/external-apis/${api.id}?scope=platform`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: api.name, base_url: canonical }),
+          }).then((pr) => {
+            if (pr.ok) setCatalogApis((prev) => prev.map((a) => a.id === api.id ? { ...a, base_url: canonical } : a));
+          }).catch(() => {});
+        }
+      }
     } catch (e) { console.error('loadCatalogApis', e); }
     finally { setLoadingCatalogApis(false); }
   };
@@ -340,6 +396,7 @@ export default function SuperAdminPanel() {
   // Add to catalog + immediately open the configure form — no separate "+ Add" step
   const addAndExpand = async (known: { key: string; name: string; env_var: string | null; base_url: string; auth_type: string; default_query_params?: Record<string, string>; default_headers?: Record<string, string>; optional_token?: boolean }) => {
     setCheckingApiId(known.key);
+    setApiEnvSaveError(null);
     try {
       const r = await fetchWithAuth('/api/external-apis?scope=platform', {
         method: 'POST',
@@ -352,13 +409,20 @@ export default function SuperAdminPanel() {
         setCatalogApis((prev) => [...prev, newEntry]);
         setExpandedApiId(known.key);
         setApiEnvForm({ api_key_env_name: known.env_var || '', is_active: true, base_url: known.base_url, daily_quota: '', _client_id_env: '', _client_secret_env: '', _config: {} });
+      } else {
+        const body = await r.json().catch(() => ({}));
+        setApiEnvSaveError(body?.error || body?.detail || `Failed to add API (${r.status}) — are you logged in as super admin?`);
       }
-    } catch (e) { console.error('addAndExpand', e); }
+    } catch (e) {
+      console.error('addAndExpand', e);
+      setApiEnvSaveError(e instanceof Error ? e.message : 'Failed to add API');
+    }
     finally { setCheckingApiId(null); }
   };
 
   const saveApiEnvConfig = async (catalogEntry: any, known?: any) => {
     setSavingApiEnv(true);
+    setApiEnvSaveError(null);
     try {
       // Embed _config (model/temperature/etc.) into query_params JSONB
       const { _config: _existingConfig, ...restQP } = catalogEntry.query_params || {};
@@ -396,8 +460,17 @@ export default function SuperAdminPanel() {
           rate_limit_per_min: apiEnvForm.daily_quota != null ? Number(apiEnvForm.daily_quota) : (catalogEntry.rate_limit_per_min ?? 60),
         }),
       });
-      if (r.ok) { setExpandedApiId(null); await loadCatalogApis(); }
-    } catch (e) { console.error('saveApiEnvConfig', e); }
+      if (r.ok) {
+        setExpandedApiId(null);
+        await loadCatalogApis();
+      } else {
+        const body = await r.json().catch(() => ({}));
+        setApiEnvSaveError(body?.error || body?.detail || `Save failed (${r.status})`);
+      }
+    } catch (e) {
+      console.error('saveApiEnvConfig', e);
+      setApiEnvSaveError(e instanceof Error ? e.message : 'Save failed');
+    }
     finally { setSavingApiEnv(false); }
   };
 
@@ -2137,27 +2210,27 @@ export default function SuperAdminPanel() {
               { key: 'discord',          name: 'Discord',                 icon: '💬',  env_var: 'DISCORD_BOT_TOKEN', auth_type: 'bearer', base_url: 'https://discord.com/api/v10/gateway',             description: 'Bot token required — community server signals', default_query_params: {} },
             ],
             llm: [
-              { key: 'openai',           name: 'OpenAI (GPT-4o)',         icon: '🤖',  env_var: 'OPENAI_API_KEY',    auth_type: 'bearer', base_url: 'https://api.openai.com/v1',                        description: 'GPT-4o, GPT-4, GPT-3.5 models' },
-              { key: 'anthropic',        name: 'Anthropic Claude',        icon: '🧠',  env_var: 'ANTHROPIC_API_KEY', auth_type: 'api_key',base_url: 'https://api.anthropic.com/v1',                     description: 'Claude 3.5 Sonnet, Opus, Haiku' },
-              { key: 'gemini',           name: 'Google Gemini',           icon: '✨',  env_var: 'GOOGLE_GEMINI_API_KEY', auth_type: 'query', base_url: 'https://generativelanguage.googleapis.com/v1', description: 'Gemini 1.5 Pro / Flash' },
-              { key: 'groq',             name: 'Groq',                    icon: '⚡',  env_var: 'GROQ_API_KEY',      auth_type: 'bearer', base_url: 'https://api.groq.com/openai/v1',                   description: 'Ultra-fast inference — Llama, Mixtral' },
-              { key: 'mistral',          name: 'Mistral AI',              icon: '🌊',  env_var: 'MISTRAL_API_KEY',   auth_type: 'bearer', base_url: 'https://api.mistral.ai/v1',                        description: 'Mistral Large, Mixtral models' },
-              { key: 'cohere',           name: 'Cohere',                  icon: '🔗',  env_var: 'COHERE_API_KEY',    auth_type: 'bearer', base_url: 'https://api.cohere.ai/v1',                         description: 'Command R+ for RAG and generation' },
+              { key: 'openai',           name: 'OpenAI (GPT-4o)',         icon: '🤖',  env_var: 'OPENAI_API_KEY',        auth_type: 'bearer',   base_url: 'https://api.openai.com/v1/models',                               description: 'GPT-4o, GPT-4, GPT-3.5 models' },
+              { key: 'anthropic',        name: 'Anthropic Claude',        icon: '🧠',  env_var: 'ANTHROPIC_API_KEY',     auth_type: 'api_key',  base_url: 'https://api.anthropic.com/v1/models',                           description: 'Claude 3.5 Sonnet, Opus, Haiku', default_headers: { 'anthropic-version': '2023-06-01' } },
+              { key: 'gemini',           name: 'Google Gemini',           icon: '✨',  env_var: 'GOOGLE_GEMINI_API_KEY', auth_type: 'query',    base_url: 'https://generativelanguage.googleapis.com/v1beta/models',       description: 'Gemini 1.5 Pro / Flash' },
+              { key: 'groq',             name: 'Groq',                    icon: '⚡',  env_var: 'GROQ_API_KEY',          auth_type: 'bearer',   base_url: 'https://api.groq.com/openai/v1/models',                         description: 'Ultra-fast inference — Llama, Mixtral' },
+              { key: 'mistral',          name: 'Mistral AI',              icon: '🌊',  env_var: 'MISTRAL_API_KEY',       auth_type: 'bearer',   base_url: 'https://api.mistral.ai/v1/models',                              description: 'Mistral Large, Mixtral models' },
+              { key: 'cohere',           name: 'Cohere',                  icon: '🔗',  env_var: 'COHERE_API_KEY',        auth_type: 'bearer',   base_url: 'https://api.cohere.ai/v2/models',                               description: 'Command R+ for RAG and generation' },
             ],
             image: [
-              { key: 'dalle',            name: 'DALL-E (OpenAI)',         icon: '🖼️',  env_var: 'OPENAI_API_KEY',    auth_type: 'bearer', base_url: 'https://api.openai.com/v1/images/generations',     description: 'DALL-E 3 image generation' },
-              { key: 'stability',        name: 'Stability AI',            icon: '🎨',  env_var: 'STABILITY_API_KEY', auth_type: 'bearer', base_url: 'https://api.stability.ai/v1',                      description: 'Stable Diffusion XL, SD3' },
-              { key: 'replicate',        name: 'Replicate',               icon: '🔁',  env_var: 'REPLICATE_API_TOKEN', auth_type: 'bearer', base_url: 'https://api.replicate.com/v1',                  description: 'Flux, SDXL and any open model' },
-              { key: 'fal',              name: 'fal.ai',                  icon: '⚡',  env_var: 'FAL_API_KEY',       auth_type: 'bearer', base_url: 'https://fal.run',                                  description: 'Fast Flux and image models' },
-              { key: 'unsplash',         name: 'Unsplash',                icon: '📷',  env_var: 'UNSPLASH_ACCESS_KEY', auth_type: 'query', base_url: 'https://api.unsplash.com/photos', description: 'High-quality free stock photos', default_query_params: { client_id: '{{api_key}}', per_page: '3' } },
-              { key: 'pixabay',          name: 'Pixabay',                 icon: '🌄',  env_var: 'PIXABAY_API_KEY',   auth_type: 'query',  base_url: 'https://pixabay.com/api/',         description: 'Free stock images, videos and music', default_query_params: { key: '{{api_key}}', q: 'nature', per_page: '3', image_type: 'photo' } },
-              { key: 'pexels',           name: 'Pexels',                  icon: '🖼️',  env_var: 'PEXELS_API_KEY',    auth_type: 'none',   base_url: 'https://api.pexels.com/v1/search', description: 'Free stock photos and videos',       default_query_params: { query: 'nature', per_page: '1' }, default_headers: { Authorization: '{{api_key}}' } },
+              { key: 'dalle',            name: 'DALL-E (OpenAI)',         icon: '🖼️',  env_var: 'OPENAI_API_KEY',      auth_type: 'bearer', base_url: 'https://api.openai.com/v1/models',              description: 'DALL-E 3 image generation — shares OPENAI_API_KEY' },
+              { key: 'stability',        name: 'Stability AI',            icon: '🎨',  env_var: 'STABILITY_API_KEY',   auth_type: 'bearer', base_url: 'https://api.stability.ai/v1/engines/list',      description: 'Stable Diffusion XL, SD3' },
+              { key: 'replicate',        name: 'Replicate',               icon: '🔁',  env_var: 'REPLICATE_API_TOKEN', auth_type: 'bearer', base_url: 'https://api.replicate.com/v1/collections',     description: 'Flux, SDXL and any open model' },
+              { key: 'fal',              name: 'fal.ai',                  icon: '⚡',  env_var: 'FAL_API_KEY',         auth_type: 'api_key',base_url: 'https://rest.alpha.fal.ai/v1/models',           description: 'Fast Flux and image models', default_headers: { 'Authorization': 'Key {{api_key}}' } },
+              { key: 'unsplash',         name: 'Unsplash',                icon: '📷',  env_var: 'UNSPLASH_ACCESS_KEY', auth_type: 'query',  base_url: 'https://api.unsplash.com/photos',               description: 'High-quality free stock photos', default_query_params: { client_id: '{{api_key}}', per_page: '3' } },
+              { key: 'pixabay',          name: 'Pixabay',                 icon: '🌄',  env_var: 'PIXABAY_API_KEY',     auth_type: 'query',  base_url: 'https://pixabay.com/api/',                      description: 'Free stock images, videos and music', default_query_params: { key: '{{api_key}}', q: 'nature', per_page: '3', image_type: 'photo' } },
+              { key: 'pexels',           name: 'Pexels',                  icon: '🖼️',  env_var: 'PEXELS_API_KEY',      auth_type: 'api_key',base_url: 'https://api.pexels.com/v1/search',              description: 'Free stock photos and videos', default_query_params: { query: 'nature', per_page: '1' }, default_headers: { Authorization: '{{api_key}}' } },
             ],
             others: [
-              { key: 'serper',           name: 'Serper (Google Search)',  icon: '🔎',  env_var: 'SERPER_API_KEY',    auth_type: 'api_key',base_url: 'https://google.serper.dev/search',                 description: 'Google Search JSON API' },
-              { key: 'browserless',      name: 'Browserless',             icon: '🌐',  env_var: 'BROWSERLESS_API_KEY', auth_type: 'api_key', base_url: 'https://chrome.browserless.io',              description: 'Headless Chrome for web scraping' },
-              { key: 'apify',            name: 'Apify',                   icon: '🕷️',  env_var: 'APIFY_API_TOKEN',   auth_type: 'bearer', base_url: 'https://api.apify.com/v2',                         description: 'Web scraping and automation actors' },
-              { key: 'perplexity',       name: 'Perplexity AI',           icon: '🧩',  env_var: 'PERPLEXITY_API_KEY', auth_type: 'bearer', base_url: 'https://api.perplexity.ai',                    description: 'AI-powered search and answers' },
+              { key: 'serper',           name: 'Serper (Google Search)',  icon: '🔎',  env_var: 'SERPER_API_KEY',      auth_type: 'api_key',base_url: 'https://google.serper.dev/search',              description: 'Google Search JSON API (POST-based — key validation only)' },
+              { key: 'browserless',      name: 'Browserless',             icon: '🌐',  env_var: 'BROWSERLESS_API_KEY', auth_type: 'api_key',base_url: 'https://chrome.browserless.io/json/version',   description: 'Headless Chrome for web scraping' },
+              { key: 'apify',            name: 'Apify',                   icon: '🕷️',  env_var: 'APIFY_API_TOKEN',     auth_type: 'bearer', base_url: 'https://api.apify.com/v2/users/me',             description: 'Web scraping and automation actors' },
+              { key: 'perplexity',       name: 'Perplexity AI',           icon: '🧩',  env_var: 'PERPLEXITY_API_KEY',  auth_type: 'bearer', base_url: 'https://api.perplexity.ai/models',              description: 'AI-powered search and answers' },
             ],
           };
 
@@ -2318,10 +2391,16 @@ export default function SuperAdminPanel() {
                                 cohere:    ['command-r-plus', 'command-r', 'command'],
                               };
                               const models = LLM_MODELS[known.key] || [];
+                              const envVarLooksLikeActualKey = /^(sk-|AIza|gsk_|rk-[a-z]|m[a-zA-Z0-9]{30,}|[A-Z][a-zA-Z0-9]{30,})/.test(apiEnvForm.api_key_env_name || '');
                               return (<>
                                 <div>
-                                  <label className="block text-xs font-medium text-gray-700 mb-1">API Key Env Var <span className="font-normal text-gray-400">— variable name in .env</span></label>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1">API Key Env Var <span className="font-normal text-gray-400">— variable name in .env (e.g. OPENAI_API_KEY), NOT the key itself</span></label>
                                   <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder={known.env_var || 'LLM_API_KEY'} value={apiEnvForm.api_key_env_name || ''} onChange={(e) => setApiEnvForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
+                                  {envVarLooksLikeActualKey && (
+                                    <p className="mt-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                                      This looks like an actual API key. Enter the <strong>variable name</strong> (e.g. <code>OPENAI_API_KEY</code>), not the key value. The actual key should be in your .env.local or Vercel environment variables.
+                                    </p>
+                                  )}
                                 </div>
                                 {models.length > 0 && (
                                   <div>
@@ -2430,8 +2509,11 @@ export default function SuperAdminPanel() {
                               <label htmlFor={`active-${known.key}`} className="text-xs text-gray-700">Active (available for use across the platform)</label>
                             </div>
 
+                            {apiEnvSaveError && (
+                              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{apiEnvSaveError}</div>
+                            )}
                             <div className="flex gap-2 pt-1">
-                              <button onClick={() => setExpandedApiId(null)} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Cancel</button>
+                              <button onClick={() => { setExpandedApiId(null); setApiEnvSaveError(null); }} className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Cancel</button>
                               <button onClick={() => saveApiEnvConfig(catalogEntry, known)} disabled={savingApiEnv} className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">{savingApiEnv ? 'Saving…' : 'Save'}</button>
                             </div>
                           </div>
@@ -2446,6 +2528,20 @@ export default function SuperAdminPanel() {
 
           return (
           <div className="space-y-4">
+            {authError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg px-6 py-4 flex items-center justify-between">
+                <span className="text-sm text-red-700">{authError}</span>
+                <a href="/super-admin/login" className="ml-4 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors whitespace-nowrap">
+                  Log in
+                </a>
+              </div>
+            )}
+            {apiEnvSaveError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg px-6 py-4 flex items-center justify-between">
+                <span className="text-sm text-red-700">{apiEnvSaveError}</span>
+                <button onClick={() => setApiEnvSaveError(null)} className="ml-4 text-red-400 hover:text-red-600 text-lg font-bold">×</button>
+              </div>
+            )}
             {/* Sub-tab bar */}
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 px-4 py-3 flex gap-1 flex-wrap">
               {([
@@ -2562,50 +2658,82 @@ export default function SuperAdminPanel() {
 
                     {expandedPlatform === p.platform_key && (
                       <div className="mt-4 bg-gray-50 rounded-lg border border-gray-200 p-4 space-y-3">
-                        {/* Redirect URI — must be registered in the platform's developer console */}
+                        {/* Credentials-already-saved notice */}
+                        {p.configured && (
+                          <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
+                            <CheckCircle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-emerald-600" />
+                            <span>
+                              <strong>Credentials are saved</strong> — Client ID: <span className="font-mono">{p.client_id_preview}</span> · Secret: ••••••
+                              {p.updated_at && ` · Last updated ${new Date(p.updated_at).toLocaleDateString()}`}.
+                              {' '}The fields below are blank for security. Enter new values only if you want to replace the saved credentials.
+                            </span>
+                          </div>
+                        )}
+                        {/* Redirect URI — only shown for platforms with an actual callback route */}
+                        {(['linkedin','twitter','youtube','instagram','tiktok','pinterest','facebook','meta'] as string[]).includes(p.platform_key) && (
                         <div>
                           <label className="block text-xs font-medium text-gray-700 mb-1">
-                            Redirect URI <span className="text-gray-400 font-normal">(register this exact URL in the platform developer console)</span>
+                            Redirect URIs <span className="text-gray-400 font-normal">(register <strong>all</strong> URLs below in the platform developer console)</span>
                           </label>
                           {(() => {
-                            // Prefer window.location.origin so the displayed URL always matches
-                            // the domain the admin is actually on (avoids stale NEXT_PUBLIC_APP_URL).
-                            const base = (typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || '')).replace(/\/$/, '');
-                            const uri = `${base}/api/auth/${p.platform_key}/callback`;
+                            const prodBase = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '');
+                            const currentBase = (typeof window !== 'undefined' ? window.location.origin : prodBase).replace(/\/$/, '');
+                            // Connector platforms: linkedin, twitter, facebook/meta/instagram use meta connector
+                            const connectorKey = ['facebook','meta','instagram','whatsapp'].includes(p.platform_key) ? 'meta' : p.platform_key;
+                            const hasConnector = ['linkedin','twitter','meta','facebook','instagram'].includes(p.platform_key);
+                            // Build full list: auth callback + connector callback (local + prod)
+                            const uriGroups: { label: string; uri: string }[] = [];
+                            // Publishing (auth) callbacks
+                            if (['linkedin','twitter','youtube','instagram','tiktok','pinterest','facebook'].includes(p.platform_key)) {
+                              uriGroups.push({ label: 'Publishing (local)', uri: `http://localhost:3000/api/auth/${p.platform_key}/callback` });
+                              if (prodBase) uriGroups.push({ label: 'Publishing (prod)', uri: `${prodBase}/api/auth/${p.platform_key}/callback` });
+                              else uriGroups.push({ label: 'Publishing (current)', uri: `${currentBase}/api/auth/${p.platform_key}/callback` });
+                            }
+                            // Connector (community-ai) callbacks
+                            if (hasConnector) {
+                              uriGroups.push({ label: 'Connector (local)', uri: `http://localhost:3000/api/community-ai/connectors/${connectorKey}/callback` });
+                              if (prodBase) uriGroups.push({ label: 'Connector (prod)', uri: `${prodBase}/api/community-ai/connectors/${connectorKey}/callback` });
+                              else uriGroups.push({ label: 'Connector (current)', uri: `${currentBase}/api/community-ai/connectors/${connectorKey}/callback` });
+                            }
                             return (
-                              <div className="flex items-center gap-2">
-                                <input
-                                  readOnly
-                                  value={uri}
-                                  className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white text-gray-600 font-mono cursor-text select-all"
-                                  onFocus={(e) => e.target.select()}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(uri).then(() => {
-                                      setCopiedRedirectFor(p.platform_key);
-                                      setTimeout(() => setCopiedRedirectFor(null), 2000);
-                                    });
-                                  }}
-                                  className="shrink-0 inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-gray-300 bg-white text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
-                                  title="Copy redirect URI"
-                                >
-                                  {copiedRedirectFor === p.platform_key ? (
-                                    <><Check className="h-3.5 w-3.5 text-emerald-600" /> Copied</>
-                                  ) : (
-                                    <><Copy className="h-3.5 w-3.5" /> Copy</>
-                                  )}
-                                </button>
+                              <div className="space-y-1.5">
+                                {uriGroups.map(({ label, uri }) => (
+                                  <div key={uri} className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-400 w-36 shrink-0">{label}</span>
+                                    <input
+                                      readOnly
+                                      value={uri}
+                                      className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white text-gray-600 font-mono cursor-text select-all"
+                                      onFocus={(e) => e.target.select()}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(uri).then(() => {
+                                          setCopiedRedirectFor(`${p.platform_key}::${uri}`);
+                                          setTimeout(() => setCopiedRedirectFor(null), 2000);
+                                        });
+                                      }}
+                                      className="shrink-0 inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-gray-300 bg-white text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+                                      title="Copy redirect URI"
+                                    >
+                                      {copiedRedirectFor === `${p.platform_key}::${uri}` ? (
+                                        <><Check className="h-3.5 w-3.5 text-emerald-600" /> Copied</>
+                                      ) : (
+                                        <><Copy className="h-3.5 w-3.5" /> Copy</>
+                                      )}
+                                    </button>
+                                  </div>
+                                ))}
+                                <p className="text-xs text-amber-600 mt-1">
+                                  All URLs above must be registered as authorized redirect URIs in the platform&apos;s developer console.
+                                  {!process.env.NEXT_PUBLIC_APP_URL && <> Set <code className="font-mono bg-amber-50 px-1 rounded">NEXT_PUBLIC_APP_URL</code> in your .env to show the exact production URL here.</>}
+                                </p>
                               </div>
                             );
                           })()}
-                          {!process.env.NEXT_PUBLIC_APP_URL && (
-                            <p className="mt-1 text-xs text-amber-600">
-                              Tip: set <code className="font-mono bg-amber-50 px-1 rounded">NEXT_PUBLIC_APP_URL</code> in your .env to lock this URL across environments.
-                            </p>
-                          )}
                         </div>
+                        )}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
                             <label className="block text-xs font-medium text-gray-700 mb-1">Client ID *</label>

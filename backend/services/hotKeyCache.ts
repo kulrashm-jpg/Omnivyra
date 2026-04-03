@@ -20,6 +20,7 @@
  */
 
 const MAX_HOT_KEYS        = 50;
+const MAX_FREQ_KEYS       = 5_000; // cap the frequency counter to prevent unbounded growth
 const MIN_FREQ_TO_PROMOTE = 3;    // key must be accessed ≥ 3× before entering hot tier
 const HOT_ENTRY_TTL_MS    = 5 * 60 * 1000; // 5 min (refresh on each hit)
 
@@ -47,7 +48,26 @@ function evictLRU(): void {
       oldest = { key, lastUsed: entry.lastUsed };
     }
   }
-  if (oldest) _hot.delete(oldest.key);
+  if (oldest) {
+    _hot.delete(oldest.key);
+    // Always clean freq counter when evicting from hot tier
+    _freqCounter.delete(oldest.key);
+  }
+}
+
+/** Drop the oldest half of frequency counter entries when it exceeds MAX_FREQ_KEYS. */
+function trimFreqCounter(): void {
+  if (_freqCounter.size < MAX_FREQ_KEYS) return;
+  const toDelete = Math.floor(MAX_FREQ_KEYS / 2);
+  let deleted = 0;
+  for (const key of _freqCounter.keys()) {
+    if (deleted >= toDelete) break;
+    // Keep keys that are currently hot
+    if (!_hot.has(key)) {
+      _freqCounter.delete(key);
+      deleted++;
+    }
+  }
 }
 
 function isExpired(entry: HotEntry): boolean {
@@ -90,6 +110,7 @@ export function hotGet(key: string): string | null {
 export function recordAccess(key: string, value: string): void {
   const freq = (_freqCounter.get(key) ?? 0) + 1;
   _freqCounter.set(key, freq);
+  trimFreqCounter();
 
   if (freq < MIN_FREQ_TO_PROMOTE) return;
   if (_hot.has(key)) {

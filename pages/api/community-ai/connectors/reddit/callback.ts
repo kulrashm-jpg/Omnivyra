@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveToken } from '../../../../../backend/services/platformTokenService';
+import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 
@@ -18,10 +19,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { code, state, error } = req.query;
+  const { code, state, error, error_description } = req.query;
   if (error) {
+    const message = typeof error_description === 'string' ? error_description : error;
     return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent(String(error || 'OAuth failed'))}`
+      `/community-ai/connectors?error=${encodeURIComponent(String(message || 'OAuth failed'))}`
     );
   }
 
@@ -67,7 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { client_id: clientId, client_secret: clientSecret } = credentials;
-  const redirectUri = getCommunityAiConnectorCallbackUrl('reddit');
+  const redirectUri = getCommunityAiConnectorCallbackUrl('reddit', req);
 
   try {
     const tokenResponse = await fetch('https://www.reddit.com/api/v1/access_token', {
@@ -100,6 +102,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       refresh_token: tokenData.refresh_token || null,
       expires_at: expiresAt,
       connected_by_user_id: access!.userId,
+    });
+
+    await dualWriteSocialAccount({
+      userId: access!.userId,
+      companyId: organizationId,
+      platform: 'reddit',
+      platformUserId: null,
+      accountName: null,
+      token: {
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token || undefined,
+        expires_at: expiresAt || undefined,
+      },
     });
 
     // G5.5: Audit log

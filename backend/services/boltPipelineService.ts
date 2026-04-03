@@ -279,7 +279,7 @@ async function runSourceRecommendation(
   return campaignId;
 }
 
-async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[]): Promise<{ plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> }> {
+async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[], isCreatorDependent?: boolean): Promise<{ plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> }> {
   const snapshot = payload.sourceStrategicTheme as Record<string, unknown>;
   const normalizedTheme = normalizeStoredStrategicTheme(snapshot);
   const basePayload = (snapshot?.context_payload && typeof snapshot.context_payload === 'object')
@@ -339,7 +339,8 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     const canonical = platform.toLowerCase().replace(/^twitter$/i, 'x');
     const prefs = platformContentPrefs[canonical] ?? platformContentPrefs[platform.toLowerCase()];
     if (Array.isArray(prefs) && prefs.length > 0) {
-      // Pick the first text-compatible content type (skip video/reel for BOLT)
+      // Pick the first text-compatible content type (skip video/reel for BOLT text campaigns)
+      if (isCreatorDependent) return prefs[0];
       const textSafe = prefs.find((t) => !['video', 'reel', 'short'].includes(t.toLowerCase()));
       return textSafe ?? prefs[0];
     }
@@ -353,10 +354,11 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
   }));
   const rawPlatformRequests = (execConfig.platform_content_requests ?? defaultPlatformRequests) as Array<{ platform?: string; content_type?: string; count_per_week?: number }>;
   const boltPlatformRequests = rawPlatformRequests
-    .filter((r) => r && r.platform && !['youtube', 'tiktok'].includes(String(r.platform).toLowerCase()))
+    // Text BOLT excludes video-first platforms; creator and combined campaigns keep them all
+    .filter((r) => r && r.platform && (isCreatorDependent || isCombined || !['youtube', 'tiktok'].includes(String(r.platform).toLowerCase())))
     .map((r) => ({
       platform: r.platform,
-      content_type: ['video', 'reel', 'carousel', 'slider', 'image', 'banner'].includes(String(r.content_type ?? '').toLowerCase())
+      content_type: !isCreatorDependent && !isCombined && ['video', 'reel', 'carousel', 'slider', 'image', 'banner'].includes(String(r.content_type ?? '').toLowerCase())
         ? 'post'
         : (r.content_type ?? 'post'),
       count_per_week: r.count_per_week ?? Math.max(1, Math.floor(parsedFreq / 2)),
@@ -383,7 +385,18 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     key_messages: execConfig.key_messages ?? themeTitle ?? (typeof snapshot?.theme_or_description === 'string' ? snapshot.theme_or_description : 'Core value and expertise'),
     campaign_duration: durationWeeks,
     preplanning_form_completed: true,
-    bolt_text_only: true,
+    bolt_text_only: !isCreatorDependent && !isCombined,
+    // User-selected content formats and per-format frequency — tell AI exactly what to plan
+    ...(Array.isArray(execConfig.content_formats) && (execConfig.content_formats as string[]).length > 0
+      ? { preferred_content_types: execConfig.content_formats, content_formats: execConfig.content_formats }
+      : {}),
+    ...(execConfig.format_frequency && typeof execConfig.format_frequency === 'object'
+      ? { format_frequency: execConfig.format_frequency }
+      : {}),
+    // Multiple campaign goals — ensure AI aligns strategy to all of them
+    ...(Array.isArray(execConfig.campaign_goals) && (execConfig.campaign_goals as string[]).length > 0
+      ? { campaign_goals: execConfig.campaign_goals }
+      : {}),
   };
 
   const planMessage = `Yes, generate my ${durationWeeks}-week plan now.`;
@@ -424,9 +437,10 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
 async function runCommitPlan(
   campaignId: string,
   plan: { weeks: unknown[] },
-  executionConfig?: Record<string, unknown>
+  executionConfig?: Record<string, unknown>,
+  isCreatorDependent?: boolean
 ): Promise<void> {
-  const sanitizedWeeks = sanitizeBoltPlanForTextOnly(plan.weeks);
+  const sanitizedWeeks = isCreatorDependent ? plan.weeks : sanitizeBoltPlanForTextOnly(plan.weeks);
   const blueprint = fromStructuredPlan({ weeks: sanitizedWeeks, campaign_id: campaignId });
   // Align with strategic theme card → create campaign flow: saveStructuredCampaignPlan + commitDraftBlueprint
   const snapshotHash = `bolt-${campaignId}-${Date.now()}`;
@@ -487,7 +501,7 @@ async function runGenerateWeeklyStructure(
   planWeeks: unknown[],
   updateRun: (updates: Partial<{ current_stage: string; status: string; progress_percentage: number; weeks_generated: number; daily_slots_created: number }>) => Promise<void>,
   logEvent: (runId: string, stage: string, status: string, metadata?: Record<string, unknown>) => Promise<void>,
-  options?: { eligiblePlatforms?: string[]; postsPerWeek?: number; campaignStartDate?: string; boltTextOnly?: boolean }
+  options?: { eligiblePlatforms?: string[]; postsPerWeek?: number; campaignStartDate?: string; boltTextOnly?: boolean; execConfig?: Record<string, unknown> }
 ): Promise<{ weeksGenerated: number; dailySlotsCreated: number }> {
   let dailySlotsCreated = 0;
   const numWeeks = planWeeks.length;
@@ -548,6 +562,10 @@ async function runGenerateWeeklyStructure(
         bolt_text_only: options?.boltTextOnly ?? true,
         ...(options?.postsPerWeek != null ? { posts_per_week: options.postsPerWeek } : {}),
         ...(options?.campaignStartDate ? { campaign_start_date: options.campaignStartDate } : {}),
+        ...(options?.execConfig?.format_frequency && typeof options.execConfig.format_frequency === 'object'
+          ? { format_frequency: options.execConfig.format_frequency as Record<string, number> }
+          : {}),
+        cross_platform_sharing: options?.execConfig?.cross_platform_sharing as boolean | { enabled: boolean } | undefined,
         ...(adaptiveInsights
           ? {
               adaptive_performance_insights: {
@@ -589,17 +607,33 @@ async function runScheduleStructuredPlan(
   campaignId: string,
   plan: { weeks: unknown[] },
   executionConfig: Record<string, unknown>,
-  onProgress?: (stage: string) => void
+  onProgress?: (stage: string) => void,
+  eligiblePlatforms?: string[]
 ): Promise<{ scheduled_count: number }> {
   const tentativeStart = executionConfig.tentative_start as string | undefined;
   if (tentativeStart) {
     const startDate = tentativeStart.includes('T') ? tentativeStart : `${tentativeStart}T00:00:00.000Z`;
     await supabase.from('campaigns').update({ start_date: startDate }).eq('id', campaignId);
   }
+
+  const rawFreq = executionConfig.frequency_per_week;
+  let frequencyPerWeek: number | undefined;
+  if (typeof rawFreq === 'number' && rawFreq > 0 && isFinite(rawFreq)) {
+    frequencyPerWeek = Math.round(rawFreq);
+  } else if (typeof rawFreq === 'string') {
+    const p = rawFreq.trim().toLowerCase() === 'daily' ? 7 : parseInt(rawFreq, 10);
+    if (!isNaN(p) && p > 0) frequencyPerWeek = p;
+  }
+
   const result = await scheduleStructuredPlan(
     { weeks: plan.weeks } as Parameters<typeof scheduleStructuredPlan>[0],
     campaignId,
-    { generateContent: true, onProgress }
+    {
+      generateContent: true,
+      onProgress,
+      frequencyPerWeek,
+      eligiblePlatforms: eligiblePlatforms?.length ? eligiblePlatforms : undefined,
+    }
   );
   await supabase
     .from('campaigns')
@@ -674,9 +708,11 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
   const { companyId, outcomeView } = payload;
   const campaignMode = (payload.executionConfig as Record<string, unknown>)?.campaign_mode as string | undefined;
   const isCreatorDependent = campaignMode === 'creator_dependent';
+  // Combined mode: text + creator formats together. Scheduling applies to the text portion only.
+  const isCombined = campaignMode === 'combined';
 
-  // Creator-dependent campaigns stop at daily_plan — a human creator must produce the content.
-  // 'schedule' and 'campaign_schedule' both trigger scheduled_posts creation (text-based only).
+  // Creator-only campaigns stop at daily_plan — a human creator must produce the content.
+  // Combined campaigns can schedule (text posts get auto-scheduled; creator pieces get daily slots).
   const shouldSchedule = !isCreatorDependent && (outcomeView === 'schedule' || outcomeView === 'campaign_schedule');
   const isWeekPlanOnly = outcomeView === 'week_plan';
 
@@ -695,7 +731,9 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
   try {
     const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false });
     const rawPlatforms = getAvailablePlatformsFromProfile(profile);
-    eligiblePlatforms = filterBoltPlatforms(rawPlatforms);
+    // Creator and Combined campaigns include all platforms (YouTube, TikTok valid for video/reel).
+    // Text-only BOLT excludes video-first platforms that can't accept text posts.
+    eligiblePlatforms = (isCreatorDependent || isCombined) ? rawPlatforms : filterBoltPlatforms(rawPlatforms);
     // Only use company-configured platforms; never add unconfigured ones
   } catch {
     eligiblePlatforms = [];
@@ -785,7 +823,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
             duration_ms: Date.now() - stageStart,
           });
         } else if (stage === 'ai/plan' && campaignId) {
-          const aiResult = await runAiPlan(runId, campaignId, companyId, payload, eligiblePlatforms);
+          const aiResult = await runAiPlan(runId, campaignId, companyId, payload, eligiblePlatforms, isCreatorDependent);
           plan = aiResult.plan;
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
@@ -794,7 +832,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
             plan: { weeks: plan.weeks },
           });
         } else if (stage === 'commit-plan' && campaignId && plan) {
-          await runCommitPlan(campaignId, plan, payload.executionConfig as Record<string, unknown>);
+          await runCommitPlan(campaignId, plan, payload.executionConfig as Record<string, unknown>, isCreatorDependent);
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
             duration_ms: Date.now() - stageStart,
@@ -815,18 +853,16 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
 
           let postsPerWeek: number;
           const rawFreq = execConfig?.frequency_per_week;
-          if (typeof rawFreq === 'string') {
+          let parsedFreq: number | null = null;
+          if (typeof rawFreq === 'number' && rawFreq > 0 && isFinite(rawFreq)) {
+            parsedFreq = Math.round(rawFreq);
+          } else if (typeof rawFreq === 'string') {
             const s = rawFreq.trim().toLowerCase();
-            const parsed = s === 'daily' ? 7 : parseInt(rawFreq, 10);
-            if (!isNaN(parsed) && parsed > 0) {
-              postsPerWeek = parsed;
-            } else {
-              postsPerWeek = determinePostsPerWeek({
-                campaignDurationWeeks: plan.weeks.length,
-                momentumLevel,
-                pressureLevel,
-              });
-            }
+            const p = s === 'daily' ? 7 : parseInt(rawFreq, 10);
+            if (!isNaN(p) && p > 0) parsedFreq = p;
+          }
+          if (parsedFreq !== null) {
+            postsPerWeek = parsedFreq;
           } else {
             postsPerWeek = determinePostsPerWeek({
               campaignDurationWeeks: plan.weeks.length,
@@ -846,7 +882,8 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
               eligiblePlatforms: eligiblePlatforms.length > 0 ? eligiblePlatforms : undefined,
               postsPerWeek,
               campaignStartDate,
-              boltTextOnly: true,
+              boltTextOnly: !isCreatorDependent && !isCombined,
+              execConfig: execConfig ?? undefined,
             }
           );
           weeksGenerated = plan.weeks.length;
@@ -856,7 +893,8 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
             campaignId,
             plan,
             payload.executionConfig,
-            (s) => updateRun(runId, { current_stage: s })
+            (s) => updateRun(runId, { current_stage: s }),
+            eligiblePlatforms.length > 0 ? eligiblePlatforms : undefined
           );
           scheduledPostsCreated = scheduleResult.scheduled_count;
           await logEvent(runId, stage, 'completed', {

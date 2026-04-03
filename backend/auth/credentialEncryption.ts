@@ -6,13 +6,14 @@
  */
 
 import crypto from 'crypto';
+import { config } from '@/config';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 const KEY_LENGTH = 32;
 
 function getEncryptionKey(): Buffer {
-  const keyEnv = process.env.ENCRYPTION_KEY;
+  const keyEnv = config.ENCRYPTION_KEY;
   if (!keyEnv) {
     throw new Error('ENCRYPTION_KEY environment variable is required');
   }

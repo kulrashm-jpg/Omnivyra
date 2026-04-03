@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveToken } from '../../../../../backend/services/platformTokenService';
+import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 
@@ -64,7 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Meta OAuth not configured')}`);
   }
 
-  const redirectUri = getCommunityAiConnectorCallbackUrl('meta');
+  const redirectUri = getCommunityAiConnectorCallbackUrl('meta', req);
 
   try {
     // Exchange code for access token
@@ -113,11 +114,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       connected_by_user_id: access.userId,
     };
 
-    // Save the same token for all three Meta platforms
+    // Save to engagement layer (community_ai_platform_tokens)
     await Promise.all([
       saveToken(tenantId, organizationId, 'facebook', tokenPayload),
       saveToken(tenantId, organizationId, 'instagram', tokenPayload),
       saveToken(tenantId, organizationId, 'whatsapp', tokenPayload),
+    ]);
+
+    // Dual-write to publishing layer (social_accounts) for facebook + instagram
+    const dualToken = { access_token: tokenData.access_token, refresh_token: tokenData.refresh_token || undefined, expires_at: expiresAt || undefined };
+    await Promise.all([
+      dualWriteSocialAccount({ userId: access.userId, companyId: organizationId, platform: 'facebook',  platformUserId: metaUserId, accountName: metaName, token: dualToken }),
+      dualWriteSocialAccount({ userId: access.userId, companyId: organizationId, platform: 'instagram', platformUserId: metaUserId, accountName: metaName, token: dualToken }),
     ]);
 
     // Audit log

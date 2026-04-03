@@ -1,3 +1,4 @@
+
 /**
  * GET  /api/super-admin/platform-oauth-configs  — list all platforms with config status
  * POST /api/super-admin/platform-oauth-configs  — upsert OAuth credentials for a platform
@@ -5,23 +6,57 @@
  * Super admin or company admin only.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { createServerClient } from '@supabase/ssr';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { encryptCredential, decryptCredential } from '../../../backend/auth/credentialEncryption';
 
+/** Resolve user from Supabase SSR cookies (no Bearer token needed). */
+async function getUserFromCookies(req: NextApiRequest) {
+  try {
+    const ssrClient = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll: () => Object.entries(req.cookies).map(([name, value]) => ({ name, value: value ?? '' })),
+          setAll: () => {},
+        },
+      }
+    );
+    const { data: { user } } = await ssrClient.auth.getUser();
+    if (!user) return null;
+    // Resolve public.users row
+    const { data: row } = await supabase
+      .from('users')
+      .select('id')
+      .eq('supabase_uid', user.id)
+      .maybeSingle();
+    return row ? { id: row.id as string } : null;
+  } catch {
+    return null;
+  }
+}
+
 async function requireAdminAccess(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  // Cookie-based sessions (set by /api/super-admin/login or content-architect login)
+  // 1. Cookie-based super-admin sessions
   if (req.cookies?.super_admin_session === '1') return true;
   if (req.cookies?.content_architect_session === '1') return true;
 
-  // Require authenticated user with admin role in user_company_roles
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user?.id) {
-    res.status(403).json({ error: 'No session — log in via the Super Admin login page.' });
+  // 2. Bearer token (Authorization header)
+  let user: { id: string } | null = null;
+  const { user: bearerUser, error } = await getSupabaseUserFromRequest(req);
+  if (!error && bearerUser?.id) user = bearerUser;
+
+  // 3. Supabase SSR cookies (set by @supabase/ssr createBrowserClient on login)
+  if (!user) user = await getUserFromCookies(req);
+
+  if (!user?.id) {
+    res.status(403).json({ error: 'Not authenticated — please log in and try again.' });
     return false;
   }
 
-  // Check for super_admin table entry first
+  // Check super_admins table
   const { data: sa } = await supabase
     .from('super_admins')
     .select('id')
@@ -30,22 +65,21 @@ async function requireAdminAccess(req: NextApiRequest, res: NextApiResponse): Pr
     .maybeSingle();
   if (sa) return true;
 
-  // Fall back to admin role in user_company_roles
+  // Check admin role in user_company_roles
   const { data: roleRows } = await supabase
     .from('user_company_roles')
     .select('role')
     .eq('user_id', user.id)
     .limit(5);
   const adminRoles = ['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN', 'company_admin', 'super_admin', 'admin'];
-  const hasAdminRole = (roleRows || []).some((r: any) => adminRoles.includes(r.role));
-  if (hasAdminRole) return true;
+  if ((roleRows || []).some((r: any) => adminRoles.includes(r.role))) return true;
 
   res.status(403).json({ error: 'Admin role required to manage OAuth credentials.' });
   return false;
 }
 
 const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenUrl: string; scopes: string[] }> = {
-  linkedin:  { label: 'LinkedIn',  authUrl: 'https://www.linkedin.com/oauth/v2/authorization', tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken', scopes: ['r_liteprofile','r_emailaddress','w_member_social'] },
+  linkedin:  { label: 'LinkedIn',  authUrl: 'https://www.linkedin.com/oauth/v2/authorization', tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken', scopes: ['openid','profile','email','w_member_social'] },
   twitter:   { label: 'X (Twitter)', authUrl: 'https://twitter.com/i/oauth2/authorize', tokenUrl: 'https://api.twitter.com/2/oauth2/token', scopes: ['tweet.read','tweet.write','users.read','offline.access'] },
   youtube:   { label: 'YouTube',   authUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token', scopes: ['https://www.googleapis.com/auth/youtube','https://www.googleapis.com/auth/youtube.upload'] },
   instagram: { label: 'Instagram', authUrl: 'https://www.facebook.com/v18.0/dialog/oauth', tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token', scopes: ['instagram_basic','instagram_content_publish','pages_show_list'] },

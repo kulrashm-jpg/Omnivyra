@@ -42,7 +42,7 @@ module.exports = {
   
   // Setup files
   setupFiles: ['<rootDir>/jest.env.js', '<rootDir>/backend/tests/setupEnv.ts'],
-  setupFilesAfterEnv: [],
+  setupFilesAfterEnv: ['<rootDir>/backend/tests/globalTeardown.ts'],
   
   // Verbose output
   verbose: true,

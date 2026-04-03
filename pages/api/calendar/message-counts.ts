@@ -1,3 +1,4 @@
+
 /**
  * GET /api/calendar/message-counts?campaignId=...&dates=2025-03-01,2025-03-02,...
  * Returns { [date]: { total, unread } } for vertical markers on dashboard calendar.

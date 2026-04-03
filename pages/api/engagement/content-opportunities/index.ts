@@ -1,3 +1,4 @@
+
 /**
  * GET /api/engagement/content-opportunities
  * Returns content opportunities from engagement signals.

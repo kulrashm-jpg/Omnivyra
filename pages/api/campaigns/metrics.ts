@@ -279,6 +279,3 @@ async function updateCampaignCompletion(campaignId: string) {
     console.error('Error updating campaign completion:', error);
   }
 }
-
-
-

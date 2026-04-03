@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Best Signal-Rich Report</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root { --bg:#f4f7fb; --paper:#fff; --ink:#0f172a; --muted:#475569; --line:#dbe4f0; --brand:#0f766e; --brand-soft:#ccfbf1; --accent:#1d4ed8; }
+    body { font-family:"Segoe UI",Arial,sans-serif; background:linear-gradient(180deg,#eef4ff 0%,var(--bg) 100%); color:var(--ink); padding:36px; max-width:1040px; margin:0 auto; line-height:1.5; }
+    h1,h2,h3,p,li,span,div { word-break:normal; overflow-wrap:break-word; hyphens:none; }
+    .shell { background:var(--paper); border:1px solid var(--line); border-radius:28px; box-shadow:0 18px 60px rgba(15,23,42,.08); overflow:hidden; }
+    .hero { padding:36px; background:radial-gradient(circle at top right,rgba(29,78,216,.12),transparent 32%),linear-gradient(135deg,#fff 0%,#f8fbff 100%); border-bottom:1px solid var(--line); }
+    .eyebrow { display:inline-block; font-size:12px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--brand); background:var(--brand-soft); border-radius:999px; padding:8px 12px; margin-bottom:18px; }
+    .hero-grid { display:grid; grid-template-columns:220px 1fr; gap:28px; align-items:center; }
+    .score-tile { background:#0f172a; color:#fff; border-radius:24px; padding:24px; text-align:center; min-height:220px; display:flex; flex-direction:column; justify-content:center; }
+    .score-value { font-size:72px; font-weight:800; line-height:1; margin-bottom:8px; }
+    .score-label { font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:#cbd5e1; }
+    .report-title { font-size:34px; line-height:1.15; margin-bottom:14px; }
+    .hero-copy { max-width:56ch; color:var(--muted); font-size:15px; margin-bottom:20px; }
+    .meta-row { display:flex; flex-wrap:wrap; gap:10px; }
+    .meta-pill { background:#eff6ff; color:#1e3a8a; border:1px solid #bfdbfe; border-radius:999px; padding:8px 12px; font-size:12px; font-weight:700; text-transform:uppercase; }
+    .section { padding:30px 36px; border-bottom:1px solid var(--line); }
+    .section:last-child { border-bottom:0; }
+    .section-head { margin-bottom:18px; display:flex; align-items:end; justify-content:space-between; gap:12px; }
+    .section-title { font-size:22px; }
+    .section-note { color:var(--muted); font-size:13px; max-width:40ch; text-align:right; }
+    .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+    .metric-card,.visual-panel,.summary-panel,.action-card { background:#fff; border:1px solid var(--line); border-radius:20px; padding:20px; }
+    .metric-kicker { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:10px; }
+    .metric-value { font-size:38px; font-weight:800; line-height:1; margin-bottom:10px; }
+    .metric-copy,.summary-item span,.action-item span,.footer-cta p { color:var(--muted); font-size:13px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+    .evidence-grid { display:grid; grid-template-columns:1.25fr .95fr; gap:16px; }
+    .visual-box { height:280px; border-radius:16px; background:linear-gradient(180deg,rgba(15,118,110,.08),rgba(15,118,110,.02)),repeating-linear-gradient(90deg,transparent 0,transparent 44px,rgba(148,163,184,.1) 44px,rgba(148,163,184,.1) 45px); border:1px dashed #94a3b8; margin-bottom:14px; position:relative; }
+    .visual-tag { position:absolute; top:14px; left:14px; background:#fff; border:1px solid var(--line); border-radius:999px; padding:7px 10px; font-size:11px; font-weight:700; text-transform:uppercase; }
+    .summary-list,.action-list { list-style:none; display:grid; gap:12px; }
+    .summary-item,.action-item { background:#f8fafc; border-radius:14px; padding:14px 16px; border-left:4px solid var(--accent); }
+    .summary-item strong,.action-item strong { display:block; margin-bottom:6px; font-size:14px; }
+    .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+    .action-number { width:34px; height:34px; border-radius:50%; background:var(--brand); color:#fff; font-size:14px; font-weight:800; display:flex; align-items:center; justify-content:center; margin-bottom:14px; }
+    .footer-cta { background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%); color:#fff; border-radius:24px; padding:28px; display:flex; align-items:center; justify-content:space-between; gap:18px; }
+    .cta-chip { background:#fff; color:#0f172a; border-radius:999px; padding:12px 18px; font-weight:800; white-space:nowrap; }
+    @media (max-width:860px) { body{padding:16px;} .hero-grid,.metrics,.evidence-grid,.actions{grid-template-columns:1fr;} .section-head{display:block;} .section-note{text-align:left;margin-top:8px;} .footer-cta{flex-direction:column;align-items:flex-start;} }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div class="eyebrow">Best / Signal Rich</div>
+      <div class="hero-grid">
+        <div class="score-tile">
+          <div class="score-value">{{overall_score}}</div>
+          <div class="score-label">Overall Signal Score</div>
+        </div>
+        <div>
+          <h1 class="report-title">{{company_name}} Strategic Snapshot</h1>
+          <p class="hero-copy">{{executive_summary}}</p>
+          <div class="meta-row">
+            <span class="meta-pill">{{website_url}}</span>
+            <span class="meta-pill">{{report_date}}</span>
+            <span class="meta-pill">{{primary_focus}}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="section">
+      <div class="section-head">
+        <h2 class="section-title">Performance Blocks</h2>
+        <p class="section-note">High-signal metrics first, one short explanatory line per card.</p>
+      </div>
+      <div class="metrics">
+        <article class="metric-card"><div class="metric-kicker">SEO Health</div><div class="metric-value">{{seo_score}}</div><p class="metric-copy">{{seo_summary}}</p></article>
+        <article class="metric-card"><div class="metric-kicker">Conversion Readiness</div><div class="metric-value">{{conversion_score}}</div><p class="metric-copy">{{conversion_summary}}</p></article>
+        <article class="metric-card"><div class="metric-kicker">Authority</div><div class="metric-value">{{authority_score}}</div><p class="metric-copy">{{authority_summary}}</p></article>
+        <article class="metric-card"><div class="metric-kicker">Demand Capture</div><div class="metric-value">{{visibility_score}}</div><p class="metric-copy">{{visibility_summary}}</p></article>
+      </div>
+    </section>
+    <section class="section">
+      <div class="section-head">
+        <h2 class="section-title">Visual Evidence</h2>
+        <p class="section-note">Lead with charts, keep supporting copy to two short lines.</p>
+      </div>
+      <div class="evidence-grid">
+        <div class="visual-panel">
+          <div class="visual-box"><div class="visual-tag">{{visual_title}}</div></div>
+          <ul class="summary-list">
+            <li class="summary-item"><strong>{{visual_callout_1_title}}</strong><span>{{visual_callout_1_text}}</span></li>
+            <li class="summary-item"><strong>{{visual_callout_2_title}}</strong><span>{{visual_callout_2_text}}</span></li>
+          </ul>
+        </div>
+        <div class="summary-panel">
+          <ul class="summary-list">
+            <li class="summary-item"><strong>{{insight_title_1}}</strong><span>{{insight_text_1}}</span></li>
+            <li class="summary-item"><strong>{{insight_title_2}}</strong><span>{{insight_text_2}}</span></li>
+            <li class="summary-item"><strong>{{insight_title_3}}</strong><span>{{insight_text_3}}</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+    <section class="section">
+      <div class="section-head">
+        <h2 class="section-title">Top Actions</h2>
+        <p class="section-note">Three actions max. No essays.</p>
+      </div>
+      <div class="actions">
+        <article class="action-card"><div class="action-number">1</div><ul class="action-list"><li class="action-item"><strong>{{action_1_title}}</strong><span>{{action_1_text}}</span></li></ul></article>
+        <article class="action-card"><div class="action-number">2</div><ul class="action-list"><li class="action-item"><strong>{{action_2_title}}</strong><span>{{action_2_text}}</span></li></ul></article>
+        <article class="action-card"><div class="action-number">3</div><ul class="action-list"><li class="action-item"><strong>{{action_3_title}}</strong><span>{{action_3_text}}</span></li></ul></article>
+      </div>
+    </section>
+    <section class="section">
+      <div class="footer-cta">
+        <div><h2 class="section-title">Best Next Move</h2><p>{{cta_text}}</p></div>
+        <div class="cta-chip">{{cta_label}}</div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

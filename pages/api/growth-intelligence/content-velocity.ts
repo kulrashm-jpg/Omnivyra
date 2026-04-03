@@ -8,6 +8,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 import {
   getContentVelocityMetrics,
   resolveCampaignIdsForCompany,
@@ -27,6 +28,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = (req.query.campaignId as string)?.trim?.() || undefined;
 
   try {
+    const companyContext = await requireCompanyContext({ req, res, companyId, campaignId });
+    if (!companyContext) return;
+
     const campaignIds = campaignId ? [campaignId] : await resolveCampaignIdsForCompany(supabase, companyId);
     const data = await getContentVelocityMetrics(supabase, campaignIds);
     return res.status(200).json({ success: true, data });

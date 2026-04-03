@@ -1,3 +1,4 @@
+
 /**
  * GET /api/response/suggestions
  * Analyze message patterns and propose rules.

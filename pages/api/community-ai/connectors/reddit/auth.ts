@@ -32,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Reddit OAuth is not configured. Super Admin must configure platform_oauth_configs or env vars.' });
   }
 
-  const redirectUri = getCommunityAiConnectorCallbackUrl('reddit');
+  const redirectUri = getCommunityAiConnectorCallbackUrl('reddit', req);
   const redirectTo =
     typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';
   const state = buildState({

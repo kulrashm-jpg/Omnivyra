@@ -1,3 +1,4 @@
+
 /**
  * Shared API: Generate 7 AI daily plans via execution engine.
  * Single endpoint for Source B (AI expansion). Used by:

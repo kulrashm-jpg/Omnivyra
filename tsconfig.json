@@ -33,6 +33,6 @@
     "out",
     "backend/tests",
     "**/*.test.ts",
-    "**/*.spec.ts"
+    "**/*.spec.ts",
   ]
 }

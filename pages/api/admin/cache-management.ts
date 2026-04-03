@@ -1,3 +1,4 @@
+
 /**
  * GET  /api/admin/cache-management  — Returns cache stats for all layers
  * POST /api/admin/cache-management  — Flushes a specific cache layer

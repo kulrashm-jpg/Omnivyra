@@ -1,3 +1,4 @@
+
 /**
  * POST /api/campaigns/suggest-duration
  * AI suggests viable duration (weeks) for new campaigns from opportunity.
@@ -13,7 +14,7 @@ import {
 } from '../../../backend/services/aiGateway';
 import { getLatestCampaignVersion } from '../../../backend/db/campaignVersionStore';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -115,5 +116,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default handler;

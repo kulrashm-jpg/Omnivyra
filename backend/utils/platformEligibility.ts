@@ -85,18 +85,20 @@ export function sortPlatformsByPriority(platforms: string[]): string[] {
  * Used for multi-platform posting eligibility.
  */
 export const CONTENT_PLATFORM_AFFINITY: Record<string, string[]> = {
-  post:       ['linkedin', 'facebook', 'instagram', 'x', 'reddit'],
-  article:    ['linkedin', 'facebook', 'medium', 'devto', 'github'],
-  blog:       ['linkedin', 'facebook', 'medium', 'devto'],
-  newsletter: ['linkedin', 'medium'],
-  video:      ['youtube', 'facebook', 'instagram', 'linkedin', 'tiktok'],
-  reel:       ['instagram', 'facebook'],
-  short:      ['youtube', 'instagram', 'facebook', 'tiktok'],
-  story:      ['instagram', 'facebook'],
-  carousel:   ['instagram', 'linkedin', 'facebook'],
-  poll:       ['linkedin', 'facebook', 'instagram', 'x'],
-  thread:     ['x', 'reddit'],
-  idea_pin:   ['pinterest'],
+  post:        ['linkedin', 'facebook', 'instagram', 'x', 'reddit'],
+  article:     ['linkedin', 'facebook', 'medium', 'devto', 'github'],
+  blog:        ['linkedin', 'facebook', 'medium', 'devto'],
+  newsletter:  ['linkedin', 'medium', 'facebook', 'x'],
+  short_story: ['linkedin', 'facebook', 'instagram', 'x'],
+  white_paper: ['linkedin', 'medium', 'devto'],
+  video:       ['youtube', 'facebook', 'instagram', 'linkedin', 'tiktok'],
+  reel:        ['instagram', 'facebook'],
+  short:       ['youtube', 'instagram', 'facebook', 'tiktok'],
+  story:       ['instagram', 'facebook'],
+  carousel:    ['instagram', 'linkedin', 'facebook'],
+  poll:        ['linkedin', 'facebook', 'instagram', 'x'],
+  thread:      ['x', 'reddit'],
+  idea_pin:    ['pinterest'],
 };
 
 /**

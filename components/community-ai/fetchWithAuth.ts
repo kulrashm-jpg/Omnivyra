@@ -1,17 +1,13 @@
 import { getAuthToken } from '../../utils/getAuthToken';
+import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 
-export const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-  const token = await getAuthToken();
+export const fetchWithAuth = async (input: RequestInfo, init?: RequestInit & { forceRefresh?: boolean }) => {
+  // Try to get a token first
+  let token = await getAuthToken();
+  console.log('📍 fetchWithAuth - initial token check:', token ? '✅ yes' : '❌ no');
 
-  if (!token) {
-    // Content Architect uses cookie auth (content_architect_session); send request with credentials only
-    return fetch(input, {
-      ...init,
-      credentials: 'include',
-      headers: init?.headers || {},
-    });
-  }
-
+  console.log('📤 Sending request with cookies + token:', token ? 'Bearer' : 'none');
+  
   const mergedHeaders: Record<string, string> = {};
   const initHeaders = init?.headers;
   if (initHeaders) {
@@ -21,7 +17,11 @@ export const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
       Object.assign(mergedHeaders, initHeaders);
     }
   }
-  mergedHeaders.Authorization = `Bearer ${token}`;
+  
+  if (token) {
+    mergedHeaders.Authorization = `Bearer ${token}`;
+  }
+  
   return fetch(input, {
     ...init,
     credentials: 'include',

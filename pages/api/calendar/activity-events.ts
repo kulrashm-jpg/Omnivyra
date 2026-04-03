@@ -1,3 +1,4 @@
+
 /**
  * GET /api/calendar/activity-events
  * Returns scheduled activity events for the dashboard calendar.

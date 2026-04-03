@@ -1,3 +1,4 @@
+
 /**
  * GET /api/campaigns/proposals/[id]
  * Fetch full proposal detail

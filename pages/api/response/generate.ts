@@ -1,3 +1,4 @@
+
 /**
  * POST /api/response/generate
  * Generate (and optionally execute) AI response for a message.

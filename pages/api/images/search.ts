@@ -1,3 +1,4 @@
+
 /**
  * Image Search API — thin proxy to the centralized imageService.
  * All provider logic, caching, rate limiting, and quality filtering

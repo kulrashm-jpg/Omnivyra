@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Omnivyra Final Report</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 16mm 14mm;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --ink: #0b1f33;
+      --muted: #5b7083;
+      --line: #d8e2ee;
+      --page: #eef5ff;
+      --paper: #ffffff;
+      --brand: #0a66c2;
+      --brand-soft: #ebf3fd;
+      --brand-deep: #084b8a;
+      --teal: #0f766e;
+      --teal-soft: #ecfdf5;
+      --gold: #d97706;
+      --gold-soft: #fff7ed;
+      --slate: #f6f9fc;
+      --navy: #0f2742;
+    }
+    html, body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--page);
+      line-height: 1.45;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    h1, h2, h3, p, li, span, div {
+      word-break: normal;
+      overflow-wrap: break-word;
+      hyphens: none;
+    }
+    .report {
+      max-width: 980px;
+      margin: 0 auto;
+    }
+    .section, .hero, .panel, .metric, .card, .action-card, .workflow-card, .proof-card, .cta {
+      break-inside: avoid-page;
+      page-break-inside: avoid;
+    }
+    .hero {
+      background: linear-gradient(135deg, #ffffff 0%, #f4f8ff 52%, #eef6ff 100%);
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      padding: 28px;
+      box-shadow: 0 16px 40px rgba(11, 31, 51, 0.08);
+      margin-bottom: 18px;
+    }
+    .hero-top {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 24px;
+      align-items: stretch;
+    }
+    .score-panel {
+      background: linear-gradient(135deg, var(--navy) 0%, #123d6b 100%);
+      color: #fff;
+      border-radius: 24px;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 220px;
+    }
+    .score-panel .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: #bfdbfe;
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+    .score-panel .value {
+      font-size: 74px;
+      line-height: 1;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .score-panel .subtext {
+      color: #dbeafe;
+      font-size: 13px;
+    }
+    .hero-copy .eyebrow {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--brand);
+      background: var(--brand-soft);
+      border: 1px solid #c9dff7;
+      border-radius: 999px;
+      padding: 8px 12px;
+      margin-bottom: 14px;
+    }
+    .hero-copy h1 {
+      font-size: 34px;
+      line-height: 1.08;
+      margin-bottom: 10px;
+    }
+    .hero-copy .lede {
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 60ch;
+      margin-bottom: 16px;
+    }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .pill {
+      border-radius: 999px;
+      padding: 8px 12px;
+      border: 1px solid #c9dff7;
+      background: #f6fbff;
+      color: var(--brand-deep);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .hero-note {
+      background: var(--gold-soft);
+      border-left: 4px solid var(--gold);
+      border-radius: 14px;
+      padding: 14px 16px;
+    }
+    .hero-note strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+    .hero-note p {
+      color: #8a4b08;
+      font-size: 14px;
+      max-width: 56ch;
+    }
+    .section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 22px;
+      box-shadow: 0 10px 24px rgba(11, 31, 51, 0.05);
+      margin-bottom: 18px;
+    }
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .section-head h2 {
+      font-size: 23px;
+      line-height: 1.1;
+    }
+    .section-head p {
+      color: var(--muted);
+      font-size: 13px;
+      max-width: 42ch;
+      text-align: right;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .metric {
+      background: var(--slate);
+      border: 1px solid #e3ebf3;
+      border-radius: 18px;
+      padding: 16px;
+      min-height: 150px;
+    }
+    .metric span {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+    .metric strong {
+      display: block;
+      font-size: 34px;
+      line-height: 1;
+      margin-bottom: 10px;
+    }
+    .metric p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 14px;
+    }
+    .panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 18px;
+    }
+    .visual-stage {
+      height: 270px;
+      border-radius: 16px;
+      border: 1px dashed #8fb8e6;
+      background:
+        radial-gradient(circle at top left, rgba(10, 102, 194, 0.13), transparent 24%),
+        linear-gradient(180deg, #fbfdff 0%, #f4f8fd 100%);
+      position: relative;
+      margin-bottom: 14px;
+    }
+    .visual-stage::after {
+      content: "{{visual_title}}";
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--brand);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 10px;
+    }
+    .stack, .proof-grid, .workflow-grid, .actions {
+      display: grid;
+      gap: 12px;
+    }
+    .stack { list-style: none; }
+    .card {
+      background: var(--slate);
+      border-radius: 16px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--brand);
+    }
+    .card strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 5px;
+    }
+    .card p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .proof-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .proof-card {
+      background: #f8fbff;
+      border: 1px solid #dbe7f5;
+      border-radius: 18px;
+      padding: 16px;
+    }
+    .proof-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+    .proof-card strong {
+      display: block;
+      font-size: 26px;
+      margin-bottom: 8px;
+    }
+    .proof-card p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .workflow-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .workflow-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+    }
+    .workflow-card .step {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--teal);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+    .workflow-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 15px;
+    }
+    .workflow-card p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .actions {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .action-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+    }
+    .action-card .index {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--brand);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+    .action-card strong {
+      display: block;
+      font-size: 15px;
+      margin-bottom: 6px;
+    }
+    .action-card p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .cta {
+      background: linear-gradient(135deg, var(--navy) 0%, #133b67 100%);
+      color: #fff;
+      border-radius: 22px;
+      padding: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .cta h2 {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+    .cta p {
+      color: #dbeafe;
+      max-width: 58ch;
+      font-size: 14px;
+    }
+    .cta .chip {
+      background: #fff;
+      color: var(--navy);
+      border-radius: 999px;
+      padding: 12px 16px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    @media (max-width: 860px) {
+      .hero-top, .metrics, .two-col, .proof-grid, .workflow-grid, .actions {
+        grid-template-columns: 1fr;
+      }
+      .section-head {
+        display: block;
+      }
+      .section-head p {
+        text-align: left;
+        margin-top: 8px;
+      }
+      .cta {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="report">
+    <section class="hero">
+      <div class="hero-top">
+        <div class="score-panel">
+          <div class="label">Omnivyra Final Score</div>
+          <div class="value">{{overall_score}}</div>
+          <div class="subtext">{{score_summary}}</div>
+        </div>
+        <div class="hero-copy">
+          <div class="eyebrow">Omnivyra Final Report</div>
+          <h1>{{company_name}} Strategic Website Report</h1>
+          <p class="lede">{{executive_summary}}</p>
+          <div class="meta-row">
+            <span class="pill">{{website_url}}</span>
+            <span class="pill">{{report_date}}</span>
+            <span class="pill">{{primary_focus}}</span>
+          </div>
+          <div class="hero-note">
+            <strong>Executive Framing</strong>
+            <p>{{confidence_summary}}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Core Performance Signals</h2>
+        <p>These blocks should make the Omnivyra story legible fast: readiness, product trust, demand capture, and conversion momentum.</p>
+      </div>
+      <div class="metrics">
+        <div class="metric">
+          <span>SEO Readiness</span>
+          <strong>{{seo_score}}</strong>
+          <p>{{seo_summary}}</p>
+        </div>
+        <div class="metric">
+          <span>Messaging Clarity</span>
+          <strong>{{messaging_score}}</strong>
+          <p>{{messaging_summary}}</p>
+        </div>
+        <div class="metric">
+          <span>Conversion Flow</span>
+          <strong>{{conversion_score}}</strong>
+          <p>{{conversion_summary}}</p>
+        </div>
+        <div class="metric">
+          <span>Trust & Authority</span>
+          <strong>{{trust_score}}</strong>
+          <p>{{trust_summary}}</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Visual Evidence + Strategic Readout</h2>
+        <p>The visual should lead. The copy should only explain what the visual proves.</p>
+      </div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="visual-stage"></div>
+          <div class="stack">
+            <div class="card">
+              <strong>{{visual_callout_1_title}}</strong>
+              <p>{{visual_callout_1_text}}</p>
+            </div>
+            <div class="card">
+              <strong>{{visual_callout_2_title}}</strong>
+              <p>{{visual_callout_2_text}}</p>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="stack">
+            <div class="card">
+              <strong>{{insight_title_1}}</strong>
+              <p>{{insight_text_1}}</p>
+            </div>
+            <div class="card">
+              <strong>{{insight_title_2}}</strong>
+              <p>{{insight_text_2}}</p>
+            </div>
+            <div class="card">
+              <strong>{{insight_title_3}}</strong>
+              <p>{{insight_text_3}}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Why Omnivyra Can Win This Story</h2>
+        <p>These proof blocks should explain the product in concrete operating-system terms rather than broad AI language.</p>
+      </div>
+      <div class="proof-grid">
+        <div class="proof-card">
+          <span>{{proof_1_label}}</span>
+          <strong>{{proof_1_value}}</strong>
+          <p>{{proof_1_text}}</p>
+        </div>
+        <div class="proof-card">
+          <span>{{proof_2_label}}</span>
+          <strong>{{proof_2_value}}</strong>
+          <p>{{proof_2_text}}</p>
+        </div>
+        <div class="proof-card">
+          <span>{{proof_3_label}}</span>
+          <strong>{{proof_3_value}}</strong>
+          <p>{{proof_3_text}}</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Omnivyra Workflow Story</h2>
+        <p>The site should make the product workflow feel connected from insight to execution to optimization.</p>
+      </div>
+      <div class="workflow-grid">
+        <div class="workflow-card">
+          <div class="step">1</div>
+          <strong>{{workflow_1_title}}</strong>
+          <p>{{workflow_1_text}}</p>
+        </div>
+        <div class="workflow-card">
+          <div class="step">2</div>
+          <strong>{{workflow_2_title}}</strong>
+          <p>{{workflow_2_text}}</p>
+        </div>
+        <div class="workflow-card">
+          <div class="step">3</div>
+          <strong>{{workflow_3_title}}</strong>
+          <p>{{workflow_3_text}}</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Final Action Sequence</h2>
+        <p>Three actions only. Each one should move the Omnivyra narrative closer to product confidence and buyer action.</p>
+      </div>
+      <div class="actions">
+        <div class="action-card">
+          <div class="index">1</div>
+          <strong>{{action_1_title}}</strong>
+          <p>{{action_1_text}}</p>
+        </div>
+        <div class="action-card">
+          <div class="index">2</div>
+          <strong>{{action_2_title}}</strong>
+          <p>{{action_2_text}}</p>
+        </div>
+        <div class="action-card">
+          <div class="index">3</div>
+          <strong>{{action_3_title}}</strong>
+          <p>{{action_3_text}}</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="cta">
+        <div>
+          <h2>{{cta_title}}</h2>
+          <p>{{cta_text}}</p>
+        </div>
+        <div class="chip">{{cta_label}}</div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

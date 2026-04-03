@@ -367,6 +367,21 @@ import type { StrategyStatusPayload } from '../../strategy/StrategyIntelligenceP
 export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const { companyId, regions, engineRecommendations, fetchWithAuth, strategicIntents, onStrategicIntentsChange, viewMode, campaignId, initialBlogId } = props;
   const router = useRouter();
+
+  // ── BOLT (Text) preset from setup page query params ──────────────────────
+  const boltTextPreset = React.useMemo(() => {
+    if (!router.isReady) return undefined;
+    const q = router.query as Record<string, string | string[] | undefined>;
+    if (typeof q.boltText !== 'string' || q.boltText !== '1') return undefined;
+    const format = (typeof q.format === 'string' ? q.format : 'post') as import('../cards/RecommendationBlueprintCard').BoltContentFormat;
+    const duration = Math.min(4, Math.max(1, parseInt(typeof q.duration === 'string' ? q.duration : '2', 10)));
+    const outcomeView = (['week_plan', 'daily_plan', 'schedule'].includes(typeof q.outcomeView === 'string' ? q.outcomeView : '')
+      ? q.outcomeView as import('../cards/RecommendationBlueprintCard').BoltOutcomeView
+      : 'week_plan');
+    return { outcomeView, durationWeeks: duration, contentFormat: format };
+  }, [router.isReady, router.query.boltText, router.query.format, router.query.duration, router.query.outcomeView]);
+  // ─────────────────────────────────────────────────────────────────────────
+
   const [hasRun, setHasRun] = useState(false);
   const [contextMode, setContextMode] = useState<ContextMode>('FULL');
   const [focusedModules, setFocusedModules] = useState<FocusModule[]>([]);
@@ -1433,6 +1448,27 @@ Generate strategic campaign pillars to capture this demand.`;
 
   return (
     <div className="space-y-6">
+      {/* ── BOLT (Text) mode banner ─────────────────────────────────────── */}
+      {boltTextPreset && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200">
+          <span className="text-xl">⚡</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-900">BOLT (Text) Mode</p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              {boltTextPreset.contentFormat.replace('_', ' ')} · {boltTextPreset.durationWeeks} week{boltTextPreset.durationWeeks > 1 ? 's' : ''} · {boltTextPreset.outcomeView.replace('_', ' ')}
+              {' '}— Each card below has a ready-to-run <strong>⚡ BOLT (Text)</strong> button.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => router.push('/command-center/bolt-text')}
+            className="shrink-0 text-xs text-amber-700 hover:text-amber-900 underline"
+          >
+            Change setup
+          </button>
+        </div>
+      )}
+      {/* ──────────────────────────────────────────────────────────────────── */}
       <header className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-semibold text-gray-900">Strategic Theme Builder</h2>
@@ -2593,6 +2629,7 @@ Generate strategic campaign pillars to capture this demand.`;
                           }
                         : undefined
                     }
+                    boltTextPreset={boltTextPreset}
                   />
                   </div>
                   );

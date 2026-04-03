@@ -1,3 +1,4 @@
+
 /**
  * Campaign Risk Assessment API
  * GET /api/campaigns/[id]/risk
@@ -32,4 +33,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-

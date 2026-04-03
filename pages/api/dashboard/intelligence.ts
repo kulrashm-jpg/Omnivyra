@@ -8,15 +8,12 @@ import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
-import { getThreads } from '../../../backend/services/engagementThreadService';
-import {
-  detectOpportunities,
-  getLatestOpportunityReport,
-  saveOpportunityReport,
-} from '../../../backend/services/opportunityDetectionService';
 import {
   getMarketingMemoriesByType,
 } from '../../../backend/services/marketingMemoryService';
+import { listDecisionObjects } from '../../../backend/services/decisionObjectService';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
+import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
 
 const ALLOWED_ROLES = [
   Role.COMPANY_ADMIN,
@@ -33,17 +30,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const companyId = (req.query.companyId as string)?.trim();
-  if (!companyId) {
-    return res.status(400).json({ error: 'companyId required' });
-  }
 
   try {
+    const companyContext = await requireCompanyContext({ req, res, companyId });
+    if (!companyContext) return;
+
     const campaignIds = new Set<string>();
 
     const { data: healthRows } = await supabase
       .from('campaign_health_reports')
       .select('campaign_id, report_json, health_score, health_status, issues')
-      .eq('company_id', companyId)
+      .eq('company_id', companyContext.companyId)
       .order('created_at', { ascending: false });
 
     const seenCampaigns = new Set<string>();
@@ -105,77 +102,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    let strategicInsights: Array<{ title: string; summary: string; confidence: number; recommended_action: string }> = [];
-    const { data: insightRows } = await supabase
-      .from('campaign_strategic_insights')
-      .select('report_json')
-      .eq('company_id', companyId)
-      .order('generated_at', { ascending: false })
-      .limit(50);
+    const [strategicDecisionRows, opportunityDecisionRows] = await runInApiReadContext('dashboardIntelligenceApi', async () =>
+      Promise.all([
+        listDecisionObjects({
+          viewName: 'growth_view',
+          companyId: companyContext.companyId,
+          sourceService: 'strategicInsightService',
+          status: ['open'],
+          limit: 50,
+        }),
+        listDecisionObjects({
+          viewName: 'growth_view',
+          companyId: companyContext.companyId,
+          sourceService: 'opportunityDetectionService',
+          status: ['open'],
+          limit: 50,
+        }),
+      ])
+    );
 
-    const seenTitles = new Set<string>();
-    for (const row of insightRows ?? []) {
-      const rj = row?.report_json as { insights?: Array<{ title?: string; summary?: string; confidence?: number; recommended_action?: string }> } | null;
-      const insights = Array.isArray(rj?.insights) ? rj.insights : [];
-      for (const i of insights) {
-        const title = i?.title ?? '';
-        if (title && !seenTitles.has(title)) {
-          seenTitles.add(title);
-          strategicInsights.push({
-            title,
-            summary: i?.summary ?? '',
-            confidence: typeof i?.confidence === 'number' ? i.confidence : 0,
-            recommended_action: i?.recommended_action ?? '',
-          });
-        }
-      }
-    }
-    strategicInsights.sort((a, b) => b.confidence - a.confidence);
-
-    let opportunities: Array<{ title: string; description: string; opportunity_score: number; confidence: number }> = [];
-    let cachedOpp = await getLatestOpportunityReport(companyId);
-    if (!cachedOpp) {
-      const trendSnapshots = await getTrendSnapshots(companyId);
-      const trendSignals = trendSnapshots.map((s: { snapshot?: unknown }) => ({ snapshot: s?.snapshot ?? {} }));
-      const { data: siRow } = await supabase
-        .from('campaign_strategic_insights')
-        .select('report_json')
-        .eq('company_id', companyId)
-        .order('generated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      let inboxSignals: Record<string, unknown>[] = [];
-      try {
-        const threads = await getThreads({ organization_id: companyId, limit: 50, exclude_ignored: true });
-        inboxSignals = threads.map((t) => ({
-          thread_id: t.thread_id,
-          latest_message: t.latest_message,
-          dominant_intent: t.dominant_intent,
-          customer_question: t.customer_question,
-        }));
-      } catch {
-        inboxSignals = [];
-      }
-      const oppReport = await detectOpportunities({
-        company_id: companyId,
-        trend_signals: trendSignals,
-        engagement_health_report: { engagement_rate: 0 },
-        strategic_insight_report: siRow?.report_json && typeof siRow.report_json === 'object' ? siRow.report_json as Record<string, unknown> : null,
-        inbox_signals: inboxSignals,
-      });
-      await saveOpportunityReport(oppReport);
-      cachedOpp = oppReport;
-    }
-    opportunities = (cachedOpp?.opportunities ?? []).map((o) => ({
-      title: o.title,
-      description: o.description,
-      opportunity_score: o.opportunity_score,
-      confidence: o.confidence,
-      opportunity_type: o.opportunity_type,
+    const strategicInsights = strategicDecisionRows.map((row) => ({
+      title: row.title,
+      summary: row.description,
+      confidence: row.confidence_score,
+      recommended_action: row.recommendation,
     }));
-    opportunities.sort((a, b) => b.opportunity_score - a.opportunity_score);
 
-    const trendSnapshots = await getTrendSnapshots(companyId);
+    const opportunities = opportunityDecisionRows.map((row) => ({
+      title: row.title,
+      description: row.description,
+      opportunity_score: row.priority_score,
+      confidence: row.confidence_score,
+      opportunity_type: row.issue_type,
+    }));
+
+    const trendSnapshots = await getTrendSnapshots(companyContext.companyId);
     const topicMap = new Map<string, { signal_strength: number; discussion_growth: number; count: number }>();
     for (const snap of trendSnapshots) {
       const s = snap?.snapshot as Record<string, unknown> | undefined;
@@ -225,9 +186,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
     const [contentMemories, narrativeMemories, audienceMemories] = await Promise.all([
-      getMarketingMemoriesByType(companyId, 'content_performance', 10),
-      getMarketingMemoriesByType(companyId, 'narrative_performance', 10),
-      getMarketingMemoriesByType(companyId, 'audience_pattern', 5),
+      getMarketingMemoriesByType(companyContext.companyId, 'content_performance', 10),
+      getMarketingMemoriesByType(companyContext.companyId, 'narrative_performance', 10),
+      getMarketingMemoriesByType(companyContext.companyId, 'audience_pattern', 5),
     ]);
     const top_content_formats = contentMemories
       .map((m) => (m.memory_value?.format ? { format: m.memory_value.format, avg_engagement: m.memory_value.avg_engagement } : null))

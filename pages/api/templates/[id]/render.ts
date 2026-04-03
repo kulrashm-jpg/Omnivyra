@@ -1,3 +1,4 @@
+
 /**
  * Template Render API
  * POST /api/templates/[id]/render
@@ -41,4 +42,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-

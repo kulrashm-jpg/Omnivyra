@@ -1,0 +1,474 @@
+        {/* Intelligence View - Full 6-Tab Dashboard */}
+        {view === 'intelligence' && (
+          <div className="space-y-8">
+            {/* Stats Row */}
+            <div className="border-b border-gray-100 bg-white rounded-xl">
+              <div className="flex divide-x divide-gray-100">
+                {[
+                  { label: 'Published', value: blogs.filter((b) => b.status === 'published').length },
+                  { label: 'Drafts', value: blogs.filter((b) => b.status === 'draft').length },
+                  { label: 'Series', value: series.length },
+                  { label: 'Connections', value: relationships.length },
+                  { label: 'Total Views', value: blogs.reduce((s, b) => s + ((b as any).views_count || 0), 0).toLocaleString() },
+                ].map(({ label, value }) => (
+                  <div key={label} className="flex-1 px-4 py-3 text-center">
+                    <p className="text-xl font-bold text-gray-900">{value}</p>
+                    <p className="text-xs text-gray-500">{label}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Tab Navigation */}
+            <div className="flex gap-1 overflow-x-auto border-b border-gray-200 pb-0">
+              {[
+                { id: 'recommendations', label: 'What to Write', icon: Lightbulb },
+                { id: 'performance', label: 'Performance', icon: TrendingUp },
+                { id: 'growth', label: 'Growth Engine', icon: Rocket },
+                { id: 'coverage', label: 'Topic Coverage', icon: BarChart2 },
+                { id: 'graph', label: 'Knowledge Graph', icon: Network },
+                { id: 'series', label: 'Series', icon: BookOpen },
+              ].map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => setIntelligenceTab(id as any)}
+                  className={`flex items-center gap-1.5 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
+                    intelligenceTab === id
+                      ? 'border-indigo-600 text-indigo-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-900'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" /> {label}
+                </button>
+              ))}
+            </div>
+
+            {/* ═══ RECOMMENDATIONS TAB ═══ */}
+            {intelligenceTab === 'recommendations' && (
+              <div className="space-y-8">
+                {/* Create Custom Blog Card */}
+                <div className="rounded-xl border border-purple-200 bg-gradient-to-r from-purple-50 to-pink-50 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-gray-900 text-sm">Create Custom Blog Card</h3>
+                      <p className="text-xs text-gray-600 mt-1">Have a unique idea? Use AI to refine it into a structured recommendation card.</p>
+                    </div>
+                    <button
+                      onClick={() => setIsAICardModalOpen(true)}
+                      className="shrink-0 inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white px-4 py-2 font-medium text-sm transition-all"
+                    >
+                      <Sparkles className="h-4 w-4" /> Create with AI
+                    </button>
+                  </div>
+                </div>
+
+                {/* Content Gaps */}
+                {gaps.length === 0 ? (
+                  <div className="rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-500">
+                    Excellent coverage — no major gaps detected.
+                  </div>
+                ) : (
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {gaps.map((gap, i) => (
+                      <div key={i} className="flex flex-col rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <h3 className="text-sm font-bold text-gray-900 leading-snug">{gap.topic}</h3>
+                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                            gap.priority === 'high' ? 'bg-red-100 text-red-700' :
+                            gap.priority === 'medium' ? 'bg-amber-100 text-amber-700' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>
+                            {gap.priority}
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-500 leading-relaxed flex-1">{gap.reason}</p>
+                        <Link
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setEditorTitle(gap.topic);
+                            setEditorCategory(gap.topic);
+                            setView('editor');
+                          }}
+                          className="mt-4 inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:underline"
+                        >
+                          Write this <ArrowRight className="h-3 w-3" />
+                        </Link>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Action Recommendations */}
+                {recommendations.length > 0 && (
+                  <section>
+                    <h2 className="mb-4 text-base font-bold text-gray-900">Action Items</h2>
+                    <div className="space-y-2">
+                      {recommendations.map((rec, i) => (
+                        <div key={i} className="flex items-start gap-4 rounded-xl border border-gray-200 bg-white px-4 py-3">
+                          <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase bg-indigo-100 text-indigo-700">
+                            {rec.type}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-gray-900">{rec.action}</p>
+                            <p className="text-xs text-gray-500 mt-0.5">{rec.reason}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </div>
+            )}
+
+            {/* ═══ PERFORMANCE TAB ═══ */}
+            {intelligenceTab === 'performance' && (
+              <div className="space-y-8">
+                {/* Summary metrics */}
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                  {(() => {
+                    const published = allMetrics.filter((m) => m.status === 'published');
+                    const avgEng = published.length ? Math.round(published.reduce((s, p) => s + (p as any).engagement_score, 0) / published.length) : 0;
+                    const avgComp = published.length ? Math.round(published.reduce((s, p) => s + (p as any).completion_rate, 0) / published.length) : 0;
+                    const avgScroll = published.length ? Math.round(published.reduce((s, p) => s + (p as any).avg_scroll_depth, 0) / published.length) : 0;
+                    const totalViews = blogs.reduce((s, b) => s + ((b as any).views_count || 0), 0);
+                    return [
+                      { label: 'Total Views', value: totalViews.toLocaleString(), color: '#0A66C2' },
+                      { label: 'Avg Engagement', value: `${avgEng}/100`, color: avgEng >= 50 ? '#16a34a' : '#d97706' },
+                      { label: 'Avg Completion', value: `${avgComp}%`, color: avgComp >= 50 ? '#16a34a' : '#d97706' },
+                      { label: 'Avg Scroll', value: `${avgScroll}%`, color: '#0A66C2' },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} className="rounded-2xl border border-gray-200 bg-white p-4 text-center shadow-sm">
+                        <p className="text-2xl font-black" style={{ color }}>{value}</p>
+                        <p className="text-xs text-gray-500 mt-1">{label}</p>
+                      </div>
+                    ));
+                  })()}
+                </div>
+
+                {/* Topic narratives */}
+                {narratives.length > 0 && (
+                  <section>
+                    <h2 className="mb-4 text-base font-bold text-gray-900 flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4 text-indigo-600" /> Topic Intelligence
+                    </h2>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {narratives.map((n: any) => {
+                        const color = n.verdict === 'scale' ? 'border-green-200 bg-green-50' :
+                          n.verdict === 'improve' ? 'border-amber-200 bg-amber-50' : 'border-gray-200 bg-gray-50';
+                        return (
+                          <div key={n.category} className={`rounded-2xl border p-4 ${color}`}>
+                            <p className="text-xs font-semibold text-gray-700 mb-2">{n.category}</p>
+                            <p className="text-xs text-gray-600 leading-relaxed">{n.message}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                )}
+
+                {/* Performance table */}
+                <section>
+                  <h2 className="mb-4 text-base font-bold text-gray-900">Blog Performance</h2>
+                  <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+                    <table className="w-full text-sm min-w-[600px]">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500">Title</th>
+                          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500">Views</th>
+                          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500">Engagement</th>
+                          <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {allMetrics.filter((m) => m.status === 'published').sort((a, b) => ((b as any).views_count || 0) - ((a as any).views_count || 0))
+                          .slice(0, 10).map((m) => (
+                          <tr key={m.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 font-medium text-gray-900 max-w-xs truncate">{m.title}</td>
+                            <td className="px-4 py-3 text-right text-gray-600">{((m as any).views_count || 0).toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right text-gray-600">{Math.round((m as any).engagement_score || 0)}/100</td>
+                            <td className="px-4 py-3 text-center">
+                              <button onClick={() => { setEditorTitle(m.title); setView('editor'); }} className="text-xs text-indigo-600 hover:underline">
+                                Edit
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {/* ═══ GROWTH ENGINE TAB ═══ */}
+            {intelligenceTab === 'growth' && (
+              <div className="space-y-8">
+                {growthSummary && (
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                    {[
+                      { label: 'High Performing', value: (growthSummary as any).highCount, color: 'text-green-600', bg: 'bg-green-50 border-green-200' },
+                      { label: 'Medium', value: (growthSummary as any).mediumCount, color: 'text-amber-600', bg: 'bg-amber-50 border-amber-200' },
+                      { label: 'Low Performing', value: (growthSummary as any).lowCount, color: 'text-red-600', bg: 'bg-red-50 border-red-200' },
+                      { label: 'Avg Engagement', value: `${(growthSummary as any).avgEngagement}/100`, color: 'text-indigo-600', bg: 'bg-blue-50 border-blue-200' },
+                    ].map(({ label, value, color, bg }) => (
+                      <div key={label} className={`rounded-xl border p-4 text-center ${bg}`}>
+                        <p className={`text-2xl font-bold ${color}`}>{value}</p>
+                        <p className="mt-0.5 text-xs text-gray-500">{label}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Performance Tiers */}
+                <section>
+                  <h2 className="mb-4 text-sm font-bold text-gray-900">All Posts by Performance</h2>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {classifiedMetrics
+                      .filter((m) => growthTier === 'all' || (m as any)._class === growthTier)
+                      .sort((a, b) => ((b as any).engagement_score || 0) - ((a as any).engagement_score || 0))
+                      .map((m) => {
+                        const cls = (m as any)._class;
+                        const clsColor = cls === 'high' ? 'border-green-200 bg-green-50' : cls === 'medium' ? 'border-amber-200 bg-amber-50' : 'border-gray-200 bg-gray-50';
+                        return (
+                          <div key={m.id} className={`rounded-xl border p-4 cursor-pointer ${clsColor} hover:shadow-md transition-shadow`}
+                            onClick={() => { setSelectedGrowthId(selectedGrowthId === m.id ? null : m.id); setRepurposedContent(null); }}>
+                            <div className="flex items-start justify-between gap-2 mb-2">
+                              <p className="text-sm font-semibold text-gray-900 line-clamp-2">{m.title}</p>
+                              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                cls === 'high' ? 'bg-green-100 text-green-700' : cls === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'
+                              }`}>{cls}</span>
+                            </div>
+                            <p className="text-xs text-gray-600">Engagement: <strong>{Math.round((m as any).engagement_score || 0)}/100</strong></p>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </section>
+
+                {/* Selected post details */}
+                {selectedGrowthId && (() => {
+                  const m = classifiedMetrics.find((m) => m.id === selectedGrowthId);
+                  if (!m) return null;
+                  const cls = (m as any)._class;
+                  return (
+                    <section className="rounded-xl border border-indigo-200 bg-indigo-50/30 p-6">
+                      <p className="text-xs font-bold uppercase text-indigo-600 mb-2">{cls === 'low' ? '🔧 Recovery Plan' : '🚀 Amplification'}</p>
+                      <h3 className="text-base font-bold text-gray-900 mb-4">{m.title}</h3>
+                      <button
+                        onClick={() => generateRepurpose(m.id)}
+                        disabled={generatingRep}
+                        className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        {generatingRep ? <><Loader2 className="h-4 w-4 animate-spin" /> Generating…</> : <><RefreshCw className="h-4 w-4" /> Generate Repurposed Content</>}
+                      </button>
+                    </section>
+                  );
+                })()}
+
+                {/* Repurposed Content */}
+                {repurposedContent && (
+                  <section className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+                    <div className="border-b border-gray-100 px-5 py-4 flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-gray-900">Repurposed Content</h3>
+                      <button
+                        onClick={() => copyToClipboard(repurposedContent.linkedInPosts[0]?.content || '', 'main')}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                      >
+                        {copiedKey === 'main' ? <><Check className="h-3.5 w-3.5 text-green-500" /> Copied</> : <><Copy className="h-3.5 w-3.5" /> Copy</>}
+                      </button>
+                    </div>
+                    <div className="flex gap-1 border-b border-gray-100 px-4 overflow-x-auto">
+                      {[
+                        { key: 'li1', label: 'LinkedIn 1' },
+                        { key: 'li2', label: 'LinkedIn 2' },
+                        { key: 'li3', label: 'LinkedIn 3' },
+                        { key: 'tw', label: 'Twitter/X' },
+                        { key: 'email', label: 'Email' },
+                        { key: 'card', label: 'Key Insights' },
+                      ].map(({ key, label }) => (
+                        <button key={key} onClick={() => setRepurposeTab(key as any)}
+                          className={`whitespace-nowrap border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+                            repurposeTab === key ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-800'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="p-5">
+                      {repurposeTab === 'li1' && (
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                          <p className="whitespace-pre-wrap text-sm text-gray-800">{repurposedContent.linkedInPosts[0]?.content}</p>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                )}
+              </div>
+            )}
+
+            {/* ═══ TOPIC COVERAGE TAB ═══ */}
+            {intelligenceTab === 'coverage' && (
+              <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+                <section>
+                  <h2 className="mb-4 text-base font-bold text-gray-900">Topic Clusters</h2>
+                  <div className="space-y-3">
+                    {clusters.slice(0, 20).map((c) => (
+                      <div key={c.slug} className="rounded-xl border border-gray-200 bg-white p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-semibold text-gray-900">{c.name}</span>
+                          <span className="text-xs text-gray-500">{c.posts} article{c.posts !== 1 ? 's' : ''}</span>
+                        </div>
+                        <div className="h-2 w-full rounded-full bg-gray-100">
+                          <div className="h-2 rounded-full transition-all" style={{
+                            width: `${c.coverage}%`,
+                            backgroundColor: c.coverage >= 80 ? '#16a34a' : c.coverage >= 40 ? '#d97706' : '#0A66C2',
+                          }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section>
+                  <h2 className="mb-4 text-base font-bold text-gray-900">Pillar Gaps</h2>
+                  <div className="space-y-2">
+                    {gaps.map((g, i) => (
+                      <div key={i} className="rounded-xl border border-gray-200 bg-white p-3">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            g.priority === 'high' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'
+                          }`}>{g.priority}</span>
+                          <span className="text-sm font-semibold text-gray-900">{g.topic}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {/* ═══ KNOWLEDGE GRAPH TAB ═══ */}
+            {intelligenceTab === 'graph' && (
+              <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+                <section>
+                  <h2 className="mb-4 text-base font-bold text-gray-900">Blog Connections ({relationships.length})</h2>
+                  <div className="space-y-2">
+                    {relationships.map((r) => (
+                      <div key={r.id} className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3">
+                        <div className="flex-1 min-w-0 text-sm">
+                          <span className="font-medium text-gray-900 truncate">{blogs.find((b) => b.id === r.source_blog_id)?.title || 'Untitled'}</span>
+                          <span className="mx-2 text-xs text-gray-500">→</span>
+                          <span className="font-medium text-gray-900 truncate">{blogs.find((b) => b.id === r.target_blog_id)?.title || 'Untitled'}</span>
+                        </div>
+                        <button onClick={() => setRelationships(relationships.filter((x) => x.id !== r.id))} className="shrink-0 text-gray-300 hover:text-red-500">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section>
+                  <h2 className="mb-4 text-base font-bold text-gray-900">Add Connection</h2>
+                  <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Source</label>
+                      <select value={relSource} onChange={(e) => setRelSource(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                        <option value="">Select…</option>
+                        {blogs.map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Type</label>
+                      <select value={relType} onChange={(e) => setRelType(e.target.value as RelationshipType)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                        <option value="related">Related</option>
+                        <option value="prerequisite">Prerequisite</option>
+                        <option value="continuation">Continuation</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Target</label>
+                      <select value={relTarget} onChange={(e) => setRelTarget(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                        <option value="">Select…</option>
+                        {blogs.filter((b) => b.id !== relSource).map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
+                      </select>
+                    </div>
+                    <button onClick={() => {
+                      if (relSource && relTarget) {
+                        setRelationships([...relationships, { id: `rel_${Date.now()}`, source_blog_id: relSource, target_blog_id: relTarget, relationship_type: relType }]);
+                        setRelSource(''); setRelTarget('');
+                      }
+                    }} disabled={!relSource || !relTarget} className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                      Create
+                    </button>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {/* ═══ SERIES TAB ═══ */}
+            {intelligenceTab === 'series' && (
+              <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+                <section>
+                  <h2 className="mb-4 text-base font-bold text-gray-900">Reading Series ({series.length})</h2>
+                  <div className="space-y-4">
+                    {series.map((s) => (
+                      <div key={s.id} className="rounded-xl border border-gray-200 bg-white p-5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <BookOpen className="h-4 w-4 text-indigo-600" />
+                              <h3 className="text-sm font-bold text-gray-900">{s.title}</h3>
+                              <span className="text-xs text-gray-400">({s.posts?.length || 0} posts)</span>
+                            </div>
+                            {s.description && <p className="mt-1 text-xs text-gray-500">{s.description}</p>}
+                          </div>
+                          <div className="flex gap-1">
+                            <button onClick={() => setEditSeries(s)} className="rounded p-1 text-gray-400 hover:bg-gray-100">
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button onClick={() => setSeries(series.filter((x) => x.id !== s.id))} className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section>
+                  <h2 className="mb-4 text-base font-bold text-gray-900">Create Series</h2>
+                  <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
+                    <input type="text" value={newSeriesTitle} onChange={(e) => setNewSeriesTitle(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="Series title" />
+                    <textarea value={newSeriesDesc} onChange={(e) => setNewSeriesDesc(e.target.value)} rows={2} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm resize-none" placeholder="Description…" />
+                    <button onClick={() => {
+                      if (newSeriesTitle.trim()) {
+                        setSeries([...series, { id: `ser_${Date.now()}`, title: newSeriesTitle, description: newSeriesDesc, posts: [] }]);
+                        setNewSeriesTitle(''); setNewSeriesDesc('');
+                      }
+                    }} disabled={!newSeriesTitle.trim()} className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                      Create
+                    </button>
+                  </div>
+                </section>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* AI Blog Card Modal */}
+        {isAICardModalOpen && (
+          <AIBlogCardModal
+            isOpen={isAICardModalOpen}
+            onClose={() => setIsAICardModalOpen(false)}
+            onCardCreated={(card) => {
+              setEditorTitle(card.topic);
+              setEditorContent('');
+              setIsAICardModalOpen(false);
+              setView('editor');
+            }}
+          />
+        )}

@@ -1,3 +1,4 @@
+
 /**
  * Public endpoint — no auth required.
  * Returns all published blog posts for a company (for embedding a blog feed).

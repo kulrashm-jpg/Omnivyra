@@ -1,3 +1,4 @@
+
 /**
  * GET /api/social-accounts/verify-config?platform=linkedin
  *

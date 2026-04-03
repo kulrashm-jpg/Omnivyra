@@ -1,3 +1,4 @@
+
 /**
  * GET  /api/admin/intelligence/throttle-status
  *   Returns current system load + throttle config + live throttle level.

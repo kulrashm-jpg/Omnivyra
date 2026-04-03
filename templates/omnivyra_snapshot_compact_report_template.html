@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Omnivyra Snapshot Compact</title>
+  <style>
+    @page { size: A4; margin: 14mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg:#eef4ff; --paper:#fff; --line:#d8e3f1; --ink:#0f172a; --muted:#5b6b82; --blue:#4f7cff; --blue-soft:#eef4ff; --green:#22c55e; --green-soft:#ecfdf3; --amber:#f59e0b; --amber-soft:#fff7e8; --red:#ef4444; --red-soft:#fff1f2; }
+    html,body { background:var(--bg); color:var(--ink); font-family:"Segoe UI",Arial,sans-serif; line-height:1.4; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .report { width:760px; margin:0 auto; padding:18px 0 28px; }
+    .section,.card,.metric,.insight,.action { break-inside:avoid-page; page-break-inside:avoid; }
+    .shell { background:var(--paper); border:1px solid var(--line); border-radius:18px; box-shadow:0 10px 28px rgba(15,23,42,.05); padding:16px; margin-bottom:12px; }
+    .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+    .tab { font-size:10px; color:var(--muted); background:#f8fbff; border:1px solid var(--line); border-radius:999px; padding:6px 9px; text-transform:uppercase; letter-spacing:.04em; }
+    .tab.active { background:var(--blue-soft); color:var(--blue); border-color:#c9d7ff; font-weight:700; }
+    .brand { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
+    .brand h1 { font-size:15px; margin-bottom:2px; }
+    .brand p { font-size:11px; color:var(--muted); }
+    .score-row { display:grid; grid-template-columns:112px 1fr 140px; gap:10px; margin-bottom:12px; }
+    .score-badge,.score-copy,.score-side { border:1px solid var(--line); border-radius:14px; background:#fbfdff; padding:14px; }
+    .score-badge { text-align:center; background:linear-gradient(180deg,#f8fbff 0%,#eef4ff 100%); }
+    .score-badge .value { font-size:40px; color:var(--blue); font-weight:800; line-height:1; margin-bottom:4px; }
+    .score-badge .label { font-size:10px; color:var(--muted); text-transform:uppercase; }
+    .score-copy strong,.score-side strong,.section h2 { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-bottom:6px; }
+    .score-copy p,.score-side p,.info-card p,.metric p,.insight p,.action p { font-size:12px; color:var(--ink); }
+    .pills { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+    .pill { font-size:10px; border-radius:999px; padding:5px 8px; border:1px solid var(--line); color:var(--muted); background:white; }
+    .pill.blue { background:var(--blue-soft); color:var(--blue); border-color:#c9d7ff; }
+    .pill.amber { background:var(--amber-soft); color:#b45309; border-color:#f7d58d; }
+    .pill.green { background:var(--green-soft); color:#15803d; border-color:#bbf7d0; }
+    .banner { border:1px solid #c9d7ff; background:var(--blue-soft); border-radius:10px; padding:10px 12px; font-size:12px; margin-bottom:12px; }
+    .decision-grid,.summary-grid,.actions-grid { display:grid; gap:8px; }
+    .decision-grid { grid-template-columns:repeat(2,1fr); }
+    .summary-grid { grid-template-columns:150px 1fr 150px; }
+    .card,.info-card,.metric,.insight,.action { border:1px solid var(--line); background:#fff; border-radius:12px; padding:12px; }
+    .card h3,.info-card h3,.action h3 { font-size:11px; text-transform:uppercase; color:var(--muted); margin-bottom:6px; letter-spacing:.04em; }
+    .card p,.info-card p,.action p { font-size:12px; }
+    .card.warn { background:var(--amber-soft); border-color:#f6d794; }
+    .card.good { background:var(--green-soft); border-color:#b8ebc6; }
+    .card.bad { background:var(--red-soft); border-color:#f6b4b7; }
+    .info-card.scorebox .big { font-size:34px; line-height:1; font-weight:800; color:var(--blue); margin-bottom:6px; }
+    .metric-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+    .metric strong { display:block; font-size:11px; color:var(--muted); margin-bottom:8px; text-transform:uppercase; }
+    .bar { height:8px; border-radius:999px; background:#e9eef7; margin:8px 0; overflow:hidden; }
+    .bar span { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,#7aa2ff 0%,#4f7cff 100%); }
+    .insight-list,.action-list { display:grid; gap:8px; }
+    .insight { background:#fbfdff; }
+    .action .meta { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 8px; }
+    .footer-cta { text-align:center; padding:18px; border:1px solid var(--line); border-radius:14px; background:#fbfdff; }
+    .footer-cta h3 { font-size:18px; margin-bottom:6px; }
+    .footer-cta p { font-size:12px; color:var(--muted); margin-bottom:10px; }
+    .button { display:inline-block; background:var(--blue); color:white; border-radius:10px; padding:10px 14px; font-size:12px; font-weight:700; }
+  </style>
+</head>
+<body>
+  <div class="report">
+    <div class="tabs">
+      <span class="tab active">Summary</span><span class="tab">Unified</span><span class="tab">Progress</span><span class="tab">Competitors</span><span class="tab">SEO Visuals</span><span class="tab">Insights</span><span class="tab">Metrics</span><span class="tab">Actions</span>
+    </div>
+    <section class="shell">
+      <div class="brand"><div><h1>{{company_name}}</h1><p>{{website_url}}</p></div><div class="pill blue">{{report_date}}</div></div>
+      <div class="score-row">
+        <div class="score-badge"><div class="value">{{overall_score}}</div><div class="label">Overall Score</div></div>
+        <div class="score-copy"><strong>Brand Context</strong><p>{{executive_summary}}</p><div class="pills"><span class="pill amber">{{stage_label}}</span><span class="pill blue">{{primary_focus}}</span><span class="pill green">{{confidence_label}}</span></div></div>
+        <div class="score-side"><strong>Your Score</strong><p>{{score_summary}}</p></div>
+      </div>
+      <div class="banner">{{banner_text}}</div>
+      <div class="summary-grid">
+        <div class="info-card scorebox"><h3>Strategic Strength</h3><div class="big">{{unified_score}}</div><p>{{unified_summary}}</p></div>
+        <div class="info-card"><h3>Top 3 Unified Actions</h3><div class="action-list"><div class="action"><p><strong>{{action_1_title}}</strong></p><p>{{action_1_text}}</p></div><div class="action"><p><strong>{{action_2_title}}</strong></p><p>{{action_2_text}}</p></div><div class="action"><p><strong>{{action_3_title}}</strong></p><p>{{action_3_text}}</p></div></div></div>
+        <div class="info-card good"><h3>Growth Direction</h3><p>{{growth_direction}}</p></div>
+      </div>
+    </section>
+    <section class="shell">
+      <h2>Decision Snapshot</h2>
+      <div class="banner">{{decision_banner}}</div>
+      <div class="decision-grid">
+        <div class="card"><h3>What's Broken</h3><p>{{decision_broken}}</p></div>
+        <div class="card good"><h3>What To Fix First</h3><p>{{decision_fix_first}}</p></div>
+        <div class="card warn"><h3>What To Delay</h3><p>{{decision_delay}}</p></div>
+        <div class="card bad"><h3>If Ignored</h3><p>{{decision_ignored}}</p></div>
+      </div>
+    </section>
+    <section class="shell"><h2>Performance Progress</h2><div class="metric-grid"><div class="metric"><strong>Unified</strong><p>{{metric_unified}}</p><div class="bar"><span style="width: {{metric_unified_pct}}%"></span></div></div><div class="metric"><strong>SEO</strong><p>{{metric_seo}}</p><div class="bar"><span style="width: {{metric_seo_pct}}%"></span></div></div><div class="metric"><strong>GEO/AEO</strong><p>{{metric_geo}}</p><div class="bar"><span style="width: {{metric_geo_pct}}%"></span></div></div><div class="metric"><strong>Authority</strong><p>{{metric_authority}}</p><div class="bar"><span style="width: {{metric_authority_pct}}%"></span></div></div></div></section>
+    <section class="shell"><h2>Key Insights</h2><div class="insight-list"><div class="insight"><p><strong>{{insight_title_1}}</strong></p><p>{{insight_text_1}}</p></div><div class="insight"><p><strong>{{insight_title_2}}</strong></p><p>{{insight_text_2}}</p></div><div class="insight"><p><strong>{{insight_title_3}}</strong></p><p>{{insight_text_3}}</p></div><div class="insight"><p><strong>{{insight_title_4}}</strong></p><p>{{insight_text_4}}</p></div></div></section>
+    <section class="shell"><h2>Your Next Steps</h2><div class="action-list"><div class="action"><h3>1</h3><p><strong>{{next_step_1_title}}</strong></p><p>{{next_step_1_text}}</p><div class="meta"><span class="pill blue">{{next_step_1_priority}}</span><span class="pill amber">{{next_step_1_effort}}</span><span class="pill green">{{next_step_1_outcome}}</span></div></div><div class="action"><h3>2</h3><p><strong>{{next_step_2_title}}</strong></p><p>{{next_step_2_text}}</p><div class="meta"><span class="pill blue">{{next_step_2_priority}}</span><span class="pill amber">{{next_step_2_effort}}</span><span class="pill green">{{next_step_2_outcome}}</span></div></div></div></section>
+    <section class="shell"><div class="footer-cta"><h3>Ready to execute?</h3><p>{{cta_text}}</p><span class="button">{{cta_label}}</span></div></section>
+  </div>
+</body>
+</html>

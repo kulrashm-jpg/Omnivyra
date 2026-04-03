@@ -1,3 +1,4 @@
+
 /**
  * POST /api/activity-workspace/schedule
  * Saves a finalized platform variant as a scheduled_posts row so it appears on the dashboard calendar.

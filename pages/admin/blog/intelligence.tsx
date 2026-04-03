@@ -8,7 +8,7 @@ import {
   Loader2, Lightbulb, Network, BookOpen, TrendingUp, Rocket,
   Plus, Trash2, ChevronUp, ChevronDown, ExternalLink,
   AlertTriangle, CheckCircle2, ArrowRight, Pencil, X, Copy, Check,
-  Zap, RefreshCw, BarChart2, XCircle,
+  Zap, RefreshCw, BarChart2, XCircle, Sparkles,
 } from 'lucide-react';
 import {
   classifyPost, getAmplificationActions, getRecoveryActions,
@@ -23,6 +23,7 @@ import {
   buildTopicClusters,
   detectContentGaps,
   generateRecommendations,
+  PLATFORM_DEFAULT_PILLARS,
   type TopicCluster,
   type ContentGap,
   type Recommendation,
@@ -46,6 +47,13 @@ import {
   type DistributionItem,
   type TopicNarrative,
 } from '../../../lib/blog/performanceEngine';
+import {
+  buildWritingStyleProfile,
+  formatStyleInstructions,
+  type WritingStyleProfile,
+} from '../../../lib/content/writingStyleEngine';
+import type { CompanyProfile } from '../../../backend/services/companyProfileService';
+import AIBlogCardModal from '../../../components/blog/AIBlogCardModal';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -81,6 +89,27 @@ interface RelRow {
   target_blog_id:   string;
   relationship_type: string;
 }
+
+interface CompanyOption {
+  company_id: string;
+  name: string;
+}
+
+interface BriefInsight {
+  company_id: string;
+  company_name: string;
+  company_context: string;
+  current_content: string;
+  /** Formatted style instructions string (prompt-ready). */
+  writing_style: string;
+  /** Structured style profile — available for downstream prompt builders. */
+  writing_style_profile: WritingStyleProfile | null;
+  related_titles: string[];
+  intent: 'awareness' | 'authority' | 'conversion' | 'retention';
+  tone: string;
+}
+
+type EnrichedGap = ContentGap & { brief: BriefInsight };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -119,6 +148,13 @@ export default function BlogIntelligencePage() {
   const [relationships, setRelationships] = useState<RelRow[]>([]);
   const [loading,       setLoading]       = useState(true);
   const [error,         setError]         = useState<string | null>(null);
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState('');
+  const [companyContextNote, setCompanyContextNote] = useState('');
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null);
+
+  // ── AI Blog Card Modal state ──────────────────────────────────────────────
+  const [isAICardModalOpen, setIsAICardModalOpen] = useState(false);
 
   // ── Series editor state ───────────────────────────────────────────────────
   const [newSeriesTitle, setNewSeriesTitle]       = useState('');
@@ -161,6 +197,77 @@ export default function BlogIntelligencePage() {
       .finally(() => setLoading(false));
   }, [router]);
 
+  useEffect(() => {
+    let active = true;
+
+    const loadCompanies = async () => {
+      try {
+        const r = await fetch('/api/company-profile?mode=list', { credentials: 'include' });
+        if (!r.ok) return;
+        const d = await r.json().catch(() => ({})) as { companies?: Array<{ company_id: string; name?: string }> };
+        const list = (d.companies || [])
+          .filter((c) => c.company_id)
+          .map((c) => ({ company_id: c.company_id, name: c.name || c.company_id }));
+        if (!active) return;
+        setCompanies(list);
+
+        const remembered = typeof window !== 'undefined' ? localStorage.getItem('selected_company_id') || '' : '';
+        const next = remembered && list.some((c) => c.company_id === remembered)
+          ? remembered
+          : (list[0]?.company_id || '');
+        setSelectedCompanyId(next);
+      } catch {
+        // non-blocking for intelligence dashboard
+      }
+    };
+
+    void loadCompanies();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setCompanyContextNote('');
+      return;
+    }
+
+    const loadCompanyContext = async () => {
+      try {
+        const r = await fetch(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' });
+        if (!r.ok) {
+          setCompanyContextNote('');
+          setCompanyProfile(null);
+          return;
+        }
+        const d = await r.json().catch(() => ({})) as { profile?: Record<string, unknown> };
+        const rawProfile = d.profile || {};
+
+        // Store full profile for WritingStyleEngine use in brief enrichment
+        setCompanyProfile(rawProfile as CompanyProfile);
+
+        const industry = typeof rawProfile.industry === 'string' ? rawProfile.industry : '';
+        const audience = typeof rawProfile.target_audience === 'string'
+          ? rawProfile.target_audience
+          : (typeof rawProfile.audience === 'string' ? rawProfile.audience : '');
+        const voice = typeof rawProfile.brand_voice === 'string'
+          ? rawProfile.brand_voice
+          : (typeof rawProfile.writing_style === 'string' ? rawProfile.writing_style : '');
+
+        const parts = [industry, audience, voice].map((x) => (x || '').trim()).filter(Boolean);
+        setCompanyContextNote(parts.join(' | '));
+      } catch {
+        setCompanyContextNote('');
+        setCompanyProfile(null);
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('selected_company_id', selectedCompanyId);
+    }
+
+    void loadCompanyContext();
+  }, [selectedCompanyId]);
+
   // ── Computed performance ─────────────────────────────────────────────────
   const {
     allMetrics,
@@ -191,11 +298,11 @@ export default function BlogIntelligencePage() {
 
   // ── Computed intelligence ─────────────────────────────────────────────────
   const { clusters, gaps, recommendations, inferred } = useMemo(() => {
-    if (!posts.length) return { clusters: [], gaps: [], recommendations: [], inferred: [] };
+    if (!posts.length) return { clusters: [], gaps: [] as EnrichedGap[], recommendations: [], inferred: [] };
 
     const clusters    = buildTopicClusters(posts);
-    const gaps        = detectContentGaps(clusters, posts);
-    const recs        = generateRecommendations(gaps, clusters, posts);
+    const gapResult   = detectContentGaps(clusters, posts, PLATFORM_DEFAULT_PILLARS);
+    const recs        = generateRecommendations(gapResult.gaps, clusters, posts);
 
     const nodes = posts.filter((p) => p.status === 'published').map((p) => ({
       id:          p.id,
@@ -220,8 +327,81 @@ export default function BlogIntelligencePage() {
 
     const inferred = inferRelatedEdges(nodes, existingEdges);
 
-    return { clusters, gaps, recommendations: recs, inferred };
-  }, [posts, relationships]);
+    const selectedCompany = companies.find((c) => c.company_id === selectedCompanyId);
+    const topTags = posts
+      .flatMap((p) => p.tags || [])
+      .reduce<Record<string, number>>((acc, tag) => {
+        const key = String(tag || '').trim().toLowerCase();
+        if (!key) return acc;
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+    const frequentTags = Object.entries(topTags)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([tag]) => tag);
+
+    // ── Writing style: use engine when profile is available ─────────────────
+    let styleProfile: WritingStyleProfile | null = null;
+    let writingStyleText: string;
+
+    if (companyProfile) {
+      styleProfile = buildWritingStyleProfile(companyProfile);
+      writingStyleText = formatStyleInstructions(styleProfile);
+      // Append content-level continuity hints derived from existing posts
+      if (frequentTags.length > 0) {
+        writingStyleText += `\n  Maintain topical continuity with tags: ${frequentTags.join(', ')}`;
+      }
+    } else {
+      // Fallback when no profile is loaded yet
+      writingStyleText = [
+        'Lead with a concrete business problem in opening paragraph.',
+        'Use authoritative, evidence-led tone with actionable takeaways.',
+        frequentTags.length > 0
+          ? `Maintain topical continuity with tags: ${frequentTags.join(', ')}.`
+          : 'Maintain topical continuity with existing category language.',
+        'Include internal linking opportunities and end with practical summary.',
+      ].join(' ');
+    }
+
+    // Derive tone from style profile if available
+    const toneText = styleProfile?.tone_summary
+      ? styleProfile.tone_summary
+      : 'Confident, analytical, and practical';
+
+    const enrichedGaps: EnrichedGap[] = gapResult.gaps.map((gap) => {
+      const relatedTitles = posts
+        .filter((p) => gap.relatedTo.some((r) => p.title.toLowerCase().includes(r.toLowerCase()) || r.toLowerCase().includes(p.title.toLowerCase())))
+        .slice(0, 3)
+        .map((p) => p.title);
+
+      const bestPerformers = [...posts]
+        .filter((p) => p.status === 'published')
+        .sort((a, b) => (b.views_count || 0) - (a.views_count || 0))
+        .slice(0, 3)
+        .map((p) => p.title);
+
+      const currentContent = relatedTitles.length > 0
+        ? `Existing coverage: ${relatedTitles.join('; ')}. Expand beyond repeated angles.`
+        : `No direct coverage yet. Reference adjacent winners: ${bestPerformers.join('; ') || 'none available'}.`;
+
+      const brief: BriefInsight = {
+        company_id: selectedCompanyId,
+        company_name: selectedCompany?.name || selectedCompanyId || 'Selected Company',
+        company_context: companyContextNote || 'No company profile context available. Use selected company context fields during generation.',
+        current_content: currentContent,
+        writing_style: writingStyleText,
+        writing_style_profile: styleProfile,
+        related_titles: relatedTitles,
+        intent: gap.priority === 'high' ? 'authority' : gap.priority === 'medium' ? 'conversion' : 'awareness',
+        tone: toneText,
+      };
+
+      return { ...gap, brief };
+    });
+
+    return { clusters, gaps: enrichedGaps, recommendations: recs, inferred };
+  }, [posts, relationships, selectedCompanyId, companyContextNote, companyProfile, companies]);
 
   // ── Computed growth ───────────────────────────────────────────────────────
   const { growthSummary, classifiedMetrics, seriesPostIdSet } = useMemo(() => {
@@ -263,7 +443,30 @@ export default function BlogIntelligencePage() {
     });
   };
 
-  // ── Series CRUD ────────────────────────────────────────────────────────────
+  // ── AI Blog Card handler ───────────────────────────────────────────────────
+  const handleAICardCreated = (card: any) => {
+    // In future, this could add the card to a pending recommendations list
+    // For now, navigate to the blog generation page with the card details
+    const token = `ai_card_${Date.now()}`;
+    try {
+      sessionStorage.setItem(token, JSON.stringify(card));
+    } catch {
+      // Continue without storage token if browser blocks it
+    }
+    void router.push({
+      pathname: '/admin/blog/generate',
+      query: {
+        prefill_source: 'superadmin_ai_card_creation',
+        prefill_topic: card.topic,
+        prefill_reason: card.reason,
+        prefill_priority: card.priority || 'medium',
+        prefill_company_id: selectedCompanyId,
+        prefill_intent: card.intent,
+        prefill_tone: card.tone,
+        prefill_card: token,
+      },
+    });
+  };
   const createSeries = async () => {
     if (!newSeriesTitle.trim()) return;
     setSavingSeries(true);
@@ -465,6 +668,39 @@ export default function BlogIntelligencePage() {
                   <Lightbulb className="h-4 w-4 text-[#0B5ED7]" />
                   What to Write Next
                 </h2>
+                <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wide text-blue-700 mb-1">Company Context for Recommendations</label>
+                  <select
+                    value={selectedCompanyId}
+                    onChange={(e) => setSelectedCompanyId(e.target.value)}
+                    className="w-full rounded-md border border-blue-200 bg-white px-3 py-2 text-sm"
+                  >
+                    {companies.map((c) => (
+                      <option key={c.company_id} value={c.company_id}>{c.name}</option>
+                    ))}
+                  </select>
+                  {companyContextNote && (
+                    <p className="mt-2 text-xs text-blue-700 line-clamp-2">{companyContextNote}</p>
+                  )}
+                </div>
+
+                {/* Create Custom Blog Card with AI */}
+                <div className="mb-4 rounded-xl border border-purple-200 bg-gradient-to-r from-purple-50 to-pink-50 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-gray-900 text-sm">Create Custom Blog Card</h3>
+                      <p className="text-xs text-gray-600 mt-1">Have a unique idea? Use AI to refine it into a structured recommendation card.</p>
+                    </div>
+                    <button
+                      onClick={() => setIsAICardModalOpen(true)}
+                      type="button"
+                      className="shrink-0 inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white px-4 py-2 font-medium text-sm transition-all"
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      Create with AI
+                    </button>
+                  </div>
+                </div>
                 {gaps.length === 0 ? (
                   <div className="rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-500">
                     Excellent coverage — no major gaps detected.
@@ -480,6 +716,14 @@ export default function BlogIntelligencePage() {
                           </span>
                         </div>
                         <p className="text-xs text-gray-500 leading-relaxed flex-1">{gap.reason}</p>
+                        <div className="mt-3 rounded-lg border border-gray-100 bg-gray-50 p-3 space-y-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Company Context</p>
+                          <p className="text-xs text-gray-700 line-clamp-2">{gap.brief.company_context}</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Current Content</p>
+                          <p className="text-xs text-gray-700 line-clamp-2">{gap.brief.current_content}</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Writing Style</p>
+                          <p className="text-xs text-gray-700 line-clamp-2">{gap.brief.writing_style}</p>
+                        </div>
                         {gap.relatedTo.length > 0 && (
                           <div className="mt-3 pt-3 border-t border-gray-100">
                             <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Builds on</p>
@@ -489,7 +733,28 @@ export default function BlogIntelligencePage() {
                           </div>
                         )}
                         <Link
-                          href={`/admin/blog/new`}
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            const token = `sa_gap_brief_${Date.now()}_${i}`;
+                            try {
+                              sessionStorage.setItem(token, JSON.stringify(gap.brief));
+                            } catch {
+                              // Continue without storage token if browser blocks it.
+                            }
+                            void router.push({
+                              pathname: '/admin/blog/generate',
+                              query: {
+                                prefill_source: 'superadmin_blog_intelligence',
+                                prefill_topic: gap.topic,
+                                prefill_reason: gap.reason,
+                                prefill_related: gap.relatedTo.join('|'),
+                                prefill_priority: gap.priority,
+                                prefill_company_id: gap.brief.company_id,
+                                prefill_brief: token,
+                              },
+                            });
+                          }}
                           className="mt-4 inline-flex items-center gap-1 text-xs font-semibold text-[#0B5ED7] hover:underline"
                         >
                           Write this <ArrowRight className="h-3 w-3" />
@@ -1541,6 +1806,18 @@ export default function BlogIntelligencePage() {
           </div>
         </div>
       )}
+
+      {/* AI Blog Card Creation Modal */}
+      <AIBlogCardModal
+        isOpen={isAICardModalOpen}
+        onClose={() => setIsAICardModalOpen(false)}
+        companyId={selectedCompanyId}
+        companyName={companies.find((c) => c.company_id === selectedCompanyId)?.name || 'Your Company'}
+        companyContext={companyContextNote}
+        existingTopics={gaps.map((g) => g.topic)}
+        writingStyleGuide={companyProfile ? formatStyleInstructions(buildWritingStyleProfile(companyProfile)) : ''}
+        onCardCreated={handleAICardCreated}
+      />
     </>
   );
 }

@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
@@ -281,6 +282,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!companyId) {
     return res.status(400).json({ error: 'companyId required' });
   }
+
+  const companyContext = await requireCompanyContext({ req, res, companyId });
+  if (!companyContext) return;
 
   if (req.method === 'GET') {
     const access = await ensureCompanyAccess(req, res, companyId);

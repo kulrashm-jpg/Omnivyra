@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Plus, 
   Edit3, 
@@ -85,11 +85,7 @@ export default function WeeklyRefinementInterface({
     return () => window.clearTimeout(t);
   }, [notice]);
 
-  useEffect(() => {
-    loadWeeklyRefinements();
-  }, [campaignId]);
-
-  const loadWeeklyRefinements = async () => {
+  const loadWeeklyRefinements = useCallback(async () => {
     setIsLoading(true);
     try {
       const response = await fetch(`/api/campaigns/weekly-refinements?campaignId=${campaignId}`);
@@ -107,9 +103,13 @@ export default function WeeklyRefinementInterface({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [campaignId]);
 
-  const loadDailyPlans = async (weekNumber: number) => {
+  useEffect(() => {
+    void loadWeeklyRefinements();
+  }, [loadWeeklyRefinements]);
+
+  const loadDailyPlans = useCallback(async (weekNumber: number) => {
     try {
       const response = await fetch(`/api/campaigns/daily-plans?campaignId=${campaignId}&weekNumber=${weekNumber}`);
       if (response.ok) {
@@ -119,7 +119,7 @@ export default function WeeklyRefinementInterface({
     } catch (error) {
       console.error('Error loading daily plans:', error);
     }
-  };
+  }, [campaignId]);
 
   const toggleWeekExpansion = (weekNumber: number) => {
     const newExpanded = new Set(expandedWeeks);
@@ -131,14 +131,14 @@ export default function WeeklyRefinementInterface({
     setExpandedWeeks(newExpanded);
   };
 
-  const openDailyPlan = async (weekNumber: number) => {
+  const openDailyPlan = useCallback(async (weekNumber: number) => {
     setSelectedWeek(weekNumber);
     await loadDailyPlans(weekNumber);
     setShowDailyPlan(true);
     if (onWeekSelect) {
       onWeekSelect(weekNumber);
     }
-  };
+  }, [loadDailyPlans, onWeekSelect]);
 
   const startAmendment = (weekNumber: number) => {
     setIsAmending(weekNumber);

@@ -7,6 +7,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
+import { requireCompanyContext } from '../../../../backend/services/companyContextGuardService';
 import {
   getCompanyRegions,
   createRegion,
@@ -30,9 +31,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
+    const companyContext = await requireCompanyContext({ req, res, companyId: companyId.trim() });
+    if (!companyContext) return;
+
     switch (req.method) {
       case 'GET': {
-        const regions = await getCompanyRegions(companyId);
+        const regions = await getCompanyRegions(companyContext.companyId);
         return res.status(200).json({ regions });
       }
       case 'POST': {
@@ -40,7 +44,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (!body?.region?.trim()) {
           return res.status(400).json({ error: 'region is required' });
         }
-        const region = await createRegion(companyId, body.region);
+        const region = await createRegion(companyContext.companyId, body.region);
         return res.status(201).json({ region });
       }
       case 'PUT': {

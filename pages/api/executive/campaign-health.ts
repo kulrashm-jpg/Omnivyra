@@ -1,3 +1,4 @@
+
 /**
  * Executive Campaign Health API — read-only projection layer.
  * Consolidates engagement, comments, stability, strategist acceptance, and alerts.
@@ -9,11 +10,12 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getGrowthIntelligenceSummary } from '../../../backend/services/growthIntelligence';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { computeDistributionStability } from '../../../lib/intelligence/distributionStability';
 import { buildStrategicMemoryProfile } from '../../../lib/intelligence/strategicMemory';
 import type { StrategistAction } from '../../../lib/intelligence/strategicMemory';
+import { getDecisionReportView } from '../../../backend/services/decisionReportService';
+import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
 
 export interface CampaignHealthSummary {
   campaign_id: string;
@@ -406,8 +408,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     try {
-      const growth = await getGrowthIntelligenceSummary(supabase, access.companyId, cid);
-      summary.growth_score = growth.growthScore;
+      const growthView = await runInApiReadContext('executiveCampaignHealthApi', async () =>
+        getDecisionReportView({
+          companyId: access.companyId,
+          reportTier: 'growth',
+          entityType: 'campaign',
+          entityId: cid,
+          sourceService: 'growthIntelligenceService',
+        })
+      );
+      summary.growth_score = growthView.decisions[0]?.priority_score ?? null;
     } catch (err) {
       console.warn('Growth intelligence unavailable', err);
       summary.growth_score = null;

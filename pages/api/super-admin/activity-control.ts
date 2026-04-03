@@ -1,3 +1,4 @@
+
 /**
  * /api/super-admin/activity-control
  *
@@ -17,7 +18,10 @@
  * Auth: super_admin_session cookie (HttpOnly) required.
  */
 
+export const runtime = 'nodejs';
+
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { config } from '@/config';
 import {
   getAllGlobalConfigs,
   getCompanyOverrides,
@@ -78,27 +82,27 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   const { type, company_id } = req.query;
 
   if (type === 'infra_limits') {
-    const config = await getInfraLimitsConfig();
-    // Resolve effective values (admin config overrides env vars)
+    const infraConfig = await getInfraLimitsConfig();
+    // Resolve effective values (admin config overrides config module values)
     const effectiveDailyLimit =
-      config.redis.maxCommandsPerDay > 0
-        ? config.redis.maxCommandsPerDay
-        : parseInt(process.env.UPSTASH_DAILY_REQUEST_LIMIT ?? '10000', 10);
+      infraConfig.redis.maxCommandsPerDay > 0
+        ? infraConfig.redis.maxCommandsPerDay
+        : config.UPSTASH_DAILY_REQUEST_LIMIT;
     const effectiveMemoryBytes =
-      config.redis.maxMemoryBytes > 0
-        ? config.redis.maxMemoryBytes
-        : parseInt(process.env.REDIS_MAX_BYTES ?? '0', 10) || 256 * 1024 * 1024;
+      infraConfig.redis.maxMemoryBytes > 0
+        ? infraConfig.redis.maxMemoryBytes
+        : config.REDIS_MAX_BYTES || 256 * 1024 * 1024;
 
     return res.status(200).json({
-      config,
+      config: infraConfig,
       effective: {
         redis: {
           maxCommandsPerDay: effectiveDailyLimit,
           maxMemoryBytes:    effectiveMemoryBytes,
           maxMemoryMB:       Math.round(effectiveMemoryBytes / (1024 * 1024)),
         },
-        db:  config.db,
-        llm: config.llm,
+        db:  infraConfig.db,
+        llm: infraConfig.llm,
       },
     });
   }

@@ -44,7 +44,7 @@ describe('contentGenerationPipeline', () => {
   });
 
   it('text content produces AI-generated master content', async () => {
-    mockedGenerateCampaignPlan.mockResolvedValue({
+    mockedRunCompletionWithOperation.mockResolvedValue({
       output: 'This is AI generated universal master content.',
       metadata: {
         provider: 'direct-openai',
@@ -64,7 +64,7 @@ describe('contentGenerationPipeline', () => {
     expect(master.generation_status).toBe('generated');
     expect(master.generation_source).toBe('ai');
     expect(master.content).toBe('This is AI generated universal master content.');
-    expect(mockedGenerateCampaignPlan).toHaveBeenCalledTimes(1);
+    expect(mockedRunCompletionWithOperation).toHaveBeenCalled();
   });
 
   it('generates platform variant from master with max length enforcement', async () => {

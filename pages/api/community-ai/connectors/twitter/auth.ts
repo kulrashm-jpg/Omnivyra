@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
+import { requireManageConnectors } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
+import { encodeOAuthState } from '../../../../../backend/auth/oauthState';
 import crypto from 'crypto';
 
 const base64Url = (input: Buffer) =>
@@ -9,15 +10,6 @@ const base64Url = (input: Buffer) =>
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
-
-const buildState = (value: Record<string, string>) => {
-  const json = JSON.stringify(value);
-  return Buffer.from(json, 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -43,14 +35,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const codeVerifier = base64Url(crypto.randomBytes(32));
   const codeChallenge = base64Url(crypto.createHash('sha256').update(codeVerifier).digest());
 
-  const redirectUri = getCommunityAiConnectorCallbackUrl('twitter');
+  // Derive callback URL from the actual request host so localhost and production
+  // both resolve to a URL that is already registered in the Twitter app.
+  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
+  const host = (req.headers['x-forwarded-host'] as string | undefined) || req.headers.host || 'localhost:3000';
+  const redirectUri = `${proto}://${host}/api/auth/twitter/callback`;
+
   const redirectTo =
     typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';
-  const state = buildState({
-    tenant_id: tenantId,
-    organization_id: organizationId,
-    redirect: redirectTo,
-    code_verifier: codeVerifier,
+
+  // Embed flow marker + PKCE code_verifier + tenant context so the shared callback
+  // knows to use PKCE and also save to community_ai_platform_tokens.
+  const state = encodeOAuthState({
+    companyId: organizationId,
+    userId: access.userId,
+    tenantId: organizationId,
+    flow: 'community-ai',
+    codeVerifier,
+    returnTo: redirectTo,
   });
 
   const params = new URLSearchParams({

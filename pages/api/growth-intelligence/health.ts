@@ -9,6 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 import { resolveCampaignIdsForCompany } from '../../../backend/services/growthIntelligence';
 
 type SystemHealth = 'healthy' | 'partial' | 'empty';
@@ -25,6 +26,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
+    const companyContext = await requireCompanyContext({ req, res, companyId });
+    if (!companyContext) return;
+
     const campaignIds = await resolveCampaignIdsForCompany(supabase, companyId);
     const campaignCount = campaignIds.length;
 
@@ -83,6 +87,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       success: true,
       data: {
         companyId,
+        authorizedCompanyId: companyContext.companyId,
         counts: {
           campaigns: campaignCount,
           scheduledPosts: scheduledPostCount,

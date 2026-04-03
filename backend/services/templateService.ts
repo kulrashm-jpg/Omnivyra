@@ -11,6 +11,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { sanitizeTextArtifacts } from './export/renderTextSanitizer';
 
 export interface ContentTemplate {
   id: string;
@@ -246,7 +247,7 @@ export function renderTemplate(
   });
 
   return {
-    content: content.trim(),
+    content: sanitizeTextArtifacts(content.trim()),
     hashtags,
     warnings,
   };

@@ -1,3 +1,4 @@
+
 /**
  * GET /api/admin/engagement-signal-health
  * Admin endpoint: collection status, platform breakdown, errors, queue size.

@@ -87,13 +87,15 @@ export class PolicySignatureMismatchError extends Error {
 
 let policySignatureAssertionRun = false;
 
+import { config } from '@/config';
+
 /**
  * Stage 27: Assert that current policy hash matches GOVERNANCE_POLICY_EXPECTED_HASH when env is set.
  * Call once at app bootstrap. Prevents silent evaluation order changes in production.
  * When env is set, always validates (allows tests to verify). When env unset, no-op once.
  */
 export function assertPolicySignatureUnchanged(): void {
-  const expected = process.env.GOVERNANCE_POLICY_EXPECTED_HASH?.trim();
+  const expected = config.GOVERNANCE_POLICY_EXPECTED_HASH?.trim();
   if (!expected) {
     policySignatureAssertionRun = true;
     return;

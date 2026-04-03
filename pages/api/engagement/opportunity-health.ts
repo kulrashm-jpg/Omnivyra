@@ -1,3 +1,4 @@
+
 /**
  * GET /api/engagement/opportunity-health
  * Returns opportunity pipeline health metrics for executive insights.

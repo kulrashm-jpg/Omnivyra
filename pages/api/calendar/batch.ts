@@ -1,3 +1,4 @@
+
 /**
  * GET /api/calendar/batch
  * Batch load: activity-events + activity message counts + calendar message counts

@@ -109,6 +109,159 @@ export type CompanyProfile = {
   } | null;
   /** User-configured content types per social platform: { linkedin: ['post', 'article'], ... }. Empty = use system defaults. */
   platform_content_type_prefs?: Record<string, string[]> | null;
+  /** Persisted report defaults and integration-derived report setup state. */
+  report_settings?: {
+    company_facts?: {
+      team_size?: string | null;
+      founded_year?: string | null;
+      revenue_range?: string | null;
+      updated_at?: string | null;
+    } | null;
+    profile_review?: {
+      last_confirmed_at?: string | null;
+      next_confirmation_due_at?: string | null;
+      confirmation_interval_days?: number | null;
+      pending_confirmation?: boolean | null;
+      last_confirmed_by_role?: string | null;
+      updated_at?: string | null;
+    } | null;
+    default_inputs?: {
+      company_name?: string | null;
+      website_domain?: string | null;
+      business_type?: string | null;
+      geography?: string | null;
+      social_links?: string[] | null;
+      competitors?: string[] | null;
+    } | null;
+    integrations?: Record<string, boolean> | null;
+    last_report_source?: string | null;
+    last_uploaded_file_name?: string | null;
+    updated_at?: string | null;
+  } | null;
+}
+
+const COMPANY_PROFILE_REVIEW_INTERVAL_DAYS = 183;
+
+function addDays(value: Date, days: number): Date {
+  const next = new Date(value);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function normalizeNullableString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function mergeCompanyFacts(
+  existing: CompanyProfile['report_settings'] extends { company_facts?: infer T } ? T : never,
+  incoming: CompanyProfile['report_settings'] extends { company_facts?: infer T } ? T : never,
+  nowIso: string,
+) {
+  const team_size = normalizeNullableString(incoming?.team_size) ?? normalizeNullableString(existing?.team_size);
+  const founded_year = normalizeNullableString(incoming?.founded_year) ?? normalizeNullableString(existing?.founded_year);
+  const revenue_range = normalizeNullableString(incoming?.revenue_range) ?? normalizeNullableString(existing?.revenue_range);
+
+  const hasAnyFacts = Boolean(team_size || founded_year || revenue_range);
+  if (!hasAnyFacts) {
+    return existing ?? null;
+  }
+
+  return {
+    ...(existing ?? {}),
+    ...(incoming ?? {}),
+    team_size,
+    founded_year,
+    revenue_range,
+    updated_at: nowIso,
+  };
+}
+
+export function upsertCompanyProfileGovernanceSettings(params: {
+  existingReportSettings?: CompanyProfile['report_settings'] | null;
+  incomingReportSettings?: CompanyProfile['report_settings'] | null;
+  confirmedByRole?: string | null;
+  now?: Date;
+}): CompanyProfile['report_settings'] {
+  const now = params.now ?? new Date();
+  const nowIso = now.toISOString();
+  const mergedFacts = mergeCompanyFacts(
+    params.existingReportSettings?.company_facts ?? null,
+    params.incomingReportSettings?.company_facts ?? null,
+    nowIso,
+  );
+
+  const existingReview = params.existingReportSettings?.profile_review ?? null;
+  const incomingReview = params.incomingReportSettings?.profile_review ?? null;
+  const intervalDays = Number(
+    incomingReview?.confirmation_interval_days ??
+      existingReview?.confirmation_interval_days ??
+      COMPANY_PROFILE_REVIEW_INTERVAL_DAYS,
+  );
+  const nextDueExisting = normalizeNullableString(existingReview?.next_confirmation_due_at);
+  const isDue =
+    !nextDueExisting ||
+    Number.isNaN(new Date(nextDueExisting).getTime()) ||
+    new Date(nextDueExisting).getTime() <= now.getTime();
+
+  const shouldConfirm = Boolean(params.confirmedByRole && mergedFacts);
+  const profile_review = shouldConfirm
+    ? {
+        ...(existingReview ?? {}),
+        ...(incomingReview ?? {}),
+        last_confirmed_at: nowIso,
+        next_confirmation_due_at: addDays(now, intervalDays).toISOString(),
+        confirmation_interval_days: intervalDays,
+        pending_confirmation: false,
+        last_confirmed_by_role: params.confirmedByRole ?? null,
+        updated_at: nowIso,
+      }
+    : {
+        ...(existingReview ?? {}),
+        ...(incomingReview ?? {}),
+        confirmation_interval_days: intervalDays,
+        pending_confirmation: Boolean((incomingReview?.pending_confirmation ?? existingReview?.pending_confirmation) || (mergedFacts && isDue)),
+        updated_at: nowIso,
+      };
+
+  return {
+    ...(params.existingReportSettings ?? {}),
+    ...(params.incomingReportSettings ?? {}),
+    company_facts: mergedFacts,
+    profile_review,
+  };
+}
+
+export function getCompanyProfileReviewStatus(profile: CompanyProfile | null): {
+  due: boolean;
+  pending_confirmation: boolean;
+  last_confirmed_at: string | null;
+  next_confirmation_due_at: string | null;
+  confirmation_interval_days: number;
+  facts_present: boolean;
+} {
+  const facts = profile?.report_settings?.company_facts ?? null;
+  const review = profile?.report_settings?.profile_review ?? null;
+  const nextDue = normalizeNullableString(review?.next_confirmation_due_at);
+  const intervalDays = Number(review?.confirmation_interval_days ?? COMPANY_PROFILE_REVIEW_INTERVAL_DAYS);
+  const factsPresent = Boolean(
+    normalizeNullableString(facts?.team_size) ||
+      normalizeNullableString(facts?.founded_year) ||
+      normalizeNullableString(facts?.revenue_range),
+  );
+  const due =
+    factsPresent &&
+    (!nextDue || Number.isNaN(new Date(nextDue).getTime()) || new Date(nextDue).getTime() <= Date.now());
+
+  return {
+    due,
+    pending_confirmation: Boolean(review?.pending_confirmation || due),
+    last_confirmed_at: normalizeNullableString(review?.last_confirmed_at),
+    next_confirmation_due_at: nextDue,
+    confirmation_interval_days: intervalDays,
+    facts_present: factsPresent,
+  };
 }
 
 /** Profile fields COMPANY_ADMIN is allowed to see (same set for all companies when company admin views). */
@@ -189,6 +342,7 @@ const COMPANY_ADMIN_VISIBLE_PROFILE_KEYS: (keyof CompanyProfile)[] = [
   'transformation_mechanism',
   'authority_domains',
   'forced_context_fields',
+  'report_settings',
 ];
 
 /**
@@ -2329,6 +2483,7 @@ export async function saveProfile(
     forced_context_fields: input.forced_context_fields ?? existing?.forced_context_fields ?? null,
     recommendation_context: input.recommendation_context !== undefined ? input.recommendation_context : existing?.recommendation_context ?? null,
     strategic_inputs: input.strategic_inputs !== undefined ? input.strategic_inputs : existing?.strategic_inputs ?? null,
+    report_settings: input.report_settings !== undefined ? input.report_settings : existing?.report_settings ?? null,
   };
 
   const lockedSet = new Set<string>(Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []);

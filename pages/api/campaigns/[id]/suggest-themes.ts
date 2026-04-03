@@ -1,3 +1,4 @@
+
 /**
  * POST /api/campaigns/[id]/suggest-themes
  * Returns strategic themes from the External API Intelligence pipeline (strategic_themes table).
@@ -8,7 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getStrategicThemesAsOpportunities } from '../../../../backend/services/strategicThemeEngine';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -51,5 +52,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default handler;

@@ -1,111 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { saveToken } from '../../../../../backend/services/platformTokenService';
-import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
-import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 
-const decodeState = (state: string) => {
-  const padded = state.replace(/-/g, '+').replace(/_/g, '/');
-  const buffer = Buffer.from(padded, 'base64');
-  return JSON.parse(buffer.toString('utf8')) as {
-    tenant_id?: string;
-    organization_id?: string;
-    redirect?: string;
-  };
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+/**
+ * GET /api/community-ai/connectors/instagram/callback  (legacy — redirects to Meta unified callback)
+ *
+ * Instagram is connected via the unified Meta OAuth flow.
+ * Canonical callback: /api/community-ai/connectors/meta/callback
+ */
+export default function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
-
-  const { code, state, error, error_description } = req.query;
-  if (error) {
-    const message = typeof error_description === 'string' ? error_description : error;
-    return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent(String(message || 'OAuth failed'))}`
-    );
-  }
-
-  if (!code || typeof code !== 'string') {
-    return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent('Missing authorization code')}`
-    );
-  }
-
-  if (!state || typeof state !== 'string') {
-    return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent('Missing OAuth state')}`
-    );
-  }
-
-  let statePayload: { tenant_id?: string; organization_id?: string; redirect?: string };
-  try {
-    statePayload = decodeState(state);
-  } catch {
-    return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent('Invalid OAuth state')}`
-    );
-  }
-
-  const tenantId = statePayload.tenant_id || '';
-  const organizationId = statePayload.organization_id || '';
-  const redirectTo = statePayload.redirect || '/community-ai/connectors';
-
-  if (!tenantId || !organizationId || tenantId !== organizationId) {
-    return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent('Invalid tenant scope')}`
-    );
-  }
-
-  const access = await requireManageConnectors(req, res, organizationId);
-  if (!access) return;
-
-  const credentials = await getOAuthCredentialsForPlatform('instagram');
-  if (!credentials?.client_id || !credentials?.client_secret) {
-    return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent('Instagram OAuth not configured')}`
-    );
-  }
-
-  const { client_id: clientId, client_secret: clientSecret } = credentials;
-  const redirectUri = getCommunityAiConnectorCallbackUrl('instagram');
-  const params = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    redirect_uri: redirectUri,
-    code,
-  });
-
-  try {
-    const tokenResponse = await fetch(
-      `https://graph.facebook.com/v19.0/oauth/access_token?${params.toString()}`,
-      { method: 'GET' }
-    );
-    if (!tokenResponse.ok) {
-      return res.redirect(
-        `/community-ai/connectors?error=${encodeURIComponent('Connection failed. Please try again.')}`
-      );
-    }
-
-    const tokenData = await tokenResponse.json();
-    const expiresIn = Number(tokenData.expires_in || 0);
-    const expiresAt =
-      expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
-
-    await saveToken(tenantId, organizationId, 'instagram', {
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token || null,
-      expires_at: expiresAt,
-      connected_by_user_id: access!.userId,
-    });
-
-    // G5.5: Audit log
-    console.info('[connector_audit]', JSON.stringify({ user_id: access!.userId, company_id: organizationId, platform: 'instagram', action: 'connect' }));
-
-    return res.redirect(`${redirectTo}?connected=instagram&status=success`);
-  } catch (err: any) {
-    return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent('Connection failed. Please try again.')}`
-    );
-  }
+  const qs = req.url?.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  return res.redirect(301, `/api/community-ai/connectors/meta/callback${qs}`);
 }

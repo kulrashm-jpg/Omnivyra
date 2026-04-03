@@ -750,9 +750,9 @@ async function runSchedulerCycle() {
     lastFeedbackIntelligenceRun = Date.now();
     try {
       const result = await runFeedbackIntelligenceEngine();
-      if (!('skipped' in result) && result.insights_created > 0) {
+      if (!('skipped' in result) && result.decisions_created > 0) {
         console.log(
-          `✅ Feedback intelligence: ${result.insights_created} insights (${result.signals_analyzed} signals)`
+          `✅ Feedback intelligence: ${result.decisions_created} decisions (${result.signals_analyzed} signals)`
         );
       }
     } catch (error: any) {
@@ -1044,4 +1044,3 @@ if (require.main === module) {
 }
 
 export { startCron, runSchedulerCycle };
-

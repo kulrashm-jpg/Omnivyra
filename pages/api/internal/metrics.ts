@@ -1,3 +1,4 @@
+
 /**
  * Internal Metrics Endpoint — RISK 5: Observability
  *

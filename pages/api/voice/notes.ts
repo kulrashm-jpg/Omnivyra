@@ -160,9 +160,3 @@ async function deleteVoiceNote(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-
-
-
-
-

@@ -164,15 +164,12 @@ export async function runIntelligenceCycle(
     const strategyStart = Date.now();
     try {
       result.strategy = await generateStrategies(companyId, {
-        windowHours,
-        buildGraph,
-        persistThemes,
+        reportTier: 'growth',
       });
       logStage('strategy_generated', {
         companyId,
         duration_ms: Date.now() - strategyStart,
-        opportunities: result.strategy?.opportunities?.length ?? 0,
-        recommendations: result.strategy?.recommendations?.length ?? 0,
+        decisions: result.strategy?.summary?.total ?? 0,
       });
     } catch (e) {
       logStage('strategy_generated', {

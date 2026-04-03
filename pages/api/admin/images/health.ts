@@ -1,3 +1,4 @@
+
 /**
  * GET /api/admin/images/health
  * Returns image service metrics: cache stats, rate limit state, counters.

@@ -30,6 +30,21 @@ export const CONTENT_TAXONOMY: Record<string, ContentTypeMeta> = {
     badgeColor: 'blue',
     label: 'Article',
   },
+  newsletter: {
+    execution: 'AI_AUTOMATED',
+    badgeColor: 'blue',
+    label: 'Newsletter',
+  },
+  short_story: {
+    execution: 'AI_AUTOMATED',
+    badgeColor: 'violet',
+    label: 'Short Story',
+  },
+  white_paper: {
+    execution: 'AI_AUTOMATED',
+    badgeColor: 'blue',
+    label: 'White Paper',
+  },
   thread: {
     execution: 'AI_AUTOMATED',
     badgeColor: 'amber',
@@ -59,6 +74,7 @@ const BADGE_CLASSES: Record<string, string> = {
   red: 'bg-red-100 text-red-700 border-red-200',
   fuchsia: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200',
   sky: 'bg-sky-100 text-sky-700 border-sky-200',
+  violet: 'bg-violet-100 text-violet-700 border-violet-200',
 };
 
 function normalizeContentType(contentType?: string | null): string {

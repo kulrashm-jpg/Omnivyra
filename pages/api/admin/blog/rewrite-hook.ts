@@ -1,3 +1,4 @@
+
 /**
  * POST /api/admin/blog/rewrite-hook
  *

@@ -1,3 +1,4 @@
+
 /**
  * Test Platform Connection API
  * GET /api/accounts/[platform]/test
@@ -104,4 +105,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-

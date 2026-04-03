@@ -3,6 +3,7 @@ import type { AppProps } from 'next/app';
 import Head from 'next/head';
 import { CompanyProvider } from '../components/CompanyContext';
 import { useRouter } from 'next/router';
+import { useEffect } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
 import { TourProvider } from '../components/tour/TourContext';
@@ -45,6 +46,16 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const showLandingNavbar = LANDING_PUBLIC_ROUTES.includes(router.pathname) || isBlogRoute || isAuditRoute;
 
+  // After auth settles: redirect unauthenticated users away from protected routes.
+  // Must be a useEffect — calling router.replace() synchronously during render causes
+  // Next.js to attempt a hard navigation while a soft navigation is in flight, which
+  // triggers "Invariant: attempted to hard navigate to the same URL".
+  useEffect(() => {
+    if (!isPublic && authChecked && !isAuthenticated) {
+      router.replace('/login');
+    }
+  }, [isPublic, authChecked, isAuthenticated, router]);
+
   // Protected routes: hold the render until the backend probe has resolved.
   // This prevents a flash of protected content before we know the user's auth state,
   // and prevents a premature redirect to /login before we know the user is NOT authenticated.
@@ -52,11 +63,8 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     return null;
   }
 
-  // After auth settles: redirect unauthenticated users away from protected routes.
+  // While authChecked but unauthenticated, render nothing (useEffect above handles redirect).
   if (!isPublic && !isAuthenticated) {
-    if (typeof window !== 'undefined') {
-      router.replace('/login');
-    }
     return null;
   }
 

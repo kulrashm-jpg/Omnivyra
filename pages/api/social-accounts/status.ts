@@ -1,3 +1,4 @@
+
 /**
  * GET /api/social-accounts/status
  * Returns platform connection status for the current user (unauthenticated: shows

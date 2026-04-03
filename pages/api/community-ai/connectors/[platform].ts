@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireManageConnectors } from './utils';
 import { revokeToken, getConnectorConnectedByUserId } from '../../../../backend/services/platformTokenService';
+import { deactivateSocialAccount } from '../../../../backend/auth/tokenStore';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'DELETE') {
@@ -38,6 +39,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // G5.5: Audit log
     console.info('[connector_audit]', JSON.stringify({ user_id: access.userId, company_id: organizationId, platform, action: 'disconnect' }));
     await revokeToken(tenantId, organizationId, platform);
+    // Also deactivate publishing layer so social-platforms reflects disconnected state
+    await deactivateSocialAccount({ userId: access.userId, companyId: organizationId, platform });
     return res.status(200).json({ success: true, message: 'Account disconnected' });
   } catch (err: any) {
     console.error('[connectors/revoke]', err);

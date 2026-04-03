@@ -1,7 +1,10 @@
+import { useEffect } from 'react';
+import { useRouter } from 'next/router';
 import Link from 'next/link';
 import HeroSection from '../components/landing/HeroSection';
 import Footer from '../components/landing/Footer';
 import FreeAuditInput from '../components/FreeAuditInput';
+import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 
 const hl = { fontFamily: "'Poppins', 'Inter', sans-serif" };
 
@@ -40,6 +43,27 @@ const PERSONAS = [
 ];
 
 export default function Home() {
+  const router = useRouter();
+
+  useEffect(() => {
+    // getSession() reads from localStorage — no network request, resolves immediately.
+    // Render nothing (null below) until we know where to send the user, so there
+    // is zero visible content before the redirect fires.
+    getSupabaseBrowser().auth.getSession().then(({ data }) => {
+      if (data.session) {
+        const pinned = localStorage.getItem('pin_home') === 'true';
+        router.replace(pinned ? '/home' : '/command-center');
+      } else {
+        router.replace('/login');
+      }
+    });
+  }, [router]);
+
+  return null;
+}
+
+// ─── Marketing page (preserved for /landing or future use) ───────────────────
+function MarketingPage() {
   return (
     <div className="min-h-screen bg-[#F5F9FF]" style={{ fontFamily: "'Inter', sans-serif" }}>
 

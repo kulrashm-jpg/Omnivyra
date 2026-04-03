@@ -89,10 +89,10 @@ export default function AuthCallback() {
 
         if (verifyRes.ok) {
           const { route } = await verifyRes.json() as { route: string };
-          const dest   = route ?? '/dashboard';
-          const pinned = localStorage.getItem('pin_home') === '1';
+          const dest   = route ?? '/command-center';
+          const pinned = localStorage.getItem('pin_home') === 'true';
           setStatusMsg('Redirecting…');
-          router.replace(dest === '/dashboard' && pinned ? '/home' : dest);
+          router.replace(dest === '/command-center' && pinned ? '/home' : dest);
           return;
         }
       } catch (e) {

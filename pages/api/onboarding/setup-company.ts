@@ -1,3 +1,4 @@
+
 /**
  * POST /api/onboarding/setup-company
  * Authorization: Bearer <supabase_access_token>
@@ -327,6 +328,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       name:               companyName.trim(),
       website:            website.trim() || companyId, // NOT NULL — use companyId as placeholder if blank
       industry:           industry.trim() || null,
+      company_size:       companySize.trim() || null,
       status:             'active',
       website_domain:     websiteDomain,
       admin_email_domain: adminEmailDomain,
@@ -389,7 +391,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       name:        companyName.trim(),
       website_url: website.trim() || null,
       industry:    industry.trim() || null,
-      geography:   companySize.trim() || null, // repurpose for team size hint
+      geography:   null,
+      report_settings: {
+        company_facts: {
+          team_size: companySize.trim() || null,
+          updated_at: now,
+        },
+        profile_review: {
+          confirmation_interval_days: 183,
+          pending_confirmation: Boolean(companySize.trim()),
+          updated_at: now,
+        },
+      },
       created_at:  now,
       updated_at:  now,
     });

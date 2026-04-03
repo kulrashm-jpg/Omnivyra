@@ -1,3 +1,4 @@
+
 /**
  * POST /api/insight/content-ideas
  * Generates content ideas from a strategic insight using AI.

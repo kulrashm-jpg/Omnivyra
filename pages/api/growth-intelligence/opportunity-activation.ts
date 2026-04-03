@@ -8,6 +8,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 import { getOpportunityActivationMetrics } from '../../../backend/services/growthIntelligence';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -22,6 +23,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
+    const companyContext = await requireCompanyContext({ req, res, companyId });
+    if (!companyContext) return;
+
     const data = await getOpportunityActivationMetrics(supabase, companyId);
     return res.status(200).json({ success: true, data });
   } catch (err: unknown) {

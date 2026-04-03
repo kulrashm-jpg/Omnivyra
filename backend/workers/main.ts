@@ -16,12 +16,13 @@
  *   REDIS_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY
  */
 
+import { config } from '@/config';
 import { validateWorkerEnv } from '../utils/validateEnv';
 import { startHealthServer }  from './healthServer';
 
 // Start health server immediately — before anything else so Railway healthchecks
 // always get a response even if Redis/workers fail to initialise.
-startHealthServer(parseInt(process.env.PORT ?? '8080', 10));
+startHealthServer(config.PORT ? parseInt(config.PORT, 10) : undefined);
 
 // Fail fast if any required env var is missing
 validateWorkerEnv();
@@ -60,7 +61,7 @@ const intelligenceWorker = getIntelligencePollingWorker();
 const leadThreadRecomputeWorker = new Worker(
   'lead-thread-recompute',
   async () => { await runLeadThreadRecomputeWorker(); },
-  { connection: getConnectionConfig(), concurrency: 1 },
+  { connection: getConnectionConfig(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
 );
 leadThreadRecomputeWorker.on('failed', (job, err) =>
   console.error('[lead-thread-recompute] job failed', { jobId: job?.id, error: err.message }));
@@ -71,7 +72,7 @@ instrumentWorker(leadThreadRecomputeWorker);
 const conversationMemoryRebuildWorker = new Worker(
   'conversation-memory-rebuild',
   async () => { await runConversationMemoryWorker(); },
-  { connection: getConnectionConfig(), concurrency: 1 },
+  { connection: getConnectionConfig(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
 );
 conversationMemoryRebuildWorker.on('failed', (job, err) =>
   console.error('[conversation-memory-rebuild] job failed', { jobId: job?.id, error: err.message }));
@@ -94,7 +95,7 @@ const engineWorker = new Worker(
       await processMarketPulseJobV1(jobId);
     }
   },
-  { connection: redisConfig },
+  { connection: redisConfig, drainDelay: 300, stalledInterval: 1_800_000 },
 );
 engineWorker.on('error', (err) => console.error('[engine-worker] error:', err));
 
@@ -106,9 +107,11 @@ const campaignWorker = new Worker<CampaignPlanningJobPayload>(
     await processCampaignPlanningJob(job);
   },
   {
-    connection:  redisConfig,
-    concurrency: 3,
-    limiter:     { max: 5, duration: 1_000 },
+    connection:     redisConfig,
+    concurrency:    3,
+    limiter:        { max: 5, duration: 1_000 },
+    drainDelay:     300,
+    stalledInterval: 1_800_000,
   },
 );
 campaignWorker.on('completed', (job) =>
@@ -128,8 +131,8 @@ async function main(): Promise<void> {
   let _cachedLatency = 0;
   setInterval(async () => {
     try { _cachedLatency = (await getMetricsSnapshot()).avgLatencyMs; } catch { /* ignore */ }
-  }, 30_000);
-  const stopMonitor = startAutoScalingMonitor(30_000, () => _cachedLatency);
+  }, 300_000); // 5 min — was 30s; each call issues redis.info('memory')
+  const stopMonitor = startAutoScalingMonitor(300_000, () => _cachedLatency); // 5 min — was 30s; each check queries 4 queues
 
   console.info('[main] all workers running', {
     queues: ['publish', 'bolt-execution', 'engagement-polling',

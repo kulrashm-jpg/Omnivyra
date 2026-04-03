@@ -1,3 +1,4 @@
+
 /**
  * GET  /api/companies/[id]/efficiency  — full efficiency report
  * POST /api/companies/[id]/efficiency  — trigger optimization run

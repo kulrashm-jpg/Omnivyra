@@ -6,6 +6,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
+import { requireCompanyContext } from '../../../../backend/services/companyContextGuardService';
 import { buildDashboardSignals } from '../../../../backend/services/companyIntelligenceDashboardService';
 
 const ALLOWED_ROLES = [
@@ -39,7 +40,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const windowHours = windowHoursParsed;
 
   try {
-    const dashboard = await buildDashboardSignals(companyId, windowHours);
+    const companyContext = await requireCompanyContext({ req, res, companyId });
+    if (!companyContext) return;
+
+    const dashboard = await buildDashboardSignals(companyContext.companyId, windowHours);
     return res.status(200).json(dashboard);
   } catch (err) {
     const message = (err as Error)?.message ?? 'Failed to fetch dashboard signals';

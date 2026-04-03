@@ -1,3 +1,4 @@
+
 /**
  * GET /api/admin/intelligence/execution-insights?days=7&company_id=optional
  *

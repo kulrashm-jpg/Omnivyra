@@ -78,6 +78,22 @@ type CompanyProfile = {
   desired_transformation?: string | null;
   transformation_mechanism?: string | null;
   authority_domains?: string[] | null;
+  report_settings?: {
+    company_facts?: {
+      team_size?: string | null;
+      founded_year?: string | null;
+      revenue_range?: string | null;
+      updated_at?: string | null;
+    } | null;
+    profile_review?: {
+      last_confirmed_at?: string | null;
+      next_confirmation_due_at?: string | null;
+      confirmation_interval_days?: number | null;
+      pending_confirmation?: boolean | null;
+      last_confirmed_by_role?: string | null;
+      updated_at?: string | null;
+    } | null;
+  } | null;
 };
 
 type CompanyProfileRefinement = {
@@ -138,6 +154,22 @@ const emptyProfile: CompanyProfile = {
   desired_transformation: '',
   transformation_mechanism: '',
   authority_domains: [],
+  report_settings: {
+    company_facts: {
+      team_size: '',
+      founded_year: '',
+      revenue_range: '',
+      updated_at: null,
+    },
+    profile_review: {
+      last_confirmed_at: null,
+      next_confirmation_due_at: null,
+      confirmation_interval_days: 183,
+      pending_confirmation: false,
+      last_confirmed_by_role: null,
+      updated_at: null,
+    },
+  },
 };
 
 const splitToList = (value?: string): string[] => {
@@ -268,6 +300,7 @@ export default function CompanyProfilePage() {
   const [createCompanyLoading, setCreateCompanyLoading] = useState(false);
   const [companyIdCopied, setCompanyIdCopied] = useState(false);
   const [createCompanyError, setCreateCompanyError] = useState<string | null>(null);
+  const [showCompanyFactReviewPrompt, setShowCompanyFactReviewPrompt] = useState(false);
 
   const filteredCompanies = useMemo(() => {
     const q = (companySearchFilter || '').trim().toLowerCase();
@@ -280,6 +313,26 @@ export default function CompanyProfilePage() {
   }, [companies, companySearchFilter]);
 
   const activeProfile = profile ?? draftProfile;
+  const companyFacts = activeProfile.report_settings?.company_facts ?? {};
+  const profileReview = activeProfile.report_settings?.profile_review ?? {};
+  const profileReviewDue = useMemo(() => {
+    if (!profileReview?.next_confirmation_due_at) {
+      return Boolean(profileReview?.pending_confirmation);
+    }
+    const dueAt = new Date(profileReview.next_confirmation_due_at).getTime();
+    if (Number.isNaN(dueAt)) return Boolean(profileReview?.pending_confirmation);
+    return Boolean(profileReview?.pending_confirmation) || dueAt <= Date.now();
+  }, [profileReview]);
+
+  useEffect(() => {
+    if (!isCompanyAdmin) return;
+    if (!companyId) return;
+    if (!profileReviewDue) {
+      setShowCompanyFactReviewPrompt(false);
+      return;
+    }
+    setShowCompanyFactReviewPrompt(true);
+  }, [isCompanyAdmin, companyId, profileReviewDue]);
 
   const handleCreateCompany = async () => {
     const { name, website } = createCompanyForm;
@@ -499,6 +552,23 @@ export default function CompanyProfilePage() {
   const handleChange = (field: keyof CompanyProfile, value: string) => {
     if (!isEditing) return;
     updateActiveProfile({ ...activeProfile, [field]: value });
+  };
+
+  const handleCompanyFactChange = (
+    field: 'team_size' | 'founded_year' | 'revenue_range',
+    value: string,
+  ) => {
+    if (!isEditing) return;
+    updateActiveProfile({
+      ...activeProfile,
+      report_settings: {
+        ...(activeProfile.report_settings || {}),
+        company_facts: {
+          ...(activeProfile.report_settings?.company_facts || {}),
+          [field]: value,
+        },
+      },
+    });
   };
 
   const normalizeUrlField = (field: keyof CompanyProfile, value: string) => {
@@ -1404,6 +1474,64 @@ export default function CompanyProfilePage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />
+      {showCompanyFactReviewPrompt && isCompanyAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-amber-200 p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+                  Company Admin Confirmation
+                </div>
+                <h2 className="mt-3 text-xl font-semibold text-slate-900">
+                  Review your company facts
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Competitor intelligence now uses team size, founded year, and revenue range. Please confirm these company facts every 6 months so reports stay aligned to the right peer set.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCompanyFactReviewPrompt(false)}
+                className="text-slate-400 hover:text-slate-700"
+                aria-label="Close company facts reminder"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              <div>Team size: <span className="font-medium">{companyFacts.team_size || 'Missing'}</span></div>
+              <div className="mt-1">Founded year: <span className="font-medium">{companyFacts.founded_year || 'Missing'}</span></div>
+              <div className="mt-1">Revenue range: <span className="font-medium">{companyFacts.revenue_range || 'Missing'}</span></div>
+              <div className="mt-3 text-xs text-slate-500">
+                {profileReview.next_confirmation_due_at
+                  ? `Due since ${new Date(profileReview.next_confirmation_due_at).toLocaleDateString()}.`
+                  : 'No admin confirmation recorded yet.'}
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowCompanyFactReviewPrompt(false)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Remind me later
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditing(true);
+                  setShowCompanyFactReviewPrompt(false);
+                }}
+                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600"
+              >
+                Review now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="max-w-4xl mx-auto bg-white shadow rounded-lg p-6 mt-6">
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -1735,6 +1863,56 @@ export default function CompanyProfilePage() {
                 <div className="text-xs text-gray-500 mt-1">
                   Extracted: {joinList(activeProfile.geography_list, activeProfile.geography)}
                 </div>
+              </div>
+            </div>
+
+            <div className="border rounded-lg p-4 bg-slate-50">
+              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between mb-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-800">Company Facts</h3>
+                  <p className="text-xs text-gray-500">
+                    These are firmographic facts used in competitor intelligence and should be confirmed by a company admin every 6 months.
+                  </p>
+                </div>
+                <div className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+                  profileReviewDue ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                }`}>
+                  {profileReviewDue ? 'Admin confirmation due' : 'Admin confirmed'}
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Team size</label>
+                  <input
+                    value={companyFacts.team_size || ''}
+                    onChange={(e) => handleCompanyFactChange('team_size', e.target.value)}
+                    placeholder="e.g. 11-50"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Founded year</label>
+                  <input
+                    value={companyFacts.founded_year || ''}
+                    onChange={(e) => handleCompanyFactChange('founded_year', e.target.value)}
+                    placeholder="e.g. 2022"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Revenue range</label>
+                  <input
+                    value={companyFacts.revenue_range || ''}
+                    onChange={(e) => handleCompanyFactChange('revenue_range', e.target.value)}
+                    placeholder="e.g. $1M-$5M"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="mt-3 text-xs text-gray-500">
+                Last confirmed: {profileReview.last_confirmed_at ? new Date(profileReview.last_confirmed_at).toLocaleDateString() : 'Not confirmed yet'}
+                {' · '}
+                Next due: {profileReview.next_confirmation_due_at ? new Date(profileReview.next_confirmation_due_at).toLocaleDateString() : 'After first admin confirmation'}
               </div>
             </div>
 

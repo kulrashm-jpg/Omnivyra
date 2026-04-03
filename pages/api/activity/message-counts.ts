@@ -1,3 +1,4 @@
+
 /**
  * GET /api/activity/message-counts?campaignId=...&activityIds=id1,id2,id3
  * Returns { [activityId]: { total, unread } } for comment indicators on activity cards.

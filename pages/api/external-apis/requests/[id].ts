@@ -12,7 +12,7 @@ import {
 } from '../../../../backend/services/rbacService';
 import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Request ID is required' });
@@ -216,5 +216,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(400).json({ error: 'Missing status or action' });
 }
-
-export default handler;

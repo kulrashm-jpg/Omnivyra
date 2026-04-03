@@ -1,3 +1,4 @@
+
 /**
  * POST /api/planner/generate-workspace-content
  * Generates platform-specific content variants for the Activity Workspace Drawer.
@@ -200,7 +201,7 @@ const CONTENT_TYPE_GUIDANCE: Record<string, string> = {
   article:   'Write a LONG-FORM ARTICLE introduction and outline. Include: headline, subheadline, lede paragraph (first 2–3 sentences that hook the reader), and a bullet-point outline of 4–6 sections.',
 };
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -336,5 +337,3 @@ Return JSON: { "${(platforms as string[]).map((p) => p.toLowerCase()).join('": "
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to generate content' });
   }
 }
-
-export default handler;

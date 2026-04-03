@@ -1,3 +1,4 @@
+
 /**
  * GET /api/auth/get-stored-phone
  * Authorization: Bearer <supabase_access_token>

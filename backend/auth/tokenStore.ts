@@ -19,6 +19,7 @@
 
 import crypto from 'crypto';
 import { supabase } from '../db/supabaseClient';
+import { config } from '@/config';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // GCM requires 12 bytes IV (not 16)
@@ -26,11 +27,11 @@ const TAG_LENGTH = 16; // GCM tag is always 16 bytes
 const KEY_LENGTH = 32; // AES-256 requires 32 bytes key
 
 /**
- * Get encryption key from environment
+ * Get encryption key from config module
  * Converts hex string or base64 to Buffer
  */
 function getEncryptionKey(): Buffer {
-  const keyEnv = process.env.ENCRYPTION_KEY;
+  const keyEnv = config.ENCRYPTION_KEY;
   if (!keyEnv) {
     throw new Error('ENCRYPTION_KEY environment variable is required');
   }
@@ -194,6 +195,83 @@ export async function setToken(socialAccountId: string, token: TokenObject): Pro
   }
 
   console.log(`✅ Token stored for account ${socialAccountId}`);
+}
+
+/**
+ * Dual-write: upsert a social_accounts row from the community-ai connector flow.
+ * Call this after saveToken() so connecting once covers both publishing and engagement.
+ * Non-fatal — errors are logged but do not throw.
+ */
+export async function dualWriteSocialAccount(opts: {
+  userId: string;
+  companyId: string;
+  platform: string;
+  platformUserId: string | null;
+  accountName: string | null;
+  token: TokenObject;
+}): Promise<void> {
+  const { userId, companyId, platform, platformUserId, accountName, token } = opts;
+  try {
+    // Find existing row
+    const query = supabase
+      .from('social_accounts')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('company_id', companyId)
+      .eq('platform', platform);
+    if (platformUserId) query.eq('platform_user_id', platformUserId);
+    const { data: existing } = await query.maybeSingle();
+
+    if (existing?.id) {
+      await supabase.from('social_accounts').update({
+        is_active: true,
+        account_name: accountName || undefined,
+        token_expires_at: token.expires_at || undefined,
+        last_sync_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq('id', existing.id);
+      await setToken(existing.id, token);
+    } else {
+      const encrypted = encryptTokenColumns(token);
+      const { data: inserted } = await supabase.from('social_accounts').insert({
+        user_id: userId,
+        company_id: companyId,
+        platform,
+        platform_user_id: platformUserId || `${platform}_${userId}`,
+        account_name: accountName || platform,
+        is_active: true,
+        token_expires_at: token.expires_at || null,
+        last_sync_at: new Date().toISOString(),
+        access_token: encrypted.access_token,
+        refresh_token: encrypted.refresh_token,
+      }).select('id').single();
+      if (inserted?.id) await setToken(inserted.id, token);
+    }
+  } catch (err: any) {
+    console.warn('[dualWriteSocialAccount] non-fatal error:', platform, err?.message);
+  }
+}
+
+/**
+ * Deactivate social_accounts row on disconnect (companion to revokeToken).
+ * Non-fatal — errors are logged but do not throw.
+ */
+export async function deactivateSocialAccount(opts: {
+  userId: string;
+  companyId: string;
+  platform: string;
+}): Promise<void> {
+  try {
+    await supabase.from('social_accounts').update({
+      is_active: false,
+      updated_at: new Date().toISOString(),
+    })
+      .eq('user_id', opts.userId)
+      .eq('company_id', opts.companyId)
+      .eq('platform', opts.platform);
+  } catch (err: any) {
+    console.warn('[deactivateSocialAccount] non-fatal error:', opts.platform, err?.message);
+  }
 }
 
 /**

@@ -1,3 +1,4 @@
+
 /**
  * Admin Intelligence Query Templates API
  * Phase-2: Super Admin Governance

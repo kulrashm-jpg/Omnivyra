@@ -7,6 +7,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
+import { requireCompanyContext } from '../../../../backend/services/companyContextGuardService';
 import {
   getCompanyCompetitors,
   createCompetitor,
@@ -30,9 +31,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
+    const companyContext = await requireCompanyContext({ req, res, companyId: companyId.trim() });
+    if (!companyContext) return;
+
     switch (req.method) {
       case 'GET': {
-        const competitors = await getCompanyCompetitors(companyId);
+        const competitors = await getCompanyCompetitors(companyContext.companyId);
         return res.status(200).json({ competitors });
       }
       case 'POST': {
@@ -40,7 +44,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (!body?.competitor_name?.trim()) {
           return res.status(400).json({ error: 'competitor_name is required' });
         }
-        const competitor = await createCompetitor(companyId, body.competitor_name);
+        const competitor = await createCompetitor(companyContext.companyId, body.competitor_name);
         return res.status(201).json({ competitor });
       }
       case 'PUT': {

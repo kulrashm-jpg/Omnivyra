@@ -9,14 +9,23 @@ export interface OAuthStateParams {
   companyId?: string;
   userId?: string;
   returnTo?: string;
+  /** 'community-ai' when the OAuth flow originates from a Community AI connector */
+  flow?: string;
+  /** Tenant / organization ID for community-ai flows */
+  tenantId?: string;
+  /** PKCE code_verifier for community-ai Twitter flows */
+  codeVerifier?: string;
 }
 
 export function encodeOAuthState(params: OAuthStateParams): string {
-  const payload = {
+  const payload: Record<string, string> = {
     cid: params.companyId || '',
     uid: params.userId || '',
-    ts: Date.now(),
+    ts: String(Date.now()),
   };
+  if (params.flow) payload.flo = params.flow;
+  if (params.tenantId) payload.tid = params.tenantId;
+  if (params.codeVerifier) payload.cv = params.codeVerifier;
   const base = Buffer.from(JSON.stringify(payload)).toString('base64');
   return params.returnTo ? `${base}|${params.returnTo}` : base;
 }
@@ -34,6 +43,9 @@ export function decodeOAuthState(state: string | undefined): OAuthStateParams {
     return {
       companyId: parsed.cid || undefined,
       userId: parsed.uid || undefined,
+      flow: parsed.flo || undefined,
+      tenantId: parsed.tid || undefined,
+      codeVerifier: parsed.cv || undefined,
       returnTo,
     };
   } catch {

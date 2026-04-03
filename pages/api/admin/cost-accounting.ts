@@ -1,3 +1,4 @@
+
 /**
  * GET /api/admin/cost-accounting
  * Comprehensive cost accounting dashboard combining usage costs, infrastructure costs, and trends

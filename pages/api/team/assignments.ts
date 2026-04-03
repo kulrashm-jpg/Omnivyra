@@ -1,3 +1,4 @@
+
 /**
  * Team Assignments API
  * GET /api/team/assignments - Get user assignments
@@ -44,4 +45,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-

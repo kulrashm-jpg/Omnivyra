@@ -50,9 +50,9 @@ describe('executionModeInference', () => {
       expect(inferExecutionMode('tweet')).toBe('AI_AUTOMATED');
       expect(inferExecutionMode('blog')).toBe('AI_AUTOMATED');
     });
-    it('returns AI_AUTOMATED for empty or unknown type', () => {
+    it('returns AI_AUTOMATED for empty type, CONDITIONAL_AI for unknown type', () => {
       expect(inferExecutionMode('')).toBe('AI_AUTOMATED');
-      expect(inferExecutionMode('unknown_format')).toBe('AI_AUTOMATED');
+      expect(inferExecutionMode('unknown_format')).toBe('CONDITIONAL_AI');
     });
     it('returns AI_AUTOMATED for creator type when media_ready is true', () => {
       expect(inferExecutionMode('video', { media_ready: true })).toBe('AI_AUTOMATED');

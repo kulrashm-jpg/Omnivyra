@@ -88,8 +88,8 @@ async function main() {
     console.log('Analysis:', result.analysis ? 'OK' : 'skipped/failed');
     console.log('Strategy:', result.strategy ? 'OK' : 'skipped/failed');
     if (result.strategy) {
-      console.log('  - Opportunities:', result.strategy.opportunities?.length ?? 0);
-      console.log('  - Recommendations:', result.strategy.recommendations?.length ?? 0);
+      console.log('  - Decisions:', result.strategy.decisions?.length ?? 0);
+      console.log('  - Open decisions:', result.strategy.summary?.open ?? 0);
     }
     console.log('Learning:', result.learning ? 'OK' : 'skipped/failed');
 

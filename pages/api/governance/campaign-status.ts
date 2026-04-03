@@ -1,3 +1,4 @@
+
 /**
  * GET /api/governance/campaign-status
  * Campaign Governance Status — read-only visibility. Stage 10 Phase 4.

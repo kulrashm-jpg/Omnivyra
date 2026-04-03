@@ -107,7 +107,7 @@ jest.mock('../../services/omnivyraClientV1', () => ({
 }));
 
 jest.mock('../../db/supabaseClient', () => ({
-  supabase: { from: jest.fn() },
+  supabase: { from: jest.fn(), rpc: jest.fn() },
 }));
 
 jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
@@ -251,6 +251,11 @@ const buildQuery = (table: string) => {
       state.single = true;
       return resolveSelect(table, state);
     }),
+    maybeSingle: jest.fn(async () => {
+      state.single = true;
+      return resolveSelect(table, state);
+    }),
+    not: jest.fn(() => query),
     then: (resolve: any, reject: any) => {
       const result = resolveSelect(table, state);
       return Promise.resolve(result).then(resolve, reject);
@@ -525,6 +530,46 @@ const resolveSelect = (table: string, state: any) => {
     }
     return { data: rows, error: null };
   }
+  if (table === 'execution_guardrails') {
+    return {
+      data: state.single
+        ? {
+            auto_execution_enabled: true,
+            daily_platform_limit: 999,
+            per_post_reply_limit: 999,
+            per_evaluation_limit: 999,
+          }
+        : [
+            {
+              auto_execution_enabled: true,
+              daily_platform_limit: 999,
+              per_post_reply_limit: 999,
+              per_evaluation_limit: 999,
+            },
+          ],
+      error: null,
+    };
+  }
+  if (table === 'organization_plan_assignments') {
+    return {
+      data: state.single ? null : [],
+      error: null,
+    };
+  }
+  if (table === 'pricing_plans') {
+    return {
+      data: state.single ? null : [],
+      error: null,
+    };
+  }
+  if (table === 'usage_meter_monthly') {
+    return {
+      data: state.single
+        ? { llm_total_tokens: 0, external_api_calls: 0, automation_executions: 0 }
+        : [{ llm_total_tokens: 0, external_api_calls: 0, automation_executions: 0 }],
+      error: null,
+    };
+  }
   return { data: null, error: null };
 };
 
@@ -632,6 +677,7 @@ const setRole = (role: string, companyId = 'tenant-1') => {
 describe('Community-AI APIs', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
+    (supabase.rpc as jest.Mock).mockResolvedValue({ data: null, error: null });
     (getProfile as jest.Mock).mockResolvedValue(null);
     actionStore.clear();
     actionLogStore.length = 0;
@@ -3750,7 +3796,7 @@ describe('Community-AI RBAC', () => {
           canExecute: false,
           canSchedule: true,
           canSkip: true,
-          canManageConnectors: false,
+          canManageConnectors: true,
         },
       },
       {
@@ -3760,7 +3806,7 @@ describe('Community-AI RBAC', () => {
           canExecute: true,
           canSchedule: false,
           canSkip: false,
-          canManageConnectors: false,
+          canManageConnectors: true,
         },
       },
       {

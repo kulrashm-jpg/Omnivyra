@@ -1,3 +1,4 @@
+
 /**
  * GET /api/auth/post-login-route
  *
@@ -16,6 +17,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 import { recordAnomalyEvent } from '../../../lib/auth/anomalyDetector';
+import { getPostLoginRoute as getUserPreferenceRoute, upsertUserPreferences } from '../../../backend/services/userPreferencesService';
 
 type RouteResponse = { route: string };
 type ErrorResponse = { error: string; code?: string };
@@ -84,5 +86,29 @@ export default async function handler(
     return res.status(200).json({ route: '/onboarding/company' });
   }
 
-  return res.status(200).json({ route: '/dashboard' });
+  // ── 5. Validate role exists (safety fallback) ──────────────────────────────
+  // If role is missing/invalid, default to dashboard for safety
+  const userRole = (roleRow as any)?.role;
+  if (!userRole) {
+    console.warn('[post-login-route] Invalid or missing role', { userId });
+    return res.status(200).json({ route: '/dashboard' });
+  }
+
+  // ── 6. Check user preferences for post-login landing page ────────────────
+  // Default: first-time users → /command-center
+  // Returning users: check if they've dismissed the command center
+  const preferredRoute = await getUserPreferenceRoute(userId);
+
+  // Create/update preferences if this is first time (auto-upsert)
+  try {
+    await upsertUserPreferences(userId, {
+      default_landing: preferredRoute === '/command-center' ? 'command_center' : 'dashboard',
+      command_center_pinned: preferredRoute === '/command-center',
+    });
+  } catch (err) {
+    // Silently fail — preference creation is nice-to-have, not critical
+    console.warn('[post-login-route] Failed to upsert preferences:', err);
+  }
+
+  return res.status(200).json({ route: preferredRoute });
 }

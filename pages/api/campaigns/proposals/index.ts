@@ -1,3 +1,4 @@
+
 /**
  * GET /api/campaigns/proposals
  * List campaign proposals with filters: organizationId, status

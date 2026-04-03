@@ -1,10 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Turbopack enabled with empty config - uses webpack fallback for compatibility
-  turbopack: {
-    // Disable persistent cache — SST files corrupt on Windows (Turbopack beta bug)
-    persistentCaching: false,
-  },
   // Type checking handled by tsc; avoids false positives from Turbopack's stricter checker
   // on Supabase generated types that drift from actual DB schema.
   typescript: {

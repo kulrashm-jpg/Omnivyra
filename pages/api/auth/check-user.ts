@@ -1,3 +1,4 @@
+
 /**
  * POST /api/auth/check-user
  * Body: { email: string }

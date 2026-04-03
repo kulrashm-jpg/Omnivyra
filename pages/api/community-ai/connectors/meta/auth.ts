@@ -67,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  const redirectUri = getCommunityAiConnectorCallbackUrl('meta');
+  const redirectUri = getCommunityAiConnectorCallbackUrl('meta', req);
   const redirectTo = typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';
   const state = buildState({ tenant_id: tenantId, organization_id: organizationId, redirect: redirectTo });
 

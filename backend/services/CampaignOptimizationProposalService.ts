@@ -22,9 +22,8 @@ export async function generateOptimizationProposal(
   try {
     if (!campaignId || typeof campaignId !== 'string') return null;
 
-    const [roi, govAnalytics, insights, campaign, events, posts] = await Promise.all([
+    const [roi, insights, campaign] = await Promise.all([
       getCampaignRoiIntelligence(campaignId),
-      getCampaignGovernanceAnalytics(campaignId),
       generateCampaignOptimizationInsights(campaignId),
       supabase
         .from('campaigns')
@@ -32,31 +31,15 @@ export async function generateOptimizationProposal(
         .eq('id', campaignId)
         .maybeSingle()
         .then((r) => (r.error ? null : r.data)),
-      supabase
-        .from('campaign_governance_events')
-        .select('event_type')
-        .eq('campaign_id', campaignId)
-        .then((r) => (r.error ? [] : r.data || [])),
-      supabase
-        .from('scheduled_posts')
-        .select('status')
-        .eq('campaign_id', campaignId)
-        .then((r) => (r.error ? [] : r.data || [])),
     ]);
 
     const durationWeeks = (campaign as any)?.duration_weeks ?? 12;
     const currentPostsPerWeek = DEFAULT_POSTS_PER_WEEK;
-    const driftCount = govAnalytics?.driftCount ?? 0;
-    const replayCoverageRatio = govAnalytics?.replayCoverageRatio ?? 1;
-    const freezeBlocks = govAnalytics?.freezeBlocks ?? 0;
-    const postList = Array.isArray(posts) ? posts : [];
-    const failedPosts = postList.filter((p: any) =>
-      /^failed$/i.test(String(p?.status || ''))
-    ).length;
-    const evts = Array.isArray(events) ? events : [];
-    const hasContentCollision = evts.some(
-      (e: any) => String(e?.event_type || '').toUpperCase() === CONTENT_COLLISION_EVENT
-    );
+    const insightHeadlines = (insights || []).map((i) => i.headline).filter(Boolean);
+    const hasGovInstability = (insights || []).some((i) => i.category === 'GOVERNANCE');
+    const hasExecutionRisk = (insights || []).some((i) => i.category === 'EXECUTION');
+    const hasRoiRisk = roi.roiScore < 50;
+    const hasContentCollision = (insights || []).some((i) => i.category === 'CONTENT_STRATEGY');
 
     const govStability = roi.governanceStabilityScore ?? 80;
     const execReliability = roi.executionReliabilityScore ?? 80;
@@ -77,10 +60,6 @@ export async function generateOptimizationProposal(
     }
 
     // Check risk signals
-    const hasRoiRisk = roi.roiScore < 50;
-    const hasGovInstability = driftCount > 0 || replayCoverageRatio < 0.8;
-    const hasExecutionRisk = freezeBlocks > 0 || failedPosts > 0;
-
     if (!hasRoiRisk && !hasGovInstability && !hasExecutionRisk && !hasContentCollision) {
       return null;
     }
@@ -103,9 +82,7 @@ export async function generateOptimizationProposal(
     // Rule 2 — Governance Instability: no duration change, only start date shift if freeze blocks
     if (hasGovInstability) {
       reasoning.push('Governance instability detected — stabilize before scaling.');
-      if (freezeBlocks > 0) {
-        proposedStartDateShift = '+7'; // suggest 7-day delay
-      }
+      proposedStartDateShift = '+7';
       proposedDurationWeeks = undefined; // override: do not propose duration change
     }
 
@@ -135,7 +112,7 @@ export async function generateOptimizationProposal(
     const summary =
       reasoning.length > 0
         ? reasoning[0]
-        : 'Optimization proposal based on campaign signals.';
+        : insightHeadlines[0] ?? 'Optimization proposal based on persisted decision signals.';
 
     return {
       campaignId,

@@ -1,3 +1,4 @@
+
 /**
  * GET /api/social-platforms/configs
  *
@@ -74,7 +75,7 @@ const requirePlatformAdmin = async (req: NextApiRequest, res: NextApiResponse) =
   return null;
 };
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -102,5 +103,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: err?.message ?? 'Failed to load configs' });
   }
 }
-
-export default handler;

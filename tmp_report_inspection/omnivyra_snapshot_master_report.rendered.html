@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+  <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Omnivyra Snapshot Master Report</title>
+    <style>
+      @page { size: A4; margin: 14mm; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      :root { --bg:#edf4fd; --paper:#fff; --line:#d7e2ef; --ink:#102033; --muted:#61718a; --blue:#4f7cff; --blue-soft:#eef3ff; --green:#16a34a; --green-soft:#ecfdf3; --amber:#f59e0b; --amber-soft:#fff7e8; --red:#ef4444; --red-soft:#fff1f2; }
+      html,body { background:var(--bg); color:var(--ink); font-family:"Segoe UI",Arial,sans-serif; line-height:1.42; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .report { width:760px; margin:0 auto; padding:18px 0 26px; }
+      .card,.metric-card,.insight-row,.step-row,.action-row,.mini-panel,.visual-card { break-inside:avoid-page; page-break-inside:avoid; }
+      .hero,.section { background:var(--paper); border:1px solid var(--line); border-radius:20px; box-shadow:0 10px 28px rgba(15,23,42,.05); padding:16px; margin-bottom:12px; }
+      .hero-grid,.three-col,.metric-grid,.card-grid { display:grid; gap:10px; }
+      .hero-grid { grid-template-columns:118px 1fr; align-items:start; }
+      .three-col { grid-template-columns:150px 1fr 160px; }
+      .metric-grid { grid-template-columns:repeat(4,1fr); }
+      .card-grid { grid-template-columns:repeat(2,1fr); }
+      .card-grid.two { grid-template-columns:repeat(2,1fr); }
+      .visual-band { display:grid; grid-template-columns:1.2fr .8fr; gap:10px; margin-bottom:12px; }
+      .score-panel,.mini-panel,.metric-card,.card,.insight-row,.step-row,.action-row { border:1px solid var(--line); border-radius:14px; background:#fff; padding:12px; }
+      .visual-card { border:1px solid var(--line); border-radius:14px; background:#fbfdff; padding:12px; }
+      .visual-card.wide { background:#fff; }
+      .visual-card.compact-top { margin-top:10px; }
+      .visual-card h3 { font-size:12px; margin-bottom:8px; }
+      .svg-chart { width:100%; height:auto; display:block; }
+      .svg-chart.radar { max-width:180px; margin:0 auto; }
+      .score-panel { background:linear-gradient(180deg,#f7faff 0%,#edf3ff 100%); text-align:center; }
+      .score-panel .kicker,.mini-panel span,.metric-card span,.eyebrow { display:block; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px; }
+      .score-panel strong,.mini-panel.scorebox strong { display:block; font-size:40px; line-height:1; color:var(--blue); margin-bottom:6px; }
+      .score-panel p,.hero-copy p,.metric-card p,.card p,.insight-row p,.step-row p,.mini-panel p,.action-row p,.section-head p { font-size:12px; color:var(--ink); }
+      .hero-copy h1,.section h2 { font-size:22px; margin-bottom:6px; }
+      .domain { color:var(--muted) !important; margin-bottom:8px; }
+      .lede { margin-bottom:10px; }
+      .section-head { display:flex; justify-content:space-between; align-items:end; gap:10px; margin-bottom:10px; }
+      .section-head p { color:var(--muted); max-width:320px; text-align:right; }
+      .pill-row,.meta-row { display:flex; gap:6px; flex-wrap:wrap; }
+      .pill { border-radius:999px; padding:5px 8px; border:1px solid var(--line); background:#fff; font-size:10px; color:var(--muted); }
+      .pill.blue { background:var(--blue-soft); color:var(--blue); border-color:#cad7ff; }
+      .pill.green { background:var(--green-soft); color:#15803d; border-color:#b9ebc8; }
+      .pill.amber { background:var(--amber-soft); color:#b45309; border-color:#f4d28b; }
+      .pill.subtle { background:#f8fbff; }
+      .highlight-banner,.step-highlight { margin-top:10px; border-radius:10px; padding:10px 12px; background:var(--green-soft); border:1px solid #b9ebc8; color:#166534; font-size:11px; }
+      .highlight-banner strong { display:block; font-size:10px; text-transform:uppercase; margin-bottom:4px; }
+      .stack { display:grid; gap:8px; }
+      .action-row,.step-row { display:grid; grid-template-columns:28px 1fr; gap:10px; }
+      .index { width:20px; height:20px; border-radius:999px; display:flex; align-items:center; justify-content:center; background:var(--blue-soft); color:var(--blue); font-size:11px; font-weight:800; margin-top:2px; }
+      .index.large { width:24px; height:24px; }
+      .card.good,.mini-panel.success { background:var(--green-soft); border-color:#b9ebc8; }
+      .card.warn { background:var(--amber-soft); border-color:#f4d28b; }
+      .card.bad { background:var(--red-soft); border-color:#f3b0b7; }
+      .card h3,.action-row h3,.step-row h3,.insight-row h3 { font-size:13px; margin-bottom:6px; }
+      .metric-card strong { display:block; font-size:28px; line-height:1; color:var(--blue); margin-bottom:8px; }
+      .bar { height:8px; border-radius:999px; background:#e7edf7; overflow:hidden; margin:8px 0; }
+      .bar span { display:block; height:100%; background:linear-gradient(90deg,#86a9ff 0%,#4f7cff 100%); border-radius:999px; }
+      .card-top { display:flex; align-items:start; justify-content:space-between; gap:10px; margin-bottom:6px; }
+      .cta { text-align:center; }
+      .button { display:inline-block; margin-top:10px; background:var(--blue); color:#fff; border-radius:10px; padding:10px 14px; font-size:12px; font-weight:700; }
+      .dot { opacity:.4; margin:0 6px; }
+    </style>
+  </head>
+  <body>
+    <div class="report">
+      
+    <section class="hero">
+      <div class="hero-grid">
+        <div class="score-panel">
+          <span class="kicker">Overall Score</span>
+          <strong>29</strong>
+          <p>EARLY-STAGE <span class="dot">/</span> CONFIDENCE: MEDIUM</p>
+        </div>
+        <div class="hero-copy">
+          <p class="eyebrow">Omnivyra Snapshot</p>
+          <h1>Omnivyra Strategic Snapshot</h1>
+          <p class="domain">www.omnivyra.com <span class="dot">/</span> Apr 3, 2026</p>
+          <p class="lede">Omnivyra turns fragmented marketing work into one operating system for readiness, strategy, creation, publishing, and optimization. The report should show how clearly that system is communicated and how effectively the site converts product understanding into action.</p>
+          <div class="pill-row">
+            <span class="pill blue">AI marketing operating system</span>
+            <span class="pill amber">EARLY-STAGE</span>
+            <span class="pill green">CONFIDENCE: MEDIUM</span>
+          </div>
+          <div class="highlight-banner"><strong>Primary Focus</strong><p>Competitors cover more buying-stage content than omnivyra.com. This is limiting discoverability and making it harder to answer buyer questions with enough depth.</p></div>
+        </div>
+      </div>
+    </section>
+  
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Unified Intelligence</p><h2>What The Report Is Saying</h2></div>
+          <p>The strongest Omnivyra report balances strategic intelligence with product trust: what the platform does, why the workflow matters, and where the site is leaking conversion confidence.</p>
+        </div>
+        <div class="three-col">
+          <article class="mini-panel scorebox">
+            <span>Unified Score</span>
+            <strong>29</strong>
+            <p></p>
+          </article>
+          <div class="stack">
+            
+              <article class="action-row">
+                <div class="index">1</div>
+                <div>
+                  <h3>Build comparison and decision pages aligned with Omnivyra&#39;s positioning in SaaS / Software in Global.</h3>
+                  <div class="meta-row"><span class="pill subtle">PRIORITY HIGH</span><span class="pill subtle">IMPACT HIGH</span><span class="pill subtle">EFFORT MEDIUM</span></div>
+                  <p>Do this first because it combines meaningful upside with lower effort.</p>
+                </div>
+              </article>
+            
+              <article class="action-row">
+                <div class="index">2</div>
+                <div>
+                  <h3>Execute the highest-impact action first.</h3>
+                  <div class="meta-row"><span class="pill subtle">PRIORITY HIGH</span><span class="pill subtle">IMPACT MEDIUM</span><span class="pill subtle">EFFORT LOW</span></div>
+                  <p>Prioritize this because it has the strongest near-term commercial leverage.</p>
+                </div>
+              </article>
+            
+              <article class="action-row">
+                <div class="index">3</div>
+                <div>
+                  <h3>Tighten conversion path</h3>
+                  <div class="meta-row"><span class="pill subtle">PRIORITY MEDIUM</span><span class="pill subtle">IMPACT MEDIUM</span><span class="pill subtle">EFFORT MEDIUM</span></div>
+                  <p>Reduce friction between product understanding and action so visitors move naturally from curiosity into analysis, planning, or account creation.</p>
+                </div>
+              </article>
+            
+          </div>
+          
+            <article class="mini-panel success">
+              <span>Growth Direction</span>
+              <p>Recover search visibility leaks and improve keyword capture. Build stronger AI answer structure after search fundamentals are stable.</p>
+            </article>
+          
+        </div>
+      </section>
+    
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Decision Snapshot</p><h2>Decision Snapshot</h2></div>
+          <p>Primary focus area: The core problem is weak content coverage. Omnivyra is currently below market relative to competitors in this market.</p>
+        </div>
+        <div class="card-grid ">
+          
+            <article class="card neutral">
+              <h3>What Is Broken</h3>
+              <p>Omnivyra is currently below market relative to competitors in this market.</p>
+            </article>
+          
+            <article class="card good">
+              <h3>What To Fix First</h3>
+              <p>Sequence positioning reinforcement with demand-capture execution so Omnivyra improves visibility without diluting differentiation.</p>
+            </article>
+          
+            <article class="card warn">
+              <h3>What To Delay</h3>
+              <p>Delay lower impact expansion until core constraints improve.</p>
+            </article>
+          
+            <article class="card bad">
+              <h3>If Ignored</h3>
+              <p>If not addressed, visibility gains from new pages will remain constrained and conversion efficiency will continue to underperform.</p>
+            </article>
+          
+        </div>
+      </section>
+    
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Progress</p><h2>Performance Progress</h2></div>
+          <p>Balanced page fill with short readouts instead of large empty score blocks.</p>
+        </div>
+        <div class="visual-band">
+          <div class="visual-card">
+            <h3>Score Progress View</h3>
+            
+    <svg viewBox="0 0 320 160" class="svg-chart" role="img" aria-label="bar chart">
+      
+      <text x="0" y="16" font-size="11" fill="#61718a">Unified</text>
+      <rect x="96" y="3" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="3" width="180" height="12" rx="6" fill="#4f7cff"></rect>
+      <text x="296" y="14" font-size="11" text-anchor="end" fill="#102033">29</text>
+    
+      <text x="0" y="56" font-size="11" fill="#61718a">SEO</text>
+      <rect x="96" y="43" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="43" width="180" height="12" rx="6" fill="#6d8fff"></rect>
+      <text x="296" y="54" font-size="11" text-anchor="end" fill="#102033">29</text>
+    
+      <text x="0" y="96" font-size="11" fill="#61718a">AI Visibility</text>
+      <rect x="96" y="83" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="83" width="8" height="12" rx="6" fill="#22c55e"></rect>
+      <text x="296" y="94" font-size="11" text-anchor="end" fill="#102033">0</text>
+    
+      <text x="0" y="136" font-size="11" fill="#61718a">Authority</text>
+      <rect x="96" y="123" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="123" width="112" height="12" rx="6" fill="#f59e0b"></rect>
+      <text x="296" y="134" font-size="11" text-anchor="end" fill="#102033">18</text>
+    
+    </svg>
+  
+          </div>
+          <div class="visual-card"><h3>Capability Radar</h3>
+    <svg viewBox="0 0 180 180" class="svg-chart radar" role="img" aria-label="radar chart">
+      <circle cx="90" cy="90" r="62" fill="#f8fbff" stroke="#d7e2ef"></circle>
+      <circle cx="90" cy="90" r="41" fill="none" stroke="#e7edf7"></circle>
+      <circle cx="90" cy="90" r="20" fill="none" stroke="#e7edf7"></circle>
+      <line x1="90" y1="90" x2="98" y2="18" stroke="#d7e2ef" /><line x1="90" y1="90" x2="158.0845213036123" y2="73.2786404500042" stroke="#d7e2ef" /><line x1="90" y1="90" x2="129.02282018339787" y2="146.72135954999578" stroke="#d7e2ef" /><line x1="90" y1="90" x2="50.97717981660216" y2="146.72135954999578" stroke="#d7e2ef" /><line x1="90" y1="90" x2="21.91547869638771" y2="73.27864045000422" stroke="#d7e2ef" />
+      <polygon points="90,66.44 100.61379072185392,86.55137034277558 96.559683415584,99.02862965722441 79.06719430736,105.04771609537403 90,90" fill="rgba(79,124,255,0.18)" stroke="#4f7cff" stroke-width="2"></polygon>
+      <text x="90" y="10" font-size="10" text-anchor="middle" fill="#61718a">Tech</text><text x="166.0845213036123" y="65.2786404500042" font-size="10" text-anchor="middle" fill="#61718a">Keywords</text><text x="137.02282018339787" y="154.72135954999578" font-size="10" text-anchor="middle" fill="#61718a">Authority</text><text x="42.97717981660216" y="154.72135954999578" font-size="10" text-anchor="middle" fill="#61718a">Content</text><text x="13.915478696387709" y="65.27864045000422" font-size="10" text-anchor="middle" fill="#61718a">AI</text>
+    </svg>
+  </div>
+        </div>
+        <div class="metric-grid">
+          
+            <article class="metric-card">
+              <span>Unified</span>
+              <strong>29</strong>
+              <div class="bar"><span style="width:29%"></span></div>
+              <p>Score 29</p>
+            </article>
+          
+            <article class="metric-card">
+              <span>SEO</span>
+              <strong>29</strong>
+              <div class="bar"><span style="width:29%"></span></div>
+              <p>Score 29</p>
+            </article>
+          
+            <article class="metric-card">
+              <span>AI Visibility</span>
+              <strong>0</strong>
+              <div class="bar"><span style="width:0%"></span></div>
+              <p>Score 0</p>
+            </article>
+          
+            <article class="metric-card">
+              <span>Authority</span>
+              <strong>18</strong>
+              <div class="bar"><span style="width:18%"></span></div>
+              <p>Score 18</p>
+            </article>
+          
+        </div>
+      </section>
+    
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Competitor Signals</p><h2>Competitor Signals</h2></div>
+          <p>Competitor sections are skipped unless both summary and visual layers exist.</p>
+        </div>
+        <div class="card-grid two">
+          
+            <article class="card warn">
+              <h3>Keyword Gap</h3>
+              <p>comparison pages, buyer-stage pages, workflow proof</p>
+            </article>
+          
+            <article class="card neutral">
+              <h3>Answer Gap</h3>
+              <p>what Omnivyra replaces, how Omnivyra works, why Omnivyra is different</p>
+            </article>
+          
+        </div>
+      </section>
+    
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Competitor Movement</p><h2>User vs Competitor Comparison</h2></div>
+          <p>Comparison is shown against the nearest competitor across the dimensions that matter most.</p>
+        </div>
+        
+          <div class="card-grid ">
+            
+              <article class="card good">
+                <h3>Relative Movement vs saas-search-rival.com</h3>
+                <p>You are still behind the strongest competitor set, but the nearest competitive gap is beginning to close.</p>
+              </article>
+            
+              <article class="card good">
+                <h3>saas-search-rival.com</h3>
+                <p>Movement improving.</p>
+              </article>
+            
+              <article class="card neutral">
+                <h3>software-authority-leader.com</h3>
+                <p>Movement stable.</p>
+              </article>
+            
+          </div>
+        
+        
+          <div class="visual-card wide compact-top">
+            <h3>User vs saas-search-rival.com</h3>
+            
+    <svg viewBox="0 0 320 240" class="svg-chart" role="img" aria-label="bar chart">
+      
+      <text x="0" y="16" font-size="11" fill="#61718a">User Content</text>
+      <rect x="96" y="3" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="3" width="67" height="12" rx="6" fill="#4f7cff"></rect>
+      <text x="296" y="14" font-size="11" text-anchor="end" fill="#102033">30</text>
+    
+      <text x="0" y="56" font-size="11" fill="#61718a">Competitor Content</text>
+      <rect x="96" y="43" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="43" width="169" height="12" rx="6" fill="#f59e0b"></rect>
+      <text x="296" y="54" font-size="11" text-anchor="end" fill="#102033">76</text>
+    
+      <text x="0" y="96" font-size="11" fill="#61718a">User Authority</text>
+      <rect x="96" y="83" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="83" width="40" height="12" rx="6" fill="#4f7cff"></rect>
+      <text x="296" y="94" font-size="11" text-anchor="end" fill="#102033">18</text>
+    
+      <text x="0" y="136" font-size="11" fill="#61718a">Competitor Authority</text>
+      <rect x="96" y="123" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="123" width="180" height="12" rx="6" fill="#f59e0b"></rect>
+      <text x="296" y="134" font-size="11" text-anchor="end" fill="#102033">81</text>
+    
+      <text x="0" y="176" font-size="11" fill="#61718a">User AI</text>
+      <rect x="96" y="163" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="163" width="8" height="12" rx="6" fill="#4f7cff"></rect>
+      <text x="296" y="174" font-size="11" text-anchor="end" fill="#102033">0</text>
+    
+      <text x="0" y="216" font-size="11" fill="#61718a">Competitor AI</text>
+      <rect x="96" y="203" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="203" width="153" height="12" rx="6" fill="#f59e0b"></rect>
+      <text x="296" y="214" font-size="11" text-anchor="end" fill="#102033">69</text>
+    
+    </svg>
+  
+          </div>
+        
+      </section>
+    
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">AI Visibility</p><h2>AI Visibility</h2></div>
+          <p>AI visibility only renders when answer-layer data is available and useful.</p>
+        </div>
+        <div class="card-grid ">
+          
+            <article class="card bad">
+              <h3>AI answer visibility is weak</h3>
+              <p></p>
+            </article>
+          
+            <article class="card neutral">
+              <h3>Answer Coverage</h3>
+              <p>Coverage 0 / Entity Clarity 18 / Structure 15</p>
+            </article>
+          
+            <article class="card good">
+              <h3>Reusable Answers</h3>
+              <p>what does omnivyra replace (missing), how does omnivyra workflow work (partial), who is omnivyra for (partial)</p>
+            </article>
+          
+        </div>
+      </section>
+    
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">SEO Visuals</p><h2>SEO Visuals</h2></div>
+          <p>Visual-first blocks are shown only when the source visual has real content.</p>
+        </div>
+        <div class="card-grid ">
+          
+            <article class="card neutral">
+              <h3>SEO Capability Radar</h3>
+              <p>Competitor keyword overlap and gap split.</p>
+            </article>
+          
+            <article class="card warn">
+              <h3>Opportunity Coverage Matrix</h3>
+              <p>Search funnel evidence is limited because impressions and clicks are still sparse in this run.</p>
+            </article>
+          
+            <article class="card good">
+              <h3>Crawl Health Breakdown</h3>
+              <p>Technical evidence reinforces the same story: issue concentration remains highest in metadata and structure.</p>
+            </article>
+          
+        </div>
+      </section>
+    
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Dimension Scores</p><h2>Dimension Scores</h2></div>
+          <p>This mirrors the score-by-dimension area from your screenshots without forcing empty boxes.</p>
+        </div>
+        <div class="card-grid ">
+          
+            <article class="card warn">
+              <h3>Content Quality</h3>
+              <p>Score 30.</p>
+            </article>
+          
+            <article class="card bad">
+              <h3>Authority</h3>
+              <p>Score 18.</p>
+            </article>
+          
+            <article class="card neutral">
+              <h3>AEO Readiness</h3>
+              <p>Score 15.</p>
+            </article>
+          
+            <article class="card good">
+              <h3>Platforms</h3>
+              <p>Score 44.</p>
+            </article>
+          
+        </div>
+      </section>
+    
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Search and AI Diagnostics</p><h2>Search and AI Diagnostics</h2></div>
+          <p>Diagnostic graphics stay inside the section so they do not create dead space on the page.</p>
+        </div>
+        <div class="card-grid ">
+          
+            <article class="card warn">
+              <h3>Query Answer Coverage</h3>
+              <p></p>
+            </article>
+          
+            <article class="card neutral">
+              <h3>Entity Authority Map</h3>
+              <p>Omnivyra (48), AI marketing operating system (39)</p>
+            </article>
+          
+            <article class="card good">
+              <h3>Answer Extraction Funnel</h3>
+              <p>Answerable 18 / Structured 15 / Citation-ready 10.</p>
+            </article>
+          
+            <article class="card neutral">
+              <h3>Search Funnel Diagnostics</h3>
+              <p>Impressions 24, clicks 44, lost clicks 56.</p>
+            </article>
+          
+        </div>
+        <div class="visual-card wide compact-top">
+          <h3>Search Funnel Readout</h3>
+          
+    <svg viewBox="0 0 320 160" class="svg-chart" role="img" aria-label="bar chart">
+      
+      <text x="0" y="16" font-size="11" fill="#61718a">Impressions</text>
+      <rect x="96" y="3" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="3" width="77" height="12" rx="6" fill="#4f7cff"></rect>
+      <text x="296" y="14" font-size="11" text-anchor="end" fill="#102033">24</text>
+    
+      <text x="0" y="56" font-size="11" fill="#61718a">Clicks</text>
+      <rect x="96" y="43" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="43" width="141" height="12" rx="6" fill="#22c55e"></rect>
+      <text x="296" y="54" font-size="11" text-anchor="end" fill="#102033">44</text>
+    
+      <text x="0" y="96" font-size="11" fill="#61718a">CTR</text>
+      <rect x="96" y="83" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="83" width="103" height="12" rx="6" fill="#f59e0b"></rect>
+      <text x="296" y="94" font-size="11" text-anchor="end" fill="#102033">32</text>
+    
+      <text x="0" y="136" font-size="11" fill="#61718a">Lost Clicks</text>
+      <rect x="96" y="123" width="190" height="12" rx="6" fill="#e7edf7"></rect>
+      <rect x="96" y="123" width="180" height="12" rx="6" fill="#ef4444"></rect>
+      <text x="296" y="134" font-size="11" text-anchor="end" fill="#102033">56</text>
+    
+    </svg>
+  
+        </div>
+      </section>
+    
+      <section class="section">
+        <div class="section-head">
+          <div><p class="eyebrow">Insights</p><h2>Key Insights</h2></div>
+          <p>Repeated lines are suppressed across the report so this section only keeps distinct conclusions.</p>
+        </div>
+        <div class="stack">
+          
+            <article class="insight-row">
+              <h3>The core problem is weak content coverage</h3>
+              <p>Competitors cover more buying-stage content than omnivyra.com.</p>
+            </article>
+          
+            <article class="insight-row">
+              <h3>AI answer visibility is weak</h3>
+              <p>The current content does not answer enough likely user questions in a complete, reusable format.</p>
+            </article>
+          
+            <article class="insight-row">
+              <h3>Competitors are signaling more authority</h3>
+              <p>SaaS / Software competitors are signaling more authority than omnivyra.com to recover trust.</p>
+            </article>
+          
+        </div>
+      </section>
+    
+    <section class="section cta">
+      <h2>Ready to execute?</h2>
+      <p>Tighten the story around Omnivyra as the system that helps teams understand, plan, execute, and improve marketing from one place. The report should end by reinforcing that operating-system narrative, not just isolated SEO tasks.</p>
+      <span class="button">Act on top priority</span>
+    </section>
+  
+    </div>
+  </body>
+  </html>

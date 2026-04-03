@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Omnivyra Visual Intelligence</title>
+  <style>
+    @page { size: A4; margin: 14mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg:#eef4ff; --paper:#fff; --line:#d8e3f0; --ink:#0f172a; --muted:#607089; --blue:#4d7cff; --blue-soft:#eef4ff; --teal:#14b8a6; --teal-soft:#ecfeff; --amber:#f59e0b; --amber-soft:#fff7e8; --green:#16a34a; --green-soft:#ecfdf3; }
+    html,body { background:var(--bg); color:var(--ink); font-family:"Segoe UI",Arial,sans-serif; line-height:1.4; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .report { width:760px; margin:0 auto; padding:18px 0 28px; }
+    .panel,.module,.card,.metric { break-inside:avoid-page; page-break-inside:avoid; }
+    .panel { background:var(--paper); border:1px solid var(--line); border-radius:18px; padding:16px; box-shadow:0 8px 24px rgba(15,23,42,.05); margin-bottom:12px; }
+    .head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+    .head h1,.head h2 { font-size:20px; }
+    .head p { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+    .banner { border:1px solid #cde7d9; background:var(--green-soft); color:#166534; border-radius:10px; padding:10px 12px; font-size:12px; margin-bottom:10px; }
+    .meta { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+    .chip { font-size:10px; border-radius:999px; padding:5px 8px; border:1px solid var(--line); background:#f8fbff; color:var(--muted); }
+    .chip.blue { background:var(--blue-soft); color:var(--blue); border-color:#ced8ff; }
+    .chip.amber { background:var(--amber-soft); color:#b45309; border-color:#f4d28b; }
+    .chip.green { background:var(--green-soft); color:#15803d; border-color:#bbe8c6; }
+    .visual-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+    .module { border:1px solid var(--line); border-radius:14px; background:#fff; padding:12px; min-height:300px; }
+    .module .top { display:flex; align-items:start; justify-content:space-between; gap:10px; margin-bottom:8px; }
+    .module h3 { font-size:11px; text-transform:uppercase; color:var(--muted); margin-bottom:4px; letter-spacing:.04em; }
+    .module p { font-size:12px; }
+    .confidence { font-size:10px; padding:5px 8px; border-radius:999px; background:#f8fbff; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+    .visual { height:120px; border:1px dashed #c7d6ea; border-radius:12px; background:linear-gradient(180deg,#fbfdff 0%,#f3f8ff 100%); margin:8px 0 10px; }
+    .mini-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+    .metric { background:#fbfdff; border:1px solid var(--line); border-radius:12px; padding:10px; }
+    .metric strong { display:block; font-size:11px; color:var(--muted); margin-bottom:6px; text-transform:uppercase; }
+    .metric .value { font-size:24px; font-weight:800; color:var(--blue); margin-bottom:6px; }
+    .metric .bar { height:7px; border-radius:999px; background:#e8edf6; margin-bottom:6px; overflow:hidden; }
+    .metric .bar span { display:block; height:100%; background:linear-gradient(90deg,#5fb2ff 0%,#4d7cff 100%); border-radius:999px; }
+    .callout,.reason { border:1px solid var(--line); border-radius:12px; padding:10px; background:#fbfdff; margin-top:8px; }
+    .callout strong,.reason strong { display:block; font-size:11px; text-transform:uppercase; color:var(--muted); margin-bottom:5px; }
+    .stack { display:grid; gap:8px; }
+  </style>
+</head>
+<body>
+  <div class="report">
+    <section class="panel">
+      <div class="head"><div><p>{{website_url}}</p><h1>{{company_name}} Visual Intelligence</h1></div><div class="chip blue">{{report_date}}</div></div>
+      <div class="banner">{{executive_summary}}</div>
+      <div class="meta"><span class="chip amber">{{stage_label}}</span><span class="chip blue">{{primary_focus}}</span><span class="chip green">{{confidence_label}}</span></div>
+    </section>
+    <section class="panel">
+      <div class="head"><div><p>SEO Visual Intelligence</p><h2>Snapshot At A Glance</h2></div></div>
+      <div class="visual-grid">
+        <div class="module"><div class="top"><div><h3>SEO Capability Radar</h3><p>{{visual_callout_1_text}}</p></div><div class="confidence">{{visual_confidence_1}}</div></div><div class="visual"></div><div class="mini-grid"><div class="metric"><strong>Technical SEO</strong><div class="value">{{radar_metric_1}}</div><div class="bar"><span style="width: {{radar_metric_1}}%"></span></div></div><div class="metric"><strong>Keyword Research</strong><div class="value">{{radar_metric_2}}</div><div class="bar"><span style="width: {{radar_metric_2}}%"></span></div></div><div class="metric"><strong>Backlinks</strong><div class="value">{{radar_metric_3}}</div><div class="bar"><span style="width: {{radar_metric_3}}%"></span></div></div><div class="metric"><strong>Content Quality</strong><div class="value">{{radar_metric_4}}</div><div class="bar"><span style="width: {{radar_metric_4}}%"></span></div></div></div><div class="reason"><strong>Why This Matters</strong><p>{{visual_reason_1}}</p></div></div>
+        <div class="module"><div class="top"><div><h3>Opportunity Coverage Matrix</h3><p>{{visual_callout_2_text}}</p></div><div class="confidence">{{visual_confidence_2}}</div></div><div class="visual"></div><div class="stack"><div class="callout"><strong>Missing Keywords</strong><p>{{matrix_missing}}</p></div><div class="callout"><strong>Weak Keywords</strong><p>{{matrix_weak}}</p></div><div class="callout"><strong>Strong Keywords</strong><p>{{matrix_strong}}</p></div></div></div>
+        <div class="module"><div class="top"><div><h3>Search Visibility Funnel</h3><p>{{visual_callout_3_text}}</p></div><div class="confidence">{{visual_confidence_3}}</div></div><div class="visual"></div><div class="mini-grid"><div class="metric"><strong>Impressions</strong><div class="value">{{funnel_impressions}}</div></div><div class="metric"><strong>Clicks</strong><div class="value">{{funnel_clicks}}</div></div><div class="metric"><strong>CTR</strong><div class="value">{{funnel_ctr}}</div></div><div class="metric"><strong>Lost Clicks</strong><div class="value">{{funnel_lost}}</div></div></div><div class="reason"><strong>Why This Matters</strong><p>{{visual_reason_3}}</p></div></div>
+        <div class="module"><div class="top"><div><h3>Crawl Health Breakdown</h3><p>{{visual_callout_4_text}}</p></div><div class="confidence">{{visual_confidence_4}}</div></div><div class="visual"></div><div class="mini-grid"><div class="metric"><strong>Metadata</strong><div class="value">{{crawl_metadata}}</div></div><div class="metric"><strong>Structure</strong><div class="value">{{crawl_structure}}</div></div><div class="metric"><strong>Internal Links</strong><div class="value">{{crawl_links}}</div></div><div class="metric"><strong>Crawl Depth</strong><div class="value">{{crawl_depth}}</div></div></div><div class="reason"><strong>Why This Matters</strong><p>{{visual_reason_4}}</p></div></div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

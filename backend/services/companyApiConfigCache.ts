@@ -8,6 +8,7 @@ import { supabase } from '../db/supabaseClient';
 
 const CACHE_PREFIX = 'company_api_config:';
 const TTL_MS = 5 * 60 * 1000;
+const MAX_CACHE_SIZE = 500;
 
 type CacheEntry<T> = { value: T; expiresAt: number };
 
@@ -40,6 +41,11 @@ function getCachedRows(companyId: string): CompanyConfigRow[] | null {
 }
 
 function setCachedRows(companyId: string, value: CompanyConfigRow[]): void {
+  if (cache.size >= MAX_CACHE_SIZE) {
+    // Evict the oldest entry (first key in insertion order)
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
   cache.set(key(companyId), { value, expiresAt: Date.now() + TTL_MS });
 }
 

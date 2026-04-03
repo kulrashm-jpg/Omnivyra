@@ -1,3 +1,4 @@
+
 /**
  * Dev-only: Run one Active Leads REACTIVE mode simulation.
  * GET or POST to /api/leads/simulate - no auth required when DEV_SIMULATE=true or NODE_ENV=development.

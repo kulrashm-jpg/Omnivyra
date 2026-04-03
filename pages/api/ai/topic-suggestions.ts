@@ -1,3 +1,4 @@
+
 /**
  * Unified API for AI topic suggestions.
  * GET: load default suggestions

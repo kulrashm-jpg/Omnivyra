@@ -1,3 +1,4 @@
+
 /**
  * POST /api/campaigns/proposals/reject
  * Reject a campaign proposal (status = rejected)

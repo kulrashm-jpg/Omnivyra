@@ -1,3 +1,4 @@
+
 // API Endpoint for Queue Statistics
 import { NextApiRequest, NextApiResponse } from 'next';
 import { queue } from '@/lib/services/queue';
@@ -46,26 +47,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

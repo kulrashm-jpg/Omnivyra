@@ -1,3 +1,4 @@
+
 /**
  * GET /api/governance/summary
  * Governance observability — real-time metrics per company.

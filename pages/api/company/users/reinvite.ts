@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
+import { requireCompanyContext } from '@/backend/services/companyContextGuardService';
 import { verifySupabaseAuthHeader } from '../../../../lib/auth/serverValidation';
 import { randomBytes, createHash } from 'crypto';
 
@@ -102,10 +103,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'email and companyId are required' });
   }
 
+  const companyContext = await requireCompanyContext({ req, res, companyId: String(companyId).trim() });
+  if (!companyContext) return;
+
   const actorId = await getActorUserId(req);
   if (!actorId) return res.status(401).json({ error: 'UNAUTHORIZED' });
 
-  const authorized = await isActorAuthorized(actorId, companyId);
+  const authorized = await isActorAuthorized(actorId, companyContext.companyId);
   if (!authorized) return res.status(403).json({ error: 'FORBIDDEN' });
 
   const normalizedEmail = String(email).trim().toLowerCase();

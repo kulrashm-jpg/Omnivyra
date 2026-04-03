@@ -1,4 +1,5 @@
 import { getLatestProfile } from '../services/companyProfileService';
+import { config } from '@/config';
 
 /** INTERNAL = company's own user (default). EXTERNAL = agency/external. Infrastructure only; no enforcement yet. */
 export type MembershipType = 'INTERNAL' | 'EXTERNAL';
@@ -52,8 +53,8 @@ export const resolveUserContext = async (): Promise<UserContext> => {
     return _contextCache.value;
   }
 
-  const role = normalizeRole(process.env.DEV_ROLE || 'admin');
-  let companyIds = parseCompanyIds(process.env.DEV_COMPANY_IDS);
+  const role = normalizeRole(config.DEV_ROLE || 'admin');
+  let companyIds = parseCompanyIds(config.DEV_COMPANY_IDS);
 
   if (companyIds.length === 0) {
     try {
@@ -69,7 +70,7 @@ export const resolveUserContext = async (): Promise<UserContext> => {
   }
 
   const userContext: UserContext = {
-    userId: process.env.DEV_USER_ID || 'dev-user',
+    userId: config.DEV_USER_ID || 'dev-user',
     role,
     companyIds,
     defaultCompanyId: companyIds[0],

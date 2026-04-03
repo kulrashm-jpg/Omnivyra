@@ -111,34 +111,54 @@ export async function saveWeekPlans(
   setWriteAllowed();
   log(source, 'saveWeekPlans', { campaignId, weekNumber, count: plans.length });
 
-  // Fetch existing (title, platform) pairs from all OTHER weeks in this campaign.
-  // We check against these to prevent the same topic landing on the same platform twice.
+  // Fetch existing rows from all OTHER weeks to prevent the exact same
+  // topic+platform+content_type+day combination from spanning multiple weeks.
   const { data: existingRows } = await supabase
     .from('daily_content_plans')
-    .select('title, platform')
+    .select('title, platform, content_type, day_of_week')
     .eq('campaign_id', campaignId)
     .neq('week_number', weekNumber);
 
-  const existingPairs = new Set<string>(
-    (existingRows ?? []).map((r: { title: string; platform: string }) =>
-      `${String(r.title ?? '').trim().toLowerCase()}::${String(r.platform ?? '').trim().toLowerCase()}`
+  // Cross-week dedup key: topic + platform + content_type + day — precise enough to
+  // block true repeats (same piece, same slot, different week) while allowing the
+  // same topic to appear on multiple days or as different content types in a week.
+  const crossWeekPairs = new Set<string>(
+    (existingRows ?? []).map((r: { title: string; platform: string; content_type: string; day_of_week: string }) =>
+      [
+        String(r.title ?? '').trim().toLowerCase(),
+        String(r.platform ?? '').trim().toLowerCase(),
+        String(r.content_type ?? '').trim().toLowerCase(),
+        String(r.day_of_week ?? '').trim().toLowerCase(),
+      ].join('::')
     )
   );
 
+  // Within-batch dedup key: same four fields — prevents inserting the exact same slot twice
+  // within a single week, but allows the same topic to appear on different days or as
+  // different content types (e.g. video on Monday + carousel on Monday are distinct).
+  const batchSeen = new Set<string>();
+
   const filtered: ExecutionPlanRow[] = [];
   for (const row of plans) {
-    const key = `${String(row.title ?? '').trim().toLowerCase()}::${String(row.platform ?? '').trim().toLowerCase()}`;
-    if (existingPairs.has(key)) {
-      log(source, `DEDUP_DROP topic="${row.title}" platform="${row.platform}" already exists in another week — skipping`, { campaignId, weekNumber });
+    const key = [
+      String(row.title ?? '').trim().toLowerCase(),
+      String(row.platform ?? '').trim().toLowerCase(),
+      String(row.content_type ?? '').trim().toLowerCase(),
+      String(row.day_of_week ?? '').trim().toLowerCase(),
+    ].join('::');
+
+    if (crossWeekPairs.has(key)) {
+      log(source, `DEDUP_DROP topic="${row.title}" platform="${row.platform}" content_type="${row.content_type}" day="${row.day_of_week}" already exists in another week — skipping`, { campaignId, weekNumber });
+    } else if (batchSeen.has(key)) {
+      log(source, `DEDUP_DROP topic="${row.title}" platform="${row.platform}" content_type="${row.content_type}" day="${row.day_of_week}" duplicate within same week batch — skipping`, { campaignId, weekNumber });
     } else {
-      // Register this pair so later rows in the same batch don't duplicate it either
-      existingPairs.add(key);
+      batchSeen.add(key);
       filtered.push(row);
     }
   }
 
   if (filtered.length < plans.length) {
-    log(source, `saveWeekPlans dedup removed ${plans.length - filtered.length} duplicate topic+platform rows`, { campaignId, weekNumber });
+    log(source, `saveWeekPlans dedup removed ${plans.length - filtered.length} rows`, { campaignId, weekNumber });
   }
 
   return persistenceSaveWeekPlans(campaignId, weekNumber, filtered, source, options);
@@ -163,18 +183,24 @@ export async function getDailyPlans(campaignId: string): Promise<Record<string, 
     throw new Error(`Failed to fetch daily plans: ${error.message}`);
   }
 
-  // Deduplicate by (title, platform): keep the first occurrence (lowest week_number),
-  // drop any later row with the same topic on the same platform.
+  // Deduplicate by (title, platform, content_type, day_of_week): drop true duplicates only.
+  // Including day and content_type prevents legitimate multi-day activities (e.g. 3 videos
+  // across Mon/Tue/Wed) from being collapsed into one.
   const seen = new Set<string>();
   const deduped: Record<string, unknown>[] = [];
   for (const row of (data ?? []) as Record<string, unknown>[]) {
     const title = String(row.title ?? '').trim().toLowerCase();
     const platform = String(row.platform ?? '').trim().toLowerCase();
     if (!title) { deduped.push(row); continue; }
-    const key = `${title}::${platform}`;
+    const key = [
+      title,
+      platform,
+      String(row.content_type ?? '').trim().toLowerCase(),
+      String(row.day_of_week ?? '').trim().toLowerCase(),
+    ].join('::');
     if (seen.has(key)) {
       if (process.env.NODE_ENV !== 'test') {
-        console.warn(`[EXECUTION_ENGINE] getDailyPlans: dropping duplicate topic="${row.title}" platform="${row.platform}" week=${row.week_number}`);
+        console.warn(`[EXECUTION_ENGINE] getDailyPlans: dropping duplicate topic="${row.title}" platform="${row.platform}" content_type="${row.content_type}" day="${row.day_of_week}" week=${row.week_number}`);
       }
       continue;
     }

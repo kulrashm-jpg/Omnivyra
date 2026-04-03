@@ -1,3 +1,4 @@
+
 /**
  * GET /api/company/platform-config
  * Returns company-configured platforms with allowed content types per platform.

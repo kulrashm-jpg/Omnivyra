@@ -15,8 +15,10 @@ export const BOLT_TEXT_CONTENT_TYPES = new Set([
   'post',
   'blog',
   'article',
+  'newsletter',
   'short_story',
   'story',
+  'white_paper',
   'thread',
   'poll',
 ]);
@@ -55,8 +57,9 @@ export function isBoltTextContentType(contentType: string): boolean {
   if (BOLT_TEXT_CONTENT_TYPES.has(norm)) return true;
   // Also allow variants like "linkedin_post", "educational post" -> post
   if (norm.includes('post') && !norm.includes('video')) return true;
-  if (norm.includes('article') || norm.includes('blog')) return true;
+  if (norm.includes('article') || norm.includes('blog') || norm.includes('newsletter')) return true;
   if (norm.includes('thread') || norm.includes('story')) return true;
+  if (norm.includes('white_paper') || norm.includes('whitepaper')) return true;
   if (norm.includes('poll')) return true;
   return false;
 }

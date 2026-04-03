@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Best Sparse-Signal Report</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root { --bg:#fcfbf7; --paper:#fffdf8; --ink:#1f2937; --muted:#6b7280; --line:#eadfcb; --sand:#f8f0df; --accent:#b45309; --deep:#78350f; --calm:#f1f5f9; }
+    body { font-family:Georgia,"Times New Roman",serif; background:radial-gradient(circle at top left,#fff6e8 0%,var(--bg) 55%); color:var(--ink); padding:30px; max-width:980px; margin:0 auto; line-height:1.55; }
+    h1,h2,h3,p,li,span,div { word-break:normal; overflow-wrap:break-word; hyphens:none; }
+    .page { background:var(--paper); border:1px solid var(--line); border-radius:24px; overflow:hidden; box-shadow:0 16px 40px rgba(120,53,15,.08); }
+    .hero { padding:34px; background:linear-gradient(135deg,#fff7ed 0%,#fffbf5 100%); border-bottom:1px solid var(--line); }
+    .kicker { font-size:12px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin-bottom:16px; }
+    .hero-layout { display:grid; grid-template-columns:170px 1fr; gap:24px; align-items:center; }
+    .hero-score { width:170px; height:170px; border-radius:28px; background:#fff; border:1px solid var(--line); display:flex; flex-direction:column; justify-content:center; align-items:center; }
+    .hero-score strong { font-size:56px; line-height:1; color:var(--deep); }
+    .hero-score span { margin-top:8px; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+    .hero h1 { font-size:36px; line-height:1.08; margin-bottom:10px; color:#111827; }
+    .hero p { max-width:54ch; color:var(--muted); font-size:15px; margin-bottom:18px; }
+    .meta { display:flex; flex-wrap:wrap; gap:10px; }
+    .meta span { background:#fff; border:1px solid var(--line); border-radius:999px; padding:8px 12px; font-size:12px; color:var(--deep); }
+    .section { padding:28px 34px; border-bottom:1px solid var(--line); }
+    .section:last-child { border-bottom:0; }
+    .section h2 { font-size:22px; margin-bottom:16px; }
+    .intent-box { background:var(--sand); border-left:4px solid var(--accent); border-radius:14px; padding:18px 20px; max-width:64ch; }
+    .intent-box p { font-size:15px; color:var(--deep); }
+    .minimal-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+    .minimal-card,.visual-placeholder,.compact-stack,.next-step { background:#fff; border:1px solid var(--line); border-radius:18px; padding:18px; }
+    .minimal-card em { display:block; font-style:normal; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:10px; }
+    .minimal-card strong { display:block; font-size:28px; color:var(--deep); margin-bottom:12px; }
+    .minimal-card p,.compact-stack li span,.steps li span,.visual-placeholder p,.next-step p { color:var(--muted); font-size:13px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+    .split { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .visual-placeholder .box { height:220px; border-radius:14px; background:linear-gradient(180deg,#fff,#faf7f2); border:1px dashed #d6c2a1; margin-bottom:14px; position:relative; }
+    .visual-placeholder .box::after { content:"{{visual_title}}"; position:absolute; top:14px; left:14px; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); }
+    .compact-stack ul,.steps { list-style:none; display:grid; gap:10px; }
+    .compact-stack li,.steps li { background:var(--calm); border-radius:12px; padding:12px 14px; }
+    .compact-stack li strong,.steps li strong { display:block; font-size:14px; margin-bottom:6px; }
+    .next-step { background:#2f241c; color:#fff; }
+    .next-step p { color:#e7d8c5; margin:10px 0 16px; max-width:46ch; }
+    .next-step .chip { display:inline-block; background:#fff; color:#2f241c; border-radius:999px; padding:10px 14px; font-weight:700; }
+    @media (max-width:820px) { body{padding:14px;} .hero-layout,.minimal-grid,.split{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="kicker">Best / Sparse Signal</div>
+      <div class="hero-layout">
+        <div class="hero-score"><strong>{{overall_score}}</strong><span>Baseline Score</span></div>
+        <div>
+          <h1>{{company_name}} Baseline Opportunity Report</h1>
+          <p>{{executive_summary}}</p>
+          <div class="meta"><span>{{website_url}}</span><span>{{report_date}}</span><span>{{primary_focus}}</span></div>
+        </div>
+      </div>
+    </section>
+    <section class="section"><h2>What This Report Knows</h2><div class="intent-box"><p>{{confidence_summary}}</p></div></section>
+    <section class="section">
+      <h2>Lean Signals</h2>
+      <div class="minimal-grid">
+        <article class="minimal-card"><em>Discoverability</em><strong>{{seo_score}}</strong><p>{{seo_summary}}</p></article>
+        <article class="minimal-card"><em>Trust</em><strong>{{trust_score}}</strong><p>{{trust_summary}}</p></article>
+        <article class="minimal-card"><em>Lead Path</em><strong>{{conversion_score}}</strong><p>{{conversion_summary}}</p></article>
+      </div>
+    </section>
+    <section class="section">
+      <h2>Best Available Evidence</h2>
+      <div class="split">
+        <div class="visual-placeholder"><div class="box"></div><p>{{visual_summary}}</p></div>
+        <div class="compact-stack">
+          <ul>
+            <li><strong>{{insight_title_1}}</strong><span>{{insight_text_1}}</span></li>
+            <li><strong>{{insight_title_2}}</strong><span>{{insight_text_2}}</span></li>
+            <li><strong>{{insight_title_3}}</strong><span>{{insight_text_3}}</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+    <section class="section">
+      <h2>Start Here</h2>
+      <ul class="steps">
+        <li><strong>{{action_1_title}}</strong><span>{{action_1_text}}</span></li>
+        <li><strong>{{action_2_title}}</strong><span>{{action_2_text}}</span></li>
+        <li><strong>{{action_3_title}}</strong><span>{{action_3_text}}</span></li>
+      </ul>
+    </section>
+    <section class="section"><div class="next-step"><h2>Best Next Step</h2><p>{{cta_text}}</p><span class="chip">{{cta_label}}</span></div></section>
+  </div>
+</body>
+</html>

@@ -36,17 +36,17 @@ function getContentTypesForPlatform(platform: string): string[] {
     if (normalized.includes(p)) types.add(ct);
   }
   const fallbacks: Record<string, string[]> = {
-    linkedin:  ['post', 'article', 'blog', 'carousel', 'video', 'poll', 'newsletter'],
+    linkedin:  ['post', 'article', 'blog', 'newsletter', 'short_story', 'white_paper', 'carousel', 'video', 'poll'],
     youtube:   ['video', 'short'],
-    twitter:   ['post', 'thread', 'poll'],
-    x:         ['post', 'thread', 'poll'],
-    instagram: ['post', 'reel', 'story', 'carousel'],
-    facebook:  ['post', 'video', 'story', 'carousel', 'blog'],
+    twitter:   ['post', 'thread', 'poll', 'newsletter'],
+    x:         ['post', 'thread', 'poll', 'newsletter'],
+    instagram: ['post', 'reel', 'story', 'carousel', 'short_story'],
+    facebook:  ['post', 'video', 'story', 'carousel', 'blog', 'newsletter', 'short_story'],
     tiktok:    ['video', 'short'],
     reddit:    ['post', 'thread'],
     pinterest: ['post', 'idea_pin'],
-    medium:    ['post', 'article', 'blog', 'newsletter'],
-    devto:     ['post', 'article', 'blog'],
+    medium:    ['post', 'article', 'blog', 'newsletter', 'short_story', 'white_paper'],
+    devto:     ['post', 'article', 'blog', 'white_paper'],
     blog:      ['post', 'article', 'blog'],
   };
   const fb = fallbacks[p] ?? ['post'];

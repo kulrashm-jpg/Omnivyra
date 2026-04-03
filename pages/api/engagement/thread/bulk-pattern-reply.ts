@@ -1,3 +1,4 @@
+
 /**
  * POST /api/engagement/thread/bulk-pattern-reply
  * Apply response pattern and send AI-generated reply to selected threads.

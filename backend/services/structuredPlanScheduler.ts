@@ -117,11 +117,13 @@ function buildAllocationSchedule(
 
 /** Map internal content type to DB schema values (platform-specific constraints). Includes image, carousel, reel, short for activity alignment. */
 const FALLBACK_CONTENT_TYPE_MAP: Record<string, Record<string, string>> = {
-  linkedin: { post: 'post', video: 'video', article: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post' },
-  x: { post: 'tweet', video: 'video', article: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'tweet' },
-  instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post' },
-  youtube: { post: 'video', video: 'video', article: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video' },
-  facebook: { post: 'post', video: 'video', article: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post' },
+  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
+  x:         { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
+  instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', newsletter: 'feed_post', short_story: 'feed_post', white_paper: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post', blog: 'feed_post' },
+  youtube:   { post: 'video', video: 'video', article: 'video', newsletter: 'video', short_story: 'video', white_paper: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video', blog: 'video' },
+  facebook:  { post: 'post', video: 'video', article: 'post', newsletter: 'post', short_story: 'post', white_paper: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'post' },
+  medium:    { post: 'post', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', blog: 'article', thread: 'post' },
+  devto:     { post: 'post', article: 'article', white_paper: 'article', blog: 'article', thread: 'post' },
 };
 
 function extractTypeMapFromPlatformRules(bundle: any): Record<string, string> | null {
@@ -466,15 +468,26 @@ function scheduleFromAllocation(
   accountMap: Map<string, string>,
   campaignId: string,
   normalize: PlatformNormalizer,
-  typeMapByPlatform: Record<string, Record<string, string>>
+  typeMapByPlatform: Record<string, Record<string, string>>,
+  fallbackPlatforms?: string[],
+  fallbackFrequency?: number
 ): { scheduledPosts: any[]; skippedPlatforms: string[] } {
   const scheduledPosts: any[] = [];
   const skippedPlatforms: string[] = [];
 
   for (const week of weeks) {
-    const allocation = week.platform_allocation || {};
+    let allocation: Record<string, number> = week.platform_allocation || {};
     const total = Object.values(allocation).reduce((a, b) => a + b, 0);
-    if (total === 0) continue;
+    if (total === 0) {
+      // Build fallback allocation from eligiblePlatforms + frequencyPerWeek so
+      // weeks with no AI-generated platform_allocation still get scheduled.
+      const platforms = fallbackPlatforms?.length ? fallbackPlatforms : Array.from(accountMap.keys());
+      if (!platforms.length) continue;
+      const freq = fallbackFrequency ?? 3;
+      const perPlatform = Math.max(1, Math.round(freq / platforms.length));
+      allocation = {};
+      for (const p of platforms) allocation[p] = perPlatform;
+    }
 
     const contentTypeMix = week.content_type_mix || ['post'];
     const ctaType = week.cta_type || 'None';
@@ -575,6 +588,10 @@ export type ScheduleStructuredPlanOptions = {
   onProgress?: (stage: string) => void;
   /** When true, skip (platform, date) combinations that are already scheduled for this campaign. */
   skipExisting?: boolean;
+  /** Total posts per week to use as fallback when platform_allocation is empty. */
+  frequencyPerWeek?: number;
+  /** Platform keys to use as fallback when platform_allocation is empty. */
+  eligiblePlatforms?: string[];
 };
 
 export class ScheduleEligibilityError extends Error {
@@ -739,7 +756,7 @@ export async function scheduleStructuredPlan(
       )
     : useLegacy
     ? scheduleFromLegacy(plan.weeks, campaign, accountMap, campaignId, normalize)
-    : scheduleFromAllocation(plan.weeks, campaign, accountMap, campaignId, normalize, typeMapByPlatform);
+    : scheduleFromAllocation(plan.weeks, campaign, accountMap, campaignId, normalize, typeMapByPlatform, options?.eligiblePlatforms, options?.frequencyPerWeek);
 
   if (scheduledPosts.length === 0) {
     return {

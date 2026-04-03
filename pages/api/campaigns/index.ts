@@ -1,3 +1,4 @@
+
 // Handle GET/POST requests to /api/campaigns
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -115,7 +116,7 @@ const mapCampaignPlaybook = (campaign: any) => ({
     : null,
 });
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const companyIdRaw =
       (req.query.companyId as string | undefined) ||
@@ -642,5 +643,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default handler;

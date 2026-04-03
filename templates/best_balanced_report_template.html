@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Best Balanced Report</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    :root { --bg:#f2f6f7; --paper:#fff; --ink:#0b1324; --muted:#526071; --line:#d9e3ea; --teal:#0f766e; --teal-soft:#ecfeff; --blue:#2563eb; --slate:#eef2f7; }
+    body { font-family:Arial,sans-serif; background:linear-gradient(180deg,#f8fbfc 0%,var(--bg) 100%); color:var(--ink); padding:28px; max-width:1040px; margin:0 auto; line-height:1.5; }
+    h1,h2,h3,p,li,span,div { word-break:normal; overflow-wrap:break-word; hyphens:none; }
+    .frame { background:var(--paper); border:1px solid var(--line); border-radius:26px; box-shadow:0 20px 48px rgba(15,23,42,.08); overflow:hidden; }
+    .top { padding:34px; display:grid; grid-template-columns:1.2fr .8fr; gap:18px; background:linear-gradient(135deg,#fff 0%,#f4fbfb 100%); border-bottom:1px solid var(--line); }
+    .brandline { font-size:12px; text-transform:uppercase; letter-spacing:.12em; color:var(--teal); font-weight:800; margin-bottom:14px; }
+    .top h1 { font-size:34px; line-height:1.08; margin-bottom:12px; }
+    .top p { color:var(--muted); max-width:58ch; margin-bottom:18px; }
+    .tags { display:flex; flex-wrap:wrap; gap:10px; }
+    .tag { border-radius:999px; padding:8px 12px; background:var(--teal-soft); border:1px solid #99f6e4; color:#115e59; font-size:12px; font-weight:700; }
+    .score-panel { background:#0b1324; color:#fff; border-radius:24px; padding:24px; display:grid; grid-template-rows:auto auto 1fr; }
+    .score-panel em { font-style:normal; color:#94a3b8; text-transform:uppercase; font-size:11px; letter-spacing:.12em; }
+    .score-panel strong { font-size:68px; line-height:1; margin:12px 0; }
+    .score-panel p { color:#cbd5e1; font-size:14px; margin:0; }
+    .section { padding:28px 34px; border-bottom:1px solid var(--line); }
+    .section:last-child { border-bottom:0; }
+    .section h2 { font-size:22px; margin-bottom:16px; }
+    .two-up { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:18px; padding:18px; }
+    .card.visual { background:linear-gradient(180deg,#f8feff 0%,#fff 100%); }
+    .visual-stage { height:236px; border-radius:14px; background:linear-gradient(180deg,rgba(37,99,235,.08),rgba(15,118,110,.03)),repeating-linear-gradient(0deg,transparent 0,transparent 36px,rgba(148,163,184,.12) 36px,rgba(148,163,184,.12) 37px); border:1px dashed #93c5fd; margin-bottom:12px; position:relative; }
+    .visual-stage::after { content:"{{visual_title}}"; position:absolute; left:14px; top:14px; font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--blue); }
+    .card p,.stat p,.stack li span,.cta p { color:var(--muted); font-size:14px; max-width:50ch; }
+    .stat-row { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+    .stat { background:var(--slate); border-radius:16px; padding:16px; }
+    .stat span { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:8px; }
+    .stat strong { display:block; font-size:32px; margin-bottom:8px; }
+    .stack { list-style:none; display:grid; gap:12px; }
+    .stack li { background:var(--slate); border-radius:14px; padding:14px 16px; }
+    .stack li strong { display:block; margin-bottom:6px; font-size:14px; }
+    .stack li span { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+    .cta { background:linear-gradient(135deg,#0f766e 0%,#115e59 100%); color:#fff; border-radius:22px; padding:24px; display:flex; align-items:center; justify-content:space-between; gap:18px; }
+    .cta p { color:#d1fae5; margin-top:8px; max-width:46ch; }
+    .cta strong { background:#fff; color:#115e59; border-radius:999px; padding:11px 16px; white-space:nowrap; }
+    @media (max-width:860px) { body{padding:14px;} .top,.two-up,.stat-row{grid-template-columns:1fr;} .cta{flex-direction:column; align-items:flex-start;} }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <section class="top">
+      <div>
+        <div class="brandline">Best / Balanced</div>
+        <h1>{{company_name}} Growth Report</h1>
+        <p>{{executive_summary}}</p>
+        <div class="tags"><span class="tag">{{website_url}}</span><span class="tag">{{report_date}}</span><span class="tag">{{primary_focus}}</span></div>
+      </div>
+      <div class="score-panel"><em>Overall Readiness</em><strong>{{overall_score}}</strong><p>{{score_summary}}</p></div>
+    </section>
+    <section class="section">
+      <h2>Balanced View</h2>
+      <div class="stat-row">
+        <div class="stat"><span>SEO</span><strong>{{seo_score}}</strong><p>{{seo_summary}}</p></div>
+        <div class="stat"><span>Messaging</span><strong>{{messaging_score}}</strong><p>{{messaging_summary}}</p></div>
+        <div class="stat"><span>Conversion</span><strong>{{conversion_score}}</strong><p>{{conversion_summary}}</p></div>
+        <div class="stat"><span>Trust</span><strong>{{trust_score}}</strong><p>{{trust_summary}}</p></div>
+      </div>
+    </section>
+    <section class="section">
+      <h2>Visual + Insight</h2>
+      <div class="two-up">
+        <article class="card visual"><div class="visual-stage"></div><p>{{visual_summary}}</p></article>
+        <article class="card"><ul class="stack"><li><strong>{{insight_title_1}}</strong><span>{{insight_text_1}}</span></li><li><strong>{{insight_title_2}}</strong><span>{{insight_text_2}}</span></li><li><strong>{{insight_title_3}}</strong><span>{{insight_text_3}}</span></li></ul></article>
+      </div>
+    </section>
+    <section class="section"><h2>Priority Sequence</h2><ul class="stack"><li><strong>{{action_1_title}}</strong><span>{{action_1_text}}</span></li><li><strong>{{action_2_title}}</strong><span>{{action_2_text}}</span></li><li><strong>{{action_3_title}}</strong><span>{{action_3_text}}</span></li></ul></section>
+    <section class="section"><div class="cta"><div><h2>{{cta_title}}</h2><p>{{cta_text}}</p></div><strong>{{cta_label}}</strong></div></section>
+  </div>
+</body>
+</html>

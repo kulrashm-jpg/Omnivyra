@@ -194,6 +194,22 @@ function getSystemPrompt(context: string): string {
     - Campaign performance analysis
     
     Provide specific scheduling recommendations and optimizations.`,
+
+    'blog-card-creation': `You are an expert blog content strategist helping users refine and structure blog post ideas.
+    You help users:
+    - Define the core topic and focus of their blog post
+    - Determine the intent (awareness, authority, conversion, or retention)
+    - Identify the target audience
+    - Select the appropriate tone and writing style
+    - Create structured recommendations for high-quality blog content
+    
+    Ask clarifying questions to understand their blog vision deeply. Help them think through:
+    - What specific problem they're solving
+    - Who needs this information most
+    - What outcome they want (educate, establish expertise, drive action, or deepen engagement)
+    - The key insights or angles that make this unique
+    
+    Be conversational, insightful, and help them create compelling blog topics.`,
     
     'general': `You are an AI assistant for a content management platform.
     Help users with:
@@ -206,5 +222,12 @@ function getSystemPrompt(context: string): string {
     Be helpful, professional, and provide actionable advice.`
   };
 
-  return prompts[context as keyof typeof prompts] || prompts.general;
+  // Check if context starts with a key in prompts
+  for (const key of Object.keys(prompts)) {
+    if (context.startsWith(key)) {
+      return prompts[key as keyof typeof prompts];
+    }
+  }
+
+  return prompts.general;
 }

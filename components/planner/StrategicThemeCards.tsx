@@ -7,7 +7,7 @@ import { useRef, useState } from 'react';
 import {
   Palette, Calendar, LayoutList, CreditCard, ArrowRight, MessageSquare,
   Loader2, Sparkles, CheckCircle2, FileText, Zap,
-  Target, BookOpen, MousePointerClick,
+  Target, MousePointerClick,
 } from 'lucide-react';
 import { usePlannerSession, type CalendarPlanActivity } from './plannerSessionStore';
 import PlatformIcon from '../ui/PlatformIcon';
@@ -29,7 +29,6 @@ const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Satu
 const INTELLIGENCE_SOURCES = [
   { value: 'hybrid' as const, label: 'Hybrid Intelligence', desc: 'Trend signals + AI reasoning', icon: Zap, themeSource: 'both' as const },
   { value: 'api' as const, label: 'API Intelligence', desc: 'Platform signals & market data', icon: Sparkles, themeSource: 'trend' as const },
-  { value: 'blog' as const, label: 'Blog Intelligence', desc: 'Existing blogs + AI synthesis', icon: BookOpen, themeSource: 'blog' as const },
   { value: 'ai' as const, label: 'AI Strategic Engine', desc: 'Pure AI strategic planning', icon: FileText, themeSource: 'ai' as const },
 ] as const;
 

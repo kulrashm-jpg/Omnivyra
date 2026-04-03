@@ -1,3 +1,4 @@
+
 /**
  * GET  /api/team/self-joined?companyId=xxx
  *   Returns all users who self-joined the company (join_source = 'self_joined').

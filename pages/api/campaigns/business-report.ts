@@ -1,17 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
-import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
-import { getLatestPlatformExecutionPlan } from '../../../backend/db/platformExecutionStore';
-import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
-import { getCampaignMemory } from '../../../backend/services/campaignMemoryService';
-import { getLatestAnalyticsReport, getLatestLearningInsights } from '../../../backend/db/performanceStore';
-import { buildExecutiveReport } from '../../../backend/services/businessIntelligenceService';
-import { getProfile } from '../../../backend/services/companyProfileService';
-import { saveBusinessReport } from '../../../backend/db/forecastStore';
 import { supabase } from '../../../backend/db/supabaseClient';
-
-const resolvePlaybookReferenceId = (snapshot: any): string | null =>
-  snapshot?.virality_playbook_id ?? snapshot?.campaign?.virality_playbook_id ?? null;
+import { getDecisionReportView } from '../../../backend/services/decisionReportService';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
+import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
 
 const fetchPlaybookContext = async (companyId: string, playbookId: string | null) => {
   if (!playbookId) return null;
@@ -26,55 +17,37 @@ const fetchPlaybookContext = async (companyId: string, playbookId: string | null
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { companyId, campaignId, costInputs, performanceMetrics } = req.body || {};
+    const companyId = typeof req.query.companyId === 'string' ? req.query.companyId.trim() : '';
+    const campaignId = typeof req.query.campaignId === 'string' ? req.query.campaignId.trim() : '';
     if (!companyId || !campaignId) {
       return res.status(400).json({ error: 'companyId and campaignId are required' });
     }
 
-    const campaignVersion = await getLatestApprovedCampaignVersion(companyId, campaignId);
-    if (!campaignVersion?.campaign_snapshot) {
-      return res.status(404).json({ error: 'Campaign plan not found' });
-    }
-    console.debug('Approved strategy used for analytics', {
-      campaignId,
-      companyId,
-      versionId: campaignVersion?.id,
-      status: campaignVersion?.status,
-    });
-
-    const platformPlan = await getLatestPlatformExecutionPlan({ companyId, campaignId, weekNumber: 1 });
-    const assets = await listAssetsWithLatestContent({ campaignId });
-    const trends = await getTrendSnapshots(companyId, campaignId);
-    const memory = await getCampaignMemory({ companyId, campaignId });
-    const analytics = await getLatestAnalyticsReport(companyId, campaignId);
-    const learning = await getLatestLearningInsights(companyId, campaignId);
-
-    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
-    const report = await buildExecutiveReport({
+    const companyContext = await requireCompanyContext({
+      req,
+      res,
       companyId,
       campaignId,
-      companyProfile: profile ?? {},
-      campaignPlan: campaignVersion.campaign_snapshot,
-      platformExecutionPlan: platformPlan?.plan_json ?? null,
-      contentAssets: assets,
-      trendsUsed: trends.flatMap((snap) => snap.snapshot?.emerging_trends ?? []).map((t: any) => t.topic),
-      campaignMemory: memory,
-      analyticsHistory: analytics?.report_json ?? null,
-      performanceMetrics,
-      costInputs,
-      learningInsights: learning?.insights_json ?? null,
+      requireCampaignId: false,
     });
+    if (!companyContext) return;
 
-    await saveBusinessReport({ campaignId, report });
-    console.log('BUSINESS REPORT CREATED', { campaignId });
-
-    const playbookReferenceId = resolvePlaybookReferenceId(campaignVersion.campaign_snapshot);
+    const { data: versionRow } = await supabase
+      .from('campaign_versions')
+      .select('campaign_snapshot')
+      .eq('campaign_id', campaignId)
+      .eq('company_id', companyId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const snapshot = versionRow?.campaign_snapshot as { virality_playbook_id?: string; campaign?: { virality_playbook_id?: string } } | null;
+    const playbookReferenceId = snapshot?.virality_playbook_id ?? snapshot?.campaign?.virality_playbook_id ?? null;
     const playbookContext = await fetchPlaybookContext(companyId, playbookReferenceId);
 
     let campaignOrigin: string | null = null;
@@ -87,12 +60,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       campaignOrigin = String(campRow.origin_source).trim() || null;
     }
 
+    const reportView = await runInApiReadContext('businessReportApi', async () =>
+      getDecisionReportView({
+        companyId: companyContext.companyId,
+        reportTier: 'deep',
+        entityType: 'campaign',
+        entityId: campaignId,
+        sourceService: 'businessIntelligenceService',
+      })
+    );
+
     return res.status(200).json({
-      ...report,
+      ...reportView,
       campaign_origin: campaignOrigin ?? 'manual',
-      // Playbook fields are for interpretation/reporting only.
-      // Campaign KPIs are evaluated independently.
-      // No downstream system should infer execution behavior from playbook data.
       playbook_id: playbookContext?.id ?? playbookReferenceId ?? null,
       playbook_name: playbookContext?.name ?? null,
       playbook_objective: playbookContext?.objective ?? null,

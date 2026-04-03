@@ -1,3 +1,4 @@
+
 /**
  * GET  /api/admin/intelligence/scheduler-config
  *   Returns all global intelligence job configs + recent execution logs per job.

@@ -1,3 +1,4 @@
+
 /**
  * Community Engagement API
  * Returns engagement signals from engagement_signals.
@@ -6,6 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -19,6 +21,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const postId = (req.query.postId as string)?.trim();
     const platform = (req.query.platform as string)?.trim();
     const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? 50), 10) || 50));
+
+    if (companyId) {
+      const companyContext = await requireCompanyContext({ req, res, companyId });
+      if (!companyContext) return;
+    }
 
     let query = supabase
       .from('engagement_signals')

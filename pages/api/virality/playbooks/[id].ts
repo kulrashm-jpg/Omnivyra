@@ -11,7 +11,7 @@ import {
 const canManagePlaybooks = (role: Role | 'SUPER_ADMIN') =>
   role === 'SUPER_ADMIN' || role === Role.COMPANY_ADMIN;
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Playbook ID is required' });
@@ -94,5 +94,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default handler;

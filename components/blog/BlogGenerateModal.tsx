@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import type { BlogGenerationOutput, BlogAngle, AngleType } from '../../lib/blog/blogGenerationEngine';
 import type { ClarificationQuestion } from '../../lib/blog/blogClarificationEngine';
-import type { HookAssessment } from '../../pages/api/admin/blog/generate';
+import type { HookAssessment } from '../../lib/blog/hookAssessment';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -43,6 +43,12 @@ interface Props {
   clusters?:   string[];
   blogs?:      SeriesBlog[];
   industry?:   string | null;   // company industry — powers Angle × Industry Matrix
+  initialTopic?: string;
+  initialTargetWords?: string;
+  initialIntent?: 'awareness' | 'authority' | 'conversion' | 'retention';
+  initialTone?: string;
+  initialRelatedBlogs?: string[];
+  baseAnswers?: Record<string, string>;
   onClose:     () => void;
   onGenerated: (
     output:         BlogGenerationOutput & { content_blocks?: unknown[] },
@@ -94,11 +100,25 @@ function stepProgress(step: Step, hasClarify: boolean): number {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function BlogGenerateModal({ companyId, clusters = [], blogs = [], industry, onClose, onGenerated }: Props) {
+export default function BlogGenerateModal({
+  companyId,
+  clusters = [],
+  blogs = [],
+  industry,
+  initialTopic,
+  initialTargetWords,
+  initialIntent,
+  initialTone,
+  initialRelatedBlogs,
+  baseAnswers,
+  onClose,
+  onGenerated,
+}: Props) {
   // Step 1 state
-  const [topic,          setTopic]          = useState('');
+  const [topic,          setTopic]          = useState(initialTopic ?? '');
   const [cluster,        setCluster]        = useState('');
   const [intent,         setIntent]         = useState('');
+  const [targetWords,    setTargetWords]    = useState(initialTargetWords || '1200');
   const [seriesMode,     setSeriesMode]     = useState(false);
   const [selectedBlogIds, setSelectedBlogIds] = useState<string[]>([]);
 
@@ -116,6 +136,25 @@ export default function BlogGenerateModal({ companyId, clusters = [], blogs = []
   const [step,         setStep]         = useState<Step>('theme');
   const [hadClarify,   setHadClarify]   = useState(false);
   const [error,        setError]        = useState('');
+
+  // Keep topic in sync when caller changes initialTopic (e.g. route query prefill)
+  React.useEffect(() => {
+    if (typeof initialTopic === 'string' && initialTopic.trim()) {
+      setTopic(initialTopic.trim());
+    }
+  }, [initialTopic]);
+
+  React.useEffect(() => {
+    if (initialIntent) {
+      setIntent(initialIntent);
+    }
+  }, [initialIntent]);
+
+  React.useEffect(() => {
+    if (initialTargetWords && initialTargetWords.trim()) {
+      setTargetWords(initialTargetWords.trim());
+    }
+  }, [initialTargetWords]);
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -146,14 +185,24 @@ export default function BlogGenerateModal({ companyId, clusters = [], blogs = []
   }
 
   function buildBody(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    const mergedAnswers = {
+      ...(baseAnswers || {}),
+      ...answers,
+      ...(targetWords ? { target_word_count: targetWords } : {}),
+    };
+
     const body: Record<string, unknown> = {
       company_id: companyId,
       topic:      topic.trim(),
     };
     if (cluster)                    body.cluster        = cluster;
     if (intent)                     body.intent         = intent;
-    if (Object.keys(answers).length) body.answers       = answers;
+    if (Object.keys(mergedAnswers).length) body.answers = mergedAnswers;
+    if (initialTone)                body.tone           = initialTone;
     if (selectedBlogIds.length)     body.series_blog_ids = selectedBlogIds;
+    if (selectedBlogIds.length === 0 && (initialRelatedBlogs?.length || 0) > 0) {
+      body.related_blogs = initialRelatedBlogs;
+    }
     if (seriesMode && selectedBlogIds.length) {
       const titles = selectedBlogIds
         .map(id => publishedBlogs.find(b => b.id === id)?.title)
@@ -183,8 +232,9 @@ export default function BlogGenerateModal({ companyId, clusters = [], blogs = []
 
     try {
       const [res] = await Promise.all([
-        fetch('/api/admin/blog/generate', {
+        fetch('/api/blogs/generate', {
           method:  'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify(buildBody({ mode: 'angles' })),
         }),
@@ -215,8 +265,9 @@ export default function BlogGenerateModal({ companyId, clusters = [], blogs = []
 
     try {
       const [res] = await Promise.all([
-        fetch('/api/admin/blog/generate', {
+        fetch('/api/blogs/generate', {
           method:  'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify(buildBody({ mode: 'angles' })),
         }),
@@ -241,8 +292,9 @@ export default function BlogGenerateModal({ companyId, clusters = [], blogs = []
     setStep('generating');
 
     try {
-      const res  = await fetch('/api/admin/blog/generate', {
+      const res  = await fetch('/api/blogs/generate', {
         method:  'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(buildBody({ mode: 'full', selected_angle: selectedAngle })),
       });
@@ -358,6 +410,24 @@ export default function BlogGenerateModal({ companyId, clusters = [], blogs = []
                   {INTENT_OPTIONS.map(o => (
                     <option key={o.value} value={o.value}>{o.label}</option>
                   ))}
+                </select>
+              </div>
+
+              {/* Target length */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+                  Target Length
+                  <span className="text-gray-400 font-normal ml-1">(word count)</span>
+                </label>
+                <select
+                  value={targetWords}
+                  onChange={e => setTargetWords(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                >
+                  <option value="800">~800 words (short)</option>
+                  <option value="1200">~1200 words (standard)</option>
+                  <option value="1600">~1600 words (deep-dive)</option>
+                  <option value="2000">~2000 words (pillar content)</option>
                 </select>
               </div>
 

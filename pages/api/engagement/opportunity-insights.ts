@@ -1,3 +1,4 @@
+
 /**
  * GET /api/engagement/opportunity-insights
  * Returns opportunity insights: top performing type, highest approval type, topics generating campaigns.

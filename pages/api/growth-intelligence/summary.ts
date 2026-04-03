@@ -8,7 +8,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
-import { getGrowthIntelligenceSummary } from '../../../backend/services/growthIntelligence';
+import { getDecisionReportView } from '../../../backend/services/decisionReportService';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
+import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -24,8 +26,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = (req.query.campaignId as string)?.trim?.() || undefined;
 
   try {
-    const summary = await getGrowthIntelligenceSummary(supabase, companyId, campaignId);
-    return res.status(200).json({ success: true, data: summary });
+    const companyContext = await requireCompanyContext({ req, res, companyId });
+    if (!companyContext) return;
+
+    const reportView = await runInApiReadContext('growthSummaryApi', async () =>
+      getDecisionReportView({
+        companyId: companyContext.companyId,
+        reportTier: 'growth',
+        entityType: campaignId ? 'campaign' : 'global',
+        entityId: campaignId ?? null,
+        sourceService: 'growthIntelligenceService',
+      })
+    );
+    return res.status(200).json({ success: true, data: reportView });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to fetch growth summary';
     return res.status(500).json({ success: false, error: message });

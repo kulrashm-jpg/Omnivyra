@@ -1,3 +1,4 @@
+
 /**
  * POST /api/planner/generate-themes
  * Generates strategic themes for the Campaign Planner.
@@ -11,22 +12,7 @@ import { generateRichThemesForCampaignWeeks } from '../../../backend/services/st
 import { supabase } from '../../../backend/db/supabaseClient';
 import { buildPlannerStrategicCard, type PlannerStrategicSourceMode } from '../../../lib/plannerStrategicCard';
 import type { PlannerExecutionHandoff } from '../../../lib/plannerExecutionHandoff';
-
-type IdeaSpine = {
-  title?: string | null;
-  refined_title?: string | null;
-  description?: string | null;
-  refined_description?: string | null;
-};
-
-type StrategyContext = {
-  duration_weeks?: number;
-  campaign_goal?: string;
-  target_audience?: string | string[];
-  key_message?: string;
-  selected_aspects?: string[];
-  selected_offerings?: string[];
-};
+import type { IdeaSpine, StrategyContext } from '../../../components/planner/plannerSessionStore';
 
 type TrendContext = {
   recommendation_id?: string | null;
@@ -45,7 +31,7 @@ function toList(value: string | string[] | null | undefined): string[] {
     .filter(Boolean);
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -197,5 +183,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default handler;

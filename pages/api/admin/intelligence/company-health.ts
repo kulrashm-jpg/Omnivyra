@@ -1,3 +1,4 @@
+
 /**
  * GET /api/admin/intelligence/company-health
  *

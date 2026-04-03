@@ -37,6 +37,7 @@
 import axios from 'axios';
 import { PublishResult } from './platformAdapter';
 import { formatContentForPlatform } from '../utils/contentFormatter';
+import { config } from '@/config';
 
 interface ScheduledPost {
   id: string;
@@ -123,7 +124,7 @@ export async function publishToSpotify(
   token: Token
 ): Promise<PublishResult> {
   // Use mock mode if enabled
-  if (process.env.USE_MOCK_PLATFORMS === 'true') {
+  if (config.USE_MOCK_PLATFORMS === true) {
     console.log('🧪 MOCK MODE: Simulating Spotify playlist creation');
     return {
       success: true,

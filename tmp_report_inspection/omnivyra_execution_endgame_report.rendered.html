@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+  <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Omnivyra Execution Endgame</title>
+    <style>
+      @page { size: A4; margin: 14mm; }
+      * { box-sizing:border-box; margin:0; padding:0; }
+      :root { --bg:#f1f6fd; --paper:#fff; --line:#d9e4f0; --ink:#0f172a; --muted:#61708a; --blue:#4f7cff; --blue-soft:#eef4ff; --green:#16a34a; --green-soft:#ecfdf3; --red:#ef4444; --red-soft:#fff1f2; --amber:#f59e0b; --amber-soft:#fff7e8; }
+      html,body { background:var(--bg); color:var(--ink); font-family:"Segoe UI",Arial,sans-serif; line-height:1.42; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .report { width:760px; margin:0 auto; padding:18px 0 28px; }
+      .panel,.metric,.step,.opportunity { break-inside:avoid-page; page-break-inside:avoid; }
+      .panel { background:var(--paper); border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 24px rgba(15,23,42,.05); padding:16px; margin-bottom:12px; }
+      h1,h2 { font-size:20px; margin-bottom:10px; }
+      .sub { font-size:12px; color:var(--muted); margin-bottom:10px; }
+      .metric-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
+      .metric { border:1px solid var(--line); border-radius:12px; background:#fff; padding:12px; }
+      .metric strong { display:block; font-size:11px; color:var(--muted); text-transform:uppercase; margin-bottom:8px; }
+      .metric .value { font-size:28px; line-height:1; font-weight:800; color:var(--blue); margin-bottom:8px; }
+      .metric .bar { height:7px; border-radius:999px; background:#e8edf5; overflow:hidden; margin-bottom:6px; }
+      .metric .bar span { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,#67d36f 0%,#22c55e 100%); }
+      .metric p { font-size:12px; color:var(--muted); }
+      .opportunities,.steps { display:grid; gap:10px; }
+      .opportunity { border:1px solid var(--line); border-radius:12px; padding:12px; background:#fff; }
+      .opportunity.warn { background:var(--amber-soft); border-color:#f3d18a; }
+      .opportunity.bad { background:var(--red-soft); border-color:#f1b0b8; }
+      .opportunity h3,.step h3 { font-size:12px; margin-bottom:6px; }
+      .opportunity p,.step p { font-size:12px; margin-bottom:6px; }
+      .tag,.pill { display:inline-block; font-size:10px; font-weight:700; padding:5px 8px; border-radius:999px; border:1px solid var(--line); background:#fff; color:var(--muted); }
+      .step { border:1px solid var(--line); border-radius:12px; background:white; padding:14px; display:grid; grid-template-columns:24px 1fr; gap:10px; }
+      .step .index { width:20px; height:20px; border-radius:50%; background:var(--blue-soft); color:var(--blue); font-size:11px; display:flex; align-items:center; justify-content:center; font-weight:800; margin-top:2px; }
+      .step .highlight { background:var(--green-soft); border-radius:8px; padding:8px 10px; color:#166534; font-size:11px; margin:6px 0; }
+      .step .meta { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+      .pill.blue { background:var(--blue-soft); color:var(--blue); border-color:#ced8ff; }
+      .pill.green { background:var(--green-soft); color:var(--green); border-color:#bbe8c6; }
+      .pill.red { background:var(--red-soft); color:var(--red); border-color:#f1b0b8; }
+      .cta { text-align:center; border:1px solid var(--line); border-radius:16px; background:#fbfdff; padding:18px; }
+      .cta h3 { font-size:18px; margin-bottom:6px; }
+      .cta p { font-size:12px; color:var(--muted); margin-bottom:10px; }
+      .button { display:inline-block; background:var(--blue); color:white; border-radius:10px; padding:10px 14px; font-size:12px; font-weight:700; }
+    </style>
+  </head>
+  <body>
+    <div class="report">
+      <section class="panel">
+        <h1>Omnivyra Execution Endgame</h1>
+        <div class="sub">Omnivyra turns fragmented marketing work into one operating system for readiness, strategy, creation, publishing, and optimization. The report should show how clearly that system is communicated and how effectively the site converts product understanding into action.</div>
+        <div class="metric-grid">
+          
+            <div class="metric">
+              <strong>Request Context</strong>
+              <div class="value">0</div>
+              <div class="bar"><span style="width: 0%"></span></div>
+              <p>Tracks how much demand context is available for this report run.</p>
+            </div>
+          
+            <div class="metric">
+              <strong>Visibility</strong>
+              <div class="value">44</div>
+              <div class="bar"><span style="width: 44%"></span></div>
+              <p>Search funnel evidence is limited because impressions and clicks are still sparse in this run.</p>
+            </div>
+          
+            <div class="metric">
+              <strong>Content Strength</strong>
+              <div class="value">30</div>
+              <div class="bar"><span style="width: 30%"></span></div>
+              <p>Measures how well pages answer buyer questions with depth and clarity.</p>
+            </div>
+          
+            <div class="metric">
+              <strong>Authority</strong>
+              <div class="value">18</div>
+              <div class="bar"><span style="width: 18%"></span></div>
+              <p>Reflects how credible and established the brand looks in market context.</p>
+            </div>
+          
+        </div>
+      </section>
+      
+        <section class="panel">
+          <h2>Improvement Opportunities</h2>
+          <div class="opportunities">
+            
+              <div class="opportunity warn">
+                <h3>Build comparison and decision pages aligned with Omnivyra&#39;s positioning in SaaS / Software in Global.</h3>
+                <p>Do this first because it combines meaningful upside with lower effort.</p>
+                <span class="tag">PLAN NEXT</span>
+              </div>
+            
+              <div class="opportunity bad">
+                <h3>Execute the highest-impact action first.</h3>
+                <p>Prioritize this because it has the strongest near-term commercial leverage.</p>
+                <span class="tag">ACT NOW</span>
+              </div>
+            
+          </div>
+        </section>
+      
+      
+        <section class="panel">
+          <h2>Your Next Steps</h2>
+          <div class="steps">
+            
+              <div class="step">
+                <div class="index">1</div>
+                <div>
+                  <h3>Build comparison and decision pages aligned with Omnivyra&#39;s positioning in SaaS / Software in Global.</h3>
+                  <p>Do this first because it combines meaningful upside with lower effort.</p>
+                  <div class="highlight">Near-term upside should become easier to discover and easier to trust for this demand area in a saturated market.</div>
+                  <div class="meta">
+                    <span class="pill blue">QUICK_WIN</span><span class="pill green">easier discovery and trust</span><span class="pill red">LOW</span>
+                  </div>
+                </div>
+              </div>
+            
+              <div class="step">
+                <div class="index">2</div>
+                <div>
+                  <h3>Execute the highest-impact action first.</h3>
+                  <p>Prioritize this because it has the strongest near-term commercial leverage.</p>
+                  <div class="highlight">Commercial upside: buyers should understand faster why Omnivyra is credible and different, improving trust and conversion readiness.</div>
+                  <div class="meta">
+                    <span class="pill blue">HIGH_IMPACT</span><span class="pill green">better conversion readiness</span><span class="pill red">MEDIUM</span>
+                  </div>
+                </div>
+              </div>
+            
+          </div>
+        </section>
+      
+      <section class="panel"><div class="cta"><h3>Ready to execute?</h3><p>Tighten the story around Omnivyra as the system that helps teams understand, plan, execute, and improve marketing from one place. The report should end by reinforcing that operating-system narrative, not just isolated SEO tasks.</p><span class="button">Act on top priority</span></div></section>
+    </div>
+  </body>
+  </html>

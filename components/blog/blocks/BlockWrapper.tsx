@@ -2,6 +2,8 @@
 
 import React, { useState } from 'react';
 import { ChevronUp, ChevronDown, Trash2, Copy, GripVertical, ChevronDown as Collapse } from 'lucide-react';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type { ContentBlock } from '../../../lib/blog/blockTypes';
 import { BLOCK_LABELS } from '../../../lib/blog/blockTypes';
 
@@ -62,17 +64,45 @@ export function BlockWrapper({
   const [collapsed, setCollapsed] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: block.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+    zIndex: isDragging ? 50 : undefined,
+  };
+
   const handleDelete = () => {
     if (!confirmDelete) { setConfirmDelete(true); return; }
     onDelete();
   };
 
   return (
-    <div className="group relative rounded-xl border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md">
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="group relative rounded-xl border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md"
+    >
       {/* Header bar */}
       <div className="flex items-center gap-2 border-b border-gray-100 px-3 py-2 bg-gray-50 rounded-t-xl">
-        {/* Grip handle (visual only) */}
-        <GripVertical className="h-4 w-4 text-gray-300 shrink-0 cursor-grab" />
+        {/* Grip handle — drag handle only, no default button behaviour */}
+        <button
+          type="button"
+          className="cursor-grab touch-none rounded p-0.5 text-gray-300 hover:text-gray-500 hover:bg-gray-200 focus:outline-none active:cursor-grabbing"
+          title="Drag to reorder"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
 
         {/* Block type badge */}
         <button

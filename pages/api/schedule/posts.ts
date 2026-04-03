@@ -1,3 +1,4 @@
+
 // LEGACY ENGINE - DO NOT EXTEND
 // Scheduled for removal after DB-platform intelligence cutover.
 // API Endpoints for Scheduling and Posting
@@ -92,26 +93,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(405).json({ error: 'Method not allowed' });
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

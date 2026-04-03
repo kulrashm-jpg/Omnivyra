@@ -1,3 +1,4 @@
+
 /**
  * GET /api/governance/company-analytics
  * Stage 22 — Company-level governance analytics. Read-only.

@@ -1,3 +1,4 @@
+
 /**
  * Public endpoint — no auth required.
  * Returns minimal form config for the embeddable JS snippet.

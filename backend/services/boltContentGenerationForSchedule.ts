@@ -95,6 +95,25 @@ export type GenerateContentProgressOptions = {
   onPhase?: (phase: 'creating' | 'repurposing') => void;
 };
 
+/** Text-based content types that should create a blog entry in the `blogs` table. */
+const BLOG_CONTENT_TYPES = new Set(['article', 'newsletter', 'white_paper', 'short_story', 'blog']);
+
+function isBlogContentType(contentType: string): boolean {
+  return BLOG_CONTENT_TYPES.has(String(contentType || '').toLowerCase().trim());
+}
+
+/** Build a unique slug from a topic title with a short timestamp suffix. */
+function buildBlogSlug(topic: string): string {
+  const base = topic
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 70) || 'article';
+  return `${base}-${Date.now().toString(36)}`;
+}
+
 /** Process up to N topic groups in parallel to speed up BOLT content generation. */
 const CONTENT_GEN_CONCURRENCY = 2;
 
@@ -111,11 +130,13 @@ export async function generateContentForDailyPlans(
   const contentMap = new Map<string, string>();
   if (!campaignId || !Array.isArray(dailyPlans) || dailyPlans.length === 0) return contentMap;
 
-  // Resolve company_id for cost tracking — allows generation to proceed on paid plans
+  // Resolve company_id and user_id — needed for blog creation and cost tracking
   let campaignCompanyId: string | null = null;
+  let campaignUserId: string | null = null;
   try {
-    const { data: campaign } = await supabase.from('campaigns').select('company_id').eq('id', campaignId).maybeSingle();
+    const { data: campaign } = await supabase.from('campaigns').select('company_id, user_id').eq('id', campaignId).maybeSingle();
     campaignCompanyId = campaign?.company_id ?? null;
+    campaignUserId = (campaign as any)?.user_id ?? null;
   } catch { /* non-fatal; generation continues without company_id */ }
 
   const groups = groupPlansByTopicAndWeek(dailyPlans);
@@ -126,8 +147,9 @@ export async function generateContentForDailyPlans(
   async function processGroup(rows: DailyPlanRow[]): Promise<{ id: string; content: string }[]> {
     if (rows.length === 0) return [];
     const first = rows[0]!;
-    const parsed = tryParseJson<Record<string, unknown>>(first.content);
-    if (!parsed || typeof parsed !== 'object') return [];
+    // content may be a JSON object (enriched from BOLT planning) or a plain string/null —
+    // fall back to an empty object so we can still generate from row-level data (topic, title).
+    const parsed = tryParseJson<Record<string, unknown>>(first.content) ?? {};
 
     const platformTargets = rows.map((r) => ({
       platform: String(r.platform || '').trim().toLowerCase(),
@@ -135,11 +157,18 @@ export async function generateContentForDailyPlans(
     })).filter((t) => t.platform);
     if (platformTargets.length === 0) return [];
 
-    const item = { ...buildItemFromEnriched(parsed, platformTargets), company_id: campaignCompanyId } as unknown as Parameters<typeof generateMasterContentFromIntent>[0];
+    // Merge row-level topic/title into parsed so buildItemFromEnriched can always resolve a topic.
+    const enriched: Record<string, unknown> = {
+      topic: first.topic || first.title || '',
+      title: first.title || first.topic || '',
+      ...parsed,
+    };
+
+    const item = { ...buildItemFromEnriched(enriched, platformTargets), company_id: campaignCompanyId } as unknown as Parameters<typeof generateMasterContentFromIntent>[0];
 
     // Use existing generated_content as master if available — avoids a redundant LLM call
     // and ensures repurposing is based on the actual stored content, not a regenerated draft.
-    const existingContent = String(parsed.generated_content ?? '').trim();
+    const existingContent = String(enriched.generated_content ?? '').trim();
     const isValidExisting =
       existingContent.length > 0 &&
       !existingContent.startsWith('[PLATFORM ADAPTATION FAILED]') &&
@@ -149,7 +178,7 @@ export async function generateContentForDailyPlans(
 
     let master: { id: string; generated_at: string; content: string; generation_status: string; generation_source: 'ai' };
     if (isValidExisting) {
-      const topicId = String(parsed.execution_id ?? parsed.id ?? first.id ?? 'topic').slice(0, 40);
+      const topicId = String(enriched.execution_id ?? enriched.id ?? first.id ?? 'topic').slice(0, 40);
       master = {
         id: `master-${topicId}`,
         generated_at: new Date().toISOString(),
@@ -176,20 +205,58 @@ export async function generateContentForDailyPlans(
       }
     }
 
+    // Save blog entry if any row in this topic group has a long-form content type.
+    // This creates the canonical article in the blogs workspace so users can edit/review it.
+    const masterIsValid =
+      master.content &&
+      !master.content.startsWith('[MASTER GENERATION FAILED') &&
+      !master.content.startsWith('[MEDIA BLUEPRINT]') &&
+      !master.content.startsWith('[MASTER CONTENT PLACEHOLDER]');
+
+    const hasBlogRow = rows.some((r) => isBlogContentType(r.content_type));
+    if (hasBlogRow && masterIsValid && campaignCompanyId && campaignUserId) {
+      try {
+        const blogTitle = String(enriched.topicTitle ?? enriched.topic ?? enriched.title ?? first.topic ?? first.title ?? '').trim() || 'Untitled Article';
+        const datePart = String(first.date ?? '').slice(0, 10);
+        const scheduledDate = datePart
+          ? new Date(`${datePart}T09:00:00Z`).toISOString()
+          : new Date().toISOString();
+        const blogSlug = buildBlogSlug(blogTitle);
+        const contentTypeSample = rows.find((r) => isBlogContentType(r.content_type))?.content_type ?? 'article';
+        const category = contentTypeSample.replace(/_/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+
+        const { error: blogInsertError } = await supabase.from('blogs').insert({
+          company_id: campaignCompanyId,
+          title: blogTitle,
+          slug: blogSlug,
+          content_markdown: master.content,
+          status: 'scheduled',
+          published_at: scheduledDate,
+          created_by: campaignUserId,
+          category,
+        });
+        if (blogInsertError) {
+          console.warn('[bolt-content-gen] Blog insert failed for topic', blogTitle, blogInsertError.message);
+        }
+      } catch (blogErr) {
+        console.warn('[bolt-content-gen] Blog creation error:', (blogErr as Error)?.message);
+      }
+    }
+
     const updates: { id: string; content: string }[] = [];
     for (const row of rows) {
       const platform = String(row.platform || '').trim().toLowerCase();
       const contentType = String(row.content_type || 'post').trim().toLowerCase();
       const key = `${platform}::${contentType}`;
-      // Prefer the platform-adapted variant; fall back to existing content rather than leaving empty
-      const content = variantByKey.get(key) ?? (isValidExisting ? existingContent : undefined);
+      // Prefer the platform-adapted variant; fall back to master content so calendar always shows real text
+      const content = variantByKey.get(key) ?? (masterIsValid ? master.content : undefined) ?? (isValidExisting ? existingContent : undefined);
       if (content) {
         contentMap.set(row.id, content);
-        const p = tryParseJson<Record<string, unknown>>(row.content);
-        if (p && typeof p === 'object') {
-          const updated = { ...p, generated_content: content };
-          updates.push({ id: row.id, content: JSON.stringify(updated) });
-        }
+        // Preserve existing JSON envelope if present; otherwise create a minimal one
+        const p = tryParseJson<Record<string, unknown>>(row.content) ?? { topic: row.topic || row.title || '' };
+        const updated = { ...p, generated_content: content };
+        updates.push({ id: row.id, content: JSON.stringify(updated) });
       }
     }
     return updates;

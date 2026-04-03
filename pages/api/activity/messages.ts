@@ -1,3 +1,4 @@
+
 /**
  * Activity Chat API
  * GET /api/activity/messages?activityId=&campaignId=

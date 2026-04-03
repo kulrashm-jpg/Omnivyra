@@ -1,3 +1,4 @@
+
 /**
  * POST /api/engagement/patterns
  * Create a response pattern (structure only, not fixed text).

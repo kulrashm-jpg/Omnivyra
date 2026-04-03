@@ -8,11 +8,14 @@
  */
 
 import os from 'os';
-import { getWorker, usageProtectionReady } from './bullmqClient';
+import { getWorker, getUsageProtectionReady } from './bullmqClient';
 import { processPublishJob } from './jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from './jobProcessors/engagementPollingProcessor';
 import { processBoltJob } from './jobProcessors/boltProcessor';
+import { processContentGenerationJob } from './jobProcessors/contentGenerationProcessor';
+import { processCreatorContentJob } from './jobProcessors/creatorContentProcessor';
 import { getIntelligencePollingWorker } from '../workers/intelligencePollingWorker';
+import { initializeContentQueues, startContentWorkers, startCreatorContentWorkers } from './contentGenerationQueues';
 
 let publishWorker: ReturnType<typeof getWorker>;
 let boltWorker: ReturnType<typeof getWorker>;
@@ -35,7 +38,16 @@ export async function startWorkers(): Promise<void> {
 
   // BUG#21 fix: await first usage-protection poll before registering workers.
   // This ensures _level is known and protection is enforced from job #1.
-  await usageProtectionReady;
+  await getUsageProtectionReady();
+
+  // Initialize content generation queues (pre-flight checks, rate limiting, backpressure)
+  await initializeContentQueues();
+
+  // Start content generation workers (unified processor for all text content types)
+  await startContentWorkers(processContentGenerationJob);
+
+  // Start creator content workers (video, carousel, story)
+  await startCreatorContentWorkers(processCreatorContentJob);
 
   publishWorker = getWorker('publish', processPublishJob);
   boltWorker = getWorker('bolt-execution', processBoltJob, { concurrency: boltConcurrency });
@@ -55,6 +67,7 @@ export async function startWorkers(): Promise<void> {
   console.log('[workers] engagement polling worker started');
   console.log('[workers] bolt-execution worker started');
   console.log('[workers] intelligence polling worker started');
+  console.log('[workers] content generation workers started (blog, post, whitepaper, story, engagement)');
 }
 
 // Standalone: run when file is executed directly

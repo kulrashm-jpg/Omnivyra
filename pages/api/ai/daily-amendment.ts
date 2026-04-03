@@ -67,9 +67,3 @@ Format your response as a structured amendment that can be applied to the daily 
     });
   }
 }
-
-
-
-
-
-

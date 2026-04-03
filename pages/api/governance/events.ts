@@ -1,3 +1,4 @@
+
 /**
  * GET /api/governance/events
  * Governance Events Timeline — read-only. Stage 10 Phase 4.

@@ -1,11 +1,13 @@
 jest.mock('../../services/aiGateway', () => ({
   generateCampaignPlan: jest.fn(),
+  runCompletionWithOperation: jest.fn(),
 }));
 
 import { runAutopilotForWeek } from '../../services/autopilotExecutionPipeline';
-import { generateCampaignPlan } from '../../services/aiGateway';
+import { generateCampaignPlan, runCompletionWithOperation } from '../../services/aiGateway';
 
 const mockedGenerateCampaignPlan = generateCampaignPlan as jest.MockedFunction<typeof generateCampaignPlan>;
+const mockedRunCompletionWithOperation = runCompletionWithOperation as jest.MockedFunction<typeof runCompletionWithOperation>;
 
 describe('autopilotExecutionPipeline', () => {
   beforeEach(() => {
@@ -17,6 +19,16 @@ describe('autopilotExecutionPipeline', () => {
         model: 'gpt-4o-mini',
         token_usage: null,
         reasoning_trace_id: 'autopilot-test',
+      },
+    });
+    mockedRunCompletionWithOperation.mockReset();
+    mockedRunCompletionWithOperation.mockResolvedValue({
+      output: 'Variant content for scheduling.',
+      metadata: {
+        provider: 'direct-openai',
+        model: 'gpt-4o-mini',
+        token_usage: null,
+        reasoning_trace_id: 'autopilot-variant-test',
       },
     });
   });

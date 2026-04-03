@@ -601,19 +601,33 @@ async function loadRecentMarketSignals(
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const rawSignals: MarketSignal[] = [];
 
-  const { data: clusterRows, error: clusterError } = await supabase
-    .from('signal_clusters')
-    .select('cluster_id, cluster_topic, created_at')
-    .gte('created_at', sevenDaysAgo)
-    .limit(20);
+  let clusterRows: { cluster_id: string; cluster_topic: string; created_at?: string }[] | null = null;
+  let clusterError: unknown = null;
+  try {
+    const result = await supabase
+      .from('signal_clusters')
+      .select('cluster_id, cluster_topic, created_at')
+      .gte('created_at', sevenDaysAgo)
+      .limit(20);
+    clusterRows = result.data as typeof clusterRows;
+    clusterError = result.error;
+  } catch {
+    clusterError = true; // treat as empty — falls through to signal_intelligence fallback
+  }
 
   if (clusterError || !clusterRows?.length) {
-    const { data: siRows } = await supabase
-      .from('signal_intelligence')
-      .select('topic, momentum_score, created_at')
-      .gte('created_at', sevenDaysAgo)
-      .order('momentum_score', { ascending: false, nullsFirst: false })
-      .limit(30);
+    let siRows: { topic: string; momentum_score: number | null; created_at?: string }[] | null = null;
+    try {
+      const result = await supabase
+        .from('signal_intelligence')
+        .select('topic, momentum_score, created_at')
+        .gte('created_at', sevenDaysAgo)
+        .order('momentum_score', { ascending: false, nullsFirst: false })
+        .limit(30);
+      siRows = result.data as typeof siRows;
+    } catch {
+      siRows = null;
+    }
     for (const r of siRows ?? []) {
       const row = r as { topic: string; momentum_score: number | null; created_at?: string };
       if (row.topic?.trim()) {

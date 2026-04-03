@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Omnivyra Final Report</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 16mm 14mm;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --ink: #0b1f33;
+      --muted: #5b7083;
+      --line: #d8e2ee;
+      --page: #eef5ff;
+      --paper: #ffffff;
+      --brand: #0a66c2;
+      --brand-soft: #ebf3fd;
+      --brand-deep: #084b8a;
+      --teal: #0f766e;
+      --teal-soft: #ecfdf5;
+      --gold: #d97706;
+      --gold-soft: #fff7ed;
+      --slate: #f6f9fc;
+      --navy: #0f2742;
+    }
+    html, body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--page);
+      line-height: 1.45;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    h1, h2, h3, p, li, span, div {
+      word-break: normal;
+      overflow-wrap: break-word;
+      hyphens: none;
+    }
+    .report {
+      max-width: 980px;
+      margin: 0 auto;
+    }
+    .section, .hero, .panel, .metric, .card, .action-card, .workflow-card, .proof-card, .cta {
+      break-inside: avoid-page;
+      page-break-inside: avoid;
+    }
+    .hero {
+      background: linear-gradient(135deg, #ffffff 0%, #f4f8ff 52%, #eef6ff 100%);
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      padding: 28px;
+      box-shadow: 0 16px 40px rgba(11, 31, 51, 0.08);
+      margin-bottom: 18px;
+    }
+    .hero-top {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 24px;
+      align-items: stretch;
+    }
+    .score-panel {
+      background: linear-gradient(135deg, var(--navy) 0%, #123d6b 100%);
+      color: #fff;
+      border-radius: 24px;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 220px;
+    }
+    .score-panel .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: #bfdbfe;
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+    .score-panel .value {
+      font-size: 74px;
+      line-height: 1;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .score-panel .subtext {
+      color: #dbeafe;
+      font-size: 13px;
+    }
+    .hero-copy .eyebrow {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--brand);
+      background: var(--brand-soft);
+      border: 1px solid #c9dff7;
+      border-radius: 999px;
+      padding: 8px 12px;
+      margin-bottom: 14px;
+    }
+    .hero-copy h1 {
+      font-size: 34px;
+      line-height: 1.08;
+      margin-bottom: 10px;
+    }
+    .hero-copy .lede {
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 60ch;
+      margin-bottom: 16px;
+    }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .pill {
+      border-radius: 999px;
+      padding: 8px 12px;
+      border: 1px solid #c9dff7;
+      background: #f6fbff;
+      color: var(--brand-deep);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .hero-note {
+      background: var(--gold-soft);
+      border-left: 4px solid var(--gold);
+      border-radius: 14px;
+      padding: 14px 16px;
+    }
+    .hero-note strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+    .hero-note p {
+      color: #8a4b08;
+      font-size: 14px;
+      max-width: 56ch;
+    }
+    .section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 22px;
+      box-shadow: 0 10px 24px rgba(11, 31, 51, 0.05);
+      margin-bottom: 18px;
+    }
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .section-head h2 {
+      font-size: 23px;
+      line-height: 1.1;
+    }
+    .section-head p {
+      color: var(--muted);
+      font-size: 13px;
+      max-width: 42ch;
+      text-align: right;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .metric {
+      background: var(--slate);
+      border: 1px solid #e3ebf3;
+      border-radius: 18px;
+      padding: 16px;
+      min-height: 150px;
+    }
+    .metric span {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+    .metric strong {
+      display: block;
+      font-size: 34px;
+      line-height: 1;
+      margin-bottom: 10px;
+    }
+    .metric p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 14px;
+    }
+    .panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 18px;
+    }
+    .visual-stage {
+      height: 270px;
+      border-radius: 16px;
+      border: 1px dashed #8fb8e6;
+      background:
+        radial-gradient(circle at top left, rgba(10, 102, 194, 0.13), transparent 24%),
+        linear-gradient(180deg, #fbfdff 0%, #f4f8fd 100%);
+      position: relative;
+      margin-bottom: 14px;
+    }
+    .visual-stage::after {
+      content: "matrix";
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--brand);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 10px;
+    }
+    .stack, .proof-grid, .workflow-grid, .actions {
+      display: grid;
+      gap: 12px;
+    }
+    .stack { list-style: none; }
+    .card {
+      background: var(--slate);
+      border-radius: 16px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--brand);
+    }
+    .card strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 5px;
+    }
+    .card p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .proof-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .proof-card {
+      background: #f8fbff;
+      border: 1px solid #dbe7f5;
+      border-radius: 18px;
+      padding: 16px;
+    }
+    .proof-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+    .proof-card strong {
+      display: block;
+      font-size: 26px;
+      margin-bottom: 8px;
+    }
+    .proof-card p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .workflow-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .workflow-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+    }
+    .workflow-card .step {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--teal);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+    .workflow-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 15px;
+    }
+    .workflow-card p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .actions {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .action-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+    }
+    .action-card .index {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--brand);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+    .action-card strong {
+      display: block;
+      font-size: 15px;
+      margin-bottom: 6px;
+    }
+    .action-card p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .cta {
+      background: linear-gradient(135deg, var(--navy) 0%, #133b67 100%);
+      color: #fff;
+      border-radius: 22px;
+      padding: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .cta h2 {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+    .cta p {
+      color: #dbeafe;
+      max-width: 58ch;
+      font-size: 14px;
+    }
+    .cta .chip {
+      background: #fff;
+      color: var(--navy);
+      border-radius: 999px;
+      padding: 12px 16px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    @media (max-width: 860px) {
+      .hero-top, .metrics, .two-col, .proof-grid, .workflow-grid, .actions {
+        grid-template-columns: 1fr;
+      }
+      .section-head {
+        display: block;
+      }
+      .section-head p {
+        text-align: left;
+        margin-top: 8px;
+      }
+      .cta {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="report">
+    <section class="hero">
+      <div class="hero-top">
+        <div class="score-panel">
+          <div class="label">Omnivyra Final Score</div>
+          <div class="value">77</div>
+          <div class="subtext">The strongest Omnivyra report balances strategic intelligence with product trust: what the platform does, why the workflow matters, and where the site is leaking conversion confidence.</div>
+        </div>
+        <div class="hero-copy">
+          <div class="eyebrow">Omnivyra Final Report</div>
+          <h1>Omnivyra Strategic Website Report</h1>
+          <p class="lede">Omnivyra turns fragmented marketing work into one operating system for readiness, strategy, creation, publishing, and optimization. The report should show how clearly that system is communicated and how effectively the site converts product understanding into action.</p>
+          <div class="meta-row">
+            <span class="pill">www.omnivyra.com</span>
+            <span class="pill">Apr 2, 2026</span>
+            <span class="pill">AI marketing operating system</span>
+          </div>
+          <div class="hero-note">
+            <strong>Executive Framing</strong>
+            <p>This Omnivyra version should feel like a real executive report, not a generic audit. Every section needs to reinforce product clarity, system credibility, and buyer momentum even when signal depth varies.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Core Performance Signals</h2>
+        <p>These blocks should make the Omnivyra story legible fast: readiness, product trust, demand capture, and conversion momentum.</p>
+      </div>
+      <div class="metrics">
+        <div class="metric">
+          <span>SEO Readiness</span>
+          <strong>77</strong>
+          <p>Omnivyra looks strongest where strategic depth and product clarity overlap, but authority and competitive differentiation still need sharper surfacing.</p>
+        </div>
+        <div class="metric">
+          <span>Messaging Clarity</span>
+          <strong>5</strong>
+          <p>Interest exists, but the SERP and on-page narrative still leave too much ambiguity about what Omnivyra does differently.</p>
+        </div>
+        <div class="metric">
+          <span>Conversion Flow</span>
+          <strong>54</strong>
+          <p>Conversion for Omnivyra depends on connecting readiness analysis, campaign planning, content execution, and optimization into one buyer journey that feels inevitable.</p>
+        </div>
+        <div class="metric">
+          <span>Trust & Authority</span>
+          <strong>63</strong>
+          <p>Omnivyra wins when the site feels like a serious operating system, not another lightweight AI tool. Credibility comes from workflow clarity, depth of capability, and visible proof of execution.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Visual Evidence + Strategic Readout</h2>
+        <p>The visual should lead. The copy should only explain what the visual proves.</p>
+      </div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="visual-stage"></div>
+          <div class="stack">
+            <div class="card">
+              <strong>Coverage Gap</strong>
+              <p>The biggest gains come from explaining the category Omnivyra is actually trying to own, not just chasing generic AI marketing terms.</p>
+            </div>
+            <div class="card">
+              <strong>Visibility Leak</strong>
+              <p>Interest exists, but the SERP and on-page narrative still leave too much ambiguity about what Omnivyra does differently.</p>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="stack">
+            <div class="card">
+              <strong>Positioning depth is lagging behind product breadth</strong>
+              <p>The site communicates value, but it does not fully explain how Omnivyra connects readiness analysis, strategy, execution, and ongoing optimization into one operating system.</p>
+            </div>
+            <div class="card">
+              <strong>Growth opportunity</strong>
+              <p>Turn product clarity into stronger readiness-to-signup momentum</p>
+            </div>
+            <div class="card">
+              <strong>Execution implication</strong>
+              <p>The strongest opportunity is to make Omnivyra feel like the command layer for marketing readiness, planning, creation, publishing, and optimization rather than another generic AI tool.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Why Omnivyra Can Win This Story</h2>
+        <p>These proof blocks should explain the product in concrete operating-system terms rather than broad AI language.</p>
+      </div>
+      <div class="proof-grid">
+        <div class="proof-card">
+          <span>Operating System Narrative</span>
+          <strong>77</strong>
+          <p>Omnivyra should be framed as the command layer connecting readiness, strategy, creation, publishing, and optimization.</p>
+        </div>
+        <div class="proof-card">
+          <span>Buyer Clarity</span>
+          <strong>88</strong>
+          <p>The site should make it obvious why Omnivyra is different from point-solution AI tools and fragmented marketing stacks.</p>
+        </div>
+        <div class="proof-card">
+          <span>Execution Confidence</span>
+          <strong>82</strong>
+          <p>Trust rises when Omnivyra shows how insight becomes action inside one system instead of leaving the workflow implied.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Omnivyra Workflow Story</h2>
+        <p>The site should make the product workflow feel connected from insight to execution to optimization.</p>
+      </div>
+      <div class="workflow-grid">
+        <div class="workflow-card">
+          <div class="step">1</div>
+          <strong>Understand readiness</strong>
+          <p>Omnivyra begins by diagnosing website readiness, messaging clarity, and growth friction so teams can see what is actually holding performance back.</p>
+        </div>
+        <div class="workflow-card">
+          <div class="step">2</div>
+          <strong>Plan the system</strong>
+          <p>The platform translates those signals into strategy, campaign structure, priorities, and content direction without forcing teams to jump between disconnected tools.</p>
+        </div>
+        <div class="workflow-card">
+          <div class="step">3</div>
+          <strong>Execute and improve</strong>
+          <p>Omnivyra closes the loop by supporting creation, publishing, and ongoing optimization so execution stays aligned with the original strategic intent.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Final Action Sequence</h2>
+        <p>Three actions only. Each one should move the Omnivyra narrative closer to product confidence and buyer action.</p>
+      </div>
+      <div class="actions">
+        <div class="action-card">
+          <div class="index">1</div>
+          <strong>Lead with the operating-system narrative</strong>
+          <p>Buyers should understand in seconds that Omnivyra is the system connecting insight, planning, creation, and improvement.</p>
+        </div>
+        <div class="action-card">
+          <div class="index">2</div>
+          <strong>Add proof blocks across product pages</strong>
+          <p>Product trust increases when the site shows how the workflow actually works instead of describing it in abstract AI language.</p>
+        </div>
+        <div class="action-card">
+          <div class="index">3</div>
+          <strong>Tighten the conversion path from understanding to action</strong>
+          <p>Visitors should move naturally from product clarity into readiness analysis, planning, or account creation without narrative drop-off.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="cta">
+        <div>
+          <h2>Recommended next move</h2>
+          <p>Tighten the story around Omnivyra as the system that helps teams understand, plan, execute, and improve marketing from one place. The report should end by reinforcing that operating-system narrative, not just isolated SEO tasks.</p>
+        </div>
+        <div class="chip">Act on top priority</div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

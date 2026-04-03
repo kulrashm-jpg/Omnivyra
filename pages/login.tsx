@@ -22,6 +22,7 @@ export default function LoginPage() {
   const router = useRouter();
   const { reason, error: errorParam, verified, email: emailParam } = router.query as Record<string, string>;
 
+  const [checking, setChecking] = useState(true); // true while session check is in-flight
   const [mode, setMode]         = useState<Mode>('password');
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
@@ -41,10 +42,21 @@ export default function LoginPage() {
   }, [emailParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    // getSession() reads from localStorage — no network request, resolves immediately.
+    // Keep checking=true until we know the user is NOT logged in so the login form
+    // is never briefly visible before a redirect fires.
     getSupabaseBrowser().auth.getSession().then(({ data }) => {
-      if (data.session) router.replace('/dashboard');
+      if (data.session) {
+        const pinned = localStorage.getItem('pin_home') === 'true';
+        router.replace(pinned ? '/home' : '/command-center');
+      } else {
+        setChecking(false);
+      }
     });
   }, [router]);
+
+  // Render nothing while the session check is in-flight
+  if (checking) return null;
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
 

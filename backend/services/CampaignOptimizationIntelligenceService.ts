@@ -1,11 +1,13 @@
 /**
- * Stage 35 — AI Strategic Optimization Engine.
- * Deterministic, advisory only. No mutation. No auto-apply. Governance-safe.
+ * Campaign optimization insights derived from persisted decision_objects only.
+ * Read-only and non-generative.
  */
 
-import { getCampaignRoiIntelligence } from './CampaignRoiIntelligenceService';
-import { getCampaignGovernanceAnalytics } from './GovernanceAnalyticsService';
 import { supabase } from '../db/supabaseClient';
+import {
+  composeCampaignOptimizationView,
+  composeDecisionIntelligence,
+} from './decisionComposerService';
 
 export interface CampaignOptimizationInsight {
   campaignId: string;
@@ -15,8 +17,6 @@ export interface CampaignOptimizationInsight {
   explanation: string;
   recommendedAction: string;
 }
-
-const CONTENT_COLLISION_EVENT = 'CONTENT_COLLISION_DETECTED';
 
 /**
  * Generate campaign optimization insights. Read-only, never throws.
@@ -29,98 +29,38 @@ export async function generateCampaignOptimizationInsights(
       return [];
     }
 
-    const [roi, govAnalytics, events, posts] = await Promise.all([
-      getCampaignRoiIntelligence(campaignId),
-      getCampaignGovernanceAnalytics(campaignId),
-      supabase
-        .from('campaign_governance_events')
-        .select('event_type')
-        .eq('campaign_id', campaignId)
-        .then((r) => (r.error ? [] : r.data || [])),
-      supabase
-        .from('scheduled_posts')
-        .select('status')
-        .eq('campaign_id', campaignId)
-        .then((r) => (r.error ? [] : r.data || [])),
-    ]);
+    const { data: campaignRow, error: campaignError } = await supabase
+      .from('campaigns')
+      .select('company_id')
+      .eq('id', campaignId)
+      .maybeSingle();
 
-    const insights: CampaignOptimizationInsight[] = [];
+    if (campaignError || !campaignRow?.company_id) return [];
 
-    if (roi.roiScore < 50) {
-      insights.push({
-        campaignId,
-        priority: 'HIGH',
-        category: 'PERFORMANCE',
-        headline: 'Campaign performance under target',
-        explanation: 'Engagement or CTR below optimal thresholds',
-        recommendedAction:
-          'Reduce frequency, refine CTA type, or adjust content mix toward higher engagement formats.',
-      });
+    const composition = await composeDecisionIntelligence({
+      companyId: campaignRow.company_id,
+      reportTier: 'deep',
+      entityType: 'campaign',
+      entityId: campaignId,
+      status: ['open'],
+    });
+
+    const optimization = composeCampaignOptimizationView(campaignId, composition);
+
+    if (!optimization.insights.length) {
+      return [
+        {
+          campaignId,
+          priority: 'LOW',
+          category: 'PERFORMANCE',
+          headline: 'Campaign operating within expected range',
+          explanation: 'No active decision signals indicate critical optimization risk.',
+          recommendedAction: 'Continue monitoring active decisions through governance dashboards.',
+        },
+      ];
     }
 
-    const driftCount = govAnalytics?.driftCount ?? 0;
-    const replayCoverageRatio = govAnalytics?.replayCoverageRatio ?? 1;
-    if (driftCount > 0 || replayCoverageRatio < 0.8) {
-      insights.push({
-        campaignId,
-        priority: 'MEDIUM',
-        category: 'GOVERNANCE',
-        headline: 'Governance stability risk detected',
-        explanation: driftCount > 0
-          ? 'Policy drift detected from replay verification'
-          : 'Replay coverage below 80% limits auditability',
-        recommendedAction: 'Review negotiation patterns and policy upgrade recommendations.',
-      });
-    }
-
-    const freezeBlocks = govAnalytics?.freezeBlocks ?? 0;
-    const postList = Array.isArray(posts) ? posts : [];
-    const schedulerFailures = postList.filter((p: any) =>
-      /^failed$/i.test(String(p?.status || ''))
-    ).length;
-
-    if (freezeBlocks > 0 || schedulerFailures > 0) {
-      insights.push({
-        campaignId,
-        priority: 'HIGH',
-        category: 'EXECUTION',
-        headline: 'Execution reliability risk',
-        explanation:
-          freezeBlocks > 0
-            ? 'Freeze blocks indicate scheduling or mutation constraints'
-            : 'Scheduled posts have failed to execute',
-        recommendedAction: 'Audit schedule timing and execution windows.',
-      });
-    }
-
-    const evts = Array.isArray(events) ? events : [];
-    const hasContentCollision = evts.some(
-      (e: any) => String(e?.event_type || '').toUpperCase() === CONTENT_COLLISION_EVENT
-    );
-
-    if (hasContentCollision) {
-      insights.push({
-        campaignId,
-        priority: 'MEDIUM',
-        category: 'CONTENT_STRATEGY',
-        headline: 'Content overlap reducing differentiation',
-        explanation: 'Content collision events indicate overlapping assets across campaigns',
-        recommendedAction: 'Adjust content selection to avoid campaign asset collision.',
-      });
-    }
-
-    if (insights.length === 0) {
-      insights.push({
-        campaignId,
-        priority: 'LOW',
-        category: 'PERFORMANCE',
-        headline: 'Campaign operating within optimal range',
-        explanation: 'No significant optimization signals detected',
-        recommendedAction: 'Continue monitoring performance and governance metrics.',
-      });
-    }
-
-    return insights;
+    return optimization.insights.map((insight) => ({ ...insight, campaignId }));
   } catch {
     return [
       {

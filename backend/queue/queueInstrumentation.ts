@@ -331,7 +331,7 @@ export function startQueueReportFlush(
 
   _flushTimer = setInterval(() => {
     void persistQueueReport(getRedis(), getRedisOpsPerMin?.());
-  }, 60_000);
+  }, 600_000); // 10 min — was 60s
 
   if (_flushTimer.unref) _flushTimer.unref();
 }

@@ -5,10 +5,11 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../../components/blog/BlogEditorForm';
-import { BlogQualityPanel } from '../../../components/blog/BlogQualityPanel';
+import { BlogQualityPanel, type ImproveArea } from '../../../components/blog/BlogQualityPanel';
 import { createDefaultBlogTemplate } from '../../../lib/blog/blogTemplate';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../../lib/blog/topicDetection';
 import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
+import type { BlogGenerationOutput } from '../../../lib/blog/blogGenerationEngine';
 
 function useBlogAccess() {
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -22,17 +23,118 @@ function useBlogAccess() {
 
 const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
 
+type PrefillPayload = {
+  output?: (BlogGenerationOutput & { content_blocks?: unknown[] }) | null;
+  source?: string;
+};
+
 export default function AdminBlogNewPage() {
   const router = useRouter();
   const { allowed, checked } = useBlogAccess();
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveState, setLiveState] = useState<BlogFormState | null>(null);
+  const [prefillChecked, setPrefillChecked] = useState(false);
+  const [prefillInitial, setPrefillInitial] = useState<Partial<BlogFormState> | null>(null);
+  const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
+  const [editorPatch, setEditorPatch] = useState<Partial<BlogFormState> | null>(null);
+  const [improvingArea, setImprovingArea] = useState<ImproveArea | null>(null);
 
   // Duplication detection
   const [existingPosts, setExistingPosts] = useState<ExistingPostMeta[]>([]);
   const [dupResult, setDupResult] = useState<DuplicationResult | null>(null);
   const dupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const jumpToImproveArea = (area: ImproveArea) => {
+    const byArea: Record<ImproveArea, { sectionId: string; focusId?: string }> = {
+      structure: { sectionId: 'blog-section-content' },
+      depth:     { sectionId: 'blog-section-content' },
+      geo:       { sectionId: 'blog-section-content' },
+      linking:   { sectionId: 'blog-section-content' },
+      seo:       { sectionId: 'blog-section-seo', focusId: 'blog-input-seo-title' },
+    };
+
+    const target = byArea[area];
+    const sectionEl = document.getElementById(target.sectionId);
+    if (sectionEl) {
+      sectionEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    if (target.focusId) {
+      const inputEl = document.getElementById(target.focusId) as HTMLInputElement | HTMLTextAreaElement | null;
+      if (inputEl) {
+        window.setTimeout(() => inputEl.focus(), 280);
+      }
+    }
+  };
+
+  const autoImproveArea = async (area: ImproveArea) => {
+    if (!liveState || improvingArea) return;
+    setImprovingArea(area);
+    setError(null);
+
+    try {
+      const companyId =
+        (typeof router.query.prefill_company_id === 'string' && router.query.prefill_company_id) ||
+        (typeof window !== 'undefined' ? (localStorage.getItem('selected_company_id') || '') : '');
+
+      if (!companyId) {
+        jumpToImproveArea(area);
+        setError('Select a company context first to run AI improvement.');
+        return;
+      }
+
+      const resp = await fetch('/api/content/improve-draft', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          area,
+          contentType: 'blog',
+          draft: {
+            title: liveState.title,
+            excerpt: liveState.excerpt,
+            seo_meta_title: liveState.seo_meta_title,
+            seo_meta_description: liveState.seo_meta_description,
+            tags: liveState.tags,
+            content_blocks: liveState.content_blocks,
+          },
+        }),
+      });
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data?.error || 'AI improvement failed');
+
+      const updated = data?.updated as Partial<BlogFormState> | undefined;
+      if (updated) {
+        setEditorPatch({
+          title: typeof updated.title === 'string' ? updated.title : liveState.title,
+          excerpt: typeof updated.excerpt === 'string' ? updated.excerpt : liveState.excerpt,
+          seo_meta_title: typeof updated.seo_meta_title === 'string' ? updated.seo_meta_title : liveState.seo_meta_title,
+          seo_meta_description: typeof updated.seo_meta_description === 'string' ? updated.seo_meta_description : liveState.seo_meta_description,
+          tags: Array.isArray(updated.tags) ? updated.tags : liveState.tags,
+          content_blocks: Array.isArray(updated.content_blocks)
+            ? updated.content_blocks
+            : liveState.content_blocks,
+        });
+      }
+
+      const delta = Number(data?.scoreDelta || 0);
+      const after = Number(data?.afterScore || 0);
+      setPrefillNotice(
+        delta > 0
+          ? `AI improved ${area}. Score +${delta} (now ${after}/100). Review and publish when ready.`
+          : `AI improvement applied for ${area}. Review changes and run again if needed.`,
+      );
+      jumpToImproveArea(area);
+    } catch (e) {
+      jumpToImproveArea(area);
+      setError(e instanceof Error ? e.message : 'AI improvement failed');
+    } finally {
+      setImprovingArea(null);
+    }
+  };
 
   // Fetch existing posts once for duplication checking
   useEffect(() => {
@@ -49,6 +151,54 @@ export default function AdminBlogNewPage() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+
+    const token = typeof router.query.prefill === 'string' ? router.query.prefill : '';
+    if (!token) {
+      setPrefillChecked(true);
+      return;
+    }
+
+    try {
+      const raw = sessionStorage.getItem(token);
+      if (!raw) {
+        setPrefillChecked(true);
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as PrefillPayload;
+      const output = parsed?.output;
+      if (output) {
+        setPrefillInitial({
+          title: output.title || '',
+          excerpt: output.excerpt || '',
+          category: output.category || '',
+          tags: Array.isArray(output.tags) ? output.tags : [],
+          seo_meta_title: output.seo_meta_title || '',
+          seo_meta_description: output.seo_meta_description || '',
+          content_blocks: Array.isArray(output.content_blocks)
+            ? (output.content_blocks as BlogFormState['content_blocks'])
+            : DEFAULT_TEMPLATE,
+          content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
+        });
+        if (parsed.source === 'superadmin_blog_intelligence') {
+          setPrefillNotice('Draft prefilled from Superadmin recommendation. Review and publish when ready.');
+        } else if (parsed.source === 'content_editor') {
+          setPrefillNotice('Content refined and ready for publishing. Make final adjustments and publish when satisfied.');
+        }
+      }
+      sessionStorage.removeItem(token);
+    } catch {
+      // Invalid token payload should not block editor usage.
+    } finally {
+      const nextQuery = { ...router.query };
+      delete nextQuery.prefill;
+      void router.replace({ pathname: router.pathname, query: nextQuery }, undefined, { shallow: true });
+      setPrefillChecked(true);
+    }
+  }, [router.isReady]);
 
   // Debounced duplication check whenever title or tags change
   useEffect(() => {
@@ -106,7 +256,7 @@ export default function AdminBlogNewPage() {
     }
   };
 
-  if (!checked) {
+  if (!checked || !prefillChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <Loader2 className="h-10 w-10 animate-spin text-[#0B5ED7]" />
@@ -147,6 +297,11 @@ export default function AdminBlogNewPage() {
 
         <div className="mx-auto max-w-[1200px] p-6">
           <h1 className="mb-6 text-2xl font-bold text-gray-900">New Post</h1>
+          {prefillNotice && (
+            <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+              {prefillNotice}
+            </div>
+          )}
           {error && (
             <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
@@ -194,12 +349,16 @@ export default function AdminBlogNewPage() {
             {/* ── Editor ─────────────────────────────────────────────────── */}
             <div className="flex-1 min-w-0 rounded-lg border border-gray-200 bg-white p-6 shadow">
               <BlogEditorForm
-                initial={{ content_blocks: DEFAULT_TEMPLATE }}
+                initial={{
+                  content_blocks: DEFAULT_TEMPLATE,
+                  ...(prefillInitial || {}),
+                }}
                 onSubmit={handleSubmit}
                 onCancel={() => router.push('/admin/blog')}
                 submitLabel="Create post"
                 isSaving={isSaving}
                 onStateChange={setLiveState}
+                externalPatch={editorPatch}
               />
             </div>
 
@@ -215,6 +374,9 @@ export default function AdminBlogNewPage() {
                     seo_meta_description: liveState.seo_meta_description,
                     tags:                 liveState.tags,
                   }}
+                  onImprove={jumpToImproveArea}
+                  onAutoImprove={autoImproveArea}
+                  improvingArea={improvingArea}
                 />
               )}
             </div>

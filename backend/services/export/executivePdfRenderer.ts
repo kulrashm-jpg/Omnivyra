@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import type { ExecutiveSummary } from '../networkIntelligence/executiveSummaryService';
 import type { ExecutiveNarrativeOutput } from '../networkIntelligence/executiveNarrativeService';
 import type { PlaybookEffectivenessMetrics } from '../networkIntelligence/playbookEffectivenessService';
+import { sanitizeRenderText, sanitizeTextArtifacts } from './renderTextSanitizer';
 
 type ExecutivePdfInput = {
   organizationName: string;
@@ -14,9 +15,9 @@ type ExecutivePdfInput = {
 const formatPercent = (value: number) => `${Math.round(value * 100)}%`;
 
 const formatTimestamp = (value: string | null) => {
-  if (!value) return '—';
+  if (!value) return '-';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
+  if (Number.isNaN(date.getTime())) return '-';
   return date.toLocaleString();
 };
 
@@ -32,7 +33,7 @@ const resolveMomentum = (lastActivityAt: string | null) => {
 };
 
 const buildTopPlatform = (row: PlaybookEffectivenessMetrics) =>
-  row.top_platforms?.[0]?.platform || '—';
+  row.top_platforms?.[0]?.platform || '-';
 
 export const renderExecutiveSummaryPdf = async (input: ExecutivePdfInput) => {
   const doc = new PDFDocument({ margin: 48, size: 'LETTER' });
@@ -53,40 +54,43 @@ export const renderExecutiveSummaryPdf = async (input: ExecutivePdfInput) => {
   const sectionTitle = (title: string) => {
     ensureSpace(24);
     doc.moveDown(0.5);
-    doc.fontSize(14).fillColor('#111827').text(title);
+    doc.fontSize(14).fillColor('#111827').text(sanitizeRenderText(title, { maxSentences: 1 }) || title);
     doc.moveDown(0.2);
   };
 
   const addLine = (label: string, value: string) => {
     ensureSpace(16);
-    doc.fontSize(10).fillColor('#374151').text(`${label}: ${value}`);
+    doc.fontSize(10).fillColor('#374151').text(
+      `${sanitizeTextArtifacts(label)}: ${sanitizeTextArtifacts(value)}`,
+      { lineGap: 1 },
+    );
   };
 
   const addList = (items: string[]) => {
     if (items.length === 0) {
-      addLine('Notes', '—');
+      addLine('Notes', '-');
       return;
     }
     items.forEach((item) => {
       ensureSpace(14);
-      doc.fontSize(10).fillColor('#374151').text(`• ${item}`);
+      doc.fontSize(10).fillColor('#374151').text(`• ${sanitizeTextArtifacts(item)}`, { lineGap: 1 });
     });
   };
 
-  doc.fontSize(18).fillColor('#111827').text(input.organizationName);
+  doc.fontSize(18).fillColor('#111827').text(sanitizeTextArtifacts(input.organizationName));
   doc.fontSize(16).text('Community-AI Executive Summary');
   doc.fontSize(10).fillColor('#6b7280').text(input.generatedAt.toLocaleDateString());
   doc.moveDown();
 
   sectionTitle('Executive Interpretation');
-  addLine('Notice', 'Interpretation only — not an execution directive');
-  addLine('Overview', input.narrative.overview || '—');
+  addLine('Notice', 'Interpretation only - not an execution directive');
+  addLine('Overview', sanitizeRenderText(input.narrative.overview || '-', { maxSentences: 2 }) || '-');
   sectionTitle('Key Shifts');
-  addList(input.narrative.key_shifts);
+  addList(input.narrative.key_shifts.map((item) => sanitizeRenderText(item, { maxSentences: 1 }) || '').filter(Boolean));
   sectionTitle('Risks to Watch');
-  addList(input.narrative.risks_to_watch);
+  addList(input.narrative.risks_to_watch.map((item) => sanitizeRenderText(item, { maxSentences: 1 }) || '').filter(Boolean));
   sectionTitle('What NOT to Change Yet');
-  addList(input.narrative.explicitly_not_recommended);
+  addList(input.narrative.explicitly_not_recommended.map((item) => sanitizeRenderText(item, { maxSentences: 1 }) || '').filter(Boolean));
   sectionTitle('Confidence Indicator');
   addLine('Confidence', formatPercent(input.narrative.confidence_level || 0));
 
@@ -97,8 +101,8 @@ export const renderExecutiveSummaryPdf = async (input: ExecutivePdfInput) => {
   addLine(
     'Automation mix',
     `Observe ${formatPercent(input.summary.automation_mix.observe)}, Assist ${formatPercent(
-      input.summary.automation_mix.assist
-    )}, Automate ${formatPercent(input.summary.automation_mix.automate)}`
+      input.summary.automation_mix.assist,
+    )}, Automate ${formatPercent(input.summary.automation_mix.automate)}`,
   );
   addLine('Last activity', formatTimestamp(input.summary.last_activity_at));
 
@@ -106,7 +110,7 @@ export const renderExecutiveSummaryPdf = async (input: ExecutivePdfInput) => {
   addLine('Eligible users', String(input.summary.total_eligible_users));
   addLine(
     'Ineligible users',
-    String(input.summary.total_discovered_users - input.summary.total_eligible_users)
+    String(input.summary.total_discovered_users - input.summary.total_eligible_users),
   );
   addLine('Eligibility rate', formatPercent(input.summary.eligibility_rate));
 
@@ -133,18 +137,17 @@ export const renderExecutiveSummaryPdf = async (input: ExecutivePdfInput) => {
   doc.fillColor('#374151');
 
   const rows = [...input.playbookPerformance].sort(
-    (a, b) => b.eligible_users_count - a.eligible_users_count
+    (a, b) => b.eligible_users_count - a.eligible_users_count,
   );
-  const maxRows = 30;
-  rows.slice(0, maxRows).forEach((row) => {
+  rows.forEach((row) => {
     ensureSpace(16);
     const values = [
-      row.playbook_name,
-      row.automation_level,
+      sanitizeTextArtifacts(row.playbook_name),
+      sanitizeTextArtifacts(row.automation_level),
       String(row.discovered_users_count),
       String(row.eligible_users_count),
       formatPercent(row.execution_rate),
-      buildTopPlatform(row),
+      sanitizeTextArtifacts(buildTopPlatform(row)),
     ];
     values.forEach((value, index) => {
       doc.text(
@@ -153,22 +156,17 @@ export const renderExecutiveSummaryPdf = async (input: ExecutivePdfInput) => {
         doc.y,
         {
           width: columnWidths[index],
-        }
+        },
       );
     });
     doc.moveDown(0.3);
   });
-  if (rows.length > maxRows) {
-    ensureSpace(16);
-    doc.fillColor('#6b7280').text(`Truncated to ${maxRows} rows.`);
-    doc.fillColor('#374151');
-  }
 
   sectionTitle('Platform Mix');
   input.summary.platform_mix.forEach((row) => {
     addLine(
-      row.platform,
-      `${row.discovered_users} (${formatPercent(row.share)})`
+      sanitizeTextArtifacts(row.platform),
+      `${row.discovered_users} (${formatPercent(row.share)})`,
     );
   });
 

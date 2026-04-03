@@ -1,112 +1,47 @@
-/**
- * Intelligence Strategy Module
- * Consolidates: opportunityDetectionEngine, strategicThemesEngine, marketPulseEngine,
- * competitiveIntelligenceEngine, strategicPlaybookEngine, strategicRecommendationEngine
- *
- * Responsibilities: opportunity detection, theme generation, market pulse, competitive insights,
- * playbook generation, recommendation generation. Engines remain in place; this module exposes a unified interface.
- */
+import { getDecisionReportView, type DecisionReportView } from './decisionReportService';
+import { listDecisionObjects, type PersistedDecisionObject } from './decisionObjectService';
+import { assertDecisionArray, assertDecisionReportView } from './decisionRuntimeGuardService';
 
-import { getCompanyInsights } from './companyIntelligenceService';
-import { detectOpportunities } from './opportunityDetectionEngine';
-import {
-  groupOpportunitiesIntoThemes,
-  persistThemes,
-  type StrategicTheme,
-} from './strategicThemesEngine';
-import { detectMarketPulse } from './marketPulseEngine';
-import { detectCompetitiveIntelligence } from './competitiveIntelligenceEngine';
-import { generatePlaybooks } from './strategicPlaybookEngine';
-import { opportunitiesToRecommendations } from './strategicRecommendationEngine';
-import { buildGraphForCompanySignals } from './intelligenceGraphEngine';
-import { detectCorrelations } from './signalCorrelationEngine';
-import type { Opportunity } from './opportunityDetectionEngine';
-import type { StrategicRecommendation } from './strategicRecommendationEngine';
-import type { MarketPulse } from './marketPulseEngine';
-import type { CompetitiveIntelligence } from './competitiveIntelligenceEngine';
-import type { StrategicPlaybook } from './strategicPlaybookEngine';
-import type { CorrelationResult } from './signalCorrelationEngine';
+const DEFAULT_LIMIT = 100;
 
-export type { Opportunity, StrategicTheme, StrategicRecommendation, MarketPulse, CompetitiveIntelligence, StrategicPlaybook, CorrelationResult };
-
-const DEFAULT_WINDOW_HOURS = 24;
-
-/**
- * Generate strategies: opportunities, themes, recommendations, playbooks.
- */
 export async function generateStrategies(
   companyId: string,
-  options?: { windowHours?: number; buildGraph?: boolean; persistThemes?: boolean }
-) {
-  const windowHours = options?.windowHours ?? DEFAULT_WINDOW_HOURS;
+  options?: { reportTier?: 'snapshot' | 'growth' | 'deep'; sourceService?: string }
+): Promise<DecisionReportView> {
+  const report = await getDecisionReportView({
+    companyId,
+    reportTier: options?.reportTier ?? 'growth',
+    sourceService: options?.sourceService,
+  });
 
-  if (options?.buildGraph) {
-    try {
-      await buildGraphForCompanySignals(companyId, windowHours);
-    } catch (e) {
-      console.warn('[intelligenceStrategy] graph build failed', (e as Error)?.message);
-    }
-  }
-
-  const insights = await getCompanyInsights(companyId, { windowHours, skipCache: false });
-  const opportunities = await detectOpportunities(companyId, insights, windowHours);
-  const recommendations = opportunitiesToRecommendations(opportunities);
-
-  const themeData = groupOpportunitiesIntoThemes(opportunities, insights);
-  const themes = options?.persistThemes
-    ? await persistThemes(companyId, themeData)
-    : themeData.map((t, i) => ({
-        theme_id: `temp-${i}`,
-        theme_topic: t.theme_topic,
-        theme_strength: t.theme_strength,
-        supporting_signals: t.supporting_signals,
-      }));
-
-  const correlations = await detectCorrelations(companyId, windowHours);
-  const pulses = detectMarketPulse(insights, correlations);
-  const competitive_signals = detectCompetitiveIntelligence(insights);
-  const playbooks = generatePlaybooks(themes, opportunities, pulses, competitive_signals);
-
-  return {
-    opportunities,
-    recommendations,
-    themes,
-    market_pulses: pulses,
-    competitive_signals,
-    playbooks,
-    correlations,
-  };
+  return assertDecisionReportView('intelligenceStrategyModule.generateStrategies', report);
 }
 
-/**
- * Get recommendations only.
- */
 export async function getRecommendations(
   companyId: string,
-  options?: { windowHours?: number; buildGraph?: boolean }
-): Promise<{ recommendations: StrategicRecommendation[] }> {
-  const { recommendations } = await generateStrategies(companyId, {
-    ...options,
-    persistThemes: false,
+  options?: { limit?: number }
+): Promise<PersistedDecisionObject[]> {
+  const decisions = await listDecisionObjects({
+    viewName: 'growth_view',
+    companyId,
+    status: ['open'],
+    limit: options?.limit ?? DEFAULT_LIMIT,
   });
-  return { recommendations };
+
+  return assertDecisionArray('intelligenceStrategyModule.getRecommendations', decisions);
 }
 
-/**
- * Get opportunities only.
- */
 export async function getOpportunities(
   companyId: string,
-  options?: { windowHours?: number }
-): Promise<{ opportunities: Opportunity[] }> {
-  const insights = await getCompanyInsights(companyId, {
-    windowHours: options?.windowHours ?? DEFAULT_WINDOW_HOURS,
-    skipCache: false,
-  });
-  const opportunities = await detectOpportunities(
+  options?: { limit?: number }
+): Promise<PersistedDecisionObject[]> {
+  const decisions = await listDecisionObjects({
+    viewName: 'growth_view',
     companyId,
-    insights,
-    options?.windowHours ?? DEFAULT_WINDOW_HOURS
-  );
-  return { opportunities };
+    sourceService: 'opportunityDetectionService',
+    status: ['open'],
+    limit: options?.limit ?? DEFAULT_LIMIT,
+  });
+
+  return assertDecisionArray('intelligenceStrategyModule.getOpportunities', decisions);
 }

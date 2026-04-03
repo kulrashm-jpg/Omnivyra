@@ -156,7 +156,7 @@ type DailyExecutionItemLike = {
 const MEDIA_DEPENDENT_TYPES = new Set(['video', 'reel', 'short', 'carousel', 'slides', 'song']);
 const VIDEO_TYPES = new Set(['video', 'reel', 'short', 'podcast']);
 const CAROUSEL_TYPES = new Set(['carousel', 'slides']);
-const ARTICLE_TYPES = new Set(['article', 'newsletter', 'blog']);
+const ARTICLE_TYPES = new Set(['article', 'newsletter', 'blog', 'short_story', 'white_paper']);
 const THREAD_TYPES = new Set(['thread', 'tweetstorm']);
 
 function getContentTypeCategory(ct: string): 'video' | 'carousel' | 'article' | 'thread' | 'post' {
@@ -192,7 +192,12 @@ SLIDE 6 (optional): [key point]
 SLIDE 7 (CTA): [call to action]
 Each slide: max 15 words. Make each slide a standalone punchy statement.`;
     case 'article':
-      return `You are a long-form content writer. Write a complete article with proper structure. Include a compelling headline, brief intro paragraph, 3-4 sections with subheadings, and a conclusion with CTA. Output plain text with clear section breaks. Target 500-700 words.`;
+      return `You are a long-form content writer. Write a complete piece with proper structure. Follow these type-specific rules:
+- article/blog: Compelling headline, brief intro, 3-4 sections with subheadings, conclusion with CTA. Target 500-700 words.
+- newsletter: Subject line, warm opening, 2-3 sections with subheadings, key takeaway, and a clear CTA at the end. Target 400-600 words.
+- short_story: Narrative arc with hook, rising tension, resolution. First-person or third-person. Conversational tone. Target 300-500 words.
+- white_paper: Formal tone, executive summary, problem statement, evidence/data sections, solution framework, conclusion. Target 700-1000 words.
+Output plain text with clear section breaks. Match the format to the exact content type requested.`;
     case 'thread':
       return `You are a Twitter/X thread writer. Write a thread of 5-7 tweets. Format as:
 1/ [opening hook tweet - must stop the scroll]
@@ -208,9 +213,15 @@ Each tweet: max 270 characters. Output plain text.`;
   }
 }
 
-function getContentTypeMaxWords(category: 'video' | 'carousel' | 'article' | 'thread' | 'post'): number {
+function getContentTypeMaxWords(category: 'video' | 'carousel' | 'article' | 'thread' | 'post', exactType?: string): number {
   switch (category) {
-    case 'article': return 700;
+    case 'article': {
+      const t = (exactType ?? '').toLowerCase();
+      if (t === 'white_paper') return 1000;
+      if (t === 'newsletter') return 600;
+      if (t === 'short_story') return 500;
+      return 700;
+    }
     case 'thread': return 350;
     case 'carousel': return 120;
     case 'video': return 200;
@@ -1269,7 +1280,7 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
   };
 
   const contentTypeSystemPrompt = getContentTypeSystemPrompt(ctCategory);
-  const contentTypeMaxWords = getContentTypeMaxWords(ctCategory);
+  const contentTypeMaxWords = getContentTypeMaxWords(ctCategory, nonEmpty(item?.content_type));
 
   try {
     const systemPrompt = contentTypeSystemPrompt;
@@ -1754,12 +1765,14 @@ export async function generatePlatformVariantFromMaster(
 
   try {
     const contentTypeFormatGuide: Record<string, string> = {
-      article: 'Format as a structured article with clear sections, subheadings, and conclusion. Minimum 400 words.',
-      newsletter: 'Format as an email newsletter with sections, subheadings, and a clear CTA at the end.',
-      thread: 'Format as a Twitter/X thread: 5-7 tweets numbered 1/ through 7/. Each tweet max 270 chars.',
-      post: 'Format as a single social post. Punchy, direct, max 3 paragraphs.',
-      story: 'Format as quick visual story text overlay — very short, max 2 lines per frame.',
-      carousel: 'Keep format as slide text (each slide: bold headline + 1-2 support lines).',
+      article:     'Format as a structured article with compelling headline, clear sections, subheadings, and conclusion with CTA. Minimum 400 words.',
+      newsletter:  'Format as an email newsletter: subject line, warm opening, 2-3 sections with subheadings, key takeaway, and clear CTA. Minimum 350 words.',
+      short_story: 'Format as a narrative short story with hook, rising action, and resolution. Conversational and engaging tone. 300-500 words.',
+      white_paper: 'Format as a formal white paper: executive summary, problem statement, evidence-backed sections, solution framework, and conclusion. 600-900 words.',
+      thread:      'Format as a Twitter/X thread: 5-7 tweets numbered 1/ through 7/. Each tweet max 270 chars.',
+      post:        'Format as a single social post. Punchy, direct, max 3 paragraphs.',
+      story:       'Format as quick visual story text overlay — very short, max 2 lines per frame.',
+      carousel:    'Keep format as slide text (each slide: bold headline + 1-2 support lines).',
     };
     const formatGuide = contentTypeFormatGuide[contentType] ?? '';
     const aiContent = await requestVariant(

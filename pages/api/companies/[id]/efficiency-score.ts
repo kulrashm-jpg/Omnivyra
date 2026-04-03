@@ -1,3 +1,4 @@
+
 /**
  * GET /api/companies/[id]/efficiency-score
  * Returns the current efficiency tier and discount for a company.

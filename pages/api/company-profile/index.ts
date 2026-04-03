@@ -4,6 +4,9 @@ import {
   saveProfile,
   calculateCompanyProfileCompleteness,
   toLimitedCompanyProfile,
+  upsertCompanyProfileGovernanceSettings,
+  getCompanyProfileReviewStatus,
+  type CompanyProfile,
 } from '../../../backend/services/companyProfileService';
 import {
   buildCompanyContext,
@@ -11,11 +14,12 @@ import {
   computeCompanyContextCompletion,
   FORCED_CONTEXT_FIELD_LABELS,
 } from '../../../backend/services/companyContextService';
-import { generateStrategicIntelligence } from '../../../backend/services/strategicIntelligenceService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveCompanyAccess, getContentArchitectCompanyId, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
+
+const DEFAULT_STRATEGIC_ASPECTS = ['Growth', 'Awareness', 'Conversion'];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
@@ -128,25 +132,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? (toLimitedCompanyProfile(resolvedProfile) ?? resolvedProfile)
         : resolvedProfile;
       const response: Record<string, unknown> = { profile: responseProfile };
+      response.company_profile_review = getCompanyProfileReviewStatus(resolvedProfile);
 
-      // Recommendation tab: backend-driven strategic intelligence (aspects + offerings by aspect). Content Architect overrides from profile.strategic_inputs.
-      const strategic = generateStrategicIntelligence(resolvedProfile ?? null);
+      // Recommendation tab: profile-driven strategic config. Content Architect overrides from profile.strategic_inputs.
       const overrides = (resolvedProfile as { strategic_inputs?: { strategic_aspects?: string[]; offerings_by_aspect?: Record<string, string[]>; strategic_objectives?: string[] } | null })?.strategic_inputs;
+      const profileAspects = [
+        ...(Array.isArray((resolvedProfile as unknown as { content_themes?: string[] | null })?.content_themes)
+          ? ((resolvedProfile as unknown as { content_themes?: string[] | null }).content_themes ?? [])
+          : []),
+        ...(Array.isArray((resolvedProfile as unknown as { campaign_focus?: string[] | null })?.campaign_focus)
+          ? ((resolvedProfile as unknown as { campaign_focus?: string[] | null }).campaign_focus ?? [])
+          : []),
+      ]
+        .map((v) => String(v ?? '').trim())
+        .filter(Boolean);
       const strategic_aspects =
         Array.isArray(overrides?.strategic_aspects) && overrides.strategic_aspects.length > 0
           ? overrides.strategic_aspects
-          : strategic.strategic_aspects;
+          : (profileAspects.length > 0 ? Array.from(new Set(profileAspects)).slice(0, 12) : DEFAULT_STRATEGIC_ASPECTS);
       const offerings_by_aspect =
         overrides?.offerings_by_aspect && typeof overrides.offerings_by_aspect === 'object'
-          ? { ...strategic.offerings_by_aspect, ...overrides.offerings_by_aspect }
-          : strategic.offerings_by_aspect;
+          ? overrides.offerings_by_aspect
+          : {};
       response.recommendation_strategic_config = {
         strategic_aspects,
         aspect_offerings_map: offerings_by_aspect,
         offerings_by_aspect,
-        ranked_aspects: strategic.ranked_aspects,
-        aspect_anchors: strategic.aspect_anchors,
-        offering_tags: strategic.offering_tags,
+        ranked_aspects: strategic_aspects,
+        aspect_anchors: strategic_aspects.map((aspect) => ({ aspect, intent_tags: [] })),
+        offering_tags: [],
         strategic_objectives: Array.isArray(overrides?.strategic_objectives) ? overrides.strategic_objectives : undefined,
       };
 
@@ -202,14 +216,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       const access = await resolveCompanyAccess(req, res, resolvedCompanyId);
       if (!access) return;
+      const existingProfile = await getProfile(resolvedCompanyId, { autoRefine: false, languageRefine: false });
+      const normalizedRole = String(access.role ?? '').toUpperCase();
+      const incomingReportSettings =
+        (body.report_settings as CompanyProfile['report_settings'] | undefined) ?? undefined;
       const payload = {
         ...body,
         company_id: resolvedCompanyId,
+        report_settings: upsertCompanyProfileGovernanceSettings({
+          existingReportSettings: existingProfile?.report_settings,
+          incomingReportSettings,
+          confirmedByRole:
+            normalizedRole === 'COMPANY_ADMIN' || normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'ADMIN'
+              ? normalizedRole
+              : null,
+        }),
       };
       const profile = await saveProfile(payload);
       const responseProfile =
         access.role === 'COMPANY_ADMIN' ? toLimitedCompanyProfile(profile) ?? profile : profile;
-      return res.status(200).json({ profile: responseProfile });
+      return res.status(200).json({
+        profile: responseProfile,
+        company_profile_review: getCompanyProfileReviewStatus(profile),
+      });
     } catch (error: any) {
       console.error('Error saving company profile:', error);
       const message = error?.message && typeof error.message === 'string' ? error.message : 'Failed to save company profile';

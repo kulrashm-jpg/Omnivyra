@@ -28,3 +28,10 @@ export const redis = new IORedis({
   enableReadyCheck: false,
   maxRetriesPerRequest: null,
 });
+
+// Suppress unhandled error events (e.g. Upstash rate-limit errors).
+// BullMQ handles connection errors internally; without this listener Node.js
+// would throw an uncaught exception for every rejected Redis command.
+redis.on('error', (err: Error) => {
+  console.warn('[redis] error:', err.message);
+});

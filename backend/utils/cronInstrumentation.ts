@@ -22,6 +22,7 @@
 
 import { hostname } from 'os';
 import IORedis        from 'ioredis';
+import { config } from '@/config';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
 
 // ── Identity ───────────────────────────────────────────────────────────────────
@@ -99,7 +100,7 @@ export class CronInstrumentation {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    const url = process.env.REDIS_URL || 'redis://localhost:6379';
+    const url = config.REDIS_URL;
     try {
       const raw = new IORedis(url, {
         enableReadyCheck:     false,

@@ -31,6 +31,8 @@ const stats: CacheStats = {
   per_api_misses: {},
 };
 
+const MAX_IN_MEMORY_CACHE_SIZE = 200;
+
 let redisClient: IORedis | null = null;
 let redisAvailable = false;
 const inMemoryCache = new Map<string, CacheEntry<any>>();
@@ -91,15 +93,11 @@ function getRedisClient(): IORedis | null {
   }
 }
 
-async function isRedisOk(): Promise<boolean> {
-  const client = getRedisClient();
-  if (!client) return false;
-  try {
-    const pong = await client.ping();
-    return pong === 'PONG';
-  } catch {
-    return false;
-  }
+function isRedisOk(): boolean {
+  // Use the connection-event-tracked flag instead of pinging on every call.
+  // The `redisAvailable` flag is set to true/false by the 'connect' and 'error'
+  // listeners in getRedisClient(), so no extra round-trip is needed.
+  return redisAvailable && redisClient !== null;
 }
 
 export const buildCacheKey = (input: {
@@ -116,7 +114,7 @@ export async function getCachedResponse<T>(
   key: string,
   apiId: string
 ): Promise<T | null> {
-  const ok = await isRedisOk();
+  const ok = isRedisOk();
   if (ok) {
     try {
       const client = getRedisClient()!;
@@ -160,7 +158,7 @@ export async function setCachedResponse<T>(
   ttlMs: number
 ): Promise<void> {
   const ttlSec = Math.ceil(ttlMs / 1000);
-  const ok = await isRedisOk();
+  const ok = isRedisOk();
   if (ok) {
     try {
       const client = getRedisClient()!;
@@ -171,6 +169,10 @@ export async function setCachedResponse<T>(
     }
   }
 
+  if (inMemoryCache.size >= MAX_IN_MEMORY_CACHE_SIZE) {
+    const oldest = inMemoryCache.keys().next().value;
+    if (oldest !== undefined) inMemoryCache.delete(oldest);
+  }
   inMemoryCache.set(key, {
     value,
     expires_at: Date.now() + ttlMs,
@@ -202,7 +204,7 @@ export async function isRateLimited(
 ): Promise<boolean> {
   const key = rateLimitRedisKey(rateLimitKeyStr);
 
-  const ok = await isRedisOk();
+  const ok = isRedisOk();
   if (ok) {
     try {
       const client = getRedisClient()!;
@@ -253,7 +255,7 @@ export async function resetExternalApiRuntime(): Promise<void> {
   inMemoryRateLimit.clear();
   clearLastRateLimitedSources();
   resetCacheStats();
-  const ok = await isRedisOk();
+  const ok = isRedisOk();
   if (ok) {
     try {
       const client = getRedisClient()!;
