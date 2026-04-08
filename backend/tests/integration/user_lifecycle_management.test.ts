@@ -68,11 +68,38 @@ const buildQuery = (table: string) => {
       state.filters[field] = value;
       return query;
     }),
+    in: jest.fn((field: string, values: any[]) => {
+      state.filters[field] = values;
+      state.op = 'in';
+      return query;
+    }),
     limit: jest.fn().mockReturnThis(),
     insert: jest.fn((payload: any) => {
+      if (table === 'users') {
+        const rows = Array.isArray(payload) ? payload : [payload];
+        rows.forEach((row) => {
+          const id = `user-${Object.keys(authUsers).length + 1}`;
+          authUsers[id] = { id, email: row.email };
+        });
+        return query;
+      }
       const rows = Array.isArray(payload) ? payload : [payload];
       rows.forEach((row) => roleRows.push(row));
       return query;
+    }),
+    maybeSingle: jest.fn(async () => {
+      if (table === 'users') {
+        const user = Object.values(authUsers).find((row) => row.email === state.filters.email) ?? null;
+        return { data: user, error: null };
+      }
+      return { data: null, error: null };
+    }),
+    single: jest.fn(async () => {
+      if (table === 'users') {
+        const user = Object.values(authUsers).find((row) => row.email === state.filters.email) ?? Object.values(authUsers).slice(-1)[0] ?? null;
+        return { data: user, error: null };
+      }
+      return { data: null, error: null };
     }),
     update: jest.fn((payload: any) => {
       state.op = 'update';
@@ -119,6 +146,13 @@ const buildQuery = (table: string) => {
           return true;
         });
         return resolve({ data: filtered, error: null });
+      }
+      if (table === 'users') {
+        let users = Object.values(authUsers);
+        if (state.op === 'in' && Array.isArray(state.filters.id)) {
+          users = users.filter((row) => state.filters.id.includes(row.id));
+        }
+        return resolve({ data: users, error: null });
       }
       return resolve({ data: [], error: null });
     },

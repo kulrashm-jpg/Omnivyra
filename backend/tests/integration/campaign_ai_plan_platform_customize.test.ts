@@ -1,9 +1,31 @@
 import handler from '../../../pages/api/campaigns/ai/plan';
 import { assessVirality } from '../../services/viralityAdvisorService';
 import { requestDecision } from '../../services/omnivyreClient';
-import { parseAiPlatformCustomization } from '../../services/campaignPlanParser';
-import { savePlatformCustomizedContent } from '../../db/campaignPlanStore';
+import { saveAiCampaignPlan } from '../../db/campaignPlanStore';
 import type { NextApiRequest, NextApiResponse } from 'next';
+
+jest.mock('../../services/campaignAiOrchestrator', () => ({
+  runCampaignAiPlan: jest.fn().mockResolvedValue({
+    mode: 'platform_customize',
+    snapshot_hash: 'hash123',
+    raw_plan_text: 'Platform customization output',
+    omnivyre_decision: {
+      recommendation: 'HOLD',
+      confidence: 0.7,
+    },
+    platform_content: {
+      day: 'Tuesday',
+      platforms: {
+        linkedin: 'LinkedIn version',
+        instagram: 'Instagram version',
+        twitter: 'Twitter version',
+      },
+    },
+  }),
+  CampaignAiMode: {},
+  normalizeCapacityCounts: jest.fn((value) => value),
+  normalizeCapacityCountsWithBreakdown: jest.fn((value) => value),
+}));
 
 jest.mock('../../services/viralityAdvisorService', () => ({
   assessVirality: jest.fn(),
@@ -30,14 +52,47 @@ jest.mock('../../services/viralitySnapshotBuilder', () => ({
 
 jest.mock('../../services/campaignPlanningInputsService', () => ({
   getCampaignPlanningInputs: jest.fn().mockResolvedValue(null),
+  saveCampaignPlanningInputs: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock('../../services/campaignPlanParser', () => ({
-  parseAiPlatformCustomization: jest.fn(),
+jest.mock('../../db/supabaseClient', () => ({
+  supabase: {
+    from: jest.fn((table: string) => {
+      if (table === 'campaign_versions') {
+        return {
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          order: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockReturnThis(),
+          maybeSingle: jest.fn().mockResolvedValue({ data: { company_id: 'comp123' }, error: null }),
+        };
+      }
+
+      return {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        order: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+      };
+    }),
+  },
+}));
+
+jest.mock('../../services/rbacService', () => ({
+  getUserCompanyRole: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'COMPANY_ADMIN' }),
+  getCompanyRoleIncludingInvited: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../../services/campaignRoleService', () => ({
+  resolveEffectiveCampaignRole: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'COMPANY_ADMIN' }),
+  isCompanyOverrideRole: jest.fn().mockReturnValue(true),
 }));
 
 jest.mock('../../db/campaignPlanStore', () => ({
-  savePlatformCustomizedContent: jest.fn(),
+  saveAiCampaignPlan: jest.fn(),
+  saveDraftBlueprint: jest.fn(),
+  getLatestDraftPlan: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('openai', () => {
@@ -89,19 +144,11 @@ describe('Campaign AI Plan Platform Customize', () => {
       timestamp: '2026-01-01T00:00:00Z',
     });
 
-    (parseAiPlatformCustomization as jest.Mock).mockResolvedValue({
-      day: 'Tuesday',
-      platforms: {
-        linkedin: 'LinkedIn version',
-        instagram: 'Instagram version',
-        twitter: 'Twitter version',
-      },
-    });
-
     const req = {
       method: 'POST',
       body: {
         campaignId: 'camp123',
+        companyId: 'comp123',
         mode: 'platform_customize',
         message: 'Customize Tuesday',
         targetDay: 'Tuesday',
@@ -113,19 +160,14 @@ describe('Campaign AI Plan Platform Customize', () => {
 
     await handler(req, res);
 
-    expect(savePlatformCustomizedContent).toHaveBeenCalledWith({
+    expect(saveAiCampaignPlan).toHaveBeenCalledWith({
       campaignId: 'camp123',
       snapshot_hash: 'hash123',
-      day: 'Tuesday',
-      platforms: {
-        linkedin: 'LinkedIn version',
-        instagram: 'Instagram version',
-        twitter: 'Twitter version',
-      },
+      mode: 'platform_customize',
+      response: 'Platform customization output',
       omnivyre_decision: expect.objectContaining({
         recommendation: 'HOLD',
       }),
-      raw_plan_text: 'Platform customization output',
     });
 
     expect(res.status).toHaveBeenCalledWith(200);

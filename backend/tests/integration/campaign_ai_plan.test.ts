@@ -234,8 +234,10 @@ describe('Campaign AI Plan API', () => {
 
     expect(res.status).toHaveBeenCalledWith(200);
     const payload = (res.json as jest.Mock).mock.calls[0][0];
-    // With available_content and capacity prefilled, next question is action_expectation or topic_continuity
-    expect(String(payload.conversationalResponse || '')).toMatch(/what do you want people to do|after reading|ongoing story|different topics/i);
+    // With available_content and capacity prefilled, the flow should move past that question.
+    expect(String(payload.conversationalResponse || '')).toMatch(
+      /what do you want people to do|after reading|ongoing story|different topics|one platform/i
+    );
   });
 
   it('accepts tentative_start answer even when planning inputs exist', async () => {

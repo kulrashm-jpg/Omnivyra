@@ -5,7 +5,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../../../components/blog/BlogEditorForm';
-import { BlogQualityPanel, type ImproveArea } from '../../../../components/blog/BlogQualityPanel';
+import { ContentQualityPanel, type ImproveArea } from '../../../../components/content/ContentQualityPanel';
 import { Loader2 } from 'lucide-react';
 import type { MediaBlockItem } from '../../../../components/blog/BlogMediaBlock';
 import type { ContentBlock } from '../../../../lib/blog/blockTypes';
@@ -261,7 +261,7 @@ export default function AdminBlogEditPage() {
             {/* ── Quality panel (sticky right sidebar) ────────────────────── */}
             <div className="hidden xl:block w-[280px] shrink-0 sticky top-6 self-start">
               {liveState && (
-                <BlogQualityPanel
+                <ContentQualityPanel
                   blocks={liveState.content_blocks}
                   formState={{
                     title:                liveState.title,

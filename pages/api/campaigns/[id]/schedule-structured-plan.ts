@@ -13,6 +13,10 @@ import { checkAndCompleteCampaignIfEligible } from '../../../../backend/services
 import { recordGovernanceEvent } from '../../../../backend/services/GovernanceEventService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 
+const isScheduleEligibilityError = (error: unknown): error is ScheduleEligibilityError => {
+  return typeof ScheduleEligibilityError === 'function' && error instanceof ScheduleEligibilityError;
+};
+
 async function getCompanyId(campaignId: string): Promise<string | null> {
   const { data } = await supabase
     .from('campaign_versions')
@@ -213,7 +217,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         message: 'Scheduler integrity check failed',
       });
     }
-    if (error instanceof ScheduleEligibilityError) {
+    if (isScheduleEligibilityError(error)) {
       return res.status(409).json({
         code: error.code,
         message: error.message,

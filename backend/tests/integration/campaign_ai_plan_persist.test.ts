@@ -4,8 +4,28 @@ import { assessVirality } from '../../services/viralityAdvisorService';
 import { requestDecision } from '../../services/omnivyreClient';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
+jest.mock('../../services/campaignAiOrchestrator', () => ({
+  runCampaignAiPlan: jest.fn().mockResolvedValue({
+    mode: 'generate_plan',
+    snapshot_hash: 'hash123',
+    raw_plan_text: 'Test campaign plan output',
+    omnivyre_decision: {
+      recommendation: 'HOLD',
+      confidence: 0.7,
+    },
+    plan: {
+      weeks: [],
+    },
+  }),
+  CampaignAiMode: {},
+  normalizeCapacityCounts: jest.fn((value) => value),
+  normalizeCapacityCountsWithBreakdown: jest.fn((value) => value),
+}));
+
 jest.mock('../../db/campaignPlanStore', () => ({
   saveAiCampaignPlan: jest.fn(),
+  saveDraftBlueprint: jest.fn(),
+  getLatestDraftPlan: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../../services/viralityAdvisorService', () => ({
@@ -34,6 +54,40 @@ jest.mock('../../services/viralitySnapshotBuilder', () => ({
 jest.mock('../../services/campaignPlanningInputsService', () => ({
   getCampaignPlanningInputs: jest.fn().mockResolvedValue(null),
   saveCampaignPlanningInputs: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../../db/supabaseClient', () => ({
+  supabase: {
+    from: jest.fn((table: string) => {
+      if (table === 'campaign_versions') {
+        return {
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          order: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockReturnThis(),
+          maybeSingle: jest.fn().mockResolvedValue({ data: { company_id: 'comp123' }, error: null }),
+        };
+      }
+
+      return {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        order: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+      };
+    }),
+  },
+}));
+
+jest.mock('../../services/rbacService', () => ({
+  getUserCompanyRole: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'COMPANY_ADMIN' }),
+  getCompanyRoleIncludingInvited: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../../services/campaignRoleService', () => ({
+  resolveEffectiveCampaignRole: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'COMPANY_ADMIN' }),
+  isCompanyOverrideRole: jest.fn().mockReturnValue(true),
 }));
 
 jest.mock('../../services/deterministicWeeklySkeleton', () => ({

@@ -1,351 +1,246 @@
 /**
- * Integration tests for Campaign Optimization Intelligence (Stage 35).
- * Advisory only. No mutation. No governance events. Read-only.
+ * Integration tests for Campaign Optimization Intelligence.
+ * Read-only and advisory only.
  */
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
 }));
-jest.mock('../../services/CampaignRoiIntelligenceService', () => ({
-  getCampaignRoiIntelligence: jest.fn(),
-}));
-jest.mock('../../services/GovernanceAnalyticsService', () => ({
-  getCampaignGovernanceAnalytics: jest.fn(),
+
+jest.mock('../../services/decisionComposerService', () => ({
+  composeDecisionIntelligence: jest.fn(),
+  composeCampaignOptimizationView: jest.fn(),
 }));
 
+jest.mock('../../services/intelligenceExecutionContext', () => ({
+  runInApiReadContext: jest.fn(async (_label: string, fn: () => Promise<unknown>) => fn()),
+}));
+
+jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (h: any) => h }));
+
 import { supabase } from '../../db/supabaseClient';
-import { getCampaignRoiIntelligence } from '../../services/CampaignRoiIntelligenceService';
-import { getCampaignGovernanceAnalytics } from '../../services/GovernanceAnalyticsService';
+import {
+  composeCampaignOptimizationView,
+  composeDecisionIntelligence,
+} from '../../services/decisionComposerService';
 import {
   generateCampaignOptimizationInsights,
-  type CampaignOptimizationInsight,
 } from '../../services/CampaignOptimizationIntelligenceService';
 
 import campaignOptimizationHandler from '../../../pages/api/analytics/campaign-optimization';
 
-jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (h: any) => h }));
-
 const campaignId = 'opt-campaign-1';
 
-type ChainResult = { data: any; error: any };
+function mockCampaignLookup(companyId: string | null = 'company-1') {
+  (supabase.from as jest.Mock).mockImplementation((table: string) => {
+    if (table === 'campaigns') {
+      return {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        maybeSingle: jest.fn().mockResolvedValue({
+          data: companyId ? { company_id: companyId } : null,
+          error: null,
+        }),
+      };
+    }
 
-function chain(result: ChainResult) {
-  const mock: any = {
-    select: jest.fn().mockReturnThis(),
-    eq: jest.fn().mockReturnThis(),
-    then: (resolve: any) => Promise.resolve(result).then(resolve),
-  };
-  return mock;
+    return {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+    };
+  });
 }
 
-function mockSupabase(events: any[] = [], posts: any[] = []) {
-  (supabase.from as jest.Mock).mockImplementation((table: string) => {
-    if (table === 'campaign_governance_events') return chain({ data: events, error: null });
-    if (table === 'scheduled_posts') return chain({ data: posts, error: null });
-    return chain({ data: [], error: null });
+function setOptimizationInsights(insights: Array<{
+  priority: 'LOW' | 'MEDIUM' | 'HIGH';
+  category: 'PERFORMANCE' | 'GOVERNANCE' | 'EXECUTION' | 'CONTENT_STRATEGY';
+  headline: string;
+  explanation?: string;
+  recommendedAction?: string;
+}>) {
+  (composeDecisionIntelligence as jest.Mock).mockResolvedValue({ insights: [] });
+  (composeCampaignOptimizationView as jest.Mock).mockReturnValue({
+    campaignId,
+    insights: insights.map((insight) => ({
+      explanation: 'Test explanation',
+      recommendedAction: 'Test action',
+      ...insight,
+    })),
+    roi: {
+      roiScore: 70,
+      performanceScore: 70,
+      governanceStabilityScore: 80,
+      executionReliabilityScore: 85,
+      optimizationSignal: 'STABLE',
+      recommendation: 'Test action',
+    },
   });
 }
 
 describe('Campaign Optimization Intelligence', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockSupabase([], []);
+    mockCampaignLookup();
   });
 
-  describe('Low ROI → PERFORMANCE insight', () => {
-    it('returns HIGH priority PERFORMANCE insight when roiScore < 50', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockResolvedValue({
+  it('returns HIGH priority PERFORMANCE insights', async () => {
+    setOptimizationInsights([
+      { priority: 'HIGH', category: 'PERFORMANCE', headline: 'Campaign performance under target' },
+    ]);
+
+    const insights = await generateCampaignOptimizationInsights(campaignId);
+
+    expect(insights).toContainEqual(
+      expect.objectContaining({
         campaignId,
-        roiScore: 35,
-        performanceScore: 40,
-        governanceStabilityScore: 80,
-        executionReliabilityScore: 90,
-        optimizationSignal: 'AT_RISK',
-      });
-      (getCampaignGovernanceAnalytics as jest.Mock).mockResolvedValue({
-        driftCount: 0,
-        replayCoverageRatio: 1,
-        freezeBlocks: 0,
-      });
-
-      const insights = await generateCampaignOptimizationInsights(campaignId);
-
-      expect(insights).toContainEqual(
-        expect.objectContaining({
-          priority: 'HIGH',
-          category: 'PERFORMANCE',
-          headline: 'Campaign performance under target',
-        })
-      );
-    });
+        priority: 'HIGH',
+        category: 'PERFORMANCE',
+        headline: 'Campaign performance under target',
+      })
+    );
   });
 
-  describe('Drift → GOVERNANCE insight', () => {
-    it('returns MEDIUM priority GOVERNANCE insight when driftCount > 0', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockResolvedValue({
-        campaignId,
-        roiScore: 70,
-        performanceScore: 60,
-        governanceStabilityScore: 60,
-        executionReliabilityScore: 90,
-        optimizationSignal: 'STABLE',
-      });
-      (getCampaignGovernanceAnalytics as jest.Mock).mockResolvedValue({
-        driftCount: 1,
-        replayCoverageRatio: 1,
-        freezeBlocks: 0,
-      });
+  it('returns MEDIUM priority GOVERNANCE insights', async () => {
+    setOptimizationInsights([
+      { priority: 'MEDIUM', category: 'GOVERNANCE', headline: 'Governance stability risk detected' },
+    ]);
 
-      const insights = await generateCampaignOptimizationInsights(campaignId);
+    const insights = await generateCampaignOptimizationInsights(campaignId);
 
-      expect(insights).toContainEqual(
-        expect.objectContaining({
-          priority: 'MEDIUM',
-          category: 'GOVERNANCE',
-          headline: 'Governance stability risk detected',
-        })
-      );
-    });
+    expect(insights).toContainEqual(
+      expect.objectContaining({
+        category: 'GOVERNANCE',
+        priority: 'MEDIUM',
+        headline: 'Governance stability risk detected',
+      })
+    );
+  });
 
-    it('returns MEDIUM priority GOVERNANCE insight when replayCoverageRatio < 0.8', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockResolvedValue({
-        campaignId,
-        roiScore: 70,
-        performanceScore: 60,
-        governanceStabilityScore: 80,
-        executionReliabilityScore: 90,
-        optimizationSignal: 'STABLE',
-      });
-      (getCampaignGovernanceAnalytics as jest.Mock).mockResolvedValue({
-        driftCount: 0,
-        replayCoverageRatio: 0.5,
-        freezeBlocks: 0,
-      });
+  it('returns HIGH priority EXECUTION insights', async () => {
+    setOptimizationInsights([
+      { priority: 'HIGH', category: 'EXECUTION', headline: 'Execution reliability risk' },
+    ]);
 
-      const insights = await generateCampaignOptimizationInsights(campaignId);
+    const insights = await generateCampaignOptimizationInsights(campaignId);
 
-      expect(insights).toContainEqual(
-        expect.objectContaining({
-          priority: 'MEDIUM',
-          category: 'GOVERNANCE',
-          headline: 'Governance stability risk detected',
-        })
-      );
+    expect(insights).toContainEqual(
+      expect.objectContaining({
+        category: 'EXECUTION',
+        priority: 'HIGH',
+        headline: 'Execution reliability risk',
+      })
+    );
+  });
+
+  it('returns MEDIUM priority CONTENT_STRATEGY insights', async () => {
+    setOptimizationInsights([
+      { priority: 'MEDIUM', category: 'CONTENT_STRATEGY', headline: 'Content overlap reducing differentiation' },
+    ]);
+
+    const insights = await generateCampaignOptimizationInsights(campaignId);
+
+    expect(insights).toContainEqual(
+      expect.objectContaining({
+        category: 'CONTENT_STRATEGY',
+        priority: 'MEDIUM',
+        headline: 'Content overlap reducing differentiation',
+      })
+    );
+  });
+
+  it('returns fallback LOW insight when no optimization signals exist', async () => {
+    setOptimizationInsights([]);
+
+    const insights = await generateCampaignOptimizationInsights(campaignId);
+
+    expect(insights).toHaveLength(1);
+    expect(insights[0]).toMatchObject({
+      priority: 'LOW',
+      headline: 'Campaign operating within expected range',
     });
   });
 
-  describe('Freeze blocks → EXECUTION insight', () => {
-    it('returns HIGH priority EXECUTION insight when freezeBlocks > 0', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockResolvedValue({
-        campaignId,
-        roiScore: 70,
-        performanceScore: 60,
-        governanceStabilityScore: 80,
-        executionReliabilityScore: 90,
-        optimizationSignal: 'STABLE',
-      });
-      (getCampaignGovernanceAnalytics as jest.Mock).mockResolvedValue({
-        driftCount: 0,
-        replayCoverageRatio: 1,
-        freezeBlocks: 2,
-      });
+  it('returns empty array for empty campaignId', async () => {
+    const insights = await generateCampaignOptimizationInsights('');
+    expect(insights).toEqual([]);
+  });
 
-      const insights = await generateCampaignOptimizationInsights(campaignId);
+  it('returns fallback LOW insight on composition failure', async () => {
+    (composeDecisionIntelligence as jest.Mock).mockRejectedValue(new Error('composition failed'));
 
-      expect(insights).toContainEqual(
-        expect.objectContaining({
-          priority: 'HIGH',
-          category: 'EXECUTION',
-          headline: 'Execution reliability risk',
-        })
-      );
-    });
+    const insights = await generateCampaignOptimizationInsights(campaignId);
 
-    it('returns HIGH priority EXECUTION insight when scheduler failures exist', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockResolvedValue({
-        campaignId,
-        roiScore: 70,
-        performanceScore: 60,
-        governanceStabilityScore: 80,
-        executionReliabilityScore: 90,
-        optimizationSignal: 'STABLE',
-      });
-      (getCampaignGovernanceAnalytics as jest.Mock).mockResolvedValue({
-        driftCount: 0,
-        replayCoverageRatio: 1,
-        freezeBlocks: 0,
-      });
-      mockSupabase([], [{ status: 'failed' }, { status: 'published' }]);
-
-      const insights = await generateCampaignOptimizationInsights(campaignId);
-
-      expect(insights).toContainEqual(
-        expect.objectContaining({
-          priority: 'HIGH',
-          category: 'EXECUTION',
-          headline: 'Execution reliability risk',
-        })
-      );
+    expect(insights).toHaveLength(1);
+    expect(insights[0]).toMatchObject({
+      priority: 'LOW',
+      headline: 'Campaign operating within optimal range',
     });
   });
 
-  describe('Content collision → CONTENT_STRATEGY insight', () => {
-    it('returns MEDIUM priority CONTENT_STRATEGY insight when collision events exist', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockResolvedValue({
-        campaignId,
-        roiScore: 70,
-        performanceScore: 60,
-        governanceStabilityScore: 80,
-        executionReliabilityScore: 90,
-        optimizationSignal: 'STABLE',
-      });
-      (getCampaignGovernanceAnalytics as jest.Mock).mockResolvedValue({
-        driftCount: 0,
-        replayCoverageRatio: 1,
-        freezeBlocks: 0,
-      });
-      mockSupabase(
-        [{ event_type: 'CONTENT_COLLISION_DETECTED' }],
-        []
-      );
+  it('does not call insert/update/upsert', async () => {
+    setOptimizationInsights([
+      { priority: 'LOW', category: 'PERFORMANCE', headline: 'Campaign operating within expected range' },
+    ]);
 
-      const insights = await generateCampaignOptimizationInsights(campaignId);
+    await generateCampaignOptimizationInsights(campaignId);
 
-      expect(insights).toContainEqual(
-        expect.objectContaining({
-          priority: 'MEDIUM',
-          category: 'CONTENT_STRATEGY',
-          headline: 'Content overlap reducing differentiation',
-        })
-      );
-    });
+    const fromCalls = (supabase.from as jest.Mock).mock.results;
+    const chain = fromCalls?.[0]?.value;
+    expect(chain?.insert).toBeUndefined();
+    expect(chain?.update).toBeUndefined();
+    expect(chain?.upsert).toBeUndefined();
   });
 
-  describe('Stable campaign → LOW insight', () => {
-    it('returns single LOW priority insight when no issues', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockResolvedValue({
-        campaignId,
-        roiScore: 75,
-        performanceScore: 70,
-        governanceStabilityScore: 85,
-        executionReliabilityScore: 90,
-        optimizationSignal: 'STABLE',
-      });
-      (getCampaignGovernanceAnalytics as jest.Mock).mockResolvedValue({
-        driftCount: 0,
-        replayCoverageRatio: 1,
-        freezeBlocks: 0,
-      });
+  it('API returns 400 when campaignId is missing', async () => {
+    const req: any = { method: 'GET', query: {} };
+    const res: any = {
+      statusCode: 200,
+      setHeader: jest.fn(),
+      status(code: number) {
+        this.statusCode = code;
+        return this;
+      },
+      json: jest.fn(),
+    };
 
-      const insights = await generateCampaignOptimizationInsights(campaignId);
+    await campaignOptimizationHandler(req, res);
 
-      expect(insights).toHaveLength(1);
-      expect(insights[0]).toMatchObject({
-        priority: 'LOW',
-        headline: 'Campaign operating within optimal range',
-      });
-    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.any(String) })
+    );
   });
 
-  describe('Validation', () => {
-    it('returns empty array for empty campaignId', async () => {
-      const insights = await generateCampaignOptimizationInsights('');
-      expect(insights).toEqual([]);
-    });
+  it('API returns insights when campaignId is provided', async () => {
+    setOptimizationInsights([
+      { priority: 'HIGH', category: 'PERFORMANCE', headline: 'Campaign performance under target' },
+    ]);
 
-    it('returns fallback LOW insight on service error', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockRejectedValue(new Error('roi failed'));
+    const req: any = { method: 'GET', query: { campaignId } };
+    const res: any = {
+      statusCode: 200,
+      setHeader: jest.fn(),
+      status(code: number) {
+        this.statusCode = code;
+        return this;
+      },
+      json: jest.fn(),
+    };
 
-      const insights = await generateCampaignOptimizationInsights(campaignId);
+    await campaignOptimizationHandler(req, res);
 
-      expect(insights).toHaveLength(1);
-      expect(insights[0].priority).toBe('LOW');
-      expect(insights[0].headline).toContain('optimal');
-    });
-  });
-
-  describe('No DB writes', () => {
-    it('does not call insert/update/upsert', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockResolvedValue({
-        campaignId,
-        roiScore: 75,
-        performanceScore: 70,
-        governanceStabilityScore: 85,
-        executionReliabilityScore: 90,
-        optimizationSignal: 'STABLE',
-      });
-      (getCampaignGovernanceAnalytics as jest.Mock).mockResolvedValue({
-        driftCount: 0,
-        replayCoverageRatio: 1,
-        freezeBlocks: 0,
-      });
-
-      await generateCampaignOptimizationInsights(campaignId);
-
-      const fromCalls = (supabase.from as jest.Mock).mock.results;
-      const chain = fromCalls?.[0]?.value;
-      expect(chain?.insert).toBeUndefined();
-      expect(chain?.update).toBeUndefined();
-      expect(chain?.upsert).toBeUndefined();
-    });
-  });
-
-  describe('API', () => {
-    it('returns 400 when campaignId is missing', async () => {
-      const req: any = { method: 'GET', query: {} };
-      const res: any = {
-        statusCode: 200,
-        setHeader: jest.fn(),
-        status: function (code: number) {
-          this.statusCode = code;
-          return this;
-        },
-        json: jest.fn(),
-      };
-
-      await campaignOptimizationHandler(req, res);
-
-      expect(res.statusCode).toBe(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ error: expect.any(String) })
-      );
-    });
-
-    it('returns insights when campaignId is provided', async () => {
-      (getCampaignRoiIntelligence as jest.Mock).mockResolvedValue({
-        campaignId,
-        roiScore: 75,
-        performanceScore: 70,
-        governanceStabilityScore: 85,
-        executionReliabilityScore: 90,
-        optimizationSignal: 'STABLE',
-      });
-      (getCampaignGovernanceAnalytics as jest.Mock).mockResolvedValue({
-        driftCount: 0,
-        replayCoverageRatio: 1,
-        freezeBlocks: 0,
-      });
-
-      const req: any = { method: 'GET', query: { campaignId } };
-      const res: any = {
-        statusCode: 200,
-        setHeader: jest.fn(),
-        status: function (code: number) {
-          this.statusCode = code;
-          return this;
-        },
-        json: jest.fn(),
-      };
-
-      await campaignOptimizationHandler(req, res);
-
-      expect(res.statusCode).toBe(200);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          insights: expect.any(Array),
-        })
-      );
-      expect((res.json as jest.Mock).mock.calls[0][0].insights.length).toBeGreaterThan(0);
-    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        insights: expect.arrayContaining([
+          expect.objectContaining({
+            campaignId,
+            category: 'PERFORMANCE',
+            headline: 'Campaign performance under target',
+          }),
+        ]),
+      })
+    );
   });
 });

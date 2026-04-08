@@ -10,7 +10,8 @@
  * - Engagement signals in content structure
  */
 
-import { CreatorContentType, CREATOR_VALIDATION_RULES } from '../prompts/creatorContentPromptsV1';
+import { CreatorContentType } from '../adapters/commandCenter/creatorContentAdapter';
+import { CREATOR_VALIDATION_RULES } from '../prompts/creatorContentPromptsV1';
 
 export interface CreatorValidationResult {
   pass: boolean;

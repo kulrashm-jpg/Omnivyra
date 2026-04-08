@@ -1,14 +1,15 @@
 /**
  * Command Center → Launch Campaigns
  *
- * Layout:
- *   Row 1 — BOLT trio (3 columns): Text | Creator | Combined
- *   Row 2 — Other modes (2 columns): Recommend Mix | Strategic Campaign
+ * 4 campaign modes in a 2×2 grid:
+ *   BOLT (Text)    |  BOLT (Creator)
+ *   Intelligent Mix |  Strategic Campaign
  */
 
 import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
+import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
 
 interface CampaignCard {
   id: string;
@@ -27,7 +28,7 @@ interface CampaignCard {
   ctaColor: string;
 }
 
-const BOLT_CARDS: CampaignCard[] = [
+const CAMPAIGN_CARDS: CampaignCard[] = [
   {
     id: 'bolt-text',
     icon: '✍️',
@@ -69,47 +70,24 @@ const BOLT_CARDS: CampaignCard[] = [
     ctaColor: 'bg-blue-500 hover:bg-blue-600',
   },
   {
-    id: 'bolt-combined',
-    icon: '🔀',
-    badge: 'AI + Creator',
-    badgeColor: 'bg-violet-100 text-violet-800',
-    title: 'BOLT (Combined)',
-    subtitle: 'Text + creator campaign',
-    description: 'Run text-based AI content alongside creator-produced media in one coordinated campaign.',
+    id: 'intelligent-mix',
+    icon: '🤖',
+    badge: 'AI Chat',
+    badgeColor: 'bg-teal-100 text-teal-800',
+    title: 'Intelligent Mix',
+    subtitle: 'AI-guided mixed campaign',
+    description: 'Conversational AI advisor that recommends the right blend of text and creator content based on your goals, audience, and performance data.',
     bullets: [
-      'Mix text and creator formats freely',
-      'All platforms — text and video-first',
-      'Single AI strategy, dual execution',
+      'Text + creator formats in one campaign',
+      'AI chat drives strategy and format mix',
+      'Adapts to audience insights and trends',
     ],
-    cta: 'Launch BOLT (Combined)',
-    route: '/command-center/bolt-combined-strategy',
-    accentFrom: 'from-violet-50',
-    accentTo: 'to-purple-50',
-    borderColor: 'border-violet-300',
-    ctaColor: 'bg-violet-500 hover:bg-violet-600',
-  },
-];
-
-const OTHER_CARDS: CampaignCard[] = [
-  {
-    id: 'recommend-mix',
-    icon: '💡',
-    badge: 'Data-Driven',
-    badgeColor: 'bg-emerald-100 text-emerald-800',
-    title: 'Recommend',
-    subtitle: 'Mix Mode',
-    description: 'AI-curated content mix based on your audience insights, performance data, and market trends.',
-    bullets: [
-      'Personalised content recommendations',
-      'Optimal channel-format pairings',
-      'Continuously adapts to performance',
-    ],
-    cta: 'View Recommendations',
-    route: '/recommendations',
-    accentFrom: 'from-emerald-50',
-    accentTo: 'to-teal-50',
-    borderColor: 'border-emerald-200',
-    ctaColor: 'bg-emerald-600 hover:bg-emerald-700',
+    cta: 'Start AI Conversation',
+    route: '/command-center/intelligent-mix-strategy',
+    accentFrom: 'from-teal-50',
+    accentTo: 'to-cyan-50',
+    borderColor: 'border-teal-300',
+    ctaColor: 'bg-teal-600 hover:bg-teal-700',
   },
   {
     id: 'strategic-campaign',
@@ -117,17 +95,17 @@ const OTHER_CARDS: CampaignCard[] = [
     badge: 'Full Control',
     badgeColor: 'bg-green-100 text-green-800',
     title: 'Strategic Campaign',
-    subtitle: 'Full Planning',
-    description: 'Build comprehensive multi-channel campaigns with complete control over strategy and execution.',
+    subtitle: 'Full planning mode',
+    description: 'Build comprehensive multi-channel campaigns with complete control over strategy, formats, and execution.',
     bullets: [
       'Full campaign planning and briefing',
       'Multi-channel calendar and scheduling',
       'OKR and goal tracking built-in',
     ],
     cta: 'Plan Campaign',
-    route: '/campaign-planner',
+    route: '/campaign-planner?mode=direct',
     accentFrom: 'from-green-50',
-    accentTo: 'to-teal-50',
+    accentTo: 'to-emerald-50',
     borderColor: 'border-green-200',
     ctaColor: 'bg-green-600 hover:bg-green-700',
   },
@@ -168,6 +146,25 @@ function Card({ card, onClick }: { card: CampaignCard; onClick: () => void }) {
 export default function CampaignsSubPage() {
   const router = useRouter();
   const { user, authChecked, isLoading } = useCompanyContext();
+  const sourceContentToken = typeof router.query.sourceContentToken === 'string' ? router.query.sourceContentToken : null;
+  const sourcePayload = React.useMemo(
+    () => readCampaignSourcePayload(sourceContentToken),
+    [sourceContentToken],
+  );
+
+  const handleCardClick = React.useCallback((route: string) => {
+    if (route.startsWith('/campaign-planner')) {
+      void router.push({
+        pathname: '/campaign-planner',
+        query: sourceContentToken ? { sourceContentToken } : undefined,
+      });
+      return;
+    }
+    void router.push({
+      pathname: route,
+      query: sourceContentToken ? { sourceContentToken } : undefined,
+    });
+  }, [router, sourceContentToken]);
 
   React.useEffect(() => {
     if (authChecked && !user?.userId) router.replace('/login');
@@ -184,7 +181,7 @@ export default function CampaignsSubPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-3 sm:px-4 lg:px-6">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-4xl mx-auto">
 
         {/* Back */}
         <button onClick={() => router.push('/command-center')}
@@ -199,35 +196,25 @@ export default function CampaignsSubPage() {
         <div className="text-center mb-10">
           <div className="text-5xl mb-3">🚀</div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Launch Campaigns</h1>
-          <p className="text-gray-500 max-w-xl mx-auto">
-            Choose your campaign execution mode. BOLT automates strategy and planning — pick the content mix that fits your team.
+          <p className="text-gray-500 max-w-lg mx-auto">
+            Choose how you want to run your campaign. Each mode is optimised for a different execution style.
           </p>
         </div>
 
-        {/* BOLT trio */}
-        <div className="mb-3">
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-base font-bold text-gray-800">⚡ BOLT Campaigns</span>
-            <span className="text-xs text-gray-400">— AI-planned, strategy-first</span>
+        {sourcePayload && (
+          <div className="mb-8 rounded-2xl border border-indigo-200 bg-indigo-50 px-5 py-4 shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-indigo-700">Campaign Source</p>
+            <p className="mt-1 text-sm font-semibold text-gray-900">{sourcePayload.title}</p>
+            <p className="mt-1 text-sm text-gray-600">
+              We’ll carry this {sourcePayload.contentType} into the campaign mode you choose so the core idea stays prefilled.
+            </p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {BOLT_CARDS.map((card) => (
-              <Card key={card.id} card={card} onClick={() => router.push(card.route)} />
-            ))}
-          </div>
-        </div>
+        )}
 
-        {/* Divider */}
-        <div className="flex items-center gap-3 my-6">
-          <div className="flex-1 h-px bg-gray-200" />
-          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Other modes</span>
-          <div className="flex-1 h-px bg-gray-200" />
-        </div>
-
-        {/* Other two */}
+        {/* 2×2 grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-          {OTHER_CARDS.map((card) => (
-            <Card key={card.id} card={card} onClick={() => router.push(card.route)} />
+          {CAMPAIGN_CARDS.map((card) => (
+            <Card key={card.id} card={card} onClick={() => handleCardClick(card.route)} />
           ))}
         </div>
 

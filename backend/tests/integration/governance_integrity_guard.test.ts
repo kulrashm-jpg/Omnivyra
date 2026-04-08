@@ -121,8 +121,15 @@ describe('Governance Integrity Guard', () => {
     it('assertPolicySignatureUnchanged throws when env hash mismatches', () => {
       const actualHash = getGovernancePolicyHash();
       process.env.GOVERNANCE_POLICY_EXPECTED_HASH = 'wrong' + actualHash;
+      jest.resetModules();
 
-      expect(() => assertPolicySignatureUnchanged()).toThrow(PolicySignatureMismatchError);
+      expect(() => {
+        const {
+          assertPolicySignatureUnchanged: assertFreshPolicySignatureUnchanged,
+          PolicySignatureMismatchError: FreshPolicySignatureMismatchError,
+        } = require('../../governance/GovernancePolicyRegistry');
+        expect(() => assertFreshPolicySignatureUnchanged()).toThrow(FreshPolicySignatureMismatchError);
+      }).not.toThrow();
     });
 
     it('assertPolicySignatureUnchanged passes when env hash matches', () => {

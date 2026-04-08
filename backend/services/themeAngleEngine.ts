@@ -21,33 +21,39 @@ const THEME_ANGLES: ThemeAngle[] = [
 
 const ANGLE_TEMPLATES: Record<ThemeAngle, string[]> = {
   trend: [
-    'How {topic} Is Transforming Campaign Execution',
-    'The Growing Impact of {topic} on Modern Marketing',
+    'Why {topic} Is Changing the Game',
+    'The Rise of {topic}',
+    'How {topic} Is Reshaping the Landscape',
   ],
   problem: [
     'The Hidden Cost of Ignoring {topic}',
-    'Why Many Teams Struggle Without {topic}',
+    'Why Most Teams Struggle With {topic}',
+    'The {topic} Problem No One Talks About',
   ],
   opportunity: [
-    'Why {topic} Is Becoming Essential for Marketing Teams',
-    'The Opportunity {topic} Creates for Modern Marketers',
+    'The Untapped Power of {topic}',
+    'How {topic} Unlocks New Growth',
+    'Why {topic} Is Your Biggest Missed Opportunity',
   ],
   contrarian: [
-    'What Most Teams Get Wrong About {topic}',
-    'Why {topic} Alone Won\'t Fix Marketing Challenges',
+    'What Everyone Gets Wrong About {topic}',
+    'The {topic} Myth, Debunked',
+    'Stop Doing {topic} the Hard Way',
   ],
   future: [
-    'The Future of Marketing with {topic}',
-    'How {topic} Is Shaping the Next Era of Marketing',
+    'Where {topic} Is Headed',
+    'The Future Belongs to {topic}',
+    'What {topic} Looks Like in Two Years',
   ],
   strategy: [
-    'A Practical Approach to Using {topic}',
-    'How Marketing Teams Can Use {topic} More Effectively',
+    'A Smarter Way to Approach {topic}',
+    'How to Win With {topic}',
+    'The Practical Guide to {topic}',
   ],
 };
 
 /** Acronyms to preserve in title case (e.g. AI, API, SEO) */
-const ACRONYMS = ['AI', 'API', 'SEO', 'SaaS', 'CRM', 'B2B', 'B2C'];
+const ACRONYMS = ['AI', 'API', 'SEO', 'SaaS', 'CRM', 'B2B', 'B2C', 'ROI', 'KPI', 'UX', 'UI', 'HR'];
 
 /** Simple djb2-style hash for deterministic angle/template selection */
 function hash(str: string): number {
@@ -77,22 +83,29 @@ function titleCasePreservingAcronyms(text: string): string {
     .join(' ');
 }
 
-/** Remove duplicate domain words (e.g. "Marketing in Marketing" → "Marketing") */
+/** Remove cases where a key word from the topic appears verbatim in the template suffix.
+ *  e.g. "The Rise of Social Media Marketing" when topic is "Social Media Marketing" is fine,
+ *  but "Why Social Media Strategy Is Shaping the Next Era of Strategy" drops the tail "of Strategy". */
 function removeDuplicateWords(text: string): string {
-  let result = text.replace(/\b(marketing|strategy|content)\s+\1\b/gi, '$1');
-  result = result.replace(/\s+in\s+(Marketing|Strategy|Content)\s*$/i, (match, word) => {
-    const earlier = result.slice(0, -match.length);
-    return new RegExp(`\\b${word}\\b`, 'i').test(earlier) ? '' : match;
+  // Remove exact consecutive duplicate words
+  let result = text.replace(/\b(\w{4,})\s+\1\b/gi, '$1');
+  // Remove trailing "of X" / "in X" / "with X" where X already appears earlier in the string
+  result = result.replace(/\s+(?:of|in|with|for)\s+(\w[\w\s]{2,25})\s*$/i, (match, tail) => {
+    const earlier = result.slice(0, result.length - match.length);
+    const words = tail.trim().split(/\s+/);
+    const majorWord = words.find((w) => w.length >= 5);
+    if (majorWord && new RegExp(`\\b${majorWord}\\b`, 'i').test(earlier)) return '';
+    return match;
   });
   return result.replace(/\s+/g, ' ').trim();
 }
 
 function templateMatchesStructure(template: string, structure: string): boolean {
   const lower = structure.toLowerCase();
-  if (lower === 'how') return /^How\b|^A Practical Approach/i.test(template);
+  if (lower === 'how') return /^How\b|^A Smarter|^A Practical|^The Practical/i.test(template);
   if (lower === 'why') return /^Why\b/i.test(template);
   if (lower === 'what') return /^What\b/i.test(template);
-  if (lower === 'future') return /The Future|The Growing Impact|The Opportunity/i.test(template);
+  if (lower === 'future') return /^The Future|^Where\b|^What .* Looks Like/i.test(template);
   if (lower === 'hidden_cost') return /Hidden Cost/i.test(template);
   return false;
 }
@@ -154,39 +167,40 @@ export function generateThemeFromTopic(
  */
 export const PROGRESSION_ANGLE_TEMPLATES: Record<string, string[]> = {
   Awareness: [
-    'Why {topic} is reshaping the industry',
-    'Why {topic} is transforming marketing teams',
+    'Why {topic} matters right now',
     'The rise of {topic}',
-    'How {topic} is changing the landscape',
+    'How {topic} is changing the game',
+    'What {topic} actually means for you',
   ],
   Education: [
-    '{topic} tools every team should know',
-    '{topic} tools every marketer should know',
-    'Understanding {topic} in practice',
-    'How {topic} actually works',
+    'What you need to know about {topic}',
+    'How {topic} really works',
+    'The essentials of {topic}',
+    'Breaking down {topic}',
   ],
   Problem: [
-    'Why teams struggle with {topic}',
-    'Common mistakes when adopting {topic}',
-    'Hidden challenges of {topic}',
+    'Why most people get {topic} wrong',
+    'The common mistakes with {topic}',
+    "What's holding teams back from {topic}",
+    'The real challenge with {topic}',
   ],
   Solution: [
-    'How {topic} solves this problem',
-    'How {topic} fixes marketing bottlenecks',
     'A better approach to {topic}',
-    'Using {topic} effectively',
+    'How to do {topic} the right way',
+    'Making {topic} actually work',
+    'The fix for your {topic} problems',
   ],
   Proof: [
-    'Companies winning with {topic}',
-    'Companies already winning with {topic}',
-    'Real examples of {topic} success',
-    'Case studies using {topic}',
+    'Real results from {topic}',
+    'What success looks like with {topic}',
+    'Stories of {topic} working in practice',
+    'Proof that {topic} delivers',
   ],
   Conversion: [
-    'How to start with {topic}',
-    'How to start using {topic} in your campaigns',
-    'Implementing {topic} today',
-    'Getting started with {topic}',
+    'Your next step with {topic}',
+    'How to get started with {topic}',
+    'Putting {topic} into action today',
+    'From zero to results with {topic}',
   ],
 };
 

@@ -9,6 +9,28 @@
 interface BlockBase {
   id: string;
   type: string;
+  /** AI generation hint — describes what content should fill this block. Ephemeral: stripped before DB save. */
+  hint?: string;
+  /** Shared visual formatting metadata consumed by all content renderers. */
+  format?: BlockFormat;
+}
+
+export type BlockTextAlign = 'left' | 'center' | 'right' | 'justify';
+export type BlockWeight = 'regular' | 'medium' | 'semibold' | 'bold';
+export type BlockTone = 'default' | 'brand' | 'muted' | 'accent' | 'success' | 'warning' | 'danger';
+export type BlockSurface = 'none' | 'subtle' | 'soft' | 'strong';
+export type BlockListStyle = 'default' | 'disc' | 'circle' | 'square' | 'decimal' | 'upper-roman';
+
+export interface BlockFormat {
+  align?: BlockTextAlign;
+  weight?: BlockWeight;
+  tone?: BlockTone;
+  surface?: BlockSurface;
+  indent?: 0 | 1 | 2 | 3;
+  spacingTop?: 'none' | 'xs' | 'sm' | 'md' | 'lg';
+  spacingBottom?: 'none' | 'xs' | 'sm' | 'md' | 'lg';
+  listStyle?: BlockListStyle;
+  lead?: boolean;
 }
 
 // ── 1. Paragraph ──────────────────────────────────────────────────────────────
@@ -73,6 +95,8 @@ export interface ImageBlock extends BlockBase {
   url: string;
   alt: string;   // required — enforced in the editor
   caption?: string;
+  attribution?: string;      // e.g. "Photo by John on Unsplash"
+  attributionUrl?: string;   // link to photographer's page
 }
 
 // ── 7. Media ──────────────────────────────────────────────────────────────────
@@ -152,6 +176,21 @@ export interface SummaryBlock extends BlockBase {
   body: string;
 }
 
+// ── 13. Columns ──────────────────────────────────────────────────────────────
+// 1, 2, or 3-column layout. Each column cell is a nested container holding
+// any ContentBlock EXCEPT another columns block (enforced at UI/validation).
+
+export interface ColumnCell {
+  id: string;
+  blocks: ContentBlock[];
+}
+
+export interface ColumnsBlock extends BlockBase {
+  type: 'columns';
+  columnCount: 1 | 2 | 3;
+  columns: ColumnCell[];  // length === columnCount
+}
+
 // ── Union ─────────────────────────────────────────────────────────────────────
 
 export type ContentBlock =
@@ -166,9 +205,13 @@ export type ContentBlock =
   | ListBlock
   | ReferencesBlock
   | InternalLinkBlock
-  | SummaryBlock;
+  | SummaryBlock
+  | ColumnsBlock;
 
 export type BlockType = ContentBlock['type'];
+
+/** Block types allowed inside a ColumnsBlock cell (prevents nesting). */
+export type InnerBlockType = Exclude<BlockType, 'columns'>;
 
 // ── Block group labels (for BlockPicker UI) ───────────────────────────────────
 
@@ -179,7 +222,7 @@ export const BLOCK_GROUPS: { label: string; types: BlockType[] }[] = [
   },
   {
     label: 'Structure',
-    types: ['key_insights', 'callout', 'quote', 'divider', 'summary'],
+    types: ['key_insights', 'callout', 'quote', 'divider', 'summary', 'columns'],
   },
   {
     label: 'Media',
@@ -204,6 +247,7 @@ export const BLOCK_LABELS: Record<BlockType, string> = {
   references:    'References',
   internal_link: 'Internal Link',
   summary:       'Article Summary',
+  columns:       'Columns',
 };
 
 export const BLOCK_DESCRIPTIONS: Record<BlockType, string> = {
@@ -219,4 +263,5 @@ export const BLOCK_DESCRIPTIONS: Record<BlockType, string> = {
   references:    'Source citations listed at the end.',
   internal_link: 'Link card to another Omnivyra article.',
   summary:       'End-of-article synthesis and key points.',
+  columns:       '1, 2, or 3-column layout container.',
 };

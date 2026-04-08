@@ -74,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .from('scheduled_posts')
       .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status')
       .in('campaign_id', campaignIds)
-      .in('status', ['scheduled', 'draft', 'publishing', 'published'])
+      .in('status', ['scheduled', 'draft', 'publishing', 'published', 'pending'])
       .order('scheduled_for', { ascending: true });
 
     if (!stageFilter) {

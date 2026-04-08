@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
+import { getCompanyLlmConfig, resolveCompanyApiKey, getActiveProviders, getModelsByProvider } from './llmProviderService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
 import { getCachedCompletion, setCachedCompletion, buildNormalizedKey } from './aiResponseCache';
@@ -74,10 +75,13 @@ const FEATURE_AREA_MAP: Record<string, string> = {
 
   // Blog Optimization (Regeneration Engine)
   blogOptimization:                  'Blog Generation',
+
+  // Block-level AI Enrichment
+  blockEnrich:                       'Blog Generation',
 };
 
 type GatewayMetadata = {
-  provider: 'direct-openai';
+  provider: 'direct-openai' | 'direct-anthropic';
   model: string;
   token_usage?: {
     prompt_tokens?: number;
@@ -99,6 +103,8 @@ type GatewayRequest = {
   temperature: number;
   response_format?: { type: 'json_object' };
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  /** Maximum output tokens. If unset, uses model default. */
+  max_tokens?: number;
   /** For bolt pipeline observability: correlate AI calls to bolt_execution_runs. */
   bolt_run_id?: string | null;
   /** For prompt change tracking and token debugging. */
@@ -112,30 +118,356 @@ type GatewayRequest = {
   cache_version?: string | null;
 };
 
-// Singleton — created once per process, reuses HTTP connection pool
+// Singleton OpenAI client using platform default key — reuses HTTP pool.
+// BYOK calls create ephemeral clients so they never share the singleton.
 let _openAiClient: OpenAI | null = null;
 
 // GAP 4: In-flight request coalescing map
 // Key: normalized cache key → Promise<GatewayResponse<string>>
 // Multiple callers with the same prompt within the same process share one API call.
 const _inFlight = new Map<string, Promise<GatewayResponse<string>>>();
-const getOpenAiClient = (): OpenAI => {
+
+// ── Shared timing helper (used by semaphore + retry) ─────────────────────────
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ── Concurrency semaphore ─────────────────────────────────────────────────────
+// Prevents API overload by capping simultaneous LLM calls per process.
+// Uses local memory — not distributed. Sufficient for single-instance deployments.
+const MAX_CONCURRENT_LLM_CALLS = Math.max(
+  1,
+  parseInt(process.env.MAX_LLM_CONCURRENCY ?? '5', 10) || 5,
+);
+let _activeLlmCalls = 0;
+
+async function acquireSlot(operation: string): Promise<number> {
+  const waitStart = Date.now();
+  while (_activeLlmCalls >= MAX_CONCURRENT_LLM_CALLS) {
+    await sleep(50);
+  }
+  _activeLlmCalls++;
+  const waitMs = Date.now() - waitStart;
+  if (waitMs > 0 && process.env.NODE_ENV !== 'test') {
+    console.info('[ai-gateway] concurrency-wait', {
+      operation,
+      waitMs,
+      activeCalls: _activeLlmCalls,
+      maxAllowed: MAX_CONCURRENT_LLM_CALLS,
+    });
+  }
+  return waitMs;
+}
+
+function releaseSlot(): void {
+  _activeLlmCalls = Math.max(0, _activeLlmCalls - 1);
+}
+
+const getOpenAiClient = (apiKey?: string): OpenAI => {
+  // BYOK: create an ephemeral client so it never pollutes the singleton.
+  if (apiKey && apiKey !== process.env.OPENAI_API_KEY) {
+    return new OpenAI({ apiKey });
+  }
   if (!_openAiClient) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
-    _openAiClient = new OpenAI({ apiKey });
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) throw new Error('Missing OPENAI_API_KEY');
+    _openAiClient = new OpenAI({ apiKey: key });
   }
   return _openAiClient;
 };
 
-const buildMetadata = (model: string, usage: any): GatewayMetadata => ({
-  provider: 'direct-openai',
+// ── Dynamic LLM config resolution ────────────────────────────────────────────
+
+type ResolvedLlmConfig = {
+  provider: 'openai' | 'anthropic';
+  model: string;
+  apiKey: string;
+  /** true = company supplied their own key; false = platform env key */
+  isByok: boolean;
+  /** true = company has an explicit config row; false = platform default */
+  isCompanyConfig: boolean;
+};
+
+function platformDefault(): ResolvedLlmConfig {
+  return {
+    provider: 'openai',
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    apiKey: process.env.OPENAI_API_KEY || '',
+    isByok: false,
+    isCompanyConfig: false,
+  };
+}
+
+async function resolveLlmConfig(
+  companyId: string | null | undefined,
+): Promise<ResolvedLlmConfig> {
+  if (!companyId || companyId === UNKNOWN_ORG) return platformDefault();
+  try {
+    const config = await getCompanyLlmConfig(companyId);
+    if (!config || !config.is_active) return platformDefault();
+
+    const { key, source } = await resolveCompanyApiKey(companyId, config.provider_name);
+    const provider = config.provider_name as 'openai' | 'anthropic';
+    return {
+      provider,
+      model: config.model_key,
+      apiKey: key,
+      isByok: source === 'company',
+      isCompanyConfig: true,
+    };
+  } catch (err) {
+    console.warn('[ai-gateway] resolveLlmConfig failed, using platform default:', (err as Error)?.message);
+    return platformDefault();
+  }
+}
+
+// ── Provider-specific callers ─────────────────────────────────────────────────
+
+type NormalizedCompletion = {
+  content: string;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
+};
+
+async function callOpenAi(params: {
+  apiKey: string;
+  model: string;
+  temperature: number;
+  messages: GatewayRequest['messages'];
+  response_format?: GatewayRequest['response_format'];
+  max_tokens?: number;
+}): Promise<NormalizedCompletion> {
+  const client = getOpenAiClient(params.apiKey);
+  const completion = await client.chat.completions.create({
+    model: params.model,
+    temperature: params.temperature,
+    response_format: params.response_format,
+    messages: params.messages,
+    ...(params.max_tokens ? { max_tokens: params.max_tokens } : {}),
+  });
+  const content = completion.choices?.[0]?.message?.content?.trim() || '';
+  const u = completion.usage;
+  return {
+    content,
+    usage: u
+      ? { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens, total_tokens: u.total_tokens }
+      : null,
+  };
+}
+
+async function callAnthropic(params: {
+  apiKey: string;
+  model: string;
+  temperature: number;
+  messages: GatewayRequest['messages'];
+  max_tokens?: number;
+}): Promise<NormalizedCompletion> {
+  // Separate system message (Anthropic requires it top-level)
+  const systemMsg = params.messages.find((m) => m.role === 'system');
+  const userMessages = params.messages.filter((m) => m.role !== 'system');
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': params.apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: params.model,
+      max_tokens: params.max_tokens ?? 4096,
+      temperature: params.temperature,
+      ...(systemMsg ? { system: systemMsg.content } : {}),
+      messages: userMessages.map((m) => ({ role: m.role, content: m.content })),
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    const err: any = new Error(`Anthropic API error ${response.status}: ${body}`);
+    err.status = response.status;
+    throw err;
+  }
+
+  const data = await response.json();
+  const content = (data.content?.[0]?.text ?? '').trim();
+  const u = data.usage;
+  return {
+    content,
+    usage: u
+      ? {
+          prompt_tokens:    u.input_tokens  ?? 0,
+          completion_tokens: u.output_tokens ?? 0,
+          total_tokens:     (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
+        }
+      : null,
+  };
+}
+
+// ── Retry helpers ─────────────────────────────────────────────────────────────
+
+function isRateLimitError(err: any): boolean {
+  const status = err?.status ?? err?.response?.status ?? err?.statusCode;
+  // 429 = rate limit (OpenAI + Anthropic), 529 = Anthropic overloaded
+  return status === 429 || status === 529;
+}
+
+function isNetworkError(err: any): boolean {
+  return (
+    err?.code === 'ECONNREFUSED' ||
+    err?.code === 'ENOTFOUND' ||
+    err?.code === 'ETIMEDOUT' ||
+    err?.message?.includes('fetch failed') ||
+    err?.message?.includes('network')
+  );
+}
+
+function isFallbackEligible(err: any): boolean {
+  return isRateLimitError(err) || isNetworkError(err);
+}
+
+/** Returns the fallback provider name + a safe model for that provider. */
+async function getFallbackConfig(
+  currentProvider: 'openai' | 'anthropic',
+  currentModel: string,
+): Promise<{ provider: 'openai' | 'anthropic'; model: string; apiKey: string } | null> {
+  try {
+    const providers = await getActiveProviders();
+    const fallbackProvider = providers.find((p) => p.name !== currentProvider);
+    if (!fallbackProvider) return null;
+
+    const name = fallbackProvider.name as 'openai' | 'anthropic';
+
+    // Use same model name if it exists on the fallback provider, else use platform default for that provider
+    const fallbackModels = await getModelsByProvider(name);
+    const sameModel = fallbackModels.find((m) => m.model_key === currentModel);
+    const model = sameModel
+      ? currentModel
+      : fallbackModels[0]?.model_key ?? (name === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o-mini');
+
+    // Platform key for fallback provider (BYOK not applied to fallback)
+    const envMap: Record<string, string | undefined> = {
+      openai:    process.env.OPENAI_API_KEY,
+      anthropic: process.env.ANTHROPIC_API_KEY,
+    };
+    const apiKey = envMap[name] ?? '';
+
+    return { provider: name, model, apiKey };
+  } catch (err) {
+    console.warn('[ai-gateway] getFallbackConfig failed:', (err as Error)?.message);
+    return null;
+  }
+}
+
+async function callProviderWithRetry(
+  provider: 'openai' | 'anthropic',
+  params: Parameters<typeof callOpenAi>[0],
+): Promise<NormalizedCompletion & { usedFallback: false }>;
+async function callProviderWithRetry(
+  provider: 'openai' | 'anthropic',
+  params: Parameters<typeof callOpenAi>[0],
+  allowFallback: true,
+): Promise<NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string }>;
+async function callProviderWithRetry(
+  provider: 'openai' | 'anthropic',
+  params: Parameters<typeof callOpenAi>[0],
+  allowFallback = false,
+): Promise<NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string }> {
+  const dispatch = (p: 'openai' | 'anthropic', ps: typeof params) =>
+    p === 'anthropic' ? callAnthropic(ps) : callOpenAi(ps);
+
+  // ── Concurrency gate ───────────────────────────────────────────────────────
+  const waitMs = await acquireSlot(params.model);
+  if (process.env.NODE_ENV !== 'test') {
+    console.info('[ai-gateway] slot-acquired', {
+      provider,
+      model:       params.model,
+      activeCalls: _activeLlmCalls,
+      maxAllowed:  MAX_CONCURRENT_LLM_CALLS,
+      waitMs,
+    });
+  }
+
+  try {
+
+  // ── Step 1: primary attempt ────────────────────────────────────────────────
+  let primaryErr: any;
+  try {
+    const result = await dispatch(provider, params);
+    return { ...result, usedFallback: false };
+  } catch (err) {
+    primaryErr = err;
+  }
+
+  // ── Step 2: same-provider retry (rate limit / overload) ───────────────────
+  if (isRateLimitError(primaryErr)) {
+    console.warn('[ai-gateway] rate-limit, retrying same provider after 2s', {
+      provider,
+      status: primaryErr?.status,
+    });
+    try {
+      await sleep(2000);
+      const result = await dispatch(provider, params);
+      return { ...result, usedFallback: false };
+    } catch (retryErr) {
+      primaryErr = retryErr; // carry latest error to fallback check
+    }
+  }
+
+  // ── Step 3: fallback provider (only for rate-limit / overload / network) ──
+  if (allowFallback && isFallbackEligible(primaryErr)) {
+    const fallback = await getFallbackConfig(provider, params.model);
+    if (fallback) {
+      console.warn('[ai-gateway] falling back to alternate provider', {
+        primaryProvider:  provider,
+        fallbackProvider: fallback.provider,
+        primaryModel:     params.model,
+        fallbackModel:    fallback.model,
+        reason:           primaryErr?.status ?? primaryErr?.code ?? primaryErr?.message,
+      });
+      try {
+        const fallbackParams = { ...params, model: fallback.model, apiKey: fallback.apiKey };
+        const result = await dispatch(fallback.provider, fallbackParams);
+        console.info('[ai-gateway] fallback succeeded', {
+          fallbackProvider: fallback.provider,
+          fallbackModel:    fallback.model,
+        });
+        return {
+          ...result,
+          usedFallback:     true,
+          fallbackProvider: fallback.provider,
+          fallbackModel:    fallback.model,
+        };
+      } catch (fallbackErr: any) {
+        console.error('[ai-gateway] fallback also failed', {
+          fallbackProvider: fallback.provider,
+          fallbackModel:    fallback.model,
+          error: fallbackErr?.status ?? fallbackErr?.message,
+        });
+        // throw the original primary error — it's more informative
+        throw primaryErr;
+      }
+    }
+  }
+
+  throw primaryErr;
+
+  } finally {
+    releaseSlot();
+  }
+}
+
+// ── Metadata builder ──────────────────────────────────────────────────────────
+
+const buildMetadata = (
+  provider: 'openai' | 'anthropic',
+  model: string,
+  usage: NormalizedCompletion['usage'],
+): GatewayMetadata => ({
+  provider: provider === 'anthropic' ? 'direct-anthropic' : 'direct-openai',
   model,
   token_usage: usage
     ? {
-        prompt_tokens: usage.prompt_tokens,
+        prompt_tokens:    usage.prompt_tokens,
         completion_tokens: usage.completion_tokens,
-        total_tokens: usage.total_tokens,
+        total_tokens:     usage.total_tokens,
       }
     : null,
   reasoning_trace_id: randomUUID(),
@@ -174,24 +506,35 @@ const runCompletion = async (
     });
   }
 
+  // ── Resolve LLM config for this company (provider, model, apiKey) ───────────
+  const llmConfig = await resolveLlmConfig(request.companyId);
+  const activeProvider = llmConfig.provider;
+  // BYOK companies use their chosen model; platform key companies respect plan downgrade
+  const activeModel = llmConfig.isCompanyConfig ? llmConfig.model : resolvedModel;
+
   const environment = process.env.NODE_ENV || 'development';
   const isMock = environment === 'test' || !!process.env.JEST_WORKER_ID;
   console.info('[campaign-ai][model-mode]', {
-    provider: 'direct-openai',
+    provider: activeProvider,
+    isByok: llmConfig.isByok,
+    isCompanyConfig: llmConfig.isCompanyConfig,
     isMock,
     environment,
-    modelName: resolvedModel,
+    modelName: activeModel,
     requestedModel: request.model,
+    companyId: request.companyId ?? null,
   });
   console.info('[campaign-ai][llm-provider-call]', {
     operation: request.operation,
-    provider: 'direct-openai',
-    modelName: resolvedModel,
+    provider: activeProvider,
+    modelName: activeModel,
+    isByok: llmConfig.isByok,
+    companyId: request.companyId ?? null,
   });
 
   // ── GAP 4: In-flight coalescing — deduplicate concurrent identical requests ─
   // Build key from normalized inputs so GAP 1 normalization applies here too.
-  const coalescingKey = buildNormalizedKey(resolvedModel, request.messages, request.cache_version);
+  const coalescingKey = buildNormalizedKey(activeModel, request.messages, request.cache_version);
   const existing = _inFlight.get(coalescingKey);
   if (existing) {
     if (process.env.NODE_ENV !== 'test') {
@@ -202,7 +545,6 @@ const runCompletion = async (
 
   // Wrap the rest of the call so concurrent callers share one Promise
   const promise = (async (): Promise<GatewayResponse<string>> => {
-  const client = getOpenAiClient();
   const start = Date.now();
 
   const preEnforcement = await checkUsageBeforeExecution({
@@ -220,10 +562,10 @@ const runCompletion = async (
       campaign_id: request.campaignId ?? null,
       user_id: null,
       source_type: 'llm',
-      provider_name: 'openai',
-      model_name: resolvedModel,
+      provider_name: activeProvider,
+      model_name: activeModel,
       model_version: null,
-      source_name: `openai:${resolvedModel}`,
+      source_name: `${activeProvider}:${activeModel}`,
       process_type: request.operation,
       feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
       error_flag: true,
@@ -238,26 +580,28 @@ const runCompletion = async (
   // ── Cache check (GAP 1+2+5): skip API call if we have a recent response ────
   const cachedContent = await getCachedCompletion(
     request.operation,
-    resolvedModel,
+    activeModel,
     request.messages,
     request.cache_version,
   );
   if (cachedContent !== null) {
     return {
       output: cachedContent,
-      metadata: buildMetadata(resolvedModel, null),
+      metadata: buildMetadata(activeProvider, activeModel, null),
     };
   }
 
   recordGptCall();
-  let completion: Awaited<ReturnType<typeof client.chat.completions.create>>;
+  let normalized: NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string };
   try {
-    completion = await client.chat.completions.create({
-      model: resolvedModel,
-      temperature: request.temperature,
+    normalized = await callProviderWithRetry(activeProvider, {
+      apiKey:          llmConfig.apiKey,
+      model:           activeModel,
+      temperature:     request.temperature,
       response_format: request.response_format,
-      messages: request.messages,
-    });
+      messages:        request.messages,
+      max_tokens:      request.max_tokens,
+    }, true);
   } catch (error: any) {
     const latency = Date.now() - start;
     recordGptLatency(latency);
@@ -267,39 +611,47 @@ const runCompletion = async (
       campaign_id: request.campaignId ?? null,
       user_id: null,
       source_type: 'llm',
-      provider_name: 'openai',
-      model_name: request.model,
+      provider_name: activeProvider,
+      model_name: activeModel,
       model_version: null,
-      source_name: `openai:${request.model}`,
+      source_name: `${activeProvider}:${activeModel}`,
       process_type: request.operation,
       feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
       latency_ms: latency,
       error_flag: true,
-      error_type: error?.response?.status?.toString() ?? error?.message ?? 'unknown',
+      error_type: error?.status?.toString() ?? error?.response?.status?.toString() ?? error?.message ?? 'unknown',
       pricing_snapshot: null,
     });
     throw error;
   }
   const latency = Date.now() - start;
   recordGptLatency(latency);
-  const content = completion.choices?.[0]?.message?.content?.trim() || '';
-  const metadata = buildMetadata(request.model, completion.usage);
-  const usage = completion.usage;
-  const inputTokens = usage?.prompt_tokens ?? 0;
-  const outputTokens = usage?.completion_tokens ?? 0;
-  const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
+
+  // Resolve which provider/model actually served the response (may differ if fallback used)
+  const effectiveProvider = normalized.usedFallback && normalized.fallbackProvider
+    ? normalized.fallbackProvider as 'openai' | 'anthropic'
+    : activeProvider;
+  const effectiveModel = normalized.usedFallback && normalized.fallbackModel
+    ? normalized.fallbackModel
+    : activeModel;
+
+  const content = normalized.content;
+  const metadata = buildMetadata(effectiveProvider, effectiveModel, normalized.usage);
+  const inputTokens  = normalized.usage?.prompt_tokens    ?? 0;
+  const outputTokens = normalized.usage?.completion_tokens ?? 0;
+  const totalTokens  = normalized.usage?.total_tokens     ?? inputTokens + outputTokens;
   // BUG#8 fix: advisory LLM token tracking
   trackLlmTokens(totalTokens);
-  const cost = resolveLlmCost('openai', request.model, inputTokens, outputTokens);
+  const cost = resolveLlmCost(effectiveProvider, effectiveModel, inputTokens, outputTokens);
   void logUsageEvent({
     organization_id: request.companyId ?? UNKNOWN_ORG,
     campaign_id: request.campaignId ?? null,
     user_id: null,
     source_type: 'llm',
-    provider_name: 'openai',
-    model_name: resolvedModel,
+    provider_name: effectiveProvider,
+    model_name: effectiveModel,
     model_version: null,
-    source_name: `openai:${resolvedModel}`,
+    source_name: `${effectiveProvider}:${effectiveModel}`,
     process_type: request.operation,
     feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
     input_tokens: inputTokens || null,
@@ -344,7 +696,7 @@ const runCompletion = async (
     generateAdditionalStrategicThemes: 'additional_strategic_themes',
   };
   // ── Store result in cache — GAP 1+2+5 (fire-and-forget) ─────────────────────
-  void setCachedCompletion(request.operation, resolvedModel, request.messages, content, request.cache_version);
+  void setCachedCompletion(request.operation, effectiveModel, request.messages, content, request.cache_version);
 
   try {
     await supabase.from('audit_logs').insert({
@@ -352,12 +704,22 @@ const runCompletion = async (
       actor_user_id: null,
       company_id: request.companyId ?? null,
       metadata: {
-        provider: metadata.provider,
-        model: metadata.model,
-        token_usage: metadata.token_usage ?? null,
+        provider:          metadata.provider,
+        model:             metadata.model,
+        token_usage:       metadata.token_usage ?? null,
         reasoning_trace_id: metadata.reasoning_trace_id,
-        operation: request.operation,
-        context_type: contextTypeMap[request.operation] || 'unknown',
+        operation:         request.operation,
+        context_type:      contextTypeMap[request.operation] || 'unknown',
+        is_byok:           llmConfig.isByok,
+        is_company_config: llmConfig.isCompanyConfig,
+        // Fallback tracing
+        used_fallback:     normalized.usedFallback,
+        ...(normalized.usedFallback ? {
+          primary_provider:  activeProvider,
+          primary_model:     activeModel,
+          fallback_provider: normalized.fallbackProvider,
+          fallback_model:    normalized.fallbackModel,
+        } : {}),
         ...(request.bolt_run_id ? { bolt_run_id: request.bolt_run_id } : {}),
         ...(request.prompt_template_name ? { prompt_template_name: request.prompt_template_name } : {}),
         ...(request.prompt_template_version ? { prompt_template_version: request.prompt_template_version } : {}),

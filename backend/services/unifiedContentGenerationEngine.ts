@@ -393,7 +393,7 @@ export async function generateAngles(input: ContentInput): Promise<ContentAngle[
       ],
     });
 
-    const raw = typeof result?.content?.[0]?.text === 'string' ? result.content[0].text : '';
+    const raw = typeof result?.output === 'string' ? result.output : '';
     const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
     const parsed = JSON.parse(trimmed || '{}');
     const angles = validateAnglesOutput(parsed);
@@ -513,7 +513,7 @@ Generate the complete content now. Return only the JSON object with hook, key_po
       ],
     });
 
-    const raw = typeof result?.content?.[0]?.text === 'string' ? result.content[0].text : '';
+    const raw = typeof result?.output === 'string' ? result.output : '';
     const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
     let parsed: Partial<ContentBlueprint> = {};
 

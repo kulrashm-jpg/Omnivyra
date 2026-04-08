@@ -819,7 +819,7 @@ export default function BoltCombinedStrategyPage() {
               </button>
               {showChat && companyId && (
                 <div className="border-t border-gray-100">
-                  <BoltCampaignChat companyId={companyId} context={{ topic, goals, audience }} />
+                  <BoltCampaignChat companyId={companyId} context={{ topic, goal: goals.join(', '), audience: audience.join(', ') }} />
                 </div>
               )}
             </div>

@@ -10,5 +10,7 @@ export { ListBlockEditor }       from './ListBlockEditor';
 export { ReferencesBlockEditor } from './ReferencesBlockEditor';
 export { InternalLinkBlockEditor } from './InternalLinkBlockEditor';
 export { SummaryBlockEditor }    from './SummaryBlockEditor';
+export { ColumnsBlockEditor }    from './ColumnsBlockEditor';
 export { BlockWrapper }          from './BlockWrapper';
 export { BlockPicker }           from './BlockPicker';
+export { ImageStockSearchPopover } from './ImageStockSearchPopover';

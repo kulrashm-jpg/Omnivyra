@@ -1,4 +1,9 @@
+jest.mock('../../services/export/htmlToPdfRenderer', () => ({
+  renderPdfFromHtml: jest.fn(async () => Buffer.from('mock-pdf')),
+}));
+
 import { renderReportPdf } from '../../services/export/reportPdfRenderer';
+import { renderPdfFromHtml } from '../../services/export/htmlToPdfRenderer';
 
 describe('reportPdfRenderer', () => {
   it('renders the executive snapshot PDF with seo visuals', async () => {
@@ -128,5 +133,10 @@ describe('reportPdfRenderer', () => {
     });
 
     expect(buffer.length).toBeGreaterThan(0);
+    expect(renderPdfFromHtml).toHaveBeenCalled();
+    const htmlArg = (renderPdfFromHtml as jest.Mock).mock.calls[0][0] as string;
+    expect(htmlArg).toContain('id="pdf-report"');
+    expect(htmlArg).toContain('class="report-page"');
+    expect(htmlArg).toContain('#pdf-report { width: 186mm;');
   });
 });

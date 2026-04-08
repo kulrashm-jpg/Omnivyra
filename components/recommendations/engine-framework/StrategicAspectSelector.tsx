@@ -10,16 +10,6 @@ function toTitleCase(s: string): string {
     .join(' ');
 }
 
-/** Fallback when API does not return company-specific aspects. */
-export const DEFAULT_STRATEGIC_ASPECTS = [
-  'Personal Clarity & Mental Peace',
-  'Career & Professional Direction',
-  'Emotional & Relationship Challenges',
-  'Life Transitions & Decision Points',
-  'Self-Discovery & Growth',
-  'Crisis & Immediate Problem Solving',
-];
-
 const COLLAPSED_VISIBLE = 6;
 
 type Props = {
@@ -45,8 +35,7 @@ export default function StrategicAspectSelector({
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState(false);
 
-  const raw = aspects.length > 0 ? aspects : DEFAULT_STRATEGIC_ASPECTS;
-  const list = useMemo(() => [...raw].sort(sortAtoZ), [raw]);
+  const list = useMemo(() => [...aspects].sort(sortAtoZ), [aspects]);
   const filtered = useMemo(() => {
     if (!search.trim()) return list;
     const q = search.trim().toLowerCase();
@@ -63,6 +52,15 @@ export default function StrategicAspectSelector({
       onAspectsChange(next);
     }
   };
+
+  if (aspects.length === 0) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white p-4">
+        <h3 className="text-sm font-semibold text-gray-800 mb-1">Strategic aspects</h3>
+        <p className="text-xs text-gray-400">No strategic aspects configured for this company. Add them in your company profile to enable this filter.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4">

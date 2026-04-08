@@ -1,0 +1,618 @@
+/**
+ * BOLT Content Job Processor
+ *
+ * Processes one topic group per BullMQ job:
+ *   1. Check master_content_cache (skip LLM if hit)
+ *   2. Generate master content (LLM call)
+ *   3. Cache master result
+ *   4. Generate platform variants for all platforms in one call
+ *   5. INSERT to scheduled_posts immediately for each platform
+ *   6. UPDATE platform_content_slots status → ready
+ *   7. UPDATE bolt_content_jobs status → done
+ *   8. Increment bolt_execution_runs progress counters
+ *
+ * Job payload (BoltContentJobData):
+ *   run_id, campaign_id, bolt_job_id, topic, content_type,
+ *   daily_plan_ids, enriched, platform_targets, campaign (meta),
+ *   account_map, type_map_by_platform
+ *
+ * Retry behaviour:
+ *   - If master already in job row (previous attempt cached it), skip LLM
+ *   - If variants already in job row, skip variant generation
+ *   - Always re-attempt scheduling (INSERT is idempotent via conflict check)
+ */
+
+import { Job } from 'bullmq';
+import { createHash } from 'crypto';
+import { supabase } from '../../db/supabaseClient';
+import {
+  generateMasterContentFromIntent,
+  buildPlatformVariantsFromMaster,
+} from '../../services/contentGenerationPipeline';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type PlatformTarget = {
+  platform: string;
+  content_type: string;
+};
+
+export type BoltContentJobData = {
+  run_id: string;
+  campaign_id: string;
+  bolt_job_id: string;
+  topic: string;
+  content_type: string;
+  daily_plan_ids: string[];
+  /** Merged enriched content object from daily_content_plans.content */
+  enriched: Record<string, unknown>;
+  platform_targets: PlatformTarget[];
+  campaign: {
+    start_date: string;
+    user_id: string;
+    company_id: string | null;
+  };
+  /** platform → social_account_id */
+  account_map: Record<string, string>;
+  /** platform → content_type → db_content_type */
+  type_map_by_platform: Record<string, Record<string, string>>;
+};
+
+// ---------------------------------------------------------------------------
+// Constants (mirrors boltScheduleBlockProcessor)
+// ---------------------------------------------------------------------------
+
+const BLOG_CONTENT_TYPES = new Set(['blog', 'article', 'newsletter', 'white_paper', 'short_story']);
+
+const PLATFORM_ORDER = ['linkedin', 'facebook', 'instagram', 'x', 'twitter', 'youtube', 'tiktok', 'pinterest'];
+
+const FALLBACK_CT_MAP: Record<string, Record<string, string>> = {
+  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
+  x:         { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
+  twitter:   { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
+  instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', newsletter: 'feed_post', short_story: 'feed_post', white_paper: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post', blog: 'feed_post' },
+  youtube:   { post: 'video', video: 'video', article: 'video', newsletter: 'video', short_story: 'video', white_paper: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video', blog: 'video' },
+  facebook:  { post: 'post', video: 'video', article: 'post', newsletter: 'post', short_story: 'post', white_paper: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'post' },
+  tiktok:    { post: 'video', video: 'video', article: 'video', newsletter: 'video', short_story: 'video', white_paper: 'video', poll: 'video', carousel: 'video', image: 'video', reel: 'video', short: 'video', story: 'video', thread: 'video', blog: 'video' },
+  pinterest: { post: 'pin', video: 'pin', article: 'pin', newsletter: 'pin', short_story: 'pin', white_paper: 'pin', poll: 'pin', carousel: 'pin', image: 'pin', reel: 'pin', short: 'pin', story: 'pin', thread: 'pin', blog: 'pin' },
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function isPlaceholder(text: string): boolean {
+  const t = String(text || '').trim();
+  if (!t) return true;
+  return (
+    /^\s*content for\b/i.test(t) ||
+    /^\s*content placeholder\b/i.test(t) ||
+    /^\s*execution job content placeholder\b/i.test(t) ||
+    t.startsWith('[PLATFORM ADAPTATION FAILED]') ||
+    t.startsWith('[MASTER GENERATION FAILED') ||
+    t.startsWith('[MASTER CONTENT PLACEHOLDER]') ||
+    t.startsWith('[PLATFORM MEDIA BLUEPRINT]') ||
+    t.startsWith('[MEDIA BLUEPRINT]')
+  );
+}
+
+function toDbPlatform(p: string): string {
+  return p === 'x' ? 'twitter' : p;
+}
+
+function toDbContentType(
+  platform: string,
+  contentType: string,
+  typeMapByPlatform: Record<string, Record<string, string>>
+): string {
+  const ct = String(contentType || '').toLowerCase().trim();
+  const fromDb = typeMapByPlatform[platform];
+  if (fromDb?.[ct]) return fromDb[ct];
+  const fallback = FALLBACK_CT_MAP[platform] ?? FALLBACK_CT_MAP['linkedin']!;
+  return (fallback as Record<string, string>)[ct] ?? 'post';
+}
+
+function buildScheduledFor(dateStr: string, timeStr: string | null | undefined): Date {
+  const time = String(timeStr ?? '09:00').trim();
+  const hhmm = time.match(/^(\d{1,2}):(\d{2})/);
+  const hours   = hhmm ? Math.min(23, Math.max(0, Number(hhmm[1]))) : 9;
+  const minutes = hhmm ? Math.min(59, Math.max(0, Number(hhmm[2]))) : 0;
+  const d = String(dateStr ?? '').slice(0, 10);
+  if (!d) return new Date();
+  return new Date(Date.UTC(
+    parseInt(d.slice(0, 4), 10),
+    parseInt(d.slice(5, 7), 10) - 1,
+    parseInt(d.slice(8, 10), 10),
+    hours, minutes, 0
+  ));
+}
+
+function buildBlogSlug(topic: string): string {
+  const base = topic
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 70) || 'article';
+  return `${base}-${Date.now().toString(36)}`;
+}
+
+function buildTopicHash(topic: string, companyId: string | null): string {
+  return createHash('sha256')
+    .update(`${String(companyId ?? '')}::${topic.toLowerCase().trim()}`)
+    .digest('hex');
+}
+
+function tryParseJson<T>(v: unknown): T | null {
+  if (v == null) return null;
+  if (typeof v === 'string') { try { return JSON.parse(v) as T; } catch { return null; } }
+  return typeof v === 'object' ? (v as T) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Cache helpers
+// ---------------------------------------------------------------------------
+
+async function getCachedMaster(
+  companyId: string | null,
+  topic: string
+): Promise<string | null> {
+  if (!companyId) return null;
+  try {
+    const hash = buildTopicHash(topic, companyId);
+    const { data } = await supabase
+      .from('master_content_cache')
+      .select('master_content, expires_at')
+      .eq('company_id', companyId)
+      .eq('topic_hash', hash)
+      .maybeSingle();
+    if (!data) return null;
+    if (data.expires_at && new Date(data.expires_at) < new Date()) return null;
+    // Increment hit count (fire-and-forget)
+    void supabase
+      .from('master_content_cache')
+      .update({ hit_count: (data as any).hit_count + 1 })
+      .eq('company_id', companyId)
+      .eq('topic_hash', hash);
+    return data.master_content ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function cacheMaster(
+  companyId: string | null,
+  topic: string,
+  masterContent: string
+): Promise<void> {
+  if (!companyId || !masterContent) return;
+  try {
+    const hash = buildTopicHash(topic, companyId);
+    await supabase.from('master_content_cache').upsert(
+      {
+        company_id:     companyId,
+        topic_hash:     hash,
+        topic_title:    topic,
+        master_content: masterContent,
+        generated_at:   new Date().toISOString(),
+        expires_at:     null,
+        hit_count:      0,
+      },
+      { onConflict: 'company_id,topic_hash', ignoreDuplicates: false }
+    );
+  } catch { /* non-fatal */ }
+}
+
+// ---------------------------------------------------------------------------
+// bolt_content_jobs status helpers
+// ---------------------------------------------------------------------------
+
+async function updateJobStatus(
+  boltJobId: string,
+  status: string,
+  extra: Record<string, unknown> = {}
+): Promise<void> {
+  try {
+    await supabase
+      .from('bolt_content_jobs')
+      .update({ status, ...extra, updated_at: new Date().toISOString() })
+      .eq('id', boltJobId);
+  } catch { /* non-fatal */ }
+}
+
+async function updateRunProgress(
+  runId: string,
+  scheduledDelta: number,
+  skippedDelta: number
+): Promise<void> {
+  try {
+    // Use RPC to atomically increment counters (avoid read-modify-write race)
+    await supabase.rpc('increment_bolt_run_progress', {
+      p_run_id:   runId,
+      p_scheduled: scheduledDelta,
+      p_skipped:   skippedDelta,
+    });
+  } catch { /* non-fatal — counters are best-effort */ }
+}
+
+// ---------------------------------------------------------------------------
+// platform_content_slots helpers
+// ---------------------------------------------------------------------------
+
+async function markSlotsGenerating(boltJobId: string, dailyPlanIds: string[]): Promise<void> {
+  if (!dailyPlanIds.length) return;
+  try {
+    await supabase
+      .from('platform_content_slots')
+      .update({ status: 'generating', updated_at: new Date().toISOString() })
+      .eq('bolt_job_id', boltJobId)
+      .in('daily_plan_id', dailyPlanIds);
+  } catch { /* non-fatal */ }
+}
+
+async function markSlotReady(
+  boltJobId: string,
+  dailyPlanId: string,
+  scheduledPostId: string | null,
+  generatedContent: string
+): Promise<void> {
+  try {
+    await supabase
+      .from('platform_content_slots')
+      .update({
+        status:            'ready',
+        generated_content: generatedContent,
+        scheduled_post_id: scheduledPostId,
+        updated_at:        new Date().toISOString(),
+      })
+      .eq('bolt_job_id', boltJobId)
+      .eq('daily_plan_id', dailyPlanId);
+  } catch { /* non-fatal */ }
+}
+
+// ---------------------------------------------------------------------------
+// Main processor
+// ---------------------------------------------------------------------------
+
+export async function processBoltContentJob(job: Job): Promise<void> {
+  const data = job.data as BoltContentJobData;
+  const {
+    run_id,
+    campaign_id,
+    bolt_job_id,
+    topic,
+    content_type,
+    daily_plan_ids,
+    enriched,
+    platform_targets,
+    campaign,
+    account_map,
+    type_map_by_platform,
+  } = data;
+
+  const companyId = campaign.company_id ?? null;
+  const userId    = campaign.user_id;
+
+  console.log('[bolt-job] START', { bolt_job_id, topic, content_type, platforms: platform_targets.map((t) => t.platform) });
+
+  // ── 1. Update job status → generating_master ────────────────────────────
+  await updateJobStatus(bolt_job_id, 'generating_master', { started_at: new Date().toISOString(), attempt_count: (job.attemptsMade ?? 0) + 1 });
+  await markSlotsGenerating(bolt_job_id, daily_plan_ids);
+  void job.updateProgress(10);
+
+  // ── 2. Resolve master content ──────────────────────────────────────────
+  // Priority: existing cached in job row > content cache > LLM
+  let masterContent: string;
+  let masterId: string;
+
+  // Check if a previous attempt already generated master (stored in job row)
+  const existingJobRow = await supabase
+    .from('bolt_content_jobs')
+    .select('master_content, master_id')
+    .eq('id', bolt_job_id)
+    .maybeSingle()
+    .then((r) => r.data);
+
+  const jobRowMaster = existingJobRow?.master_content ?? null;
+  const cachedMaster = jobRowMaster ?? await getCachedMaster(companyId, topic);
+
+  if (cachedMaster && !isPlaceholder(cachedMaster)) {
+    masterContent = cachedMaster;
+    masterId = existingJobRow?.master_id ?? `cached-${bolt_job_id}`;
+    console.log('[bolt-job] master from cache', { topic, preview: masterContent.slice(0, 80) });
+  } else {
+    const existingContent = String(enriched.generated_content ?? '').trim();
+    if (existingContent && !isPlaceholder(existingContent)) {
+      masterContent = existingContent;
+      masterId = `existing-${bolt_job_id}`;
+      console.log('[bolt-job] master reused from enriched content', { topic });
+    } else {
+      // LLM call
+      const intent = tryParseJson<Record<string, unknown>>(enriched.intent) ?? {};
+      const brief  = tryParseJson<Record<string, unknown>>(enriched.writer_content_brief ?? enriched.writerBrief) ?? {};
+      const item = {
+        execution_id: String(enriched.execution_id ?? enriched.id ?? `topic-${topic.slice(0, 30).replace(/\s/g, '-')}`),
+        topic,
+        title: topic,
+        company_id: companyId,
+        intent: {
+          objective:       enriched.dailyObjective     ?? intent.objective       ?? 'Educate and engage the audience',
+          pain_point:      enriched.whatProblemAreWeAddressing ?? intent.pain_point ?? 'Audience challenge',
+          outcome_promise: enriched.whatShouldReaderLearn      ?? intent.outcome_promise ?? 'Clear value',
+          cta_type:        enriched.desiredAction       ?? intent.cta_type        ?? 'Soft engagement',
+          target_audience: enriched.whoAreWeWritingFor  ?? intent.target_audience ?? 'Professional audience',
+        },
+        writer_content_brief: {
+          topicTitle:                 topic,
+          writingIntent:              (enriched.writingIntent             ?? brief.writingIntent             ?? enriched.dailyObjective ?? '') as string,
+          whatShouldReaderLearn:      (enriched.whatShouldReaderLearn     ?? brief.whatShouldReaderLearn     ?? '') as string,
+          whatProblemAreWeAddressing: (enriched.whatProblemAreWeAddressing ?? brief.whatProblemAreWeAddressing ?? '') as string,
+          desiredAction:              (enriched.desiredAction             ?? brief.desiredAction             ?? '') as string,
+          narrativeStyle:             (enriched.narrativeStyle            ?? brief.narrativeStyle            ?? '') as string,
+          topicGoal:                  (enriched.dailyObjective            ?? brief.topicGoal                 ?? '') as string,
+        },
+        content_type: content_type as any,
+        active_platform_targets: platform_targets,
+      } as Parameters<typeof generateMasterContentFromIntent>[0];
+
+      const master = await generateMasterContentFromIntent(item);
+      masterContent = master.content;
+      masterId = master.id;
+      console.log('[bolt-job] master generated via LLM', { topic, masterId, preview: masterContent.slice(0, 80) });
+    }
+
+    // Cache master for future campaigns
+    await cacheMaster(companyId, topic, masterContent);
+  }
+
+  // Store master in job row so retries don't regenerate it
+  await updateJobStatus(bolt_job_id, 'generating_variants', {
+    master_content: masterContent,
+    master_id:      masterId,
+  });
+  void job.updateProgress(40);
+
+  // ── 3. Blog entry for long-form types ─────────────────────────────────
+  const isLongForm = BLOG_CONTENT_TYPES.has(content_type);
+  if (isLongForm && masterContent && !isPlaceholder(masterContent) && companyId && userId) {
+    try {
+      const firstPlanId = daily_plan_ids[0];
+      let datePart = '';
+      if (firstPlanId) {
+        const { data: dp } = await supabase
+          .from('daily_content_plans')
+          .select('date')
+          .eq('id', firstPlanId)
+          .maybeSingle();
+        datePart = String(dp?.date ?? '').slice(0, 10);
+      }
+      const scheduledDate = datePart
+        ? new Date(`${datePart}T09:00:00Z`).toISOString()
+        : new Date().toISOString();
+      const category = content_type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      const { error: blogErr } = await supabase.from('blogs').insert({
+        company_id:       companyId,
+        title:            topic,
+        slug:             buildBlogSlug(topic),
+        content_markdown: masterContent,
+        status:           'scheduled',
+        published_at:     scheduledDate,
+        created_by:       userId,
+        category,
+      });
+      if (blogErr) console.warn('[bolt-job] Blog insert failed:', blogErr.message);
+    } catch (e) {
+      console.warn('[bolt-job] Blog creation error:', (e as Error)?.message);
+    }
+  }
+
+  // ── 4. Build platform variants ─────────────────────────────────────────
+  // Check if variants already generated in a previous attempt
+  const existingVariantsJson = ((existingJobRow as any)?.variants_json as Record<string, string> | null) ?? null;
+  let variantByKey: Map<string, string>;
+
+  if (existingVariantsJson && Object.keys(existingVariantsJson).length > 0) {
+    variantByKey = new Map(Object.entries(existingVariantsJson));
+    console.log('[bolt-job] variants from previous attempt', { count: variantByKey.size });
+  } else {
+    const intent = tryParseJson<Record<string, unknown>>(enriched.intent) ?? {};
+    const brief  = tryParseJson<Record<string, unknown>>(enriched.writer_content_brief ?? enriched.writerBrief) ?? {};
+    const itemForVariants = {
+      execution_id: String(enriched.execution_id ?? `topic-${topic.slice(0, 30).replace(/\s/g, '-')}`),
+      topic, title: topic, company_id: companyId,
+      intent: {
+        objective: enriched.dailyObjective ?? intent.objective ?? 'Educate and engage the audience',
+        pain_point: enriched.whatProblemAreWeAddressing ?? intent.pain_point ?? 'Audience challenge',
+        outcome_promise: enriched.whatShouldReaderLearn ?? intent.outcome_promise ?? 'Clear value',
+        cta_type: enriched.desiredAction ?? intent.cta_type ?? 'Soft engagement',
+        target_audience: enriched.whoAreWeWritingFor ?? intent.target_audience ?? 'Professional audience',
+      },
+      writer_content_brief: {
+        topicTitle: topic,
+        writingIntent: (enriched.writingIntent ?? brief.writingIntent ?? '') as string,
+        whatShouldReaderLearn: (enriched.whatShouldReaderLearn ?? brief.whatShouldReaderLearn ?? '') as string,
+        whatProblemAreWeAddressing: (enriched.whatProblemAreWeAddressing ?? brief.whatProblemAreWeAddressing ?? '') as string,
+        desiredAction: (enriched.desiredAction ?? brief.desiredAction ?? '') as string,
+        narrativeStyle: (enriched.narrativeStyle ?? brief.narrativeStyle ?? '') as string,
+        topicGoal: (enriched.dailyObjective ?? brief.topicGoal ?? '') as string,
+      },
+      content_type: content_type as any,
+      active_platform_targets: platform_targets,
+      master_content: { id: masterId, content: masterContent, generation_status: 'generated' },
+    } as unknown as Parameters<typeof generateMasterContentFromIntent>[0];
+
+    variantByKey = new Map<string, string>();
+    try {
+      const variants = await buildPlatformVariantsFromMaster(itemForVariants as unknown as Parameters<typeof generateMasterContentFromIntent>[0]);
+      for (const v of variants) {
+        const vp  = String(v.platform   || '').toLowerCase();
+        const vct = String(v.content_type || '').toLowerCase();
+        // Normalise 'twitter' → 'x' so lookup matches canonical platform keys
+        const normVp = vp === 'twitter' ? 'x' : vp;
+        if (
+          v.generated_content &&
+          !v.generated_content.startsWith('[PLATFORM ADAPTATION FAILED]') &&
+          !v.generated_content.startsWith('[PLATFORM MEDIA BLUEPRINT]')
+        ) {
+          variantByKey.set(`${normVp}::${vct}`, v.generated_content);
+          if (vp !== normVp) variantByKey.set(`${vp}::${vct}`, v.generated_content); // alias
+        }
+      }
+      // Persist variants in job row so retries skip this step
+      const variantsObj: Record<string, string> = {};
+      variantByKey.forEach((v, k) => { variantsObj[k] = v; });
+      await updateJobStatus(bolt_job_id, 'scheduling', { variants_json: variantsObj });
+    } catch (variantErr) {
+      console.warn('[bolt-job] Variant generation failed, using master for all platforms:', (variantErr as Error)?.message);
+      await updateJobStatus(bolt_job_id, 'scheduling');
+    }
+  }
+
+  void job.updateProgress(70);
+
+  // ── 5. Insert scheduled_posts for each platform ────────────────────────
+  const masterValid = Boolean(masterContent) && !isPlaceholder(masterContent);
+  let scheduled = 0;
+  let skipped   = 0;
+  const scheduledPostIds: string[] = [];
+
+  // Fetch daily_content_plans rows for date/time/repurpose info
+  const { data: planRows } = await supabase
+    .from('daily_content_plans')
+    .select('id, platform, content_type, date, scheduled_time, content, week_number')
+    .in('id', daily_plan_ids);
+
+  const planRowMap = new Map((planRows ?? []).map((r: any) => [r.id, r]));
+
+  // Sort by PLATFORM_ORDER for deterministic repurpose indexing
+  const orderedTargets = [...platform_targets].sort((a, b) => {
+    const ia = PLATFORM_ORDER.indexOf(a.platform);
+    const ib = PLATFORM_ORDER.indexOf(b.platform);
+    return (ia >= 0 ? ia : 999) - (ib >= 0 ? ib : 999);
+  });
+
+  const totalDistributions = orderedTargets.length;
+
+  for (let i = 0; i < orderedTargets.length; i++) {
+    const target = orderedTargets[i]!;
+    // target.platform is the canonical key (e.g. 'linkedin', 'x', 'instagram')
+    // set by queueBoltContentJobs after normalize(). Use it directly for account_map.
+    const canonicalPlatform = target.platform;
+
+    const socialAccountId = account_map[canonicalPlatform];
+    if (!socialAccountId) {
+      console.warn('[bolt-job] SKIP — no social account', {
+        canonicalPlatform, topic,
+        availableKeys: Object.keys(account_map),
+      });
+      skipped++;
+      continue;
+    }
+
+    // Variant lookup: try canonical key first, then 'twitter' alias for 'x'
+    const variantKey      = `${canonicalPlatform}::${target.content_type}`;
+    const variantKeyAlias = canonicalPlatform === 'x' ? `twitter::${target.content_type}` : null;
+    const content = variantByKey.get(variantKey)
+      ?? (variantKeyAlias ? variantByKey.get(variantKeyAlias) : undefined)
+      ?? (masterValid ? masterContent : null);
+
+    if (!content || isPlaceholder(content)) {
+      console.warn('[bolt-job] SKIP — no valid content', { canonicalPlatform, topic, variantKey });
+      skipped++;
+      continue;
+    }
+
+    // Find the matching daily_plan row for date/time.
+    // DB stores raw platform values — match after normalizing both sides.
+    const planRow = daily_plan_ids
+      .map((id) => planRowMap.get(id))
+      .find((r: any) => {
+        if (!r) return false;
+        const rawDb = String(r.platform || '').toLowerCase().trim();
+        // canonical 'x' matches db values 'x' or 'twitter'
+        if (canonicalPlatform === 'x') return rawDb === 'x' || rawDb === 'twitter';
+        return rawDb === canonicalPlatform;
+      });
+
+    const dateStr     = String((planRow as any)?.date ?? campaign.start_date ?? '').slice(0, 10);
+    const timeStr     = (planRow as any)?.scheduled_time ?? null;
+    const dailyPlanId = (planRow as any)?.id ?? null;
+    const scheduledFor = buildScheduledFor(dateStr, timeStr);
+    // For DB content_type, use canonical platform (not 'x' alias)
+    const dbPlatform    = toDbPlatform(canonicalPlatform);
+    const dbContentType = toDbContentType(dbPlatform, target.content_type, type_map_by_platform);
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('scheduled_posts')
+      .insert({
+        user_id:           userId,
+        social_account_id: socialAccountId,
+        campaign_id,
+        platform:          dbPlatform,
+        content_type:      dbContentType,
+        title:             topic || undefined,
+        content,
+        scheduled_for:     scheduledFor.toISOString(),
+        status:            'scheduled',
+        repurpose_index:   i + 1,
+        repurpose_total:   totalDistributions,
+        created_at:        new Date().toISOString(),
+        updated_at:        new Date().toISOString(),
+      })
+      .select('id')
+      .maybeSingle();
+
+    if (insertError) {
+      console.warn('[bolt-job] INSERT failed', { platform: canonicalPlatform, topic, error: insertError.message });
+      skipped++;
+      continue;
+    }
+
+    const scheduledPostId = (inserted as any)?.id ?? null;
+    if (scheduledPostId) scheduledPostIds.push(scheduledPostId);
+
+    // Update platform_content_slot
+    if (dailyPlanId) {
+      await markSlotReady(bolt_job_id, dailyPlanId, scheduledPostId, content);
+
+      // Update daily_content_plans.content with finalized JSON
+      try {
+        const rowParsed = tryParseJson<Record<string, unknown>>((planRow as any)?.content) ?? {};
+        const finalizedJson = {
+          ...rowParsed,
+          generated_content:    content,
+          master_content:       { id: masterId, content: masterContent },
+          content_status:       'finalized',
+          finalized_at:         new Date().toISOString(),
+          refinement_status:    'finalized',
+          refinement_finalized: true,
+          distribution_mode:    totalDistributions > 1 ? 'shared' : 'unique',
+          sequence_index:       i + 1,
+          total_distributions:  totalDistributions,
+        };
+        await supabase
+          .from('daily_content_plans')
+          .update({ content: JSON.stringify(finalizedJson), updated_at: new Date().toISOString() })
+          .eq('id', dailyPlanId);
+      } catch { /* non-fatal */ }
+    }
+
+    scheduled++;
+    console.log('[bolt-job] scheduled', { platform: canonicalPlatform, topic, scheduledFor: scheduledFor.toISOString() });
+  }
+
+  // ── 6. Mark job done ───────────────────────────────────────────────────
+  await updateJobStatus(bolt_job_id, 'done', {
+    scheduled_post_ids: scheduledPostIds,
+    completed_at:       new Date().toISOString(),
+  });
+
+  // ── 7. Update run progress counters ───────────────────────────────────
+  await updateRunProgress(run_id, scheduled, skipped);
+
+  void job.updateProgress(100);
+  console.log('[bolt-job] DONE', { bolt_job_id, topic, scheduled, skipped });
+}

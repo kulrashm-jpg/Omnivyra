@@ -10,6 +10,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { renderOmnivyraSnapshotMasterHtml, renderReportHtmlTemplate } from '../../../backend/services/export/reportHtmlTemplateRenderer';
 import { renderReportPdf } from '../../../backend/services/export/reportPdfRenderer';
 import { buildBusinessImpact } from '../../../backend/services/businessImpactFormatter';
 import { sanitizeReportViewPayload } from '../../../backend/services/reportContentSanitizationService';
@@ -61,6 +62,18 @@ export type ReportViewNextStep = {
   action: string;
   description: string;
   steps: string[];
+  reasoning: string;
+  tactics: string[];
+  focusPage: string;
+  timeline: {
+    short: string;
+    mid: string;
+    long: string;
+  };
+  priority: 'high' | 'medium' | 'low';
+  impact: 'high' | 'medium' | 'low';
+  effort: 'low' | 'medium' | 'high';
+  confidence: number;
   expectedOutcome: string;
   expectedUpside: string;
   impactScore: number;
@@ -166,11 +179,21 @@ export type ReportViewSeoExecutiveSummary = {
   };
   top3Actions: Array<{
     actionTitle: string;
+    title: string;
     priority: 'high' | 'medium' | 'low';
     expectedImpact: 'high' | 'medium' | 'low';
     effort: 'low' | 'medium' | 'high';
     linkedVisual: 'radar' | 'matrix' | 'funnel' | 'crawl';
     reasoning: string;
+    tactics: string[];
+    focusPage: string;
+    timeline: {
+      short: string;
+      mid: string;
+      long: string;
+    };
+    impact: 'high' | 'medium' | 'low';
+    confidence: number;
   }>;
   growthOpportunity: {
     title: string;
@@ -633,8 +656,20 @@ type ComposedReportSection = {
   }>;
   actions?: Array<{
     title?: string;
+    reasoning?: string;
     recommendation?: string;
     steps?: string[];
+    tactics?: string[];
+    focus_page?: string;
+    timeline?: {
+      short?: string;
+      mid?: string;
+      long?: string;
+    };
+    priority?: 'high' | 'medium' | 'low';
+    impact?: 'high' | 'medium' | 'low';
+    effort?: 'low' | 'medium' | 'high';
+    confidence?: number;
     expected_outcome?: string;
     expected_upside?: string;
     effort_level?: 'low' | 'medium' | 'high';
@@ -733,6 +768,18 @@ type ComposedReportData = {
   top_priorities?: Array<{
     title?: string;
     why_now?: string;
+    reasoning?: string;
+    tactics?: string[];
+    focus_page?: string;
+    timeline?: {
+      short?: string;
+      mid?: string;
+      long?: string;
+    };
+    priority?: 'high' | 'medium' | 'low';
+    impact?: 'high' | 'medium' | 'low';
+    effort?: 'low' | 'medium' | 'high';
+    confidence?: number;
     expected_outcome?: string;
     expected_upside?: string;
     effort_level?: 'low' | 'medium' | 'high';
@@ -815,11 +862,21 @@ type ComposedReportData = {
     };
     top_3_actions?: Array<{
       action_title?: string;
+      title?: string;
       priority?: 'high' | 'medium' | 'low';
       expected_impact?: 'high' | 'medium' | 'low';
       effort?: 'low' | 'medium' | 'high';
       linked_visual?: 'radar' | 'matrix' | 'funnel' | 'crawl';
       reasoning?: string;
+      tactics?: string[];
+      focus_page?: string;
+      timeline?: {
+        short?: string;
+        mid?: string;
+        long?: string;
+      };
+      impact?: 'high' | 'medium' | 'low';
+      confidence?: number;
     }>;
     growth_opportunity?: {
       title?: string;
@@ -1276,12 +1333,22 @@ function buildSeoExecutiveSummary(report: ComposedReportData): ReportViewSeoExec
     },
     top3Actions: Array.isArray(summary.top_3_actions)
       ? summary.top_3_actions.map((item) => ({
-          actionTitle: item.action_title || 'Priority action',
+          actionTitle: item.action_title || item.title || '',
+          title: item.title || item.action_title || '',
           priority: item.priority || 'medium',
           expectedImpact: item.expected_impact || 'medium',
           effort: item.effort || 'medium',
           linkedVisual: item.linked_visual || 'radar',
-          reasoning: item.reasoning || 'This action is one of the clearest next moves in the current snapshot.',
+          reasoning: item.reasoning || '',
+          tactics: Array.isArray(item.tactics) ? item.tactics.filter((step) => typeof step === 'string' && step.trim().length > 0).slice(0, 3) : [],
+          focusPage: item.focus_page || '',
+          timeline: {
+            short: item.timeline?.short || '',
+            mid: item.timeline?.mid || '',
+            long: item.timeline?.long || '',
+          },
+          impact: item.impact || item.expected_impact || 'medium',
+          confidence: typeof item.confidence === 'number' ? item.confidence : 0,
         })).slice(0, 3)
       : [],
     growthOpportunity: summary.growth_opportunity
@@ -1565,14 +1632,24 @@ function mapComposedReport(
         effortLevel,
       });
       return {
-        action: action.title || action.action_type || 'Take action',
-        description:
-          action.recommendation ||
-          'Use this recommendation to turn the report into an execution task.',
+        action: action.title || action.action_type || '',
+        description: action.recommendation || '',
         steps: Array.isArray(action.steps) ? action.steps.slice(0, 4) : [],
+        reasoning: action.reasoning || '',
+        tactics: Array.isArray(action.tactics) ? action.tactics.filter((step) => typeof step === 'string' && step.trim().length > 0).slice(0, 3) : [],
+        focusPage: action.focus_page || '',
+        timeline: {
+          short: action.timeline?.short || '',
+          mid: action.timeline?.mid || '',
+          long: action.timeline?.long || '',
+        },
+        priority: action.priority || (impactScore >= 72 ? 'high' : impactScore >= 48 ? 'medium' : 'low'),
+        impact: action.impact || normalizeImpact(impactScore),
+        effort: action.effort || effortLevel,
+        confidence: typeof action.confidence === 'number' ? action.confidence : Math.round(Number(action.confidence_score ?? 0) * 100),
         expectedOutcome:
           action.expected_outcome ||
-          'This action should improve visibility, trust, or conversion readiness.',
+          '',
         expectedUpside:
           action.expected_upside ||
           buildExpectedUpside({
@@ -2563,6 +2640,14 @@ function mapSnapshot(
         action: action.title,
         description: action.title,
         steps: [],
+        reasoning: '',
+        tactics: [],
+        focusPage: '',
+        timeline: { short: '', mid: '', long: '' },
+        priority: 'medium',
+        impact: 'medium',
+        effort: effortLevel,
+        confidence: 0,
         expectedOutcome: 'This action should improve visibility, trust, or conversion readiness.',
         expectedUpside: buildExpectedUpside({
           priorityType,
@@ -2683,6 +2768,14 @@ function mapPerformance(
         action: `Improve: ${p.title}`,
         description: p.recovery_actions[0]?.reason ?? '',
         steps: [],
+        reasoning: '',
+        tactics: [],
+        focusPage: '',
+        timeline: { short: '', mid: '', long: '' },
+        priority: p.scores.health === 'poor' ? 'high' : 'medium',
+        impact: p.scores.health === 'poor' ? 'high' : 'medium',
+        effort: effortLevel,
+        confidence: 0,
         expectedOutcome: 'This should improve the page health and recover lost performance.',
         expectedUpside: buildExpectedUpside({
           priorityType,
@@ -2782,6 +2875,14 @@ function mapGrowth(
       action: rec.action,
       description: rec.reason,
       steps: [],
+      reasoning: '',
+      tactics: [],
+      focusPage: '',
+      timeline: { short: '', mid: '', long: '' },
+      priority: 'medium',
+      impact: 'medium',
+      effort: effortLevel,
+      confidence: 0,
       expectedOutcome: 'This should expand search footprint or strengthen authority.',
       expectedUpside: buildExpectedUpside({
         priorityType,
@@ -2823,6 +2924,27 @@ function mapGrowth(
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
+
+function sanitizeFilenamePart(value: string | null | undefined): string {
+  return (value ?? '')
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildPdfDownloadFilename(
+  type: 'snapshot' | 'performance' | 'growth',
+  companyName: string | null | undefined,
+  domain: string,
+): string {
+  const brand = sanitizeFilenamePart(companyName) || sanitizeFilenamePart(domain) || 'Report';
+  const prefix = type === 'snapshot'
+    ? 'Digital Snapshot'
+    : type === 'performance'
+      ? 'Performance Report'
+      : 'Growth Report';
+  return `${prefix} - ${brand}.pdf`;
+}
 
 export default async function handler(
   req: NextApiRequest,
@@ -3089,12 +3211,25 @@ export default async function handler(
   if (composedPayload) {
     const withComparison = await attachProgressComparison(composedPayload);
     const sanitizedWithComparison = sanitizeReportViewPayload(withComparison);
+    if (format === 'html') {
+      const html = type === 'snapshot'
+        ? renderOmnivyraSnapshotMasterHtml(sanitizedWithComparison).html
+        : renderReportHtmlTemplate(sanitizedWithComparison).html;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'private, no-store');
+      return res.status(200).send(html);
+    }
     if (format === 'pdf') {
       const pdfBuffer = await renderReportPdf(sanitizedWithComparison);
+      const filename = buildPdfDownloadFilename(
+        type,
+        sanitizedWithComparison.companyContext?.companyName ?? null,
+        report.domain,
+      );
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename=\"${type}-${report.domain.replace(/[^a-z0-9.-]+/gi, '-')}-${reportId}.pdf\"`,
+        `attachment; filename=\"${filename}\"`,
       );
       res.setHeader('Cache-Control', 'private, no-store');
       return (res as NextApiResponse).status(200).send(pdfBuffer);
@@ -3118,12 +3253,26 @@ export default async function handler(
   const payloadWithComparison = await attachProgressComparison(payload);
   const sanitizedPayloadWithComparison = sanitizeReportViewPayload(payloadWithComparison);
 
+  if (format === 'html') {
+    const html = type === 'snapshot'
+      ? renderOmnivyraSnapshotMasterHtml(sanitizedPayloadWithComparison).html
+      : renderReportHtmlTemplate(sanitizedPayloadWithComparison).html;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.status(200).send(html);
+  }
+
   if (format === 'pdf') {
     const pdfBuffer = await renderReportPdf(sanitizedPayloadWithComparison);
+    const filename = buildPdfDownloadFilename(
+      type,
+      sanitizedPayloadWithComparison.companyContext?.companyName ?? null,
+      report.domain,
+    );
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename=\"${type}-${report.domain.replace(/[^a-z0-9.-]+/gi, '-')}-${reportId}.pdf\"`,
+      `attachment; filename=\"${filename}\"`,
     );
     res.setHeader('Cache-Control', 'private, no-store');
     return (res as NextApiResponse).status(200).send(pdfBuffer);

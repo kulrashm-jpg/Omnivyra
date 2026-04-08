@@ -21,6 +21,10 @@ import {
 import type { BlogGenerationOutput, BlogAngle, AngleType } from '../../lib/blog/blogGenerationEngine';
 import type { ClarificationQuestion } from '../../lib/blog/blogClarificationEngine';
 import type { HookAssessment } from '../../lib/blog/hookAssessment';
+import type { AngleEffectivenessEntry } from '../../lib/blog/feedbackOptimizationEngine';
+import type { SEOIntelligenceResult } from '../../lib/blog/seoIntelligenceEngine';
+import type { TrendIntelligenceResult } from '../../lib/blog/trendIntelligenceEngine';
+import { BLOG_FORMAT_OPTIONS, ARTICLE_FORMAT_OPTIONS, WHITEPAPER_FORMAT_OPTIONS, NEWSLETTER_FORMAT_OPTIONS, STORY_FORMAT_OPTIONS, GUIDE_FORMAT_OPTIONS, type BlogFormatType, type ArticleFormatType, type WhitepaperFormatType, type NewsletterFormatType, type StoryFormatType, type GuideFormatType } from '../../lib/blog/blogStructureTemplates';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -49,6 +53,10 @@ interface Props {
   initialTone?: string;
   initialRelatedBlogs?: string[];
   baseAnswers?: Record<string, string>;
+  /** 'blog' (default), 'article', 'whitepaper', 'newsletter', 'story', or 'guide' — changes API endpoint and prompt tone */
+  contentType?: 'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide';
+  /** Format type from briefing page. Default: 'standard'. */
+  initialFormatType?: BlogFormatType | ArticleFormatType | WhitepaperFormatType | NewsletterFormatType | StoryFormatType | GuideFormatType;
   onClose:     () => void;
   onGenerated: (
     output:         BlogGenerationOutput & { content_blocks?: unknown[] },
@@ -111,6 +119,8 @@ export default function BlogGenerateModal({
   initialTone,
   initialRelatedBlogs,
   baseAnswers,
+  contentType = 'blog',
+  initialFormatType = 'standard',
   onClose,
   onGenerated,
 }: Props) {
@@ -127,10 +137,14 @@ export default function BlogGenerateModal({
   const [answers,   setAnswers]   = useState<Record<string, string>>({});
 
   // Step 3 state
-  const [angles,           setAngles]           = useState<BlogAngle[]>([]);
-  const [selectedAngle,    setSelectedAngle]    = useState<BlogAngle | null>(null);
-  const [recommendedAngle, setRecommendedAngle] = useState<AngleType | null>(null);
-  const [industryMatrix,   setIndustryMatrix]   = useState<IndustryAngle[]>([]);
+  const [angles,              setAngles]              = useState<BlogAngle[]>([]);
+  const [selectedAngle,       setSelectedAngle]       = useState<BlogAngle | null>(null);
+  const [recommendedAngle,    setRecommendedAngle]    = useState<AngleType | null>(null);
+  const [industryMatrix,      setIndustryMatrix]      = useState<IndustryAngle[]>([]);
+  const [angleEffectiveness,  setAngleEffectiveness]  = useState<Partial<Record<AngleType, AngleEffectivenessEntry>>>({});
+  const [effectivenessBased,  setEffectivenessBased]  = useState(false);
+  const [seoIntelligence,     setSeoIntelligence]     = useState<SEOIntelligenceResult | null>(null);
+  const [trendIntelligence,   setTrendIntelligence]   = useState<TrendIntelligenceResult | null>(null);
 
   // Flow
   const [step,         setStep]         = useState<Step>('theme');
@@ -184,6 +198,9 @@ export default function BlogGenerateModal({
     });
   }
 
+  const apiEndpoint = contentType === 'whitepaper' ? '/api/whitepapers/generate' : contentType === 'guide' ? '/api/guides/generate' : contentType === 'newsletter' ? '/api/newsletters/generate' : contentType === 'story' ? '/api/stories/generate' : contentType === 'article' ? '/api/articles/generate' : '/api/blogs/generate';
+  const contentLabel = contentType === 'whitepaper' ? 'whitepaper' : contentType === 'guide' ? 'guide' : contentType === 'article' ? 'article' : 'blog';
+
   function buildBody(extra: Record<string, unknown> = {}): Record<string, unknown> {
     const mergedAnswers = {
       ...(baseAnswers || {}),
@@ -194,6 +211,8 @@ export default function BlogGenerateModal({
     const body: Record<string, unknown> = {
       company_id: companyId,
       topic:      topic.trim(),
+      content_type: contentType,
+      format_type: initialFormatType,
     };
     if (cluster)                    body.cluster        = cluster;
     if (intent)                     body.intent         = intent;
@@ -232,7 +251,7 @@ export default function BlogGenerateModal({
 
     try {
       const [res] = await Promise.all([
-        fetch('/api/blogs/generate', {
+        fetch(apiEndpoint, {
           method:  'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -250,6 +269,10 @@ export default function BlogGenerateModal({
       } else {
         setAngles(data.angles ?? []);
         setRecommendedAngle(data.recommended_angle ?? null);
+        setAngleEffectiveness(data.angle_effectiveness ?? {});
+        setEffectivenessBased(data.effectiveness_based ?? false);
+        setSeoIntelligence(data.seo_intelligence ?? null);
+        setTrendIntelligence(data.trend_intelligence ?? null);
         setStep('angles');
       }
     } catch {
@@ -265,7 +288,7 @@ export default function BlogGenerateModal({
 
     try {
       const [res] = await Promise.all([
-        fetch('/api/blogs/generate', {
+        fetch(apiEndpoint, {
           method:  'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -278,6 +301,10 @@ export default function BlogGenerateModal({
 
       setAngles(data.angles ?? []);
       setRecommendedAngle(data.recommended_angle ?? null);
+      setAngleEffectiveness(data.angle_effectiveness ?? {});
+      setEffectivenessBased(data.effectiveness_based ?? false);
+      setSeoIntelligence(data.seo_intelligence ?? null);
+      setTrendIntelligence(data.trend_intelligence ?? null);
       setStep('angles');
     } catch {
       setError('Network error. Please try again.');
@@ -292,7 +319,7 @@ export default function BlogGenerateModal({
     setStep('generating');
 
     try {
-      const res  = await fetch('/api/blogs/generate', {
+      const res  = await fetch(apiEndpoint, {
         method:  'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -303,7 +330,16 @@ export default function BlogGenerateModal({
 
       const confidence: 'high' | 'medium' = data.confidence ?? 'medium';
       const hookAssessment: HookAssessment = data.hook_assessment ?? { strength: 'moderate', note: '' };
-      onGenerated(data.result, confidence, hookAssessment, selectedAngle?.type ?? null);
+
+      // Attach SEO keywords to result for persistence downstream
+      const resultWithSeo = { ...data.result };
+      const seo = data.seo_intelligence ?? seoIntelligence;
+      if (seo) {
+        resultWithSeo.primary_keyword = seo.primary_keyword;
+        resultWithSeo.secondary_keywords = seo.secondary_keywords;
+      }
+
+      onGenerated(resultWithSeo, confidence, hookAssessment, selectedAngle?.type ?? null);
     } catch {
       setError('Network error. Please try again.');
       setStep('angles');
@@ -430,6 +466,22 @@ export default function BlogGenerateModal({
                   <option value="2000">~2000 words (pillar content)</option>
                 </select>
               </div>
+
+              {/* Format type (read-only display from briefing page) */}
+              {initialFormatType !== 'standard' && (
+                <div className="flex items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-2">
+                  <span className="text-xs text-gray-500">Format:</span>
+                  <span className="text-xs font-semibold text-indigo-700">
+                    {BLOG_FORMAT_OPTIONS.find(f => f.value === initialFormatType)?.label
+                      ?? ARTICLE_FORMAT_OPTIONS.find(f => f.value === initialFormatType)?.label
+                      ?? WHITEPAPER_FORMAT_OPTIONS.find(f => f.value === initialFormatType)?.label
+                      ?? NEWSLETTER_FORMAT_OPTIONS.find(f => f.value === initialFormatType)?.label
+                      ?? STORY_FORMAT_OPTIONS.find(f => f.value === initialFormatType)?.label
+                      ?? GUIDE_FORMAT_OPTIONS.find(f => f.value === initialFormatType)?.label
+                      ?? 'Standard'}
+                  </span>
+                </div>
+              )}
 
               {/* Series toggle */}
               {publishedBlogs.length > 0 && (
@@ -562,7 +614,59 @@ export default function BlogGenerateModal({
               {recommendedAngle && (
                 <div className="flex items-center gap-1.5 text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-1.5">
                   <Star className="h-3 w-3 fill-indigo-500 text-indigo-500" />
-                  <span><strong>Recommended:</strong> {recommendedAngle.charAt(0).toUpperCase() + recommendedAngle.slice(1)} — based on your past blog performance</span>
+                  <span>
+                    <strong>Recommended:</strong> {recommendedAngle.charAt(0).toUpperCase() + recommendedAngle.slice(1)}
+                    {effectivenessBased
+                      ? ` — ${Math.round((angleEffectiveness[recommendedAngle]?.score ?? 0) * 100)}% effective based on past content`
+                      : ' — based on your past blog performance'}
+                  </span>
+                </div>
+              )}
+
+              {/* SEO Intelligence keywords */}
+              {seoIntelligence && (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 space-y-1">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                    <Target className="h-3 w-3 text-indigo-500" />
+                    SEO Keywords
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                      {seoIntelligence.primary_keyword}
+                    </span>
+                    {seoIntelligence.secondary_keywords.map(kw => (
+                      <span key={kw} className="text-[10px] text-gray-600 bg-gray-200 px-2 py-0.5 rounded-full">
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                  {seoIntelligence.keyword_warnings.length > 0 && (
+                    <div className="text-[10px] text-amber-700 mt-1">
+                      {seoIntelligence.keyword_warnings.map((w, i) => (
+                        <p key={i} className="flex items-start gap-1">
+                          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5 text-amber-500" />
+                          {w}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Trend signals */}
+              {trendIntelligence && trendIntelligence.relevant_trends.length > 0 && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 space-y-1">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800">
+                    <TrendingUp className="h-3 w-3 text-emerald-600" />
+                    Trending in Your Market
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {trendIntelligence.relevant_trends.slice(0, 2).map(t => (
+                      <span key={t.topic} className="text-[10px] font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                        {t.topic} ({Math.round(t.discussion_growth * 100)}% growth)
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -574,6 +678,15 @@ export default function BlogGenerateModal({
                   const industryAngle = industryMatrix.find(m => m.angle_type === angle.type);
                   const isBestForInd  = industryAngle?.recommendation === 'best';
                   const isAvoidForInd = industryAngle?.recommendation === 'avoid';
+                  const effEntry      = angleEffectiveness[angle.type];
+                  // Check if this angle's title has strong overlap with a relevant trend (>0.5 similarity)
+                  const hasTrendOverlap = trendIntelligence?.relevant_trends.some(t => {
+                    const tWords = new Set(t.topic.toLowerCase().split(/\s+/).filter(w => w.length >= 3));
+                    const titleWords = angle.title.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
+                    const matches = titleWords.filter(w => tWords.has(w)).length;
+                    const union = new Set([...tWords, ...titleWords]).size;
+                    return union > 0 && (matches / union) > 0.5;
+                  });
                   return (
                     <button
                       key={angle.type}
@@ -601,9 +714,19 @@ export default function BlogGenerateModal({
                                 <Star className="h-2.5 w-2.5 fill-indigo-500" /> Recommended
                               </span>
                             )}
+                            {effEntry && effEntry.sample_size >= 3 && !isRecommend && (
+                              <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full">
+                                {Math.round(effEntry.score * 100)}% effective
+                              </span>
+                            )}
                             {isBestForInd && !isRecommend && industry && (
                               <span className="flex items-center gap-0.5 text-[10px] font-semibold text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded-full">
                                 <TrendingUp className="h-2.5 w-2.5" /> Works well for {industry}
+                              </span>
+                            )}
+                            {hasTrendOverlap && (
+                              <span className="flex items-center gap-0.5 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full">
+                                <TrendingUp className="h-2.5 w-2.5" /> Trending
                               </span>
                             )}
                             {selected && (
@@ -645,7 +768,7 @@ export default function BlogGenerateModal({
                   disabled={!selectedAngle}
                   className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
-                  <Sparkles className="h-4 w-4" /> Write This Blog
+                  <Sparkles className="h-4 w-4" /> Write This {contentLabel === 'article' ? 'Article' : 'Blog'}
                 </button>
               </div>
             </div>
@@ -662,7 +785,7 @@ export default function BlogGenerateModal({
               </div>
               <div>
                 <p className="text-base font-bold text-gray-900">
-                  {angles.length === 0 ? 'Generating angle options…' : 'Writing your blog post'}
+                  {angles.length === 0 ? 'Generating angle options…' : `Writing your ${contentLabel}…`}
                 </p>
                 <p className="text-sm text-gray-500 mt-1 max-w-xs">
                   {angles.length === 0

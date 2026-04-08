@@ -1223,6 +1223,9 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const freshThreadAppliedRef = useRef<Set<string>>(new Set());
   const planAbortRef = useRef<AbortController | null>(null);
+  /** When true, auto-send "Create my plan" after welcome message is set (all GATHER_ORDER fields satisfied). */
+  const autoTriggerPlanRef = useRef(false);
+  const sendMessageRef = useRef<((override?: string) => Promise<void>) | null>(null);
 
   const resolvedCompanyId = useMemo(() => {
     if (companyId) return companyId;
@@ -1337,6 +1340,17 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     }
     return names;
   }, [companyConfiguredPlatforms, platformCatalogPlatforms]);
+
+  const configuredPlatformKeys = useMemo(() => {
+    if (!companyConfiguredPlatforms || companyConfiguredPlatforms.length === 0) return [];
+    return Array.from(
+      new Set(
+        companyConfiguredPlatforms
+          .map((p) => String(p.platform || '').toLowerCase().replace(/^twitter$/i, 'x').trim())
+          .filter(Boolean)
+      )
+    );
+  }, [companyConfiguredPlatforms]);
 
   const platformContentTypeOptions = useMemo(() => {
     const next: Record<string, string[]> = {};
@@ -1464,7 +1478,9 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
 
   const platformExtractCandidates = useMemo(() => {
     const keys =
-      platformCatalogPlatforms && platformCatalogPlatforms.length > 0
+      configuredPlatformKeys.length > 0
+        ? configuredPlatformKeys
+        : platformCatalogPlatforms && platformCatalogPlatforms.length > 0
         ? platformCatalogPlatforms
             .map((p) => String(p?.canonical_key || '').toLowerCase().trim())
             .filter(Boolean)
@@ -1472,7 +1488,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     const out = new Set<string>(keys);
     if (out.has('x')) out.add('twitter');
     return Array.from(out);
-  }, [platformCatalogPlatforms]);
+  }, [configuredPlatformKeys, platformCatalogPlatforms]);
 
   const hasEffectiveCatalog = platformCatalogPlatforms?.length > 0 || PLATFORM_OPTIONS.length > 0;
 
@@ -1581,7 +1597,12 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       weekOne?.platform_allocation && typeof weekOne.platform_allocation === 'object'
         ? Object.keys(weekOne.platform_allocation).join(', ')
         : '';
-    const platforms = pickString(platformsFromFields, platformsFromWeek);
+    const configuredPlatforms = configuredPlatformKeys.length > 0
+      ? configuredPlatformKeys
+          .map((platform) => PLATFORM_LABELS[platform] || platform)
+          .join(', ')
+      : '';
+    const platforms = pickString(platformsFromFields, platformsFromWeek, configuredPlatforms);
     if (platforms) base.platforms = platforms;
 
     // Persist platform-content-type selections (used for blueprint weekly cards).
@@ -1675,6 +1696,331 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
         kpiFocus: week?.weekly_kpi_focus || '—',
       },
     }));
+  };
+
+  const buildUniqueActivityCardsForWeek = (week: any) => {
+    const formatPlatformLabel = (platform: unknown) => {
+      const key = String(platform ?? '').trim().toLowerCase();
+      if (!key) return '';
+      return PLATFORM_LABELS[key as keyof typeof PLATFORM_LABELS] || key.charAt(0).toUpperCase() + key.slice(1);
+    };
+
+    const topicBriefs = Array.isArray(week?.topics) ? (week.topics as any[]) : [];
+    const executionItems = Array.isArray(week?.execution_items) ? (week.execution_items as any[]) : [];
+    const cards: any[] = [];
+
+    for (let execIdx = 0; execIdx < executionItems.length; execIdx += 1) {
+      const exec = executionItems[execIdx];
+      const contentType = String(exec?.content_type ?? exec?.contentType ?? 'â€”').trim() || 'â€”';
+      const selectedPlatforms = Array.isArray(exec?.selected_platforms)
+        ? exec.selected_platforms.map((p: unknown) => String(p ?? '').trim().toLowerCase()).filter(Boolean)
+        : [];
+      const fallbackPlatforms = Array.isArray(exec?.platform_options)
+        ? exec.platform_options.map((p: unknown) => String(p ?? '').trim().toLowerCase()).filter(Boolean)
+        : [];
+      const slotPlatforms = Array.isArray(exec?.slot_platforms) ? (exec.slot_platforms as any[]) : [];
+      const topicSlots = Array.isArray(exec?.topic_slots) ? (exec.topic_slots as any[]) : [];
+
+      for (let slotIdx = 0; slotIdx < topicSlots.length; slotIdx += 1) {
+        const slot = topicSlots[slotIdx];
+        const platformsForSlot = (
+          Array.isArray(slotPlatforms[slotIdx]) && slotPlatforms[slotIdx].length > 0
+            ? slotPlatforms[slotIdx]
+            : (selectedPlatforms.length > 0 ? selectedPlatforms : fallbackPlatforms)
+        )
+          .map((p: unknown) => String(p ?? '').trim().toLowerCase())
+          .filter(Boolean);
+        const intent = slot?.intent && typeof slot.intent === 'object' ? slot.intent : {};
+        const matchedTopic = topicBriefs.find((topic) => {
+          const meta = (topic as any)?.execution_meta;
+          if (meta && Number(meta.exec_index) === execIdx && Number(meta.slot_index) === slotIdx) return true;
+          return String(topic?.topicTitle ?? '').trim() === String(slot?.topic ?? '').trim();
+        });
+
+        cards.push({
+          ...(matchedTopic && typeof matchedTopic === 'object' ? matchedTopic : {}),
+          topicTitle: matchedTopic?.topicTitle || String(slot?.topic ?? '').trim() || `Activity ${cards.length + 1}`,
+          topicContext: {
+            ...(matchedTopic?.topicContext && typeof matchedTopic.topicContext === 'object' ? matchedTopic.topicContext : {}),
+            writingIntent:
+              matchedTopic?.topicContext?.writingIntent ||
+              String((intent as any)?.brief_summary ?? (intent as any)?.writing_intent ?? '').trim() ||
+              'â€”',
+          },
+          whoAreWeWritingFor:
+            matchedTopic?.whoAreWeWritingFor ||
+            String((intent as any)?.target_audience ?? '').trim() ||
+            'â€”',
+          whatProblemAreWeAddressing:
+            matchedTopic?.whatProblemAreWeAddressing ||
+            String((intent as any)?.pain_point ?? '').trim() ||
+            'â€”',
+          whatShouldReaderLearn:
+            matchedTopic?.whatShouldReaderLearn ||
+            String((intent as any)?.outcome_promise ?? '').trim() ||
+            'â€”',
+          desiredAction:
+            matchedTopic?.desiredAction ||
+            String((intent as any)?.cta_type ?? week?.cta_type ?? '').trim() ||
+            'â€”',
+          narrativeStyle:
+            matchedTopic?.narrativeStyle ||
+            String(week?.weeklyContextCapsule?.toneGuidance ?? '').trim() ||
+            'â€”',
+          topicExecution: {
+            platformTargets: platformsForSlot.length > 0 ? platformsForSlot.map(formatPlatformLabel) : ['â€”'],
+            contentType,
+            ctaType: String((intent as any)?.cta_type ?? week?.cta_type ?? 'â€”').trim() || 'â€”',
+            kpiFocus: String(week?.weekly_kpi_focus ?? 'â€”').trim() || 'â€”',
+            creator_instruction:
+              slot?.creator_instruction && typeof slot.creator_instruction === 'object'
+                ? slot.creator_instruction
+                : undefined,
+            executionMode: String(slot?.execution_mode ?? '').trim() || undefined,
+            masterContentId: String(slot?.master_content_id ?? '').trim() || undefined,
+            progressionStep: Number(slot?.progression_step ?? slotIdx + 1) || slotIdx + 1,
+          },
+        });
+      }
+    }
+
+    if (cards.length > 0) return cards;
+    return buildTopicsWithExecutionForWeek(week);
+  };
+
+  const buildReviewActivityCardsForWeek = (week: any) => {
+    const formatPlatformLabel = (platform: unknown) => {
+      const key = String(platform ?? '').trim().toLowerCase();
+      if (!key) return '';
+      return PLATFORM_LABELS[key as keyof typeof PLATFORM_LABELS] || key.charAt(0).toUpperCase() + key.slice(1);
+    };
+
+    const directCards = buildUniqueActivityCardsForWeek(week);
+    const postingSource = Array.isArray(week?.resolved_postings) && week.resolved_postings.length > 0
+      ? (week.resolved_postings as any[])
+      : (Array.isArray(week?.daily_execution_items) ? (week.daily_execution_items as any[]) : []);
+    const cardsFromPostings: any[] = [];
+    if (postingSource.length > 0) {
+      const seen = new Set<string>();
+      postingSource.forEach((posting: any, idx: number) => {
+        const contentType = String(posting?.content_type ?? posting?.contentType ?? 'post').trim().toLowerCase() || 'post';
+        const platform = String(posting?.platform ?? '').trim().toLowerCase();
+        const isCreator = isCreatorDependentContentType(contentType);
+        const uniqueKey =
+          String(posting?.master_content_id ?? posting?.posting_id ?? posting?.execution_id ?? '').trim() ||
+          `${String(posting?.topic ?? posting?.title ?? '').trim().toLowerCase()}::${contentType}::${platform || 'shared'}::${idx}`;
+        if (seen.has(uniqueKey)) return;
+        seen.add(uniqueKey);
+        const intent = posting?.intent && typeof posting.intent === 'object'
+          ? posting.intent
+          : posting?.writer_content_brief && typeof posting.writer_content_brief === 'object'
+            ? posting.writer_content_brief
+            : {};
+        cardsFromPostings.push({
+          topicTitle: String(posting?.topic ?? posting?.title ?? '').trim() || `Activity ${idx + 1}`,
+          topicContext: {
+            writingIntent: String((intent as any)?.brief_summary ?? posting?.description ?? posting?.objective ?? '').trim() || '—',
+          },
+          whoAreWeWritingFor: String((intent as any)?.target_audience ?? '').trim() || '—',
+          whatProblemAreWeAddressing: String((intent as any)?.pain_point ?? posting?.summary ?? '').trim() || '—',
+          whatShouldReaderLearn: String((intent as any)?.outcome_promise ?? posting?.introObjective ?? '').trim() || '—',
+          desiredAction: String((intent as any)?.cta_type ?? posting?.cta ?? week?.cta_type ?? '').trim() || '—',
+          narrativeStyle: String(week?.weeklyContextCapsule?.toneGuidance ?? posting?.brandVoice ?? '').trim() || '—',
+          topicExecution: {
+            platformTargets: platform ? [formatPlatformLabel(platform)] : ['—'],
+            contentType,
+            ctaType: String((intent as any)?.cta_type ?? posting?.cta ?? week?.cta_type ?? '—').trim() || '—',
+            kpiFocus: String(week?.weekly_kpi_focus ?? '—').trim() || '—',
+            creator_instruction:
+              posting?.creator_instruction && typeof posting.creator_instruction === 'object'
+                ? posting.creator_instruction
+                : undefined,
+            executionMode: String(posting?.execution_mode ?? (isCreator ? 'CREATOR_REQUIRED' : 'AI_AUTOMATED')).trim() || undefined,
+            masterContentId: String(posting?.master_content_id ?? '').trim() || undefined,
+            progressionStep: Number(posting?.progression_step ?? idx + 1) || idx + 1,
+          },
+          _creatorCard: posting?.creator_card && typeof posting.creator_card === 'object' ? posting.creator_card : undefined,
+        });
+      });
+    }
+
+    const breakdown = week?.platform_content_breakdown && typeof week.platform_content_breakdown === 'object'
+      ? (week.platform_content_breakdown as Record<string, Array<{ type?: string; count?: number; topic?: string; topics?: string[]; platforms?: string[] }>>)
+      : null;
+    const cardsFromBreakdown: any[] = [];
+    if (breakdown && Object.keys(breakdown).length > 0) {
+      const seen = new Set<string>();
+      Object.entries(breakdown).forEach(([platformKey, rawItems]) => {
+        const items = Array.isArray(rawItems) ? rawItems : [];
+        items.forEach((item) => {
+          const contentType = String(item?.type ?? 'post').trim().toLowerCase() || 'post';
+          const sharedPlatforms = Array.isArray(item?.platforms) && item.platforms.length > 0
+            ? item.platforms.map((p) => String(p ?? '').trim().toLowerCase()).filter(Boolean)
+            : [platformKey];
+          const topics = Array.isArray(item?.topics)
+            ? item.topics.map((t) => String(t ?? '').trim()).filter(Boolean)
+            : (typeof item?.topic === 'string' && item.topic.trim() ? [item.topic.trim()] : []);
+          const count = Number(item?.count ?? 0);
+          const uniqueCount = Math.max(topics.length, Number.isFinite(count) && count > 0 ? Math.floor(count) : 1);
+          const dedupeKey = `${contentType}::${sharedPlatforms.slice().sort().join('|')}::${topics.join('|') || `count-${uniqueCount}`}`;
+          if (seen.has(dedupeKey)) return;
+          seen.add(dedupeKey);
+          for (let pieceIdx = 0; pieceIdx < uniqueCount; pieceIdx += 1) {
+            const topicTitle =
+              topics[pieceIdx] ||
+              (topics[0] ? `${topics[0]} (${pieceIdx + 1})` : `${contentType} ${pieceIdx + 1}`);
+            cardsFromBreakdown.push({
+              topicTitle,
+              topicContext: {
+                writingIntent: `${getIntentLabelForContentType(contentType)} for ${sharedPlatforms.map(formatPlatformLabel).join(', ')}`,
+              },
+              whoAreWeWritingFor: String(week?.weeklyContextCapsule?.audienceProfile ?? '').trim() || '—',
+              whatProblemAreWeAddressing: String(week?.primary_objective ?? week?.summary ?? '').trim() || '—',
+              whatShouldReaderLearn: String(week?.theme ?? week?.phase_label ?? '').trim() || '—',
+              desiredAction: String(week?.cta_type ?? '').trim() || '—',
+              narrativeStyle: String(week?.weeklyContextCapsule?.toneGuidance ?? '').trim() || '—',
+              topicExecution: {
+                platformTargets: sharedPlatforms.map(formatPlatformLabel).filter(Boolean),
+                contentType,
+                ctaType: String(week?.cta_type ?? '—').trim() || '—',
+                kpiFocus: String(week?.weekly_kpi_focus ?? '—').trim() || '—',
+                progressionStep: pieceIdx + 1,
+              },
+            });
+          }
+        });
+      });
+    }
+
+    const best = [directCards, cardsFromPostings, cardsFromBreakdown]
+      .filter((items) => Array.isArray(items) && items.length > 0)
+      .sort((a, b) => b.length - a.length)[0];
+
+    if (best && best.length > 0) return best;
+
+    const rawRequests =
+      (lastCollectedPlanningContextFromApi as any)?.platform_content_requests ??
+      (prefilledPlanning as any)?.platform_content_requests ??
+      (collectedPlanningContext as any)?.platform_content_requests ??
+      null;
+    const requestObject: Record<string, Record<string, number>> = {};
+
+    if (rawRequests && typeof rawRequests === 'object') {
+      if (Array.isArray(rawRequests)) {
+        for (const entry of rawRequests as any[]) {
+          const platform = String(entry?.platform ?? '').trim().toLowerCase();
+          const contentType = String(entry?.content_type ?? '').trim().toLowerCase();
+          const count = Number(entry?.count_per_week ?? 0);
+          if (!platform || !contentType || !Number.isFinite(count) || count <= 0) continue;
+          requestObject[platform] = requestObject[platform] || {};
+          requestObject[platform]![contentType] = Math.floor(count);
+        }
+      } else {
+        for (const [platform, byType] of Object.entries(rawRequests as Record<string, unknown>)) {
+          if (!byType || typeof byType !== 'object') continue;
+          const normalizedPlatform = String(platform ?? '').trim().toLowerCase();
+          if (!normalizedPlatform) continue;
+          const out: Record<string, number> = {};
+          for (const [contentType, rawCount] of Object.entries(byType as Record<string, unknown>)) {
+            const count = Number(rawCount ?? 0);
+            if (!contentType || !Number.isFinite(count) || count <= 0) continue;
+            out[String(contentType).trim().toLowerCase()] = Math.floor(count);
+          }
+          if (Object.keys(out).length > 0) requestObject[normalizedPlatform] = out;
+        }
+      }
+    }
+
+    const sharingConfig =
+      (lastCollectedPlanningContextFromApi as any)?.cross_platform_sharing ??
+      (prefilledPlanning as any)?.cross_platform_sharing ??
+      (collectedPlanningContext as any)?.cross_platform_sharing ??
+      null;
+    const sharingEnabled =
+      sharingConfig && typeof sharingConfig === 'object' && 'enabled' in sharingConfig
+        ? Boolean((sharingConfig as { enabled?: boolean }).enabled)
+        : (hasProvidedPlatformContentRequests || Object.keys(planningPlatformContentRequests || {}).length > 0)
+          ? planningCrossPlatformSharingEnabled
+          : true;
+    const sharingSchedule =
+      sharingConfig && typeof sharingConfig === 'object' && typeof (sharingConfig as { schedule?: unknown }).schedule === 'string'
+        ? String((sharingConfig as { schedule?: string }).schedule)
+        : planningCrossPlatformScheduleMode;
+
+    if (Object.keys(requestObject).length === 0) return [];
+
+    const perTypePerPlatform: Record<string, Record<string, number>> = {};
+    for (const [platform, byType] of Object.entries(requestObject)) {
+      for (const [contentType, count] of Object.entries(byType || {})) {
+        perTypePerPlatform[contentType] = perTypePerPlatform[contentType] || {};
+        perTypePerPlatform[contentType]![platform] = Math.floor(Number(count) || 0);
+      }
+    }
+
+    const fallbackCards: any[] = [];
+    const themeLabel = String(week?.theme ?? week?.phase_label ?? `Week ${week?.week ?? 1}`).trim();
+    const objectiveLabel = String(week?.primary_objective ?? week?.objective ?? week?.summary ?? '').trim();
+    const audienceLabel = String(week?.weeklyContextCapsule?.audienceProfile ?? '').trim() || '—';
+    const toneLabel = String(week?.weeklyContextCapsule?.toneGuidance ?? '').trim() || '—';
+
+    Object.entries(perTypePerPlatform).forEach(([contentType, platformCounts]) => {
+      const platformEntries = Object.entries(platformCounts).filter(([, count]) => Number(count) > 0);
+      if (platformEntries.length === 0) return;
+      const counts = platformEntries.map(([, count]) => Number(count) || 0);
+      const uniqueCount = sharingEnabled
+        ? Math.max(...counts)
+        : counts.reduce((sum, count) => sum + count, 0);
+      if (!Number.isFinite(uniqueCount) || uniqueCount <= 0) return;
+
+      const piecePlatforms: string[][] = Array.from({ length: uniqueCount }, () => []);
+      if (sharingEnabled) {
+        for (const [platform, countRaw] of platformEntries) {
+          const count = Math.floor(Number(countRaw) || 0);
+          for (let idx = 0; idx < count; idx += 1) {
+            if (!piecePlatforms[idx]) piecePlatforms[idx] = [];
+            piecePlatforms[idx]!.push(platform);
+          }
+        }
+      } else {
+        let cursor = 0;
+        for (const [platform, countRaw] of platformEntries) {
+          const count = Math.floor(Number(countRaw) || 0);
+          for (let idx = 0; idx < count; idx += 1) {
+            piecePlatforms[cursor] = [platform];
+            cursor += 1;
+          }
+        }
+      }
+
+      for (let idx = 0; idx < uniqueCount; idx += 1) {
+        const assignedPlatforms = (piecePlatforms[idx] || []).filter(Boolean);
+        fallbackCards.push({
+          topicTitle: `${prettyContentTypeLabel(contentType)} ${idx + 1}`,
+          topicContext: {
+            writingIntent: objectiveLabel || themeLabel || `Create ${prettyContentTypeLabel(contentType)} for this week`,
+          },
+          whoAreWeWritingFor: audienceLabel,
+          whatProblemAreWeAddressing: objectiveLabel || themeLabel || '—',
+          whatShouldReaderLearn: themeLabel || '—',
+          desiredAction: String(week?.cta_type ?? '').trim() || '—',
+          narrativeStyle: toneLabel,
+          topicExecution: {
+            platformTargets: assignedPlatforms.length > 0 ? assignedPlatforms.map(formatPlatformLabel) : ['—'],
+            contentType,
+            ctaType: String(week?.cta_type ?? '—').trim() || '—',
+            kpiFocus: String(week?.weekly_kpi_focus ?? '—').trim() || '—',
+            progressionStep: idx + 1,
+          },
+          contentTypeGuidance: {
+            primaryFormat: sharingEnabled ? 'shared_piece' : 'unique_piece',
+            adaptationRequired: sharingEnabled && assignedPlatforms.length > 1,
+            scheduleMode: sharingSchedule,
+          },
+        });
+      }
+    });
+
+    return fallbackCards;
   };
 
   const applyLocalWeekTextReplacement = (
@@ -2356,9 +2702,90 @@ This comprehensive approach ensures consistent growth and engagement across all 
     return false;
   };
 
+  const isMeaningfulPlanningValue = (value: unknown, key?: string): boolean => {
+    if (value == null) return false;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return false;
+      if (key === 'exclusive_campaigns') return true;
+      if (key === 'platforms') return trimmed.length > 0;
+      if (key === 'available_content') return true;
+      return trimmed.length > 0;
+    }
+    if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+    if (Array.isArray(value)) {
+      if (key === 'exclusive_campaigns') return true;
+      return value.length > 0;
+    }
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      if (key === 'available_content' || key === 'content_capacity') {
+        if (Boolean((obj as any)._declared_none || (obj as any).declared_none || (obj as any).declaredNone)) return true;
+      }
+      return Object.keys(obj).length > 0;
+    }
+    return false;
+  };
+
+  const hasAnsweredPlanningKey = (key: string): boolean => {
+    const pre = prefilledPlanning as Record<string, unknown> | null | undefined;
+    const ec = (pre?.execution_config as Record<string, unknown> | null | undefined) ?? {};
+    const collected = (collectedPlanningContext as Record<string, unknown> | null | undefined) ?? {};
+    const apiCollected = (lastCollectedPlanningContextFromApi as Record<string, unknown> | null | undefined) ?? {};
+    const fromForm = buildCollectedPlanningContextForApi() ?? {};
+    const lookup = (field: string): unknown =>
+      fromForm?.[field] ?? apiCollected?.[field] ?? collected?.[field] ?? pre?.[field] ?? ec?.[field];
+
+    if (key === 'platforms') {
+      if (planningSelectedPlatforms.length > 0) return true;
+      if (configuredPlatformKeys.length > 0) return true;
+      const value = lookup('platforms');
+      if (Array.isArray(value)) return value.length > 0;
+      return isMeaningfulPlanningValue(value, key);
+    }
+
+    if (key === 'platform_content_requests') {
+      if (planningPlatformContentRequests && Object.keys(planningPlatformContentRequests).length > 0) return true;
+      return isMeaningfulPlanningValue(lookup(key), key);
+    }
+
+    if (key === 'exclusive_campaigns') {
+      if (hasProvidedExclusiveCampaigns) return true;
+      return isMeaningfulPlanningValue(lookup(key), key);
+    }
+
+    if (key === 'available_content') {
+      if (planningAvailableCountsOverride && Object.keys(planningAvailableCountsOverride).length > 0) return true;
+      return isMeaningfulPlanningValue(lookup(key), key);
+    }
+
+    if (key === 'content_capacity' || key === 'weekly_capacity') {
+      if (planningCapacityCountsOverride && Object.keys(planningCapacityCountsOverride).length > 0) return true;
+      return isMeaningfulPlanningValue(lookup('content_capacity'), 'content_capacity')
+        || isMeaningfulPlanningValue(lookup('weekly_capacity'), 'content_capacity');
+    }
+
+    return isMeaningfulPlanningValue(lookup(key), key);
+  };
+
   /** First question — matches backend GATHER_ORDER: available_content is always first. */
   const getFirstQuestion = (): string => {
     return '**First question:** Do you have existing content (videos, posts, blogs) for this campaign? Answer "no", "none", or describe what you have. (e.g., 3 videos, 10 posts, 2 blogs)';
+  };
+
+  /**
+   * Returns the first GATHER_ORDER key that is NOT yet satisfied in prefilledPlanning.
+   * Returns null if all 8 fields are present (ready to generate the plan immediately).
+   */
+  const getFirstUnansweredGatherKey = (): string | null => {
+    const GATHER_KEYS = [
+      'available_content',
+      'content_capacity',
+      'exclusive_campaigns',
+      'platforms',
+      'platform_content_requests',
+    ];
+    return GATHER_KEYS.find((k) => !hasAnsweredPlanningKey(k)) ?? null;
   };
 
   const buildRecommendationWelcome = (campaignData: any): string => {
@@ -2368,29 +2795,92 @@ This comprehensive approach ensures consistent growth and engagement across all 
     const payload = recommendationContext?.context_payload as Record<string, unknown> | undefined;
     const formats = payload?.formats as string[] | undefined;
     const reachEst = payload?.reach_estimate;
+
+    const firstMissing = getFirstUnansweredGatherKey();
+
+    if (firstMissing === null) {
+      // All required planning fields are already satisfied — skip Q&A, auto-generate the plan.
+      autoTriggerPlanRef.current = true;
+      const pre = prefilledPlanning as Record<string, unknown> | null | undefined;
+      const ec = (pre?.execution_config as Record<string, unknown> | null | undefined) ?? {};
+      const audience = pre?.target_audience ?? ec.target_audience ?? '';
+      const summaryLines: string[] = [];
+      if (audience) summaryLines.push(`**Audience:** ${audience}`);
+      const summaryBlock = summaryLines.length > 0 ? `\n\n${summaryLines.join('\n')}` : '';
+      return [
+        `Hello! I'm ready to build your week plan for **"${name}"**.`,
+        summaryBlock,
+        `\n\nI have all the information I need. Generating your week plan now...`,
+      ].join('');
+    }
+
+    // Some fields are missing — show what we know and ask the first missing question.
+    const GATHER_QUESTION_MAP: Record<string, string> = {
+      available_content: 'Do you have existing content (videos, posts, blogs) for this campaign? Answer "no", "none", or describe what you have. (e.g., 3 videos, 10 posts, 2 blogs)',
+      content_capacity: 'How many pieces of content can you and your team create every week? (e.g., 3 videos, 10 posts, 2 blogs)',
+      exclusive_campaigns: 'Anything only for one platform? (e.g. a LinkedIn-only series, or "no")',
+      platforms: 'Where will you post? (e.g. LinkedIn, Instagram, YouTube, X)',
+      platform_content_requests: 'How often will you share each content type per platform? (e.g., LinkedIn: 3 posts/week, Instagram: 5 reels/week)',
+    };
+
     const parts: string[] = [
       `Hello! I'm here to help you turn **"${name}"** into a complete content marketing plan.`,
     ];
+
     if (prefilledPlanning && Object.keys(prefilledPlanning).length > 0) {
-      parts.push('\n\nI already have from your setup:\n' + Object.entries(prefilledPlanning).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n'));
-      parts.push(`\n\nI'll ask only what's still needed to build your week plan.`);
-      parts.push(`\n\n${getFirstQuestion()}`);
-      return parts.join('');
+      const pre = prefilledPlanning as Record<string, unknown>;
+      const ec = (pre.execution_config as Record<string, unknown> | null | undefined) ?? {};
+      const knownLines: string[] = [];
+      const displayFields: Array<[string, string]> = [
+        ['target_audience', 'Target audience'],
+        ['content_capacity', 'Content capacity'],
+        ['platforms', 'Platforms'],
+        ['available_content', 'Existing content'],
+        ['exclusive_campaigns', 'Platform exclusives'],
+        ['platform_content_requests', 'Platform content requests'],
+      ];
+      for (const [key, label] of displayFields) {
+        const v = pre[key] ?? ec[key];
+        if (hasAnsweredPlanningKey(key)) {
+          const summary =
+            typeof v === 'string'
+              ? v
+              : key === 'platforms' && configuredPlatformKeys.length > 0
+                ? configuredPlatformKeys.join(', ')
+                : key === 'platform_content_requests'
+                  ? 'Captured from your earlier setup'
+                  : key === 'available_content' || key === 'content_capacity'
+                    ? 'Captured from your earlier setup'
+                    : Array.isArray(v)
+                      ? `${v.length} configured`
+                      : 'Captured from your earlier setup';
+          knownLines.push(`- **${label}:** ${String(summary).slice(0, 100)}`);
+        }
+      }
+      if (knownLines.length > 0) {
+        parts.push('\n\nFrom your setup I already know:\n' + knownLines.join('\n'));
+      }
+      if (firstMissing) {
+        parts.push(`\n\nI'll only ask for anything still missing.`);
+      }
+    } else {
+      if (desc) {
+        parts.push(`\n\nI see your theme: *${desc.slice(0, 200)}${desc.length > 200 ? '...' : ''}*`);
+      }
+      if (regions && regions.length > 0) {
+        parts.push(`\n\n**Target regions:** ${regions.join(', ')}`);
+      }
+      if (formats && formats.length > 0) {
+        parts.push(`\n**Suggested formats:** ${formats.join(', ')}`);
+      }
+      if (reachEst) {
+        parts.push(`\n**Estimated reach:** ${reachEst}`);
+      }
+      parts.push(`\n\nI'll only ask for any missing planning details: available content, content capacity, platform exclusives, platforms, and per-platform content requests. Then say "Create my plan" or "I'm ready".`);
     }
-    if (desc) {
-      parts.push(`\n\nI see your theme: *${desc.slice(0, 200)}${desc.length > 200 ? '...' : ''}*`);
-    }
-    if (regions && regions.length > 0) {
-      parts.push(`\n\n**Target regions:** ${regions.join(', ')}`);
-    }
-    if (formats && formats.length > 0) {
-      parts.push(`\n**Suggested formats:** ${formats.join(', ')}`);
-    }
-    if (reachEst) {
-      parts.push(`\n**Estimated reach:** ${reachEst}`);
-    }
-    parts.push(`\n\nI'll ask you one question at a time. We need: available content (if any), content capacity, exclusive campaigns, action expectation, platforms, platform content requests, key messages, campaign duration. Then say "Create my plan" or "I'm ready".`);
-    parts.push(`\n\n${getFirstQuestion()}`);
+
+    const questionText = GATHER_QUESTION_MAP[firstMissing] ?? getFirstQuestion().replace('**First question:** ', '');
+    parts.push(`\n\n**${firstMissing === 'available_content' ? 'First' : 'Next'} question:** ${questionText}`);
     return parts.join('');
   };
 
@@ -2398,7 +2888,16 @@ This comprehensive approach ensures consistent growth and engagement across all 
     const pre = prefilledPlanning;
     if (!pre || Object.keys(pre).length === 0) return '';
     const items = Object.entries(pre).map(([k, v]) => `- ${k.replace(/_/g, ' ')}: ${v}`).join('\n');
-    const firstQuestion = `\n\n${getFirstQuestion()}\n\n`;
+    const firstMissing = getFirstUnansweredGatherKey();
+    const firstQuestion = firstMissing
+      ? `\n\n**${firstMissing === 'available_content' ? 'First' : 'Next'} question:** ${({
+          available_content: 'Do you have existing content (videos, posts, blogs) for this campaign? Answer "no", "none", or describe what you have. (e.g., 3 videos, 10 posts, 2 blogs)',
+          content_capacity: 'How many pieces of content can you and your team create every week? (e.g., 3 videos, 10 posts, 2 blogs)',
+          exclusive_campaigns: 'Anything only for one platform? (e.g. a LinkedIn-only series, or "no")',
+          platforms: 'Where will you post? (e.g. LinkedIn, Instagram, YouTube, X)',
+          platform_content_requests: 'How often will you share each content type per platform? (e.g., LinkedIn: 3 posts/week, Instagram: 5 reels/week)',
+        } as Record<string, string>)[firstMissing] || getFirstQuestion().replace('**First question:** ', '')}\n\n`
+      : '\n\nI already have everything I need to generate your week plan.\n\n';
     return `Hello! I'm your AI assistant for "${name}".
 
 I already have these from your campaign setup:
@@ -2410,9 +2909,9 @@ ${firstQuestion}`;
 
   const GENERIC_WELCOME = (name: string) => {
     const prefilledIntro = buildPrefilledWelcome(name);
-    const base = prefilledIntro || `Hello! I'm your AI assistant for "${name}". I'll ask you one question at a time to build your campaign plan.
+    const base = prefilledIntro || `Hello! I'm your AI assistant for "${name}". I'll ask only for any planning details that are still missing.
 
-**Planning checklist:** available content (if any), content capacity, exclusive campaigns, action expectation, platforms, platform content requests, key messages, campaign duration. Each week will have a concrete theme decided by AI before scheduling.
+**Planning checklist:** available content, content capacity, exclusive campaigns, platforms, and platform content requests. Each week will have a concrete theme decided by AI before scheduling.
 
 When we have everything, say "Create my plan" or "I'm ready" and I'll generate it.
 
@@ -2504,8 +3003,15 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
             setPlanningPlatformContentRequests(parsed.platformContentRequests);
           }
           if (Array.isArray(parsed?.planningSelectedPlatforms) && parsed.planningSelectedPlatforms.length > 0) {
-            setPlanningSelectedPlatforms(parsed.planningSelectedPlatforms.map((p) => String(p).toLowerCase().trim()).filter(Boolean));
-            restoredPlatformsFromStorage = true;
+            const restored = parsed.planningSelectedPlatforms
+              .map((p) => String(p).toLowerCase().replace(/^twitter$/i, 'x').trim())
+              .filter(Boolean)
+              .filter((p, index, arr) => arr.indexOf(p) === index)
+              .filter((p) => configuredPlatformKeys.length === 0 || configuredPlatformKeys.includes(p));
+            if (restored.length > 0) {
+              setPlanningSelectedPlatforms(restored);
+              restoredPlatformsFromStorage = true;
+            }
           }
           if (typeof parsed?.crossPlatformSharing === 'boolean') {
             setPlanningCrossPlatformSharingEnabled(parsed.crossPlatformSharing);
@@ -2538,8 +3044,10 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         }
         return [];
       })();
-      if (platforms.length > 0) {
-        setPlanningSelectedPlatforms(Array.from(new Set(platforms.map((p) => (p === 'twitter' ? 'x' : p)))));
+      const filteredPlatforms = Array.from(new Set(platforms.map((p) => (p === 'twitter' ? 'x' : p))))
+        .filter((p) => configuredPlatformKeys.length === 0 || configuredPlatformKeys.includes(p));
+      if (filteredPlatforms.length > 0) {
+        setPlanningSelectedPlatforms(filteredPlatforms);
       }
     }
   };
@@ -2765,17 +3273,18 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         return '(e.g., US, UK, India, global)';
       }
       if (q.includes('core message') || q.includes('key message') || q.includes('audience to remember') || q.includes('one thing you want people to remember')) {
-        if (companyKeyMessages) return `(e.g. ${companyKeyMessages})`;
-        if (companyProblemTransformation?.desired_transformation) return `(e.g. Desired Transformation: ${companyProblemTransformation.desired_transformation})`;
-        if (companyProblemTransformation?.life_after_solution) return `(e.g. Life After Solution: ${companyProblemTransformation.life_after_solution})`;
-        return '(e.g. from Problem & Transformation in your company profile)';
+        return '';
       }
-      return '(e.g., brief specific answer in 1-2 lines)';
+      if ((q.includes('after reading your content') && q.includes('what should people do')) || q.includes('what do you want people to do after')) {
+        return '';
+      }
+      return '';
     };
 
     const withExample = (line: string): string => {
       const example = exampleForQuestion(line);
       // Replace weak or messy example blocks with a clearer one.
+      if (!example) return line.replace(/\s+\(e\.g\.,?.*\)/i, '');
       if (/\(e\.g\.,?.*\)/i.test(line)) {
         return line.replace(/\(e\.g\.,?.*\)/i, example);
       }
@@ -2802,28 +3311,16 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         .filter((i) => i >= 0),
     [messages]
   );
-  const quickPickConfig = useMemo(() => {
-    const useBack = quickPickBackIndex >= 1 && aiMessageIndices.length > quickPickBackIndex;
-    const aiIndex = useBack ? aiMessageIndices[aiMessageIndices.length - 1 - quickPickBackIndex]! : aiMessageIndices[aiMessageIndices.length - 1];
-    const aiMsg = aiIndex != null ? messages[aiIndex]?.message : '';
-    const lastAi = typeof aiMsg === 'string' ? aiMsg : '';
-    const q = extractQuestionCandidate(lastAi);
-    const base = allowOnlyGatherConfig(getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks));
-    if (!base) return base;
-    if (base.key === 'available_content') {
-      return { ...base, options: allCatalogContentTypeQuickPickOptions };
-    }
-    if (base.key === 'content_capacity') {
-      return { ...base, options: allCatalogContentTypeQuickPickOptions };
-    }
-    if (base.key === 'platforms') {
-      return { ...base, options: platformQuickPickOptions };
-    }
-    return base;
-  }, [messages, quickPickBackIndex, aiMessageIndices, platformQuickPickOptions, allCatalogContentTypeQuickPickOptions, creatorDependentQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks]);
   const quickPickAiMessageId = useMemo(() => {
     return [...messages].reverse().find((m) => m.type === 'ai' && m.message)?.id ?? null;
   }, [messages]);
+  const shouldHideTrailingAnsweredGatherPrompt = useMemo(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage || lastMessage.type !== 'ai' || !lastMessage.message) return false;
+    const q = extractQuestionCandidate(String(lastMessage.message));
+    const cfg = allowOnlyGatherConfig(getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks));
+    return Boolean(cfg && hasAnsweredPlanningKey(cfg.key));
+  }, [messages, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks, hasProvidedExclusiveCampaigns, planningSelectedPlatforms, configuredPlatformKeys, planningPlatformContentRequests, planningAvailableCountsOverride, planningCapacityCountsOverride, prefilledPlanning, collectedPlanningContext, lastCollectedPlanningContextFromApi]);
   /** When in back mode, show previous question + user response (so selected response is visible) + editable form. */
   const displayedMessages = useMemo(() => {
     if (quickPickBackIndex !== 1 || aiMessageIndices.length < 2) return messages;
@@ -2831,6 +3328,11 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     const prevUserIndex = prevAiIndex + 1;
     return messages.slice(0, prevUserIndex + 1);
   }, [messages, quickPickBackIndex, aiMessageIndices]);
+  const visibleMessages = useMemo(() => {
+    if (quickPickBackIndex === 1) return displayedMessages;
+    if (!shouldHideTrailingAnsweredGatherPrompt) return displayedMessages;
+    return displayedMessages.slice(0, -1);
+  }, [displayedMessages, quickPickBackIndex, shouldHideTrailingAnsweredGatherPrompt]);
   /** When in back mode, attach the form to the previous AI message; otherwise to the last. */
   const quickPickAttachToMessageId = useMemo(() => {
     if (quickPickBackIndex === 1 && aiMessageIndices.length >= 2) {
@@ -2840,7 +3342,17 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     return quickPickAiMessageId;
   }, [quickPickBackIndex, aiMessageIndices, messages, quickPickAiMessageId]);
   const eligiblePlanningTypes = useMemo(() => {
+    const formatHintsFromContext = [
+      ...(((recommendationContext?.context_payload as any)?.formats as string[] | undefined) ?? []),
+      ...((typeof (prefilledPlanning as any)?.suggested_formats === 'string'
+        ? String((prefilledPlanning as any).suggested_formats).split(',')
+        : []) as string[]),
+    ]
+      .map((value) => canonicalPlanningTypeLabel(String(value || '').trim()))
+      .filter(Boolean);
+
     const fromProps = [
+      ...formatHintsFromContext,
       ...extractPlanningTypeHintsFromCapacityValue((prefilledPlanning as any)?.available_content),
       ...extractPlanningTypeHintsFromCapacityValue((prefilledPlanning as any)?.weekly_capacity ?? (prefilledPlanning as any)?.content_capacity),
       ...extractPlanningTypeHintsFromCapacityValue((collectedPlanningContext as any)?.available_content),
@@ -2869,6 +3381,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       ...fromHistory,
     ]);
   }, [
+    recommendationContext,
     planningAvailableTypeHints,
     planningCapacityTypeHints,
     prefilledPlanning,
@@ -2877,7 +3390,38 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     platformQuickPickOptions,
     planDurationLimit?.max_campaign_duration_weeks,
   ]);
+  const quickPickConfig = useMemo(() => {
+    const useBack = quickPickBackIndex >= 1 && aiMessageIndices.length > quickPickBackIndex;
+    const aiIndex = useBack ? aiMessageIndices[aiMessageIndices.length - 1 - quickPickBackIndex]! : aiMessageIndices[aiMessageIndices.length - 1];
+    const aiMsg = aiIndex != null ? messages[aiIndex]?.message : '';
+    const lastAi = typeof aiMsg === 'string' ? aiMsg : '';
+    const q = extractQuestionCandidate(lastAi);
+    const base = allowOnlyGatherConfig(getQuickPickConfig(q, platformQuickPickOptions, planDurationLimit?.max_campaign_duration_weeks));
+    if (!base) return base;
+    if (hasAnsweredPlanningKey(base.key)) return null;
+    const creatorOnlyEligible =
+      eligiblePlanningTypes.size > 0 &&
+      Array.from(eligiblePlanningTypes).every((label) =>
+        CREATOR_DEPENDENT_PLANNING_LABELS.includes(label as typeof CREATOR_DEPENDENT_PLANNING_LABELS[number])
+      );
+    if (base.key === 'available_content') {
+      return { ...base, options: creatorOnlyEligible ? creatorDependentQuickPickOptions : allCatalogContentTypeQuickPickOptions };
+    }
+    if (base.key === 'content_capacity') {
+      return { ...base, options: creatorOnlyEligible ? creatorDependentQuickPickOptions : allCatalogContentTypeQuickPickOptions };
+    }
+    if (base.key === 'platforms') {
+      return { ...base, options: platformQuickPickOptions };
+    }
+    return base;
+  }, [messages, quickPickBackIndex, aiMessageIndices, platformQuickPickOptions, allCatalogContentTypeQuickPickOptions, creatorDependentQuickPickOptions, eligiblePlanningTypes, planDurationLimit?.max_campaign_duration_weeks, hasProvidedExclusiveCampaigns, planningSelectedPlatforms, configuredPlatformKeys, planningPlatformContentRequests, planningAvailableCountsOverride, planningCapacityCountsOverride, prefilledPlanning, collectedPlanningContext, lastCollectedPlanningContextFromApi]);
   const shouldRenderQuickPickInInput = false;
+
+  useEffect(() => {
+    if (planningSelectedPlatforms.length > 0) return;
+    if (configuredPlatformKeys.length === 0) return;
+    setPlanningSelectedPlatforms(configuredPlatformKeys);
+  }, [configuredPlatformKeys, planningSelectedPlatforms.length]);
 
   useEffect(() => {
     if (isNavigatingBackRef.current) {
@@ -2956,11 +3500,14 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     // Persist platform selection so the next question can show only selected platforms.
     if (quickPickConfig?.key === 'platforms') {
       const inferred = extractPlatforms(messageText);
-      if (inferred?.length) setPlanningSelectedPlatforms(Array.from(new Set(inferred)));
+      const filtered = (inferred ?? []).filter((p) => configuredPlatformKeys.length === 0 || configuredPlatformKeys.includes(p));
+      if (filtered.length) setPlanningSelectedPlatforms(Array.from(new Set(filtered)));
     }
-    const effectiveCurrentPlan = initialPlan?.weeks?.length
-      ? initialPlan
-      : (showPlanOverview && structuredPlan ? { weeks: structuredPlan.weeks } : undefined);
+    const effectiveCurrentPlan = structuredPlan?.weeks?.length
+      ? { weeks: structuredPlan.weeks }
+      : initialPlan?.weeks?.length
+        ? initialPlan
+        : undefined;
 
     const userMessage: ChatMessage = {
       id: Date.now(),
@@ -3020,7 +3567,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         setMessages(prev => [...prev, aiResponse]);
         await saveCampaignMessage(aiResponse);
       } else if (selectedProvider === 'gpt' || selectedProvider === 'claude') {
-        provider = selectedProvider === 'gpt' ? 'GPT-4' : 'Claude 3.5 Sonnet';
+        provider = 'AI Assistant';
         aiResponse.provider = provider;
         setMessages(prev => [...prev, aiResponse]);
 
@@ -3200,6 +3747,25 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
       focusInputSoon();
     }
   };
+
+  // Keep sendMessageRef in sync so the auto-trigger useEffect doesn't capture a stale closure.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { sendMessageRef.current = (msg?: string) => sendMessage(msg); });
+
+  // Auto-trigger plan generation when buildRecommendationWelcome detected all GATHER_ORDER fields
+  // are already satisfied (autoTriggerPlanRef.current = true). We wait for the welcome message to
+  // be rendered (messages.length > 0) before auto-sending "Create my plan".
+  useEffect(() => {
+    if (!autoTriggerPlanRef.current) return;
+    if (messages.length === 0) return;
+    if (isLoading) return;
+    // Trigger only once
+    autoTriggerPlanRef.current = false;
+    const timer = setTimeout(() => {
+      void sendMessageRef.current?.('Create my plan');
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [messages, isLoading]);
 
   const submitQuickPickAnswer = async (config: QuickPickConfig) => {
     if (isBusy) return;
@@ -4294,11 +4860,11 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
           {quickPickBackButton}
           <div className="text-xs text-gray-600 mb-2">
-            Set frequency per content type per platform (aligned with your capacity), then choose same topic across platforms or different, and same day vs staggered vs AI.
+            Set the per-platform frequency for the configured platforms below.
           </div>
           <div className="mb-2 rounded-md border border-gray-200 bg-white p-2">
             <div className="text-xs font-medium text-gray-700 mb-2">(1) Frequency per content type — match or adjust to your capacity</div>
-            <div className="text-[11px] text-gray-500 mb-2">Set how many of each type per week per platform below.</div>
+            <div className="text-[11px] text-gray-500 mb-2">Set how many of each type you want per week for each configured platform.</div>
             <div className="flex flex-wrap items-center gap-3 text-xs text-gray-700 mt-3 pt-2 border-t border-gray-100">
               <span className="font-medium text-gray-700">(2) Can one content piece be shared across platforms?</span>
               <label className="flex items-center gap-2 cursor-pointer">
@@ -5185,8 +5751,8 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
 
   const getProviderName = (provider: AIProvider) => {
     switch (provider) {
-      case 'gpt': return 'GPT-4';
-      case 'claude': return 'Claude 3.5 Sonnet';
+      case 'gpt': return 'AI Assistant';
+      case 'claude': return 'AI Assistant';
       case 'demo': return 'Demo AI';
       default: return 'AI Assistant';
     }
@@ -5381,28 +5947,37 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
     );
   };
 
+  const summarizeCreatorInstruction = (creatorInstruction: unknown): string | null => {
+    if (!creatorInstruction || typeof creatorInstruction !== 'object') return null;
+    const data = creatorInstruction as Record<string, unknown>;
+    const parts = [
+      data.targetAudience ? `Audience: ${String(data.targetAudience).trim()}` : '',
+      data.objective ? `Goal: ${String(data.objective).trim()}` : '',
+      data.deliverable ? `Deliverable: ${String(data.deliverable).trim()}` : '',
+      data.visualBrief ? `Visual: ${String(data.visualBrief).trim()}` : '',
+      data.hook ? `Hook: ${String(data.hook).trim()}` : '',
+    ].filter(Boolean);
+    if (parts.length === 0) return null;
+    const summary = parts.join(' | ');
+    return summary.length > 220 ? `${summary.slice(0, 219)}...` : summary;
+  };
+
   const renderStructuredPlan = (plan: StructuredPlan) => {
     return (
       <div className="space-y-4">
         {plan.weeks.map((week) => {
-          const isBlueprint = week.platform_allocation && Object.keys(week.platform_allocation).length > 0;
-          const hasEnrichedTopics = Array.isArray((week as any).topics) && (week as any).topics.length > 0;
+          const topicsWithExecution = buildReviewActivityCardsForWeek(week);
+          const hasEnrichedTopics = topicsWithExecution.length > 0;
+          const hasExecutionStructure =
+            (week.platform_allocation && Object.keys(week.platform_allocation).length > 0) ||
+            (Array.isArray((week as any)?.execution_items) && (week as any).execution_items.length > 0) ||
+            (Array.isArray((week as any)?.resolved_postings) && (week as any).resolved_postings.length > 0) ||
+            (Array.isArray((week as any)?.daily_execution_items) && (week as any).daily_execution_items.length > 0) ||
+            (((week as any)?.platform_content_breakdown && typeof (week as any).platform_content_breakdown === 'object')
+              ? Object.keys((week as any).platform_content_breakdown).length > 0
+              : false);
+          const isBlueprint = Boolean(hasExecutionStructure || hasEnrichedTopics);
           const themeLabel = week.phase_label || week.theme || `Week ${week.week}`;
-          const platformTargets = Object.entries((week as any)?.platform_allocation || {})
-            .map(([platform, count]) => `${platform}: ${count}`)
-            .filter(Boolean);
-          const contentTypes = Array.isArray((week as any)?.content_type_mix) ? (week as any).content_type_mix : [];
-          const topicsWithExecution = hasEnrichedTopics
-            ? (((week as any).topics as any[]).map((topic, idx) => ({
-                ...topic,
-                topicExecution: {
-                  platformTargets: platformTargets.length > 0 ? [platformTargets[idx % platformTargets.length]] : ['—'],
-                  contentType: contentTypes[idx % Math.max(contentTypes.length, 1)] || '—',
-                  ctaType: (week as any)?.cta_type || '—',
-                  kpiFocus: (week as any)?.weekly_kpi_focus || '—',
-                },
-              })))
-            : [];
           // Helper to render rec-specific fields (summary, objectives, goals, suggested days)
           const renderRecFields = () => (
             <>
@@ -5466,6 +6041,9 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                         <div className="text-gray-600">Learns: {topic.whatShouldReaderLearn || '—'}</div>
                         <div className="text-gray-600">Action: {topic.desiredAction || '—'}</div>
                         <div className="text-gray-600">Style: {topic.narrativeStyle || '—'}</div>
+                        {summarizeCreatorInstruction(topic?.topicExecution?.creator_instruction) && (
+                          <div className="text-gray-600">Creator brief: {summarizeCreatorInstruction(topic?.topicExecution?.creator_instruction)}</div>
+                        )}
                         <div className="text-gray-600">
                           {getFormatLineForContentType(
                             topic?.topicExecution?.contentType ?? (topic as any)?.contentType ?? (topic as any)?.content_type,
@@ -6270,8 +6848,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                 <div className="flex gap-2">
                   {[
                     { id: 'demo', name: 'Demo AI', icon: Sparkles, color: 'from-purple-500 to-violet-600', status: 'Always Available' },
-                    { id: 'gpt', name: 'GPT-4', icon: Zap, color: 'from-green-500 to-emerald-600', status: 'Use if configured' },
-                    { id: 'claude', name: 'Claude 3.5', icon: Brain, color: 'from-orange-500 to-red-600', status: 'Use if configured' }
+                    { id: 'gpt', name: 'AI Assistant', icon: Zap, color: 'from-green-500 to-emerald-600', status: 'Use if configured' },
                   ].map((provider) => {
                     const Icon = provider.icon;
                     return (
@@ -6300,19 +6877,12 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                 <div className="mt-3 p-3 bg-blue-50 rounded-lg">
                   <div className="flex items-center gap-2 mb-2">
                     <CheckCircle className="h-4 w-4 text-blue-600" />
-                    <span className="text-sm font-medium text-blue-900">Current Configuration</span>
+                    <span className="text-sm font-medium text-blue-900">AI Assistant Configuration</span>
                   </div>
                   <div className="text-sm text-blue-800">
-                    {selectedProvider === 'claude' && (
-                      <div>
-                        <strong>Claude 3.5 Sonnet</strong> selected
-                        <br />
-                        <span className="text-blue-600">Provider credentials are validated when you send a message.</span>
-                      </div>
-                    )}
                     {selectedProvider === 'gpt' && (
                       <div>
-                        <strong>GPT-4</strong> selected
+                        <strong>Company-configured AI assistant</strong>
                         <br />
                         <span className="text-blue-600">Provider credentials are validated when you send a message.</span>
                       </div>
@@ -6338,7 +6908,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                 ) : (
                   <span className="flex items-center gap-1">
                     <AlertCircle className="h-3 w-3 text-orange-500" />
-                    {selectedProvider === 'gpt' ? 'OpenAI' : 'Anthropic'} API with campaign context
+                    AI provider with campaign context
                   </span>
                 )}
               </div>
@@ -6886,7 +7456,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
               )}
             </div>
           ) : (
-            displayedMessages.map((message) => (
+            visibleMessages.map((message) => (
               <div key={message.id} className={`flex w-full ${message.type === 'user' ? 'justify-end' : 'justify-start'} px-1 sm:px-2`}>
                 <div className={`px-4 py-3 rounded-lg min-w-0 ${
                   message.type === 'user' 
@@ -7040,7 +7610,7 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                       {selectedProvider === 'demo'
                         ? 'Demo AI is analyzing campaign data...'
                         : selectedProvider === 'gpt'
-                        ? 'GPT-4 is learning from past campaigns...'
+                        ? 'AI Assistant is learning from past campaigns...'
                         : 'Claude is reasoning with campaign context...'}
                     </span>
                   </div>
@@ -7096,24 +7666,12 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                   {structuredPlan.weeks.map((week) => {
                     const themeLabel = week.theme || week.phase_label || `Week ${week.week}`;
                     const hasDaily = week.daily && week.daily.length > 0;
-                    const hasEnrichedTopics = Array.isArray((week as any).topics) && (week as any).topics.length > 0;
+                    const topicsWithExecution = buildReviewActivityCardsForWeek(week);
+                    const hasEnrichedTopics = topicsWithExecution.length > 0;
                     const platformTargets = Object.entries((week as any)?.platform_allocation || {})
                       .map(([platform, count]) => `${platform}: ${count}`)
                       .filter(Boolean);
                     const contentTypes = Array.isArray((week as any)?.content_type_mix) ? (week as any).content_type_mix : [];
-                    const topicsWithExecution = hasEnrichedTopics
-                      ? (((week as any).topics as any[]).map((topic, idx) => ({
-                          ...topic,
-                          topicExecution: {
-                            platformTargets: platformTargets.length > 0
-                              ? [platformTargets[idx % platformTargets.length]]
-                              : ['—'],
-                            contentType: contentTypes[idx % Math.max(contentTypes.length, 1)] || '—',
-                            ctaType: (week as any)?.cta_type || '—',
-                            kpiFocus: (week as any)?.weekly_kpi_focus || '—',
-                          },
-                        })))
-                      : [];
                     return (
                       <div
                         key={week.week}
@@ -7162,6 +7720,9 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                                   <div className="text-gray-600">Learns: {topic.whatShouldReaderLearn || '—'}</div>
                                   <div className="text-gray-600">Action: {topic.desiredAction || '—'}</div>
                                   <div className="text-gray-600">Style: {topic.narrativeStyle || '—'}</div>
+                                  {summarizeCreatorInstruction(topic?.topicExecution?.creator_instruction) && (
+                                    <div className="text-gray-600">Creator brief: {summarizeCreatorInstruction(topic?.topicExecution?.creator_instruction)}</div>
+                                  )}
                                   <div className="text-gray-600">
                                     {getFormatLineForContentType(
                                       topic?.topicExecution?.contentType ?? (topic as any)?.contentType ?? (topic as any)?.content_type,
@@ -7189,6 +7750,26 @@ I'll ask a few quick questions first to focus our work—scope (all weeks or spe
                               <div className="mb-2">
                                 <div className="text-gray-500 font-medium text-xs">Objectives:</div>
                                 <ul className="list-disc list-inside text-xs text-gray-700">{week.objectives.map((o, i) => <li key={i}>{o}</li>)}</ul>
+                              </div>
+                            )}
+                            {platformTargets.length > 0 && (
+                              <div className="mb-2">
+                                <div className="text-gray-500 font-medium text-xs">Platform allocation:</div>
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  {platformTargets.map((item, i) => (
+                                    <span key={i} className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded text-xs">{item}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {contentTypes.length > 0 && (
+                              <div className="mb-2">
+                                <div className="text-gray-500 font-medium text-xs">Content mix:</div>
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  {contentTypes.map((item, i) => (
+                                    <span key={i} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded text-xs">{item}</span>
+                                  ))}
+                                </div>
                               </div>
                             )}
                             {week.goals && week.goals.length > 0 && (

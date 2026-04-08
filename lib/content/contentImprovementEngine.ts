@@ -1,10 +1,15 @@
 import { calculateQualityScore, type FormMeta } from '../blog/blogValidation';
-import { computeSearchScores, type BlogPost } from '../blog/searchScoringEngine';
 import { analyzeOptimization, type OptimizationAction, type InstructionCode } from '../blog/optimizationEngine';
 import { applyOptimizationActions, type BlogForRegeneration } from '../blog/regenerationExecutor';
 import type { ContentBlock } from '../blog/blockTypes';
 import { buildFormattedStyleInstructions } from './writingStyleEngine';
 import type { CompanyProfile } from '../../backend/services/companyProfileService';
+import { calculateNewsletterQualityScore } from '../newsletter/newsletterValidation';
+import { computeNewsletterScores } from '../newsletter/newsletterScoringEngine';
+import {
+  computeContentSearchScores,
+  type ContentSearchPost,
+} from './searchScoringCore';
 
 export type ImprovementArea = 'structure' | 'depth' | 'seo' | 'geo' | 'linking';
 
@@ -18,9 +23,11 @@ export type ImproveBlogDraftInput = {
     seo_meta_description?: string;
     tags?: string[];
     content_blocks: ContentBlock[];
+    target_word_count?: number;
+    format_type?: string;
   };
   context?: {
-    contentType?: string;
+    contentType?: 'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide';
     socialPlatform?: string;
     campaignContext?: string;
     trendContext?: string;
@@ -58,10 +65,11 @@ function toFormMeta(input: ImproveBlogDraftInput['draft']): FormMeta {
     seo_meta_title: input.seo_meta_title || '',
     seo_meta_description: input.seo_meta_description || '',
     tags: Array.isArray(input.tags) ? input.tags : [],
+    target_word_count: typeof input.target_word_count === 'number' ? input.target_word_count : undefined,
   };
 }
 
-function toBlogPost(input: ImproveBlogDraftInput['draft']): BlogPost {
+function toBlogPost(input: ImproveBlogDraftInput['draft']): ContentSearchPost {
   const blocks = Array.isArray(input.content_blocks) ? input.content_blocks : [];
   const internalLinks = blocks.filter((b) => b.type === 'internal_link').length;
   const referencesCount = blocks
@@ -76,6 +84,9 @@ function toBlogPost(input: ImproveBlogDraftInput['draft']): BlogPost {
     content_blocks: blocks,
   };
 }
+
+export type ImproveContentDraftInput = ImproveBlogDraftInput;
+export type ImproveContentDraftOutput = ImproveBlogDraftOutput;
 
 function findHeadingTargets(blocks: ContentBlock[], max = 2): OptimizationAction[] {
   const headings = blocks
@@ -99,7 +110,7 @@ function selectActions(
   area: ImprovementArea,
   actions: OptimizationAction[],
   blocks: ContentBlock[],
-  depthMeta: { wordCount: number; h2Count: number; shortParaCount: number },
+  depthMeta: { wordCount: number; h2Count: number; shortParaCount: number; targetWordCount?: number },
 ): OptimizationAction[] {
   const allow = new Set(AREA_CODE_ALLOWLIST[area]);
   const executable = new Set([
@@ -119,7 +130,7 @@ function selectActions(
     .slice(0, 5);
 
   // If depth is low but there are no thin sections, add new sections instead of only expanding existing ones.
-  if (area === 'depth' && depthMeta.wordCount < 800 && depthMeta.shortParaCount === 0 && depthMeta.h2Count < 4) {
+  if (area === 'depth' && depthMeta.wordCount < (depthMeta.targetWordCount ?? 800) && depthMeta.shortParaCount === 0 && depthMeta.h2Count < 4) {
     const hasAddHeadings = picked.some((a) => a.instruction_code === 'ADD_HEADINGS');
     if (!hasAddHeadings) {
       picked = [
@@ -163,7 +174,7 @@ function selectActions(
 
   if (area === 'depth') {
     const expanders = findHeadingTargets(blocks, 2);
-    if (depthMeta.wordCount < 800 && depthMeta.h2Count < 4) {
+    if (depthMeta.wordCount < (depthMeta.targetWordCount ?? 800) && depthMeta.h2Count < 4) {
       return [{
         type: 'structure_add_headings',
         instruction_code: 'ADD_HEADINGS' as InstructionCode,
@@ -205,7 +216,7 @@ function buildContextLine(input: ImproveBlogDraftInput): string {
   return chunks.join('\n');
 }
 
-export async function improveBlogDraft(input: ImproveBlogDraftInput): Promise<ImproveBlogDraftOutput> {
+export async function improveContentDraft(input: ImproveContentDraftInput): Promise<ImproveContentDraftOutput> {
   const safeDraft = {
     title: input.draft.title || '',
     excerpt: input.draft.excerpt || '',
@@ -213,16 +224,29 @@ export async function improveBlogDraft(input: ImproveBlogDraftInput): Promise<Im
     seo_meta_description: input.draft.seo_meta_description || '',
     tags: Array.isArray(input.draft.tags) ? input.draft.tags : [],
     content_blocks: Array.isArray(input.draft.content_blocks) ? input.draft.content_blocks : [],
+    target_word_count: typeof input.draft.target_word_count === 'number' ? input.draft.target_word_count : undefined,
+    format_type: typeof input.draft.format_type === 'string' ? input.draft.format_type : undefined,
   };
 
-  const before = calculateQualityScore(safeDraft.content_blocks, toFormMeta(safeDraft));
-  const post = toBlogPost(safeDraft);
-  const scores = computeSearchScores(post);
+  const isNewsletter = input.context?.contentType === 'newsletter';
+  const before = isNewsletter
+    ? calculateNewsletterQualityScore(safeDraft.content_blocks, {
+        ...toFormMeta(safeDraft),
+        content_type: 'newsletter',
+        format_type: safeDraft.format_type,
+      })
+    : calculateQualityScore(safeDraft.content_blocks, {
+        ...toFormMeta(safeDraft),
+        content_type: input.context?.contentType,
+      });
+  const post: ContentSearchPost = toBlogPost(safeDraft);
+  const scores = isNewsletter ? computeNewsletterScores(post) : computeContentSearchScores(post);
   const analysis = analyzeOptimization(post, scores);
   const selectedActions = selectActions(input.area, analysis.actions, safeDraft.content_blocks, {
     wordCount: before.meta.wordCount,
     h2Count: before.meta.h2Count,
     shortParaCount: before.meta.shortParaCount,
+    targetWordCount: before.meta.targetWordCount,
   });
 
   const blogForRegen: BlogForRegeneration = {
@@ -242,7 +266,16 @@ export async function improveBlogDraft(input: ImproveBlogDraftInput): Promise<Im
     content_blocks: regen.updated_blocks,
   };
 
-  const after = calculateQualityScore(updated.content_blocks, toFormMeta(updated));
+  const after = isNewsletter
+    ? calculateNewsletterQualityScore(updated.content_blocks, {
+        ...toFormMeta(updated),
+        content_type: 'newsletter',
+        format_type: updated.format_type,
+      })
+    : calculateQualityScore(updated.content_blocks, {
+        ...toFormMeta(updated),
+        content_type: input.context?.contentType,
+      });
 
   return {
     updated,
@@ -253,4 +286,8 @@ export async function improveBlogDraft(input: ImproveBlogDraftInput): Promise<Im
       .filter((c) => c.status === 'applied')
       .map((c) => c.instruction_code),
   };
+}
+
+export async function improveBlogDraft(input: ImproveBlogDraftInput): Promise<ImproveBlogDraftOutput> {
+  return improveContentDraft(input);
 }

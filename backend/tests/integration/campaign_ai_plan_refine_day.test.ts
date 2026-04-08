@@ -1,9 +1,30 @@
 import handler from '../../../pages/api/campaigns/ai/plan';
 import { assessVirality } from '../../services/viralityAdvisorService';
 import { requestDecision } from '../../services/omnivyreClient';
-import { parseAiRefinedDay } from '../../services/campaignPlanParser';
-import { saveStructuredCampaignPlanDayUpdate } from '../../db/campaignPlanStore';
+import { saveAiCampaignPlan } from '../../db/campaignPlanStore';
 import type { NextApiRequest, NextApiResponse } from 'next';
+
+jest.mock('../../services/campaignAiOrchestrator', () => ({
+  runCampaignAiPlan: jest.fn().mockResolvedValue({
+    mode: 'refine_day',
+    snapshot_hash: 'hash123',
+    raw_plan_text: 'Refined day output',
+    omnivyre_decision: {
+      recommendation: 'HOLD',
+      confidence: 0.7,
+    },
+    day: {
+      week: 2,
+      day: 'Tuesday',
+      objective: 'Improve engagement',
+      content: 'Updated post',
+      platforms: { linkedin: 'Updated post' },
+    },
+  }),
+  CampaignAiMode: {},
+  normalizeCapacityCounts: jest.fn((value) => value),
+  normalizeCapacityCountsWithBreakdown: jest.fn((value) => value),
+}));
 
 jest.mock('../../services/viralityAdvisorService', () => ({
   assessVirality: jest.fn(),
@@ -30,14 +51,47 @@ jest.mock('../../services/viralitySnapshotBuilder', () => ({
 
 jest.mock('../../services/campaignPlanningInputsService', () => ({
   getCampaignPlanningInputs: jest.fn().mockResolvedValue(null),
+  saveCampaignPlanningInputs: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock('../../services/campaignPlanParser', () => ({
-  parseAiRefinedDay: jest.fn(),
+jest.mock('../../db/supabaseClient', () => ({
+  supabase: {
+    from: jest.fn((table: string) => {
+      if (table === 'campaign_versions') {
+        return {
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          order: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockReturnThis(),
+          maybeSingle: jest.fn().mockResolvedValue({ data: { company_id: 'comp123' }, error: null }),
+        };
+      }
+
+      return {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        order: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+      };
+    }),
+  },
+}));
+
+jest.mock('../../services/rbacService', () => ({
+  getUserCompanyRole: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'COMPANY_ADMIN' }),
+  getCompanyRoleIncludingInvited: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../../services/campaignRoleService', () => ({
+  resolveEffectiveCampaignRole: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'COMPANY_ADMIN' }),
+  isCompanyOverrideRole: jest.fn().mockReturnValue(true),
 }));
 
 jest.mock('../../db/campaignPlanStore', () => ({
-  saveStructuredCampaignPlanDayUpdate: jest.fn(),
+  saveAiCampaignPlan: jest.fn(),
+  saveDraftBlueprint: jest.fn(),
+  getLatestDraftPlan: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('openai', () => {
@@ -89,18 +143,11 @@ describe('Campaign AI Plan Refine Day', () => {
       timestamp: '2026-01-01T00:00:00Z',
     });
 
-    (parseAiRefinedDay as jest.Mock).mockResolvedValue({
-      week: 2,
-      day: 'Tuesday',
-      objective: 'Improve engagement',
-      content: 'Updated post',
-      platforms: { linkedin: 'Updated post' },
-    });
-
     const req = {
       method: 'POST',
       body: {
         campaignId: 'camp123',
+        companyId: 'comp123',
         mode: 'refine_day',
         message: 'Refine Tuesday',
         targetDay: 'Tuesday',
@@ -111,20 +158,14 @@ describe('Campaign AI Plan Refine Day', () => {
 
     await handler(req, res);
 
-    expect(saveStructuredCampaignPlanDayUpdate).toHaveBeenCalledWith({
+    expect(saveAiCampaignPlan).toHaveBeenCalledWith({
       campaignId: 'camp123',
       snapshot_hash: 'hash123',
-      dayPlan: {
-        week: 2,
-        day: 'Tuesday',
-        objective: 'Improve engagement',
-        content: 'Updated post',
-        platforms: { linkedin: 'Updated post' },
-      },
+      mode: 'refine_day',
+      response: 'Refined day output',
       omnivyre_decision: expect.objectContaining({
         recommendation: 'HOLD',
       }),
-      raw_plan_text: 'Refined day output',
     });
 
     expect(res.status).toHaveBeenCalledWith(200);

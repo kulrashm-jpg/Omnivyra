@@ -19,12 +19,35 @@ const EMPTY: SuggestionResponse = {
   trend_context_options: [],
 };
 
-function toStringArray(input: unknown): string[] {
+function toStringArray(input: unknown, maxItems = 4): string[] {
   if (!Array.isArray(input)) return [];
   return input
     .map((v) => (typeof v === 'string' ? v.trim() : ''))
     .filter(Boolean)
-    .slice(0, 4);
+    .slice(0, maxItems);
+}
+
+function resolveSuggestionRange(
+  rawCount: unknown,
+  rawTargetWordCount: unknown,
+): { min: number; max: number } {
+  if (typeof rawCount === 'number' && rawCount >= 1 && rawCount <= 10) {
+    const count = Math.round(rawCount);
+    return { min: count, max: count };
+  }
+
+  const parsedTarget =
+    typeof rawTargetWordCount === 'number'
+      ? rawTargetWordCount
+      : typeof rawTargetWordCount === 'string'
+      ? parseInt(rawTargetWordCount, 10)
+      : NaN;
+
+  if (!Number.isFinite(parsedTarget)) return { min: 3, max: 3 };
+  if (parsedTarget >= 2000) return { min: 6, max: 8 };
+  if (parsedTarget >= 1600) return { min: 5, max: 6 };
+  if (parsedTarget >= 1200) return { min: 4, max: 5 };
+  return { min: 3, max: 3 };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -36,6 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     reason,
     brief,
     currentValues,
+    count: rawCount,
   } = req.body ?? {};
 
   if (!company_id || typeof company_id !== 'string') {
@@ -62,6 +86,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const briefObj = (brief && typeof brief === 'object') ? (brief as Record<string, unknown>) : {};
     const valuesObj = (currentValues && typeof currentValues === 'object') ? (currentValues as Record<string, unknown>) : {};
+    const suggestionRange = resolveSuggestionRange(rawCount, valuesObj.target_word_count ?? valuesObj.targetWords);
 
     const promptContext = [
       `Topic: ${String(topic).trim()}`,
@@ -74,6 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       valuesObj.mustInclude ? `Existing must-include points: ${String(valuesObj.mustInclude)}` : '',
       valuesObj.campaignObjective ? `Existing campaign objective: ${String(valuesObj.campaignObjective)}` : '',
       valuesObj.trendContext ? `Existing trend context: ${String(valuesObj.trendContext)}` : '',
+      valuesObj.target_word_count || valuesObj.targetWords ? `Target word count: ${String(valuesObj.target_word_count ?? valuesObj.targetWords)}` : '',
     ].filter(Boolean).join('\n\n');
 
     const ai = await runCompletionWithOperation({
@@ -93,18 +119,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           role: 'user',
           content:
             `${promptContext}\n\n` +
-            'Return JSON with this exact shape:\n' +
+            `Return JSON with this exact shape (${suggestionRange.min === suggestionRange.max ? `exactly ${suggestionRange.min}` : `between ${suggestionRange.min} and ${suggestionRange.max}`} options per field):\n` +
             '{\n' +
-            '  "uniqueness_directive_options": ["...", "...", "..."],\n' +
-            '  "must_include_points_options": ["...", "...", "..."],\n' +
-            '  "campaign_objective_options": ["...", "...", "..."],\n' +
-            '  "trend_context_options": ["...", "...", "..."]\n' +
+            `  "uniqueness_directive_options": [${Array.from({ length: suggestionRange.max }, () => '"..."').join(', ')}],\n` +
+            `  "must_include_points_options": [${Array.from({ length: suggestionRange.max }, () => '"..."').join(', ')}],\n` +
+            `  "campaign_objective_options": [${Array.from({ length: suggestionRange.max }, () => '"..."').join(', ')}],\n` +
+            `  "trend_context_options": [${Array.from({ length: suggestionRange.max }, () => '"..."').join(', ')}]\n` +
             '}\n\n' +
             'Rules:\n' +
             '- No buzzwords or generic copy\n' +
             '- Keep aligned to company context and topic\n' +
             '- Must-includes should be comma-ready bullet phrases\n' +
-            '- Trend context should mention current market/AI/distribution shifts where relevant',
+            '- Trend context should mention current market/AI/distribution shifts where relevant\n' +
+            '- Higher word counts require denser, more specific, more varied suggestions\n' +
+            `- For target length tiers, use these counts for each field: 800+ => 3, 1200+ => 4-5, 1600+ => 5-6, 2000+ => 6-8`,
         },
       ],
     });
@@ -112,10 +140,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const raw = ai.output ? JSON.parse(ai.output) as Record<string, unknown> : {};
 
     const out: SuggestionResponse = {
-      uniqueness_directive_options: toStringArray(raw.uniqueness_directive_options),
-      must_include_points_options: toStringArray(raw.must_include_points_options),
-      campaign_objective_options: toStringArray(raw.campaign_objective_options),
-      trend_context_options: toStringArray(raw.trend_context_options),
+      uniqueness_directive_options: toStringArray(raw.uniqueness_directive_options, suggestionRange.max),
+      must_include_points_options: toStringArray(raw.must_include_points_options, suggestionRange.max),
+      campaign_objective_options: toStringArray(raw.campaign_objective_options, suggestionRange.max),
+      trend_context_options: toStringArray(raw.trend_context_options, suggestionRange.max),
     };
 
     return res.status(200).json(out);

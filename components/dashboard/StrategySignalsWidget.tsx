@@ -56,11 +56,11 @@ export default function StrategySignalsWidget({ companyId, fetchWithAuth }: Prop
   };
 
   const handleStrategicBacklog = () => {
-    router.push(`/recommendations?companyId=${encodeURIComponent(companyId)}&state=LONG_TERM`);
+    router.push(`/recommendations?tab=TREND&companyId=${encodeURIComponent(companyId)}&state=LONG_TERM`);
   };
 
   const handleIdeasArchived = () => {
-    router.push(`/recommendations?companyId=${encodeURIComponent(companyId)}&state=ARCHIVED`);
+    router.push(`/recommendations?tab=TREND&companyId=${encodeURIComponent(companyId)}&state=ARCHIVED`);
   };
 
   return (

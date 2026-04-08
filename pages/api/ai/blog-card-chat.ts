@@ -9,7 +9,58 @@ function getOpenAiClient(): OpenAI {
   return new OpenAI({ apiKey });
 }
 
-function getBlogCardSystemPrompt(): string {
+function getCardSystemPrompt(params: {
+  contentType?: string;
+  contentModeLabel?: string;
+  contentLabel?: string;
+}): string {
+  const contentType = params.contentType === 'newsletter' ? 'newsletter' : 'blog';
+  const contentLabel = params.contentLabel?.trim() || contentType;
+  const modeLabel = params.contentModeLabel?.trim();
+
+  if (contentType === 'newsletter') {
+    return `You are an expert newsletter strategist helping create strategic newsletter recommendation cards.
+
+Your role is to:
+1. Understand the newsletter idea, audience, and strategic purpose
+2. Guide the user toward a strong newsletter angle instead of a generic article topic
+3. Shape the recommendation around newsletter thinking, recurring reader value, and a clear payoff
+4. Keep the recommendation aligned to the selected newsletter mode${modeLabel ? `: ${modeLabel}` : ''}
+
+Important: Ask ONE focused question at a time. Keep responses concise and actionable.
+
+Newsletter-specific guidance:
+- Recommend newsletter-worthy ideas, not generic SEO article titles
+- Optimize for point of view, signal, interpretation, structure, and reader retention
+- If the selected mode is "Share a deep idea", favor contrarian insights, reframing, and memorable angles
+- If the selected mode is "Break down the week", favor signals, interpretation, and pattern recognition
+- If the selected mode is "Analyze a market shift", favor leverage, positioning, and strategic implications
+- If the selected mode is "Teach something actionable", favor practical execution, frameworks, and immediate next steps
+
+When the user provides enough information (idea, intent, audience, key message), generate a JSON response in this format:
+{
+  "done": true,
+  "card": {
+    "topic": "string",
+    "intent": "awareness|authority|conversion|retention",
+    "audience": "string",
+    "reason": "string explaining why this ${contentLabel} matters",
+    "priority": "high|medium|low",
+    "tone": "string describing the tone (e.g., sharp, analytical, practical, conversational)",
+    "writingStyle": "string describing the style",
+    "relatedTopics": ["array", "of", "related", "topics"]
+  }
+}
+
+Otherwise respond with:
+{
+  "done": false,
+  "nextQuestion": "your next guiding question"
+}
+
+Always respond ONLY with valid JSON (no markdown, no extra text).`;
+  }
+
   return `You are an expert content strategist helping create strategic blog content recommendations.
 
 Your role is to:
@@ -55,7 +106,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { message, companyId, conversation = [] } = req.body;
+  const { message, companyId, conversation = [], contentType, metadata = {} } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
@@ -77,7 +128,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const systemPrompt = getBlogCardSystemPrompt();
+    const systemPrompt = getCardSystemPrompt({
+      contentType: typeof contentType === 'string' ? contentType : undefined,
+      contentModeLabel: typeof metadata?.contentModeLabel === 'string' ? metadata.contentModeLabel : undefined,
+      contentLabel: typeof metadata?.contentLabel === 'string' ? metadata.contentLabel : undefined,
+    });
 
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },

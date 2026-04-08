@@ -46,7 +46,7 @@ jest.mock('../../../backend/services/rbacService', () => {
   };
 });
 
-const { supabase } = jest.requireMock('../../../utils/supabaseClient');
+const { supabase: backendSupabase } = jest.requireMock('../../../backend/db/supabaseClient');
 const { createClient } = jest.requireMock('@supabase/supabase-js');
 
 const buildQuery = (table: string, state: any) => {
@@ -64,6 +64,7 @@ const buildQuery = (table: string, state: any) => {
       return query;
     }),
     order: jest.fn().mockReturnThis(),
+    range: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     single: jest.fn(() => {
       state.single = true;
@@ -133,7 +134,7 @@ describe('Campaign company scope fix', () => {
       { id: 'c2', name: 'Campaign Two', weekly_themes: [] },
       { id: 'c3', name: 'Campaign Three', weekly_themes: [] },
     ];
-    (supabase.from as jest.Mock).mockImplementation((table: string) =>
+    (backendSupabase.from as jest.Mock).mockImplementation((table: string) =>
       buildQuery(table, { filters: {}, rows: mappingRows, campaignRows, roleRows: [] })
     );
     const handler = (await import('../../../pages/api/campaigns/list')).default;
@@ -150,7 +151,7 @@ describe('Campaign company scope fix', () => {
   it('does not reference campaigns.company_id', async () => {
     const mappingRows = [{ company_id: 'company-a', campaign_id: 'c1' }];
     const campaignRows = [{ id: 'c1', name: 'Campaign One', weekly_themes: [] }];
-    (supabase.from as jest.Mock).mockImplementation((table: string) =>
+    (backendSupabase.from as jest.Mock).mockImplementation((table: string) =>
       buildQuery(table, { filters: {}, rows: mappingRows, campaignRows, roleRows: [] })
     );
     const handler = (await import('../../../pages/api/campaigns/list')).default;
@@ -165,7 +166,7 @@ describe('Campaign company scope fix', () => {
   it('returns empty list for other company', async () => {
     const mappingRows = [{ company_id: 'company-a', campaign_id: 'c1' }];
     const campaignRows = [{ id: 'c1', name: 'Campaign One', weekly_themes: [] }];
-    (supabase.from as jest.Mock).mockImplementation((table: string) =>
+    (backendSupabase.from as jest.Mock).mockImplementation((table: string) =>
       buildQuery(table, { filters: {}, rows: mappingRows, campaignRows, roleRows: [] })
     );
     const handler = (await import('../../../pages/api/campaigns/list')).default;
@@ -221,7 +222,7 @@ describe('Campaign company scope fix', () => {
         })
       ),
     };
-    (createClient as jest.Mock).mockReturnValue(indexSupabase);
+    (backendSupabase.from as jest.Mock).mockImplementation(indexSupabase.from);
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://example.com';
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
 
@@ -259,8 +260,6 @@ describe('Campaign company scope fix', () => {
   });
 
   it('dashboard only shows company campaigns', async () => {
-    jest.resetModules();
-    const { createClient: createClientAfterReset } = jest.requireMock('@supabase/supabase-js');
     const mappingRows = [
       { company_id: 'company-a', campaign_id: 'c1' },
       { company_id: 'company-a', campaign_id: 'c2' },
@@ -281,26 +280,15 @@ describe('Campaign company scope fix', () => {
         })
       ),
     };
-    (createClientAfterReset as jest.Mock).mockReturnValue(indexSupabase);
-    process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://example.com';
-    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
+    (backendSupabase.from as jest.Mock).mockImplementation(indexSupabase.from);
 
-    await new Promise<void>((resolve, reject) => {
-      jest.isolateModules(async () => {
-        (createClientAfterReset as jest.Mock).mockReturnValue(indexSupabase);
-        const handler = (await import('../../../pages/api/campaigns/index')).default;
-        const req = createApiRequestMock({ method: 'GET', companyId: 'company-a' });
-        const res = createMockRes();
-        await handler(req, res);
-        try {
-          expect(res.statusCode).toBe(200);
-          expect(res.body?.campaigns.map((c: any) => c.id)).toEqual(['c1', 'c2']);
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
-      });
-    });
+    const handler = (await import('../../../pages/api/campaigns/index')).default;
+    const req = createApiRequestMock({ method: 'GET', companyId: 'company-a' });
+    const res = createMockRes();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.campaigns.map((c: any) => c.id)).toEqual(['c1', 'c2']);
   });
 
 });

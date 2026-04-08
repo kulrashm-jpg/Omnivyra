@@ -13,7 +13,7 @@ import {
   competitorGapsToDecisions,
   type CompetitorIntelligenceResult,
 } from './reportCompetitorIntelligenceService';
-import { buildPublicDomainAuditDecisions } from './publicDomainAuditService';
+import { buildPublicDomainAuditDecisions, type PublicAuditResult } from './publicDomainAuditService';
 import {
   synthesizePrimaryNarrative,
   type PrimaryNarrative,
@@ -62,8 +62,20 @@ type SnapshotOpportunity = {
 type SnapshotAction = {
   decision_id: string;
   title: string;
+  reasoning: string;
   recommendation: string;
   steps: string[];
+  tactics: string[];
+  focus_page: string;
+  timeline: {
+    short: string;
+    mid: string;
+    long: string;
+  };
+  priority: 'high' | 'medium' | 'low';
+  impact: 'high' | 'medium' | 'low';
+  effort: 'low' | 'medium' | 'high';
+  confidence: number;
   expected_outcome: string;
   expected_upside: string;
   effort_level: 'low' | 'medium' | 'high';
@@ -77,6 +89,18 @@ type SnapshotAction = {
 type SnapshotTopPriority = {
   title: string;
   why_now: string;
+  reasoning: string;
+  tactics: string[];
+  focus_page: string;
+  timeline: {
+    short: string;
+    mid: string;
+    long: string;
+  };
+  priority: 'high' | 'medium' | 'low';
+  impact: 'high' | 'medium' | 'low';
+  effort: 'low' | 'medium' | 'high';
+  confidence: number;
   expected_outcome: string;
   expected_upside: string;
   effort_level: 'low' | 'medium' | 'high';
@@ -111,11 +135,21 @@ export interface SnapshotReport {
     };
     top_3_actions: Array<{
       action_title: string;
+      title: string;
       priority: 'high' | 'medium' | 'low';
       expected_impact: 'high' | 'medium' | 'low';
       effort: 'low' | 'medium' | 'high';
       linked_visual: 'radar' | 'matrix' | 'funnel' | 'crawl';
       reasoning: string;
+      tactics: string[];
+      focus_page: string;
+      timeline: {
+        short: string;
+        mid: string;
+        long: string;
+      };
+      impact: 'high' | 'medium' | 'low';
+      confidence: number;
     }>;
     growth_opportunity: {
       title: string;
@@ -677,6 +711,9 @@ type CompanyNarrativeContext = {
   primaryOffering: string | null;
   positioning: string | null;
   marketContext: string | null;
+  marketFocus: string | null;
+  productServices: string[];
+  geography: string | null;
 };
 
 type PositioningStrength = 'strong' | 'moderate' | 'weak';
@@ -734,6 +771,16 @@ function extractCompanyNarrativeContext(params: {
   const primaryOffering = firstNonEmpty(profile?.products_services, profile?.products_services_list);
   const businessType = firstNonEmpty(params.resolvedInput?.resolved.businessType, profile?.category, profile?.industry);
   const geography = firstNonEmpty(params.resolvedInput?.resolved.geography, profile?.geography);
+  const marketFocus = firstNonEmpty(
+    params.resolvedInput?.resolved.companyContext.marketFocus,
+    businessType,
+    geography,
+  );
+  const productServices = splitCandidates(
+    params.resolvedInput?.resolved.companyContext.productServices.length
+      ? params.resolvedInput?.resolved.companyContext.productServices
+      : [profile?.products_services, profile?.products_services_list],
+  );
   const marketContext = businessType && geography
     ? `${businessType} in ${geography}`
     : businessType || geography || null;
@@ -745,7 +792,53 @@ function extractCompanyNarrativeContext(params: {
     primaryOffering,
     positioning,
     marketContext,
+    marketFocus,
+    productServices,
+    geography,
   };
+}
+
+function normalizePageLabel(value: string | null | undefined): string {
+  const lower = String(value ?? '').toLowerCase();
+  if (!lower) return '';
+  if (/(^|\/)pricing/.test(lower)) return 'pricing';
+  if (/(^|\/)(faq|faqs)/.test(lower)) return 'FAQ';
+  if (/(^|\/)blog/.test(lower)) return 'blog';
+  if (/(compare|comparison|\/vs\/|versus|alternative)/.test(lower)) return 'comparison';
+  if (/(product|feature|solution)/.test(lower)) return 'product';
+  if (/(home|homepage)/.test(lower)) return 'homepage';
+  return '';
+}
+
+function recommendationTimeline(effortLevel: 'low' | 'medium' | 'high', confidence: number): {
+  short: string;
+  mid: string;
+  long: string;
+} {
+  const confidenceLabel = confidence >= 70 ? 'with measurable' : confidence >= 45 ? 'with directional' : 'with early';
+  if (effortLevel === 'low') {
+    return {
+      short: `2-4 weeks: ${confidenceLabel} movement should appear on the target pages first.`,
+      mid: '1-3 months: stronger click quality and page-level engagement should become visible.',
+      long: '3-6 months: the change should compound into better qualified discovery and conversion readiness.',
+    };
+  }
+  if (effortLevel === 'high') {
+    return {
+      short: '2-4 weeks: implementation signals should appear after the first page set is shipped.',
+      mid: '1-3 months: coverage and trust signals should begin lifting the target cluster.',
+      long: '3-6 months: the full content and authority program should translate into stronger market capture.',
+    };
+  }
+  return {
+    short: '2-4 weeks: initial signal improvement should appear on the first upgraded pages.',
+    mid: '1-3 months: stronger visibility, trust, and engagement should show across the target cluster.',
+    long: '3-6 months: sustained execution should improve qualified traffic and conversion progression.',
+  };
+}
+
+function confidencePercent(decision: PersistedDecisionObject): number {
+  return clamp(Math.round(Number(decision.confidence_score ?? 0) * 100), 0, 100);
 }
 
 function personalizeEntityReferences(text: string, context?: CompanyNarrativeContext): string {
@@ -768,7 +861,7 @@ function assessPositioningAndMarket(params: {
   decisions: PersistedDecisionObject[];
   publicAudit?: Awaited<ReturnType<typeof buildPublicDomainAuditDecisions>> | null;
 }): StrategicContext {
-  const companyName = params.companyContext.companyName || params.companyContext.domain || 'The company';
+  const companyName = params.companyContext.companyName || params.companyContext.domain || 'this business';
   const positioningLabel = params.companyContext.positioning || params.companyContext.tagline || params.companyContext.homepageHeadline || 'its core market promise';
   const claritySignals = [
     params.companyContext.positioning,
@@ -872,8 +965,15 @@ function toAction(
   decision: PersistedDecisionObject,
   companyContext?: CompanyNarrativeContext,
   strategicContext?: StrategicContext,
+  recommendationContext?: {
+    publicAudit?: PublicAuditResult | null;
+    competitorIntelligence?: CompetitorIntelligenceResult | null;
+    authorityScore?: number | null;
+    contentQualityScore?: number | null;
+    aiVisibilityScore?: number | null;
+  },
 ): SnapshotAction {
-  const plan = buildActionPlan(decision, companyContext, strategicContext);
+  const plan = buildActionPlan(decision, companyContext, strategicContext, recommendationContext);
   const impact = impactScore(decision);
   const priorityType = classifyPriorityType({
     impactScore: impact,
@@ -882,8 +982,16 @@ function toAction(
   return {
     decision_id: decision.id,
     title: plan.title,
+    reasoning: plan.reasoning,
     recommendation: plan.recommendation,
     steps: plan.steps,
+    tactics: plan.tactics,
+    focus_page: plan.focusPage,
+    timeline: plan.timeline,
+    priority: plan.priority,
+    impact: plan.impact,
+    effort: plan.effortLevel,
+    confidence: plan.confidence,
     expected_outcome: plan.expectedOutcome,
     expected_upside: buildExpectedUpside({
       priorityType,
@@ -1073,38 +1181,377 @@ function inferEffortLevel(decision: PersistedDecisionObject): 'low' | 'medium' |
   return 'high';
 }
 
+function guessFocusPage(
+  decision: PersistedDecisionObject,
+  publicAudit?: PublicAuditResult | null,
+): string {
+  const payload = (decision.action_payload ?? {}) as Record<string, unknown>;
+  const thinPages = splitCandidates(payload.thin_pages);
+  const orphanPages = splitCandidates(payload.orphan_like_pages);
+  const productPages = splitCandidates(payload.product_pages);
+  const focusCandidates = [...thinPages, ...orphanPages, ...productPages];
+  for (const candidate of focusCandidates) {
+    const label = normalizePageLabel(candidate);
+    if (label) return label;
+  }
+  const lower = `${decision.issue_type} ${decision.title} ${decision.description}`.toLowerCase();
+  if (/(pricing)/.test(lower)) return 'pricing';
+  if (/(faq|answer|schema)/.test(lower)) return 'FAQ';
+  if (/(compare|comparison|versus|\/vs\/)/.test(lower)) return 'comparison';
+  if (/(product|feature|solution)/.test(lower)) return 'product';
+  if (/(blog|guide|article)/.test(lower)) return 'blog';
+  if (publicAudit?.site_structure.pricing_pages.length) return 'pricing';
+  if (publicAudit?.site_structure.product_pages.length) return 'product';
+  if (publicAudit?.site_structure.homepage) return 'homepage';
+  return '';
+}
+
+function lowestDepthPageTargets(publicAudit?: PublicAuditResult | null): string[] {
+  if (!publicAudit) return [];
+  const thinDecision = publicAudit.decisions.find((decision) => decision.issue_type === 'weak_content_depth');
+  const payload = (thinDecision?.action_payload ?? {}) as Record<string, unknown>;
+  const thinPages = splitCandidates(payload.thin_pages);
+  const labels = thinPages.map((page) => normalizePageLabel(page)).filter(Boolean);
+  const deduped = [...new Set(labels)];
+  if (deduped.length > 0) return deduped;
+  const fallback: string[] = [];
+  if (publicAudit.site_structure.product_pages.length) fallback.push('product');
+  if (publicAudit.site_structure.pricing_pages.length) fallback.push('pricing');
+  if (publicAudit.site_structure.homepage) fallback.push('homepage');
+  if (publicAudit.site_structure.blog_pages.length) fallback.push('blog');
+  return fallback.slice(0, 3);
+}
+
+function topTrafficPotentialPages(publicAudit?: PublicAuditResult | null): string[] {
+  if (!publicAudit) return [];
+  const ordered = [
+    publicAudit.site_structure.homepage ? 'homepage' : '',
+    publicAudit.site_structure.pricing_pages.length ? 'pricing' : '',
+    publicAudit.site_structure.product_pages.length ? 'product' : '',
+    publicAudit.site_structure.geo_pages.length ? 'geo page' : '',
+    publicAudit.site_structure.blog_pages.length ? 'blog' : '',
+  ].filter(Boolean);
+  return [...new Set(ordered)].slice(0, 3);
+}
+
+function competitorGapTactics(
+  competitorIntelligence?: CompetitorIntelligenceResult | null,
+  companyContext?: CompanyNarrativeContext,
+): string[] {
+  const buyingStageGap = competitorIntelligence?.generated_gaps.find((gap) => /buying-stage content/i.test(gap.title));
+  if (!buyingStageGap) return [];
+  const targets = buyingStageGap.leading_competitors.slice(0, 2);
+  const marketFocus = companyContext?.marketFocus || companyContext?.marketContext || 'your market';
+  if (targets.length === 0) {
+    return [
+      `Build comparison and /vs/ pages for the highest-intent ${marketFocus} alternatives already appearing in competitor coverage.`,
+    ];
+  }
+  return targets.map((competitor) => `Build a /vs/ or comparison page against ${competitor} for the buying-stage gaps this snapshot found.`);
+}
+
+function backlinkTactics(
+  authorityScore: number | null | undefined,
+  companyContext?: CompanyNarrativeContext,
+): string[] {
+  if (typeof authorityScore === 'number' && authorityScore >= 30) return [];
+  const marketFocus = companyContext?.marketFocus || companyContext?.marketContext || 'your market';
+  return [
+    `Build links from directories, partner lists, and trade publications relevant to ${marketFocus}.`,
+    `Pitch one proof-led byline or expert contribution to publications covering ${marketFocus}.`,
+  ];
+}
+
+function contentDepthTactics(publicAudit?: PublicAuditResult | null): string[] {
+  const targets = lowestDepthPageTargets(publicAudit);
+  if (targets.length === 0) return [];
+  return [
+    `Expand the thinnest ${targets.slice(0, 2).join(' and ')} pages first so they answer buyer questions with enough depth to rank and convert.`,
+    `Add proof blocks, objection handling, and clear section hierarchy to the weakest ${targets[0]} pages identified in the crawl.`,
+  ];
+}
+
+function aiVisibilityTactics(
+  aiVisibilityScore: number | null | undefined,
+  publicAudit?: PublicAuditResult | null,
+): string[] {
+  if ((aiVisibilityScore ?? 0) !== 0) return [];
+  const pages = topTrafficPotentialPages(publicAudit);
+  if (pages.length === 0) return [];
+  return [
+    `Add FAQ schema and direct-answer sections to the top traffic-potential pages: ${pages.join(', ')}.`,
+  ];
+}
+
+function structuredReasoning(params: {
+  decision: PersistedDecisionObject;
+  companyContext?: CompanyNarrativeContext;
+  strategicContext?: StrategicContext;
+}): string {
+  const marketFocus = params.companyContext?.marketFocus || params.companyContext?.marketContext || '';
+  const geography = params.companyContext?.geography || '';
+  const focus = [marketFocus, geography].filter(Boolean).join(' in ');
+  const contextClause = focus ? `for ${focus}` : '';
+  const marketClause = params.strategicContext ? ` in a ${params.strategicContext.marketType} market` : '';
+  return `${params.decision.description}${contextClause || marketClause ? ` This matters ${contextClause || ''}${marketClause}`.replace(/\s+/g, ' ').trim() : ''} because it affects how buyers discover, trust, and compare the offer before converting.`.replace(/\s+/g, ' ').trim();
+}
+
+function scrubActionCompanyReferences(text: string, companyContext?: CompanyNarrativeContext): string {
+  let next = text;
+  const companyName = firstNonEmpty(companyContext?.companyName);
+  const domain = firstNonEmpty(companyContext?.domain);
+
+  if (domain) {
+    const normalizedDomain = domain.replace(/^https?:\/\//i, '').replace(/^www\./i, '');
+    const domainPattern = normalizedDomain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    next = next.replace(new RegExp(`\\b(?:www\\.)?${domainPattern}\\b`, 'gi'), 'the site');
+  }
+
+  if (companyName) {
+    const companyPattern = companyName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    next = next.replace(new RegExp(`\\b${companyPattern}'s\\b`, 'gi'), "the business's");
+    next = next.replace(new RegExp(`\\b${companyPattern}\\b`, 'gi'), 'the business');
+  }
+
+  return next.replace(/\s+/g, ' ').trim();
+}
+
+function replaceLegacyOmnivyraReferences(text: string, companyContext?: CompanyNarrativeContext): string {
+  if (!text) return text;
+  const companyName = firstNonEmpty(companyContext?.companyName, companyContext?.domain) || 'this business';
+  return text
+    .replace(/\bOmnivyra's\b/g, `${companyName}'s`)
+    .replace(/\bOmnivyra\b/g, companyName)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+type StructuredActionTrack = 'authority' | 'positioning' | 'comparison' | 'generic';
+
+function inferStructuredActionTrack(params: {
+  issueType?: string | null;
+  actionType?: string | null;
+  title?: string | null;
+  recommendation?: string | null;
+  optimizationFocus?: string | null;
+  tactics?: string[] | null;
+}): StructuredActionTrack {
+  const signature = [
+    params.issueType,
+    params.actionType,
+    params.title,
+    params.recommendation,
+    params.optimizationFocus,
+    ...(params.tactics ?? []),
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  if (/(backlink|authority|citation|directory|publication|partner list|outreach|proof-led asset|links from)/.test(signature)) {
+    return 'authority';
+  }
+  if (params.actionType === 'adjust_strategy' || /(positioning proof|credibility|expert framing|proof architecture|trust signals|category claim)/.test(signature)) {
+    return 'positioning';
+  }
+  if (/(comparison|competitor|\/vs\/|decision-stage|objection-handling|buying-stage)/.test(signature)) {
+    return 'comparison';
+  }
+  return 'generic';
+}
+
+function authorityActionTactics(
+  authorityScore: number | null | undefined,
+  companyContext?: CompanyNarrativeContext,
+): string[] {
+  const marketFocus = companyContext?.marketFocus || companyContext?.marketContext || 'the market';
+  const entityLabel = companyContext?.companyName || companyContext?.domain || 'the site';
+  return [
+    backlinkTactics(authorityScore, companyContext)[0] || `Secure backlinks from relevant publications and partner domains covering ${marketFocus}.`,
+    `Publish one proof-led asset, such as a case study, benchmark, or customer evidence page, that earns citations and reinforces authority.`,
+    `Turn the strongest proof asset into an outreach sequence for analysts, directories, and partner ecosystems that can reference ${entityLabel}.`,
+  ].filter(Boolean).slice(0, 3);
+}
+
+function positioningProofTactics(
+  companyContext?: CompanyNarrativeContext,
+  publicAudit?: PublicAuditResult | null,
+): string[] {
+  const primaryPages = topTrafficPotentialPages(publicAudit);
+  const pageLabel = primaryPages.length ? primaryPages.slice(0, 2).join(' and ') : 'the homepage and primary commercial pages';
+  return [
+    `Add above-the-fold trust signals on ${pageLabel}, including proof bars, customer evidence, and a clearer category claim.`,
+    'Introduce expert positioning blocks that explain who the offer is for, what it replaces, and why it is credible in this market.',
+    'Add credibility modules such as testimonials, implementation proof, certifications, or outcome callouts directly beside conversion paths.',
+  ];
+}
+
+function comparisonPageTactics(
+  decision: PersistedDecisionObject,
+  publicAudit?: PublicAuditResult | null,
+): string[] {
+  const payload = (decision.action_payload ?? {}) as Record<string, unknown>;
+  const thinPages = splitCandidates(payload.thin_pages);
+  const startingPages = thinPages.length ? thinPages.slice(0, 2).join(' and ') : topTrafficPotentialPages(publicAudit).slice(0, 2).join(' and ');
+  return [
+    `Build /vs/ pages for the highest-priority alternatives and route them from ${startingPages || 'the key commercial pages'} first.`,
+    'Add objection-handling sections that answer pricing, switching risk, implementation effort, and fit questions before the CTA.',
+    'Create decision-stage pages that compare options, summarize tradeoffs, and move buyers toward a confident next step.',
+  ];
+}
+
+function buildStructuredTactics(params: {
+  decision: PersistedDecisionObject;
+  companyContext?: CompanyNarrativeContext;
+  strategicContext?: StrategicContext;
+  publicAudit?: PublicAuditResult | null;
+  competitorIntelligence?: CompetitorIntelligenceResult | null;
+  authorityScore?: number | null;
+  contentQualityScore?: number | null;
+  aiVisibilityScore?: number | null;
+}): string[] {
+  const payload = (params.decision.action_payload ?? {}) as Record<string, unknown>;
+  const track = inferStructuredActionTrack({
+    issueType: params.decision.issue_type,
+    actionType: params.decision.action_type,
+    title: params.decision.title,
+    recommendation: params.decision.recommendation,
+    optimizationFocus: String(payload.optimization_focus ?? ''),
+  });
+
+  if (track === 'authority') {
+    return authorityActionTactics(params.authorityScore, params.companyContext);
+  }
+
+  if (track === 'positioning') {
+    return positioningProofTactics(params.companyContext, params.publicAudit);
+  }
+
+  if (track === 'comparison') {
+    return comparisonPageTactics(params.decision, params.publicAudit);
+  }
+
+  const tactics: string[] = [];
+
+  const thinPages = splitCandidates(payload.thin_pages);
+  if (thinPages.length > 0) {
+    tactics.push(`Rewrite the weakest crawl-identified pages first: ${thinPages.slice(0, 3).join(', ')}.`);
+  }
+
+  const errorPages = splitCandidates(payload.error_pages);
+  const orphanPages = splitCandidates(payload.orphan_like_pages);
+  if (errorPages.length > 0 || orphanPages.length > 0) {
+    const targets = [...errorPages, ...orphanPages].slice(0, 3);
+    tactics.push(`Fix crawl support and internal linking for ${targets.join(', ')} before expanding more pages.`);
+  }
+
+  const keywordTheme = firstNonEmpty(payload.keyword, payload.keyword_theme, payload.optimization_focus);
+  if (keywordTheme) {
+    tactics.push(`Use ${keywordTheme} as the organizing theme for the first page update so the page matches the detected demand gap.`);
+  }
+
+  tactics.push(...aiVisibilityTactics(params.aiVisibilityScore, params.publicAudit));
+
+  if (typeof params.contentQualityScore === 'number' && params.contentQualityScore < 35) {
+    tactics.push(...contentDepthTactics(params.publicAudit));
+  }
+
+  tactics.push(...competitorGapTactics(params.competitorIntelligence, params.companyContext));
+
+  const pageFocus = guessFocusPage(params.decision, params.publicAudit);
+  if (pageFocus) {
+    tactics.push(`Start on the ${pageFocus} page type first, then cascade the same proof and structure pattern to adjacent pages.`);
+  }
+
+  const baseFocus = firstNonEmpty(payload.keyword, payload.keyword_theme, params.decision.title) || 'the highest-priority gap';
+  if (tactics.length < 3) {
+    tactics.push(`Rewrite the page sections around ${baseFocus} so the promise, proof, and next step are explicit above the fold.`);
+  }
+  if (tactics.length < 3) {
+    tactics.push(`Add one proof block and one objection-handling block tied to ${baseFocus} on the first page shipped.`);
+  }
+  if (tactics.length < 3) {
+    tactics.push(`Link the first upgraded page from the homepage and related pages so search engines and buyers can reach it faster.`);
+  }
+
+  return [...new Set(tactics.filter(Boolean))].slice(0, 3);
+}
+
 function buildActionPlan(
   decision: PersistedDecisionObject,
   companyContext?: CompanyNarrativeContext,
   strategicContext?: StrategicContext,
+  context?: {
+    publicAudit?: PublicAuditResult | null;
+    competitorIntelligence?: CompetitorIntelligenceResult | null;
+    authorityScore?: number | null;
+    contentQualityScore?: number | null;
+    aiVisibilityScore?: number | null;
+  },
 ): {
   title: string;
+  reasoning: string;
   recommendation: string;
   steps: string[];
+  tactics: string[];
+  focusPage: string;
+  timeline: {
+    short: string;
+    mid: string;
+    long: string;
+  };
+  priority: 'high' | 'medium' | 'low';
+  impact: 'high' | 'medium' | 'low';
+  confidence: number;
   expectedOutcome: string;
   effortLevel: 'low' | 'medium' | 'high';
 } {
   const payload = (decision.action_payload ?? {}) as Record<string, unknown>;
-  const focus =
+  const focus = scrubActionCompanyReferences(
     (typeof payload.keyword === 'string' && payload.keyword) ||
     (typeof payload.keyword_theme === 'string' && payload.keyword_theme) ||
-    decision.title;
+    decision.title,
+    companyContext,
+  );
   const effortLevel = inferEffortLevel(decision);
   const alignmentStep = strategicContext?.positioningStrength === 'weak'
     ? 'Ensure each buyer-stage page reinforces your differentiation with proof before scaling broader distribution.'
     : strategicContext
       ? `Tune this execution for a ${strategicContext.marketType} market by prioritizing ${strategicContext.keySuccessFactor}.`
       : null;
+  const reasoning = scrubActionCompanyReferences(
+    structuredReasoning({ decision, companyContext, strategicContext }),
+    companyContext,
+  );
+  const tactics = buildStructuredTactics({
+    decision,
+    companyContext,
+    strategicContext,
+    publicAudit: context?.publicAudit ?? null,
+    competitorIntelligence: context?.competitorIntelligence ?? null,
+    authorityScore: context?.authorityScore ?? null,
+    contentQualityScore: context?.contentQualityScore ?? null,
+    aiVisibilityScore: context?.aiVisibilityScore ?? null,
+  });
+  const focusPage = guessFocusPage(decision, context?.publicAudit ?? null);
+  const confidence = confidencePercent(decision);
+  const timeline = recommendationTimeline(effortLevel, confidence);
+  const impact = impactBand(impactScore(decision));
+  const priority = executivePriorityBand(Number(decision.priority_score ?? impactScore(decision)));
 
   if (decision.action_type === 'fix_cta') {
     return {
       title: `Rebuild the CTA flow on ${focus} for high-intent conversion`,
+      reasoning,
       recommendation: decision.recommendation,
       steps: [
         'Audit the current CTA on the highest-intent page and identify the single next action you want visitors to take.',
         'Rewrite the CTA copy so the value promise and next step are explicit and low-friction.',
         alignmentStep || 'Align supporting proof near the CTA so visitors have a reason to trust the click.',
       ],
+      tactics,
+      focusPage,
+      timeline,
+      priority,
+      impact,
+      confidence,
       expectedOutcome: companyContext?.companyName
         ? `More of ${companyContext.companyName}'s existing traffic should progress into meaningful action instead of stalling.`
         : 'More of the traffic you already have should progress into meaningful action instead of stalling.',
@@ -1117,12 +1564,19 @@ function buildActionPlan(
       title: companyContext?.marketContext
         ? `Reallocate distribution to the highest-fit segment in ${companyContext.marketContext}`
         : 'Reallocate distribution to the highest-fit market segment',
+      reasoning,
       recommendation: decision.recommendation,
       steps: [
         'Define the primary geography or channel segment that should be prioritized first.',
         'Adjust messaging examples, proof, and landing experience so they match that audience more closely.',
         alignmentStep || 'Shift distribution effort toward the channels where that audience is already showing intent.',
       ],
+      tactics,
+      focusPage,
+      timeline,
+      priority,
+      impact,
+      confidence,
       expectedOutcome: companyContext?.companyName
         ? `Traffic quality for ${companyContext.companyName} should improve because the right message is reaching the right audience.`
         : 'Traffic quality should improve because the right message is reaching the right audience.',
@@ -1133,14 +1587,21 @@ function buildActionPlan(
   if (decision.action_type === 'adjust_strategy') {
     return {
       title: companyContext?.positioning
-        ? `Strengthen proof for ${companyContext.positioning} around ${focus} to recover trust`
+        ? `Strengthen proof for ${companyContext.positioning} around the core focus area to recover trust`
         : `Strengthen positioning proof around ${focus} to recover trust`,
+      reasoning,
       recommendation: decision.recommendation,
       steps: [
         'Define the main promise the brand should own and the proof required to support it.',
         'Update the homepage or key landing page so the value proposition and credibility are obvious within seconds.',
         alignmentStep || 'Publish at least one supporting proof asset, such as a case study, testimonial block, or expert perspective.',
       ],
+      tactics,
+      focusPage,
+      timeline,
+      priority,
+      impact,
+      confidence,
       expectedOutcome: companyContext?.companyName
         ? `Buyers should understand faster why ${companyContext.companyName} is credible and different, improving trust and conversion readiness.`
         : 'Buyers should understand faster why this business is credible and different, improving trust and conversion readiness.',
@@ -1150,14 +1611,21 @@ function buildActionPlan(
 
   return {
     title: companyContext?.companyName && companyContext.marketContext
-      ? `Build comparison and decision pages aligned with ${companyContext.companyName}'s positioning in ${companyContext.marketContext}`
+      ? `Build comparison and decision pages aligned with the current positioning in ${companyContext.marketContext}`
       : `Build comparison and decision pages targeting ${focus} intent gaps`,
+    reasoning,
     recommendation: decision.recommendation,
     steps: [
       'Identify the primary page or topic cluster that should carry this intent.',
       'Rewrite or expand the page so it answers the real buyer question with more specificity and proof.',
       alignmentStep || 'Add one supporting asset or internal link that strengthens topical depth and next-step clarity.',
     ],
+    tactics,
+    focusPage,
+    timeline,
+    priority,
+    impact,
+    confidence,
     expectedOutcome: companyContext?.companyName
       ? `${companyContext.companyName} should become easier to discover and easier to trust for this demand area${strategicContext ? ` in a ${strategicContext.marketType} market.` : '.'}`
       : 'The business should become easier to discover and easier to trust for this demand area.',
@@ -1436,6 +1904,13 @@ function ensureSectionFloor(
   sectionDefinition: SnapshotSectionDefinition,
   companyContext?: CompanyNarrativeContext,
   strategicContext?: StrategicContext,
+  recommendationContext?: {
+    publicAudit?: PublicAuditResult | null;
+    competitorIntelligence?: CompetitorIntelligenceResult | null;
+    authorityScore?: number | null;
+    contentQualityScore?: number | null;
+    aiVisibilityScore?: number | null;
+  },
 ): SnapshotReportSection {
   const seeded = sectionSeedDecision(
     sectionDefinition.key,
@@ -1455,7 +1930,7 @@ function ensureSectionFloor(
       existingIds.add(decision.id);
     }
     if (nextActions.length < 2) {
-      nextActions.push(toAction(decision, companyContext, strategicContext));
+      nextActions.push(toAction(decision, companyContext, strategicContext, recommendationContext));
     }
     if (nextOpportunities.length < 1 && isOpportunityCandidate(decision)) {
       nextOpportunities.push(toOpportunity(decision));
@@ -1668,6 +2143,14 @@ function buildTopPriorities(sections: SnapshotReportSection[]): SnapshotTopPrior
         action.impact_score >= 55
           ? 'This has immediate leverage on visibility, trust, or conversion quality.'
           : 'This is a practical foundation step that unlocks stronger performance later.',
+      reasoning: action.reasoning,
+      tactics: action.tactics,
+      focus_page: action.focus_page,
+      timeline: action.timeline,
+      priority: action.priority,
+      impact: action.impact,
+      effort: action.effort,
+      confidence: action.confidence,
       expected_outcome: action.expected_outcome,
       expected_upside: action.expected_upside,
       effort_level: action.effort_level,
@@ -1693,8 +2176,13 @@ function buildDecisionSnapshot(params: {
   competitorIntelligence: CompetitorIntelligenceResult;
   topPriorities: SnapshotTopPriority[];
 }): SnapshotReport['decision_snapshot'] {
-  const primaryFocusArea = normalizeCoreProblem(params.coreProblem);
-  const firstPriority = params.topPriorities[0]?.title ?? params.seoSummary.top_3_actions[0]?.action_title ?? 'Stabilize authority and visibility foundations';
+  const primaryFocusArea = normalizeCoreProblem(params.coreProblem)
+    || normalizeCoreProblem(params.seoSummary.primary_problem.title)
+    || normalizeCoreProblem(params.unifiedSummary.primary_constraint.title)
+    || normalizeCoreProblem(params.competitorSummary?.primary_gap.title)
+    || '';
+  const firstPriorityAction = params.topPriorities[0];
+  const firstPriority = firstPriorityAction?.title ?? params.seoSummary.top_3_actions[0]?.action_title ?? 'Stabilize authority and visibility foundations';
   const firstPriorityImpact = params.topPriorities[0]?.impact_score ?? 0;
   const firstPriorityEffort = params.topPriorities[0]?.effort_level ?? 'medium';
   const competitorFallback =
@@ -1772,14 +2260,22 @@ function buildDecisionSnapshot(params: {
 
   return {
     primary_focus_area: primaryFocusArea,
-    whats_broken: [params.diagnosis, params.strategicContext?.marketPositionStatement].filter(Boolean).join(' '),
-    what_to_fix_first: params.strategicContext?.strategyAlignment
-      ? `${params.strategicContext.strategyAlignment} Then fix ${primaryFocusArea} through highest-leverage authority and coverage work. Execution risk: ${params.strategicContext.executionRisk}`
-      : `Fix ${primaryFocusArea} first by concentrating effort on highest-leverage authority and coverage work before channel expansion.`,
+    whats_broken: replaceLegacyOmnivyraReferences(
+      [params.diagnosis, params.strategicContext?.marketPositionStatement].filter(Boolean).join(' '),
+      params.companyContext,
+    ),
+    what_to_fix_first: replaceLegacyOmnivyraReferences(
+      params.strategicContext?.strategyAlignment
+      ? `${params.strategicContext.strategyAlignment} Start with ${firstPriority} on the ${firstPriorityAction?.focus_page || 'highest-intent'} pages. ${firstPriorityAction?.reasoning || ''} ${params.strategicContext.executionRisk}`.replace(/\s+/g, ' ').trim()
+      : `Fix ${primaryFocusArea} first by starting with ${firstPriority} on the ${firstPriorityAction?.focus_page || 'highest-intent'} pages before channel expansion.`.replace(/\s+/g, ' ').trim(),
+      params.companyContext,
+    ),
     what_to_delay: whatToDelay,
     if_ignored: `${ifIgnored} ${competitorClause} ${params.strategicContext?.positionImplication || ''}`.replace(/\s+/g, ' ').trim(),
-    execution_sequence: executionSequence,
-    if_executed_well: `${ifExecutedWell} ${params.strategicContext?.resilienceGuidance || ''}`.replace(/\s+/g, ' ').trim(),
+    execution_sequence: firstPriorityAction?.tactics?.length
+      ? firstPriorityAction.tactics.slice(0, 3).map((tactic, index) => `Step ${index + 1}: ${tactic}`)
+      : executionSequence,
+    if_executed_well: `${ifExecutedWell} ${firstPriorityAction?.timeline.long || ''} ${params.strategicContext?.resilienceGuidance || ''}`.replace(/\s+/g, ' ').trim(),
     when_to_expect_impact: {
       short_term: shortTerm,
       mid_term: midTerm,
@@ -1975,7 +2471,7 @@ function buildSnapshotVisualIntelligence(params: {
         }, 0))
     : null;
 
-  const competitorStandingValues = params.competitorIntelligence.comparison?.competitors?.map((entry) => {
+  const competitorStandingValues = (params.competitorIntelligence.comparison?.competitors ?? []).map((entry) => {
     const deltas = entry.deltas_vs_company;
     if (!deltas) return null;
     const avgDelta = averageNumber([
@@ -2197,6 +2693,11 @@ function buildSeoExecutiveSummary(params: {
   score: ReturnType<typeof buildReportScoreModel>;
   visualIntelligence: SnapshotReport['visual_intelligence'];
   topPriorities: SnapshotTopPriority[];
+  companyContext?: CompanyNarrativeContext;
+  strategicContext?: StrategicContext;
+  publicAudit?: PublicAuditResult | null;
+  competitorIntelligence: CompetitorIntelligenceResult;
+  geoAeoSummary: SnapshotReport['geo_aeo_executive_summary'];
 }): SnapshotReport['seo_executive_summary'] {
   const technicalScore = params.visualIntelligence.seo_capability_radar.technical_seo_score;
   const visibilityScore = params.visualIntelligence.seo_capability_radar.rank_tracking_score;
@@ -2249,7 +2750,13 @@ function buildSeoExecutiveSummary(params: {
           if_not_addressed: 'If not addressed, execution will stay reactive and each optimization cycle will produce inconsistent results.',
         };
 
-  const usedAreas = new Set<string>();
+  const usedTracks = new Set<StructuredActionTrack>();
+  const trackPriority: Record<StructuredActionTrack, number> = {
+    authority: 0,
+    positioning: 1,
+    comparison: 2,
+    generic: 3,
+  };
   const linkedVisualForDecision = (decision: PersistedDecisionObject): 'radar' | 'matrix' | 'funnel' | 'crawl' => {
     if (/backlink|authority/.test(decision.issue_type)) return 'radar';
     if (/keyword|ranking/.test(decision.issue_type)) return 'matrix';
@@ -2258,34 +2765,108 @@ function buildSeoExecutiveSummary(params: {
     return 'radar';
   };
 
-  const topActions = sortedDecisions
+  const topActionsWithTrack = sortedDecisions
     .map((decision) => {
-      const area = mapIssueToExecutiveArea(decision.issue_type);
-      if (usedAreas.has(area)) return null;
-      usedAreas.add(area);
+      const plan = buildActionPlan(
+        decision,
+        params.companyContext,
+        params.strategicContext,
+        {
+          publicAudit: params.publicAudit ?? null,
+          competitorIntelligence: params.competitorIntelligence,
+          authorityScore,
+          contentQualityScore: contentScore,
+          aiVisibilityScore: params.geoAeoSummary.overall_ai_visibility_score,
+        },
+      );
+      const track = inferStructuredActionTrack({
+        issueType: decision.issue_type,
+        actionType: decision.action_type,
+        title: plan.title,
+        recommendation: `${decision.recommendation} ${plan.reasoning}`,
+        optimizationFocus: String((decision.action_payload as Record<string, unknown> | undefined)?.optimization_focus ?? ''),
+        tactics: plan.tactics,
+      });
+      if (usedTracks.has(track)) return null;
+      usedTracks.add(track);
       return {
-        action_title: buildActionPlan(decision).title,
-        priority: executivePriorityBand(Number(decision.priority_score ?? impactScore(decision))),
-        expected_impact: impactBand(impactScore(decision)),
-        effort: inferEffortLevel(decision),
-        linked_visual: linkedVisualForDecision(decision),
-        reasoning: decision.recommendation,
+        track,
+        action: {
+          action_title: plan.title,
+          title: plan.title,
+          priority: executivePriorityBand(Number(decision.priority_score ?? impactScore(decision))),
+          expected_impact: impactBand(impactScore(decision)),
+          effort: inferEffortLevel(decision),
+          linked_visual: linkedVisualForDecision(decision),
+          reasoning: plan.reasoning,
+          tactics: plan.tactics,
+          focus_page: plan.focusPage,
+          timeline: plan.timeline,
+          impact: plan.impact,
+          confidence: plan.confidence,
+        },
       };
     })
-    .filter((item): item is NonNullable<typeof item> => Boolean(item))
-    .slice(0, 3);
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
-  while (topActions.length < 3 && params.topPriorities[topActions.length]) {
-    const item = params.topPriorities[topActions.length];
-    topActions.push({
-      action_title: item.title,
-      priority: executivePriorityBand(item.impact_score),
-      expected_impact: impactBand(item.impact_score),
-      effort: item.effort_level,
-      linked_visual: topActions.length === 0 ? 'crawl' : topActions.length === 1 ? 'matrix' : 'radar',
-      reasoning: item.why_now,
+  let fallbackIndex = 0;
+  while (topActionsWithTrack.length < 3 && params.topPriorities[fallbackIndex]) {
+    const item = params.topPriorities[fallbackIndex];
+    fallbackIndex += 1;
+    const track = inferStructuredActionTrack({
+      title: item.title,
+      recommendation: item.reasoning,
+      tactics: item.tactics,
+    });
+    if (usedTracks.has(track) && track !== 'generic') continue;
+    usedTracks.add(track);
+    topActionsWithTrack.push({
+      track,
+      action: {
+        action_title: item.title,
+        title: item.title,
+        priority: executivePriorityBand(item.impact_score),
+        expected_impact: impactBand(item.impact_score),
+        effort: item.effort_level,
+        linked_visual: topActionsWithTrack.length === 0 ? 'crawl' : topActionsWithTrack.length === 1 ? 'radar' : 'matrix',
+        reasoning: item.reasoning,
+        tactics: item.tactics,
+        focus_page: item.focus_page,
+        timeline: item.timeline,
+        impact: item.impact,
+        confidence: item.confidence,
+      },
     });
   }
+
+  fallbackIndex = 0;
+  while (topActionsWithTrack.length < 3 && params.topPriorities[fallbackIndex]) {
+    const item = params.topPriorities[fallbackIndex];
+    fallbackIndex += 1;
+    if (topActionsWithTrack.some((entry) => entry.action.title === item.title)) continue;
+    topActionsWithTrack.push({
+      track: 'generic',
+      action: {
+        action_title: item.title,
+        title: item.title,
+        priority: executivePriorityBand(item.impact_score),
+        expected_impact: impactBand(item.impact_score),
+        effort: item.effort_level,
+        linked_visual: topActionsWithTrack.length === 0 ? 'crawl' : topActionsWithTrack.length === 1 ? 'radar' : 'matrix',
+        reasoning: item.reasoning,
+        tactics: item.tactics,
+        focus_page: item.focus_page,
+        timeline: item.timeline,
+        impact: item.impact,
+        confidence: item.confidence,
+      },
+    });
+  }
+
+  const topActions = topActionsWithTrack
+    .sort((left, right) => trackPriority[left.track] - trackPriority[right.track])
+    .map((item) => item.action)
+    .slice(0, 3);
 
   const growthOpportunity = bestOpportunity || typeof funnelLostClicks === 'number'
     ? {
@@ -3029,6 +3610,39 @@ export function composeSnapshotReportFromDecisions(params: {
     decisions: finalDecisions,
     publicAudit: params.publicAudit ?? null,
   });
+  const narrative = synthesizePrimaryNarrative(finalDecisions);
+  const coreProblem = normalizeCoreProblem(narrative.primary_problem);
+  const diagnosis = buildDiagnosis({
+    narrative,
+    companyContext,
+    strategicContext,
+  });
+  const score = buildReportScoreModel({
+    decisions: finalDecisions,
+    resolvedInput: params.resolvedInput,
+    competitorIntelligence,
+  });
+  const narrativeContext = createNarrativeContext();
+  const visualIntelligence = buildSnapshotVisualIntelligence({
+    decisions: finalDecisions,
+    score,
+    competitorIntelligence,
+    publicAudit: params.publicAudit ?? null,
+    narrativeContext,
+  });
+  const geoAeoVisuals = buildGeoAeoVisuals({
+    publicAudit: params.publicAudit ?? null,
+  });
+  const geoAeoExecutiveSummary = buildGeoAeoExecutiveSummary({
+    geoAeoVisuals,
+  });
+  const recommendationContext = {
+    publicAudit: params.publicAudit ?? null,
+    competitorIntelligence,
+    authorityScore: visualIntelligence.seo_capability_radar.backlinks_score,
+    contentQualityScore: visualIntelligence.seo_capability_radar.content_quality_score,
+    aiVisibilityScore: geoAeoExecutiveSummary.overall_ai_visibility_score,
+  };
 
   let sections = SNAPSHOT_SECTION_DEFINITIONS.map((definition) => {
     const sectionDecisions = finalDecisions
@@ -3040,7 +3654,7 @@ export function composeSnapshotReportFromDecisions(params: {
       IU_ids: definition.IU_ids,
       insights: sectionDecisions.slice(0, 4).map((decision) => toInsight(decision, companyContext)),
       opportunities: sectionDecisions.filter(isOpportunityCandidate).slice(0, 2).map(toOpportunity),
-      actions: sortSectionActions(sectionDecisions.slice(0, 3).map((decision) => toAction(decision, companyContext, strategicContext))),
+      actions: sortSectionActions(sectionDecisions.slice(0, 3).map((decision) => toAction(decision, companyContext, strategicContext, recommendationContext))),
     } satisfies SnapshotReportSection;
   });
 
@@ -3051,6 +3665,7 @@ export function composeSnapshotReportFromDecisions(params: {
       SNAPSHOT_SECTION_DEFINITIONS[index],
       companyContext,
       strategicContext,
+      recommendationContext,
     );
     return {
       ...ensured,
@@ -3086,7 +3701,7 @@ export function composeSnapshotReportFromDecisions(params: {
     const existingIds = new Set(sections.flatMap((section) => section.actions.map((item) => item.decision_id)));
     for (const decision of finalDecisions) {
       if (existingIds.has(decision.id)) continue;
-      sections[0].actions.push(toAction(decision, companyContext, strategicContext));
+      sections[0].actions.push(toAction(decision, companyContext, strategicContext, recommendationContext));
       existingIds.add(decision.id);
       totalActions += 1;
       if (totalActions >= SNAPSHOT_MIN_ACTIONS) break;
@@ -3114,7 +3729,7 @@ export function composeSnapshotReportFromDecisions(params: {
     const existingIds = new Set(sections.flatMap((section) => section.actions.map((item) => item.decision_id)));
     for (const decision of finalDecisions) {
       if (existingIds.has(decision.id)) continue;
-      sections[0].actions.push(toAction(decision, companyContext, strategicContext));
+      sections[0].actions.push(toAction(decision, companyContext, strategicContext, recommendationContext));
       existingIds.add(decision.id);
       totalActions += 1;
       if (totalActions >= SNAPSHOT_MIN_ACTIONS) break;
@@ -3122,29 +3737,6 @@ export function composeSnapshotReportFromDecisions(params: {
     sections[0].actions = sortSectionActions(sections[0].actions);
   }
 
-  const narrative = synthesizePrimaryNarrative(finalDecisions);
-  const coreProblem = normalizeCoreProblem(narrative.primary_problem);
-  const diagnosis = buildDiagnosis({
-    narrative,
-    companyContext,
-    strategicContext,
-  });
-  const score = buildReportScoreModel({
-    decisions: finalDecisions,
-    resolvedInput: params.resolvedInput,
-    competitorIntelligence,
-  });
-  const narrativeContext = createNarrativeContext();
-  const visualIntelligence = buildSnapshotVisualIntelligence({
-    decisions: finalDecisions,
-    score,
-    competitorIntelligence,
-    publicAudit: params.publicAudit ?? null,
-    narrativeContext,
-  });
-  const geoAeoVisuals = buildGeoAeoVisuals({
-    publicAudit: params.publicAudit ?? null,
-  });
   const topPriorities = buildTopPriorities(sections);
   const summary = buildSummary({
     sections,
@@ -3161,9 +3753,11 @@ export function composeSnapshotReportFromDecisions(params: {
     score,
     visualIntelligence,
     topPriorities,
-  });
-  const geoAeoExecutiveSummary = buildGeoAeoExecutiveSummary({
-    geoAeoVisuals,
+    companyContext,
+    strategicContext,
+    publicAudit: params.publicAudit ?? null,
+    competitorIntelligence,
+    geoAeoSummary: geoAeoExecutiveSummary,
   });
   const unifiedIntelligenceSummary = buildUnifiedIntelligenceSummary({
     coreProblem,

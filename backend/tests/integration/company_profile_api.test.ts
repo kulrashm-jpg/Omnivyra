@@ -14,6 +14,18 @@ jest.mock('../../services/companyProfileService', () => ({
   saveProfile: jest.fn(),
   refineProfileWithAI: jest.fn(),
   refineProfileWithAIWithDetails: jest.fn(),
+  calculateCompanyProfileCompleteness: jest.fn(() => ({
+    score: 100,
+    section_scores: {},
+  })),
+  toLimitedCompanyProfile: jest.fn((profile) => profile),
+  upsertCompanyProfileGovernanceSettings: jest.fn(({ existingReportSettings, incomingReportSettings }) =>
+    incomingReportSettings ?? existingReportSettings ?? null
+  ),
+  getCompanyProfileReviewStatus: jest.fn(() => ({
+    status: 'ready',
+    issues: [],
+  })),
 }));
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn().mockResolvedValue({ user: { id: 'user-1' }, error: null }),
@@ -22,6 +34,11 @@ jest.mock('../../services/rbacService', () => ({
   ...jest.requireActual('../../services/rbacService'),
   isSuperAdmin: jest.fn().mockResolvedValue(true),
   getUserRole: jest.fn().mockResolvedValue({ role: 'SUPER_ADMIN', error: null }),
+}));
+jest.mock('../../services/contentArchitectService', () => ({
+  resolveCompanyAccess: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'SUPER_ADMIN' }),
+  getContentArchitectCompanyId: jest.fn().mockReturnValue(null),
+  isContentArchitectSession: jest.fn().mockReturnValue(false),
 }));
 
 describe('Company profile API', () => {

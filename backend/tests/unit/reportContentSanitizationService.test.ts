@@ -30,7 +30,7 @@ describe('reportContentSanitizationService', () => {
 
     expect(sanitized.diagnosis).toBe('Authority is weak.');
     expect(sanitized.summary).not.toBe('Authority is weak.');
-    expect(sanitized.confidenceSource).toContain('Available signals indicate limited data coverage');
+    expect(sanitized.confidenceSource).toBe('');
     expect(sanitized.decisionSnapshot.executionSequence[0]).toBe('Step 1: Build depth pages.');
   });
 

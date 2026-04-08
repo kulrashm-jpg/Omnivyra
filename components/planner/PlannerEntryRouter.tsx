@@ -6,6 +6,7 @@
 
 import React, { useEffect, useMemo } from 'react';
 import { useRouter } from 'next/router';
+import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
 
 export type PlannerEntryMode = 'direct' | 'turbo' | 'recommendation' | 'campaign' | 'opportunity';
 
@@ -40,6 +41,10 @@ export function PlannerEntryRouter({ children }: PlannerEntryRouterProps) {
       typeof query.opportunityId === 'string' && query.opportunityId.trim()
         ? query.opportunityId.trim()
         : null;
+    const sourceContentToken =
+      typeof query.sourceContentToken === 'string' && query.sourceContentToken.trim()
+        ? query.sourceContentToken.trim()
+        : null;
     const sourceOpportunityId =
       opportunityId ??
       (typeof query.sourceOpportunityId === 'string' && query.sourceOpportunityId.trim()
@@ -59,9 +64,18 @@ export function PlannerEntryRouter({ children }: PlannerEntryRouterProps) {
       }
     }
 
+    if (!sourceTheme && sourceContentToken && typeof window !== 'undefined') {
+      const payload = readCampaignSourcePayload(sourceContentToken);
+      if (payload?.sourceTheme) {
+        sourceTheme = payload.sourceTheme;
+      }
+    }
+
     const initialIdea =
       typeof query.initialIdea === 'string' && query.initialIdea.trim()
         ? query.initialIdea.trim()
+        : sourceContentToken && typeof window !== 'undefined'
+        ? (readCampaignSourcePayload(sourceContentToken)?.suggestedTopic ?? null)
         : null;
 
     let entry_mode: PlannerEntryMode = 'direct';
@@ -92,6 +106,7 @@ export function PlannerEntryRouter({ children }: PlannerEntryRouterProps) {
     query.recommendationId,
     query.campaignId,
     query.sourceTheme,
+    query.sourceContentToken,
     query.opportunityId,
     query.sourceOpportunityId,
     query.initialIdea,

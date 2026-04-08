@@ -84,6 +84,7 @@ function generateSlug(title: string): string {
     .trim()
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
     .slice(0, 80);
 }
 

@@ -1,6 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { getUserRole, isSuperAdmin, Role, getCompanyRoleIncludingInvited } from '@/backend/services/rbacService';
+import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { getProfile } from '@/backend/services/companyProfileService';
 import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { buildFormattedStyleInstructions } from '@/lib/content/writingStyleEngine';
@@ -19,58 +18,44 @@ const EMPTY: SuggestionResponse = {
   trend_context_options: [],
 };
 
-function toStringArray(input: unknown): string[] {
+function toStringArray(input: unknown, maxItems = 4): string[] {
   if (!Array.isArray(input)) return [];
   return input
     .map((v) => (typeof v === 'string' ? v.trim() : ''))
     .filter(Boolean)
-    .slice(0, 4);
+    .slice(0, maxItems);
 }
 
-async function ensureCompanyAccess(
-  req: NextApiRequest,
-  res: NextApiResponse,
-  companyId: string,
-): Promise<{ userId: string; role: Role | null } | null> {
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
+function resolveSuggestionRange(
+  rawCount: unknown,
+  rawTargetWordCount: unknown,
+): { min: number; max: number } {
+  if (typeof rawCount === 'number' && rawCount >= 1 && rawCount <= 10) {
+    const count = Math.round(rawCount);
+    return { min: count, max: count };
   }
 
-  const superAdmin = await isSuperAdmin(user.id);
-  if (superAdmin) {
-    return { userId: user.id, role: Role.SUPER_ADMIN };
-  }
+  const parsedTarget =
+    typeof rawTargetWordCount === 'number'
+      ? rawTargetWordCount
+      : typeof rawTargetWordCount === 'string'
+      ? parseInt(rawTargetWordCount, 10)
+      : NaN;
 
-  let { role, error: roleError } = await getUserRole(user.id, companyId);
-  if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
-    const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
-    if (
-      fallbackRole === Role.COMPANY_ADMIN ||
-      fallbackRole === Role.ADMIN ||
-      fallbackRole === Role.SUPER_ADMIN
-    ) {
-      role = fallbackRole;
-      roleError = null;
-    }
-  }
-  if (roleError) {
-    res.status(403).json({ error: roleError === 'COMPANY_ACCESS_DENIED' ? 'COMPANY_ACCESS_DENIED' : 'FORBIDDEN_ROLE' });
-    return null;
-  }
-  if (!role) {
-    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    return null;
-  }
-
-  return { userId: user.id, role };
+  if (!Number.isFinite(parsedTarget)) return { min: 3, max: 3 };
+  if (parsedTarget >= 2000) return { min: 6, max: 8 };
+  if (parsedTarget >= 1600) return { min: 5, max: 6 };
+  if (parsedTarget >= 1200) return { min: 4, max: 5 };
+  return { min: 3, max: 3 };
 }
+
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { company_id, topic, reason, brief, currentValues } = req.body ?? {};
+  const { company_id, topic, reason, brief, currentValues, count: rawCount } = req.body ?? {};
+  const valuesObj = (currentValues && typeof currentValues === 'object') ? (currentValues as Record<string, unknown>) : {};
+  const suggestionRange = resolveSuggestionRange(rawCount, valuesObj.target_word_count ?? valuesObj.targetWords);
 
   if (!company_id || typeof company_id !== 'string') {
     return res.status(400).json({ error: 'company_id required' });
@@ -80,7 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Verify user authentication and company access
-  const auth = await ensureCompanyAccess(req, res, company_id);
+  const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
 
   try {
@@ -88,7 +73,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const styleInstructions = profile ? buildFormattedStyleInstructions(profile) : '';
 
     const briefObj = (brief && typeof brief === 'object') ? (brief as Record<string, unknown>) : {};
-    const valuesObj = (currentValues && typeof currentValues === 'object') ? (currentValues as Record<string, unknown>) : {};
 
     const promptContext = [
       `Topic: ${String(topic).trim()}`,
@@ -101,6 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       valuesObj.mustInclude ? `Existing must-include points: ${String(valuesObj.mustInclude)}` : '',
       valuesObj.campaignObjective ? `Existing campaign objective: ${String(valuesObj.campaignObjective)}` : '',
       valuesObj.trendContext ? `Existing trend context: ${String(valuesObj.trendContext)}` : '',
+      valuesObj.target_word_count || valuesObj.targetWords ? `Target word count: ${String(valuesObj.target_word_count ?? valuesObj.targetWords)}` : '',
     ].filter(Boolean).join('\n\n');
 
     const ai = await runCompletionWithOperation({
@@ -120,18 +105,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           role: 'user',
           content:
             `${promptContext}\n\n` +
-            'Return JSON with this exact shape:\n' +
+            `Return JSON with this exact shape (${suggestionRange.min === suggestionRange.max ? `exactly ${suggestionRange.min}` : `between ${suggestionRange.min} and ${suggestionRange.max}`} options per field):\n` +
             '{\n' +
-            '  "uniqueness_directive_options": ["...", "...", "..."],\n' +
-            '  "must_include_points_options": ["...", "...", "..."],\n' +
-            '  "campaign_objective_options": ["...", "...", "..."],\n' +
-            '  "trend_context_options": ["...", "...", "..."]\n' +
+            `  "uniqueness_directive_options": [${Array.from({ length: suggestionRange.max }, () => '"..."').join(', ')}],\n` +
+            `  "must_include_points_options": [${Array.from({ length: suggestionRange.max }, () => '"..."').join(', ')}],\n` +
+            `  "campaign_objective_options": [${Array.from({ length: suggestionRange.max }, () => '"..."').join(', ')}],\n` +
+            `  "trend_context_options": [${Array.from({ length: suggestionRange.max }, () => '"..."').join(', ')}]\n` +
             '}\n\n' +
             'Rules:\n' +
             '- No buzzwords or generic copy\n' +
             '- Keep aligned to company context and topic\n' +
             '- Must-includes should be comma-ready bullet phrases\n' +
-            '- Trend context should mention current market/AI/distribution shifts where relevant',
+            '- Trend context should mention current market/AI/distribution shifts where relevant\n' +
+            '- Higher word counts require denser, more specific, more varied suggestions\n' +
+            `- For target length tiers, use these counts for each field: 800+ => 3, 1200+ => 4-5, 1600+ => 5-6, 2000+ => 6-8`,
         },
       ],
     });
@@ -139,10 +126,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const raw = ai.output ? JSON.parse(ai.output) as Record<string, unknown> : {};
 
     const out: SuggestionResponse = {
-      uniqueness_directive_options: toStringArray(raw.uniqueness_directive_options),
-      must_include_points_options: toStringArray(raw.must_include_points_options),
-      campaign_objective_options: toStringArray(raw.campaign_objective_options),
-      trend_context_options: toStringArray(raw.trend_context_options),
+      uniqueness_directive_options: toStringArray(raw.uniqueness_directive_options, suggestionRange.max),
+      must_include_points_options: toStringArray(raw.must_include_points_options, suggestionRange.max),
+      campaign_objective_options: toStringArray(raw.campaign_objective_options, suggestionRange.max),
+      trend_context_options: toStringArray(raw.trend_context_options, suggestionRange.max),
     };
 
     return res.status(200).json(out);

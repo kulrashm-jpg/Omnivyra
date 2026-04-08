@@ -273,6 +273,7 @@ export default function CampaignDetails() {
   const [isEnhancingAllWeeks, setIsEnhancingAllWeeks] = useState(false);
   const [editedWeekDailyPlans, setEditedWeekDailyPlans] = useState<Record<number, DailyPlan[]>>({});
   const [isSavingWeekPlan, setIsSavingWeekPlan] = useState<number | null>(null);
+  const [selectedWeekDay, setSelectedWeekDay] = useState<{ weekNumber: number; day: string } | null>(null);
   const [distributionMode, setDistributionMode] = useState<'staggered' | 'same_day_per_topic'>('staggered');
   const [isViralityExpanded, setIsViralityExpanded] = useState(false);
   const [showRequiredActions, setShowRequiredActions] = useState(false);
@@ -1386,7 +1387,8 @@ export default function CampaignDetails() {
   const getStageColor = (stage: string) => {
     const m: Record<string, string> = {
       planning: 'bg-blue-100 text-blue-800',
-      twelve_week_plan: 'bg-indigo-100 text-indigo-800',
+      week_plan: 'bg-indigo-100 text-indigo-800',
+      twelve_week_plan: 'bg-indigo-100 text-indigo-800', // legacy
       daily_plan: 'bg-amber-100 text-amber-800',
       charting: 'bg-green-100 text-green-800', // legacy
       schedule: 'bg-green-100 text-green-800',
@@ -3114,18 +3116,277 @@ export default function CampaignDetails() {
                     : Math.abs(creatorShare - prevCreatorShare) <= 0.1 ? 'Balanced →'
                     : creatorShare > prevCreatorShare + 0.1 ? 'Heavy Load ↓'
                     : 'Balanced →';
-                  const topicsWithExecution = hasEnrichedTopics
+                  // --- Activity card derivation for BOLT / legacy campaigns (no topics[] in blueprint) ---
+                  //
+                  // Card count = unique CONTENT PIECES (not DB rows).
+                  // Distribution mode determines uniqueness:
+                  //   SHARED  (default): same piece goes to all platforms → 1 card per (topic + contentType)
+                  //   STAGGERED        : each platform gets UNIQUE content → 1 card per (topic + contentType + platform)
+                  //
+                  // Card count formula with sharing ON, N platforms, M content types, K pieces per type:
+                  //   total = sum over each type: ceil(K / N)
+                  // e.g. 3 posts + 3 articles on 1 platform → 6 cards
+                  //      3 posts + 3 articles on 2 platforms (sharing) → ceil(3/2)×2 = 4 cards
+                  //      3 posts + 3 articles on 3 platforms (sharing) → ceil(3/3)×2 = 2 cards
+
+                  // Detect distribution mode from daily plan rows (populated by generate-weekly-structure)
+                  const weekIsStaggered = weekDailyPlans.length > 0
+                    ? (weekDailyPlans as any[]).some((p) => p.distribution_strategy === 'STAGGERED')
+                    : (weekPlan as any)?.distribution_strategy === 'STAGGERED';
+
+                  const formatPlatformLabel = (platform: unknown) => {
+                    const key = String(platform ?? '').trim().toLowerCase();
+                    if (!key) return '';
+                    return PLATFORM_LABELS[key as keyof typeof PLATFORM_LABELS] || key.charAt(0).toUpperCase() + key.slice(1);
+                  };
+
+                  // Source 1: execution_items.topic_slots (unique content pieces from blueprint)
+                  const topicBriefs = Array.isArray((weekPlan as any)?.topics) ? ((weekPlan as any).topics as any[]) : [];
+                  const derivedTopicsFromSlots = executionItems.flatMap((exec: any, execIdx: number) => {
+                    const slots = Array.isArray(exec?.topic_slots) ? exec.topic_slots : [];
+                    const selectedPlatforms = Array.isArray(exec?.selected_platforms)
+                      ? exec.selected_platforms.map((p: unknown) => String(p ?? '').trim().toLowerCase()).filter(Boolean)
+                      : [];
+                    const fallbackPlatforms = Array.isArray(exec?.platform_options)
+                      ? exec.platform_options.map((p: unknown) => String(p ?? '').trim().toLowerCase()).filter(Boolean)
+                      : [];
+                    const slotPlatforms = Array.isArray(exec?.slot_platforms) ? exec.slot_platforms : [];
+                    const contentType = String(exec?.content_type ?? exec?.contentType ?? 'post').trim() || 'post';
+                    const isCreator = isCreatorDependentContentType(contentType);
+                    return slots.map((slot: any, slotIdx: number) => {
+                      const intent = slot?.intent && typeof slot.intent === 'object' ? slot.intent : {};
+                      const matchedTopic = topicBriefs.find((topic) => {
+                        const meta = (topic as any)?.execution_meta;
+                        if (meta && Number(meta.exec_index) === execIdx && Number(meta.slot_index) === slotIdx) return true;
+                        return String(topic?.topicTitle ?? '').trim() === String(slot?.topic ?? '').trim();
+                      });
+                      const creatorCard =
+                        slot?.creator_card && typeof slot.creator_card === 'object'
+                          ? slot.creator_card
+                          : slot?.intent
+                            ? {
+                                ...(!isCreator ? {
+                                  hook: slot.intent?.hook || undefined,
+                                  key_points: Array.isArray(slot.intent?.key_points) ? slot.intent.key_points : undefined,
+                                  seo_focus: slot.intent?.seo_focus || undefined,
+                                  keywords: Array.isArray(slot.intent?.keywords) ? slot.intent.keywords : undefined,
+                                  hashtags: Array.isArray(slot.intent?.hashtags) ? slot.intent.hashtags : undefined,
+                                  repurpose_angles: Array.isArray(slot.intent?.repurpose_angles) ? slot.intent.repurpose_angles : undefined,
+                                } : {}),
+                                ...(isCreator ? {
+                                  visual_hook: slot.intent?.visual_hook || undefined,
+                                  image_prompt: slot.intent?.image_prompt || undefined,
+                                  video_prompt: slot.intent?.video_prompt || undefined,
+                                  scene_direction: slot.intent?.scene_direction || undefined,
+                                  keywords: Array.isArray(slot.intent?.keywords) ? slot.intent.keywords : undefined,
+                                  hashtags: Array.isArray(slot.intent?.hashtags) ? slot.intent.hashtags : undefined,
+                                } : {}),
+                                summary: slot.intent?.brief_summary || undefined,
+                                objective: slot.intent?.objective || undefined,
+                                target_audience: slot.intent?.target_audience || undefined,
+                                intent: slot.intent,
+                              }
+                            : undefined;
+                      const platformsForSlot = (
+                        Array.isArray(slotPlatforms[slotIdx]) && slotPlatforms[slotIdx].length > 0
+                          ? slotPlatforms[slotIdx]
+                          : (selectedPlatforms.length > 0 ? selectedPlatforms : fallbackPlatforms)
+                      )
+                        .map((p: unknown) => String(p ?? '').trim().toLowerCase())
+                        .filter(Boolean);
+                      return {
+                        ...(matchedTopic && typeof matchedTopic === 'object' ? matchedTopic : {}),
+                        topicTitle: matchedTopic?.topicTitle || String(slot?.topic ?? '').trim() || `Activity ${execIdx + 1}.${slotIdx + 1}`,
+                        whoAreWeWritingFor:
+                          matchedTopic?.whoAreWeWritingFor ||
+                          String((intent as any)?.target_audience ?? '').trim() ||
+                          undefined,
+                        whatProblemAreWeAddressing:
+                          matchedTopic?.whatProblemAreWeAddressing ||
+                          String((intent as any)?.pain_point ?? '').trim() ||
+                          undefined,
+                        whatShouldReaderLearn:
+                          matchedTopic?.whatShouldReaderLearn ||
+                          String((intent as any)?.outcome_promise ?? '').trim() ||
+                          undefined,
+                        desiredAction:
+                          matchedTopic?.desiredAction ||
+                          String((intent as any)?.cta_type ?? (weekPlan as any)?.cta_type ?? '').trim() ||
+                          undefined,
+                        narrativeStyle:
+                          matchedTopic?.narrativeStyle ||
+                          String((weekPlan as any)?.weeklyContextCapsule?.toneGuidance ?? (intent as any)?.writing_angle ?? slot?.writer_content_brief?.tone ?? '').trim() ||
+                          undefined,
+                        topicContext: {
+                          ...(matchedTopic?.topicContext && typeof matchedTopic.topicContext === 'object' ? matchedTopic.topicContext : {}),
+                          writingIntent:
+                            matchedTopic?.topicContext?.writingIntent ||
+                            String((intent as any)?.brief_summary ?? (intent as any)?.writing_intent ?? '').trim() ||
+                            undefined,
+                        },
+                        _contentType: contentType,
+                        _platforms: platformsForSlot.map(formatPlatformLabel).filter(Boolean),
+                        _execMode: String(slot?.execution_mode ?? (isCreator ? 'CREATOR_REQUIRED' : 'AI_AUTOMATED')).trim() || undefined,
+                        _creatorInstruction: (slot?.creator_instruction && typeof slot.creator_instruction === 'object') ? slot.creator_instruction : undefined,
+                        _isCreator: isCreator,
+                        _creatorCard: creatorCard,
+                      };
+                    });
+                  });
+
+                  // Source 2: resolved/daily execution items when blueprint topics are still collapsed
+                  const postingSource = Array.isArray((weekPlan as any)?.resolved_postings) && (weekPlan as any).resolved_postings.length > 0
+                    ? ((weekPlan as any).resolved_postings as any[])
+                    : (Array.isArray((weekPlan as any)?.daily_execution_items) ? ((weekPlan as any).daily_execution_items as any[]) : []);
+                  const derivedTopicsFromResolvedPostings = postingSource.length > 0
+                    ? (() => {
+                        const seen = new Set<string>();
+                        const cards: any[] = [];
+                        postingSource.forEach((posting: any, idx: number) => {
+                          const contentType = String(posting?.content_type ?? posting?.contentType ?? 'post').trim().toLowerCase() || 'post';
+                          const platform = String(posting?.platform ?? '').trim().toLowerCase();
+                          const uniqueKey = String(posting?.master_content_id ?? posting?.posting_id ?? posting?.execution_id ?? '').trim()
+                            || `${String(posting?.topic ?? '').trim().toLowerCase()}::${contentType}::${weekIsStaggered ? platform : 'shared'}::${idx}`;
+                          if (seen.has(uniqueKey)) return;
+                          seen.add(uniqueKey);
+                          const isCreator = isCreatorDependentContentType(contentType);
+                          const intent = posting?.intent && typeof posting.intent === 'object'
+                            ? posting.intent
+                            : posting?.writer_content_brief && typeof posting.writer_content_brief === 'object'
+                              ? posting.writer_content_brief
+                              : {};
+                          cards.push({
+                            topicTitle: String(posting?.topic ?? posting?.title ?? '').trim() || `Activity ${idx + 1}`,
+                            whoAreWeWritingFor: String((intent as any)?.target_audience ?? '').trim() || undefined,
+                            whatProblemAreWeAddressing: String((intent as any)?.pain_point ?? posting?.summary ?? '').trim() || undefined,
+                            whatShouldReaderLearn: String((intent as any)?.outcome_promise ?? posting?.introObjective ?? '').trim() || undefined,
+                            desiredAction: String((intent as any)?.cta_type ?? posting?.cta ?? '').trim() || undefined,
+                            narrativeStyle: String((weekPlan as any)?.weeklyContextCapsule?.toneGuidance ?? posting?.brandVoice ?? '').trim() || undefined,
+                            topicContext: {
+                              writingIntent: String((intent as any)?.brief_summary ?? posting?.description ?? posting?.objective ?? '').trim() || undefined,
+                            },
+                            _contentType: contentType,
+                            _platforms: platform ? [formatPlatformLabel(platform)] : [],
+                            _execMode: String(posting?.execution_mode ?? (isCreator ? 'CREATOR_REQUIRED' : 'AI_AUTOMATED')).trim() || undefined,
+                            _creatorInstruction: posting?.creator_instruction && typeof posting.creator_instruction === 'object' ? posting.creator_instruction : undefined,
+                            _isCreator: isCreator,
+                            _creatorCard: posting?.creator_card && typeof posting.creator_card === 'object' ? posting.creator_card : undefined,
+                          });
+                        });
+                        return cards;
+                      })()
+                    : [];
+
+                  // Source 2: daily_content_plans rows (populated by generate-weekly-structure, most up-to-date).
+                  // Deduplication key depends on distribution mode:
+                  //   Shared    → (topicTitle, contentType)           : same piece on multiple platforms = 1 card
+                  //   Staggered → (topicTitle, contentType, platform) : each platform's piece = separate card
+                  const derivedTopicsFromDailyPlans = weekDailyPlans.length > 0
+                    ? (() => {
+                        const seen = new Set<string>();
+                        const cards: any[] = [];
+                        for (const p of weekDailyPlans as any[]) {
+                          const daily = p.dailyObject as any;
+                          const topicTitle = String(p.title || p.topic || daily?.topicTitle || '').trim();
+                          const contentType = String(p.contentType || daily?.contentType || 'post').toLowerCase();
+                          const platform = String(p.platform || '').toLowerCase();
+                          // Dedup key: include platform only when staggered (unique content per platform)
+                          const dedupeKey = weekIsStaggered
+                            ? `${topicTitle.toLowerCase()}::${contentType}::${platform}`
+                            : `${topicTitle.toLowerCase()}::${contentType}`;
+                          if (seen.has(dedupeKey)) continue;
+                          seen.add(dedupeKey);
+                          // For shared mode: collect all platforms this (topic+contentType) appears on
+                          // For staggered mode: this card is already platform-specific
+                          const allPlatforms = weekIsStaggered
+                            ? (platform ? [platform] : [])
+                            : (() => {
+                                const ps = (weekDailyPlans as any[])
+                                  .filter((q: any) => {
+                                    const qt = String(q.title || q.topic || q.dailyObject?.topicTitle || '').trim().toLowerCase();
+                                    const qc = String(q.contentType || q.dailyObject?.contentType || 'post').toLowerCase();
+                                    return qt === topicTitle.toLowerCase() && qc === contentType;
+                                  })
+                                  .map((q: any) => String(q.platform || '').toLowerCase())
+                                  .filter(Boolean);
+                                return [...new Set(ps)];
+                              })();
+                          const isCreator = isCreatorDependentContentType(contentType);
+                          // creator_card from the daily-plans API (built by buildCreatorCard — contains all rich fields)
+                          const creatorCard = (p.creator_card && typeof p.creator_card === 'object') ? p.creator_card : undefined;
+                          // For text cards: pull enrichment fields from writerBrief/intent stored in daily object
+                          // The content column JSON contains the full enriched item including intent.hook, intent.key_points, etc.
+                          const writerBrief = daily?.writer_brief ?? daily?.writerBrief;
+                          const intentData = daily?.intent ?? writerBrief ?? null;
+                          // Synthesised creator_card also carries text enrichment for non-creator types
+                          // Merge: prefer creator_card fields (most complete), fall back to intent fields
+                          const enrichedCreatorCard = !isCreator && !creatorCard && intentData ? {
+                            hook: intentData?.hook || undefined,
+                            key_points: Array.isArray(intentData?.key_points) ? intentData.key_points : undefined,
+                            seo_focus: intentData?.seo_focus || undefined,
+                            keywords: Array.isArray(intentData?.keywords) ? intentData.keywords : undefined,
+                            hashtags: Array.isArray(intentData?.hashtags) ? intentData.hashtags : undefined,
+                            repurpose_angles: Array.isArray(intentData?.repurpose_angles) ? intentData.repurpose_angles : undefined,
+                            intent: intentData,
+                          } : creatorCard;
+                          cards.push({
+                            topicTitle: topicTitle || undefined,
+                            whoAreWeWritingFor: daily?.whoAreWeWritingFor || undefined,
+                            whatProblemAreWeAddressing: p.summary || daily?.whatProblemAreWeAddressing || undefined,
+                            whatShouldReaderLearn: p.introObjective || daily?.whatShouldReaderLearn || undefined,
+                            desiredAction: p.cta || daily?.desiredAction || undefined,
+                            narrativeStyle: p.brandVoice || daily?.narrativeStyle || undefined,
+                            topicContext: (p.description || p.objective)
+                              ? { writingIntent: p.description || p.objective }
+                              : undefined,
+                            _contentType: contentType,
+                            _platforms: allPlatforms.length > 0 ? allPlatforms : (platform ? [platform] : []),
+                            _execMode: daily?.execution_mode || (isCreator ? 'CREATOR_REQUIRED' : 'AI_AUTOMATED'),
+                            _day: p.dayOfWeek || undefined,
+                            _isCreator: isCreator,
+                            _creatorCard: enrichedCreatorCard,
+                          });
+                        }
+                        return cards;
+                      })()
+                    : [];
+
+                  const bestDerivedTopics = [derivedTopicsFromSlots, derivedTopicsFromResolvedPostings, derivedTopicsFromDailyPlans]
+                    .filter((items) => Array.isArray(items) && items.length > 0)
+                    .sort((a, b) => b.length - a.length)[0] ?? [];
+                  const effectiveHasTopics = bestDerivedTopics.length > 0 || hasEnrichedTopics;
+
+                  const topicsWithExecution = bestDerivedTopics.length > 0
+                    ? bestDerivedTopics.map((topic: any, idx: number) => ({
+                        ...topic,
+                        topicExecution: {
+                          platformTargets: topic._platforms && topic._platforms.length > 0
+                            ? topic._platforms
+                            : (platformTargets.length > 0 ? [platformTargets[idx % Math.max(platformTargets.length, 1)].split(':')[0].trim()] : ['—']),
+                          contentType: topic._contentType || contentTypes[idx % Math.max(contentTypes.length, 1)] || '—',
+                          ctaType: (weekPlan as any)?.cta_type || topic.desiredAction || '—',
+                          kpiFocus: (weekPlan as any)?.weekly_kpi_focus || '—',
+                          ...(topic._execMode ? { execution_mode: topic._execMode } : {}),
+                          ...(topic._creatorInstruction ? { creator_instruction: topic._creatorInstruction } : {}),
+                        },
+                      }))
+                    : hasEnrichedTopics
                     ? (((weekPlan as any).topics as any[]).map((topic, idx) => {
                         const slot = flatSlots[idx];
+                        const ct = (contentTypesBySlotIndex[idx] ?? contentTypes[idx % Math.max(contentTypes.length, 1)] ?? '—') || '—';
                         const execution_mode = typeof (slot as any)?.execution_mode === 'string' ? (slot as any).execution_mode : undefined;
                         const creator_instruction = (slot as any)?.creator_instruction && typeof (slot as any).creator_instruction === 'object' ? (slot as any).creator_instruction : undefined;
+                        const creator_card = (slot as any)?.creator_card && typeof (slot as any).creator_card === 'object' ? (slot as any).creator_card : undefined;
+                        const isCreator = isCreatorDependentContentType(ct);
                         return {
                           ...topic,
+                          _isCreator: isCreator,
+                          _creatorCard: creator_card,
                           topicExecution: {
                             platformTargets: platformTargets.length > 0
                               ? [platformTargets[idx % platformTargets.length]]
                               : ['—'],
-                            contentType: (contentTypesBySlotIndex[idx] ?? contentTypes[idx % Math.max(contentTypes.length, 1)] ?? '—') || '—',
+                            contentType: ct,
                             ctaType: (weekPlan as any)?.cta_type || '—',
                             kpiFocus: (weekPlan as any)?.weekly_kpi_focus || '—',
                             ...(execution_mode ? { execution_mode } : {}),
@@ -3134,8 +3395,9 @@ export default function CampaignDetails() {
                         };
                       }))
                     : [];
-                  const topicsCount = hasEnrichedTopics
-                    ? ((weekPlan as any).topics as any[]).length
+
+                  const topicsCount = effectiveHasTopics
+                    ? topicsWithExecution.length
                     : (((weekPlan as any)?.topics_to_cover as string[] | undefined)?.length ?? 0);
                   
                   return (
@@ -3242,8 +3504,68 @@ export default function CampaignDetails() {
                                 </p>
                               )}
                               {topicsCount > 0 && (
-                                <p className="text-xs text-gray-500 mt-0.5">{topicsCount} topics</p>
+                                <p className="text-xs text-gray-500 mt-0.5">{topicsCount} topic{topicsCount !== 1 ? 's' : ''}</p>
                               )}
+                              {/* Content type + platform summary chips + AI/creator split */}
+                              {weekDailyPlans.length > 0 && (() => {
+                                const typeMap: Record<string, number> = {};
+                                const platformSet = new Set<string>();
+                                let aiCount = 0, creatorCount = 0, conditionalCount = 0;
+                                weekDailyPlans.forEach((p) => {
+                                  const ct = (p.contentType || 'post').toLowerCase();
+                                  typeMap[ct] = (typeMap[ct] || 0) + 1;
+                                  if (p.platform) platformSet.add(p.platform);
+                                  const storedEM = (p.dailyObject as any)?.execution_mode as string | undefined;
+                                  const em = isCreatorDependentContentType(p.contentType) ? 'CREATOR_REQUIRED'
+                                    : storedEM === 'CREATOR_REQUIRED' ? 'CREATOR_REQUIRED'
+                                    : storedEM === 'CONDITIONAL_AI' ? 'CONDITIONAL_AI'
+                                    : 'AI_AUTOMATED';
+                                  if (em === 'AI_AUTOMATED') aiCount++;
+                                  else if (em === 'CREATOR_REQUIRED') creatorCount++;
+                                  else conditionalCount++;
+                                });
+                                return (
+                                  <div className="mt-1 space-y-1">
+                                    {/* Platform + content type chips */}
+                                    <div className="flex flex-wrap gap-1">
+                                      {[...platformSet].map((pl) => (
+                                        <span key={pl} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">
+                                          <PlatformIcon platform={pl} size={10} />
+                                        </span>
+                                      ))}
+                                      {Object.entries(typeMap).slice(0, 4).map(([ct, n]) => {
+                                        const colors = getActivityColorClasses(ct);
+                                        return (
+                                          <span key={ct} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium capitalize ${colors.badge}`}>
+                                            {n > 1 ? `${n}×` : ''}{ct.replace(/_/g, ' ')}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                    {/* AI vs creator execution split */}
+                                    <div className="flex items-center gap-2">
+                                      {aiCount > 0 && (
+                                        <span className="inline-flex items-center gap-1 text-[10px] text-gray-600">
+                                          <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                                          {aiCount} AI-driven
+                                        </span>
+                                      )}
+                                      {conditionalCount > 0 && (
+                                        <span className="inline-flex items-center gap-1 text-[10px] text-gray-600">
+                                          <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                                          {conditionalCount} conditional
+                                        </span>
+                                      )}
+                                      {creatorCount > 0 && (
+                                        <span className="inline-flex items-center gap-1 text-[10px] text-gray-600">
+                                          <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
+                                          {creatorCount} creator
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           </div>
                           
@@ -3344,7 +3666,7 @@ export default function CampaignDetails() {
                                     <span className="ml-2 text-sm">{(weekPlan as any).keyMessaging}</span>
                                   </div>
                                 )}
-                                {!hasEnrichedTopics && (weekPlan as any)?.topics_to_cover?.length > 0 && (
+                                {!effectiveHasTopics && (weekPlan as any)?.topics_to_cover?.length > 0 && (
                                   <div>
                                     <span className="text-sm font-medium text-gray-600">Topics to cover:</span>
                                     <ul className="mt-1 list-disc list-inside text-sm text-gray-700">
@@ -3354,7 +3676,7 @@ export default function CampaignDetails() {
                                     </ul>
                                   </div>
                                 )}
-                                {(((weekPlan as any)?.weeklyContextCapsule && typeof (weekPlan as any).weeklyContextCapsule === 'object') || hasEnrichedTopics) && (
+                                {(((weekPlan as any)?.weeklyContextCapsule && typeof (weekPlan as any).weeklyContextCapsule === 'object') || effectiveHasTopics) && (
                                   <div>
                                     <span className="text-sm font-medium text-gray-600">Writing Context:</span>
                                     {(weekPlan as any)?.weeklyContextCapsule && (
@@ -3376,7 +3698,7 @@ export default function CampaignDetails() {
                                         )}
                                       </div>
                                     )}
-                                    {hasEnrichedTopics && (
+                                    {effectiveHasTopics && (
                                       <div className="mt-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
                                         {topicsWithExecution.map((topic, idx) => {
                                           const contentType = topic?.topicExecution?.contentType ?? (topic as any)?.contentType ?? (topic as any)?.content_type;
@@ -3389,82 +3711,173 @@ export default function CampaignDetails() {
                                           const modeLabel = intel.label;
                                           const modeExplanation = intel.explanation;
                                           const execDot = execMode === 'AI_AUTOMATED' ? '🟢' : execMode === 'CONDITIONAL_AI' ? '🟡' : '🔴';
-                                          const creatorBrief = topic?.topicExecution?.creator_instruction && typeof topic.topicExecution.creator_instruction === 'object'
-                                            ? (topic.topicExecution.creator_instruction as Record<string, unknown>).targetAudience
-                                              ? `Audience: ${String((topic.topicExecution.creator_instruction as Record<string, unknown>).targetAudience)}`
-                                              : (topic.topicExecution.creator_instruction as Record<string, unknown>).objective
-                                                ? `Goal: ${String((topic.topicExecution.creator_instruction as Record<string, unknown>).objective)}`
-                                                : null
-                                            : null;
+                                          // Is this a creator content card? (video, carousel, reel, story, etc.)
+                                          const isCreatorCard = isCreatorDependentContentType(contentType) || (topic as any)?._isCreator === true;
+                                          // Creator card data: prefer _creatorCard (from daily plans or slot), fall back to creator_instruction
+                                          const creatorCardData = (topic as any)?._creatorCard ?? (topic?.topicExecution?.creator_instruction && typeof topic.topicExecution.creator_instruction === 'object' ? topic.topicExecution.creator_instruction : null);
                                           return (
                                           <button
-                                            key={`${topic?.topicTitle || 'topic'}-${idx}`}
+                                            key={`${topic?.topicTitle || 'topic'}-${idx}-${(topic as any)?._platforms?.[0] || ''}`}
                                             type="button"
                                             onClick={() => openTopicWorkspaceFromWeeklyCard(weekNumber, topic)}
                                             className={`text-xs text-gray-700 rounded border p-2 text-left hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors cursor-pointer ${cardClass}`}
                                           >
-                                            <div className="font-medium text-gray-900">{modeLabel ?? 'AI Ready'}</div>
-                                            {modeExplanation && <div className="text-[10px] text-gray-500 mt-0.5">{modeExplanation}</div>}
+                                            {/* Mode label row */}
+                                            <div className="flex items-center gap-1.5">
+                                              <span className="text-[10px] leading-none">{execDot}</span>
+                                              <span className="font-medium text-gray-900 text-[10px]">{modeLabel ?? (isCreatorCard ? 'Creator Required' : 'AI Ready')}</span>
+                                            </div>
+                                            {modeExplanation && <div className="text-[10px] text-gray-400 mt-0.5">{modeExplanation}</div>}
                                             {execMode === 'CONDITIONAL_AI' && (
-                                              <>
-                                                <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">Template Required</span>
-                                                <span className="block mt-0.5 text-[10px] text-gray-500">Template unlocks AI generation</span>
-                                              </>
+                                              <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">Template Required</span>
                                             )}
-                                            <div className="flex items-center justify-between gap-2 flex-wrap mt-1.5">
-                                              <div className="font-medium">{displayWeeklyTitle(topic?.topicTitle, 'Untitled Topic')}</div>
-                                              <div className="flex items-center gap-1.5">
-                                                <span className="text-[10px] leading-none" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (modeLabel ?? undefined)}>{execDot}</span>
-                                                <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${badgeClass}`}>
-                                                  {topic?.topicExecution?.contentType || 'activity'}
-                                                </span>
+
+                                            {/* Title + content type badge */}
+                                            <div className="flex items-start justify-between gap-2 mt-1.5">
+                                              <div className="font-semibold text-gray-900 leading-snug">{displayWeeklyTitle(topic?.topicTitle, 'Untitled Topic')}</div>
+                                              <span className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-medium ${badgeClass}`}>
+                                                {topic?.topicExecution?.contentType || 'activity'}
+                                              </span>
+                                            </div>
+
+                                            {/* --- CREATOR content fields --- */}
+                                            {isCreatorCard ? (
+                                              <div className="mt-1.5 space-y-0.5">
+                                                {/* Brief / objective */}
+                                                {(creatorCardData?.summary || creatorCardData?.objective) && (
+                                                  <div><span className="font-medium">Brief:</span> {String(creatorCardData.summary || creatorCardData.objective)}</div>
+                                                )}
+                                                {creatorCardData?.target_audience && (
+                                                  <div><span className="font-medium">Audience:</span> {String(creatorCardData.target_audience)}</div>
+                                                )}
+                                                {(creatorCardData?.intent?.pain_point || creatorCardData?.intent?.outcome_promise) && (
+                                                  <div>
+                                                    {creatorCardData.intent.pain_point && <div><span className="font-medium">Pain point:</span> {String(creatorCardData.intent.pain_point)}</div>}
+                                                    {creatorCardData.intent.outcome_promise && <div><span className="font-medium">Viewer learns:</span> {String(creatorCardData.intent.outcome_promise)}</div>}
+                                                  </div>
+                                                )}
+                                                {/* Visual hook */}
+                                                {(creatorCardData?.visual_hook || creatorCardData?.intent?.visual_hook) && (
+                                                  <div><span className="font-medium">Visual hook (0–3s):</span> {String(creatorCardData.visual_hook || creatorCardData.intent.visual_hook)}</div>
+                                                )}
+                                                {/* Scene direction */}
+                                                {(creatorCardData?.scene_direction || creatorCardData?.intent?.scene_direction) && (
+                                                  <div className="mt-0.5">
+                                                    <div className="font-medium text-gray-700 mb-0.5">Scene direction:</div>
+                                                    <div className="text-[10px] text-gray-600 whitespace-pre-line bg-gray-50 rounded p-1.5 border border-gray-100">{String(creatorCardData.scene_direction || creatorCardData.intent.scene_direction)}</div>
+                                                  </div>
+                                                )}
+                                                {/* Image prompt */}
+                                                {(creatorCardData?.image_prompt || creatorCardData?.intent?.image_prompt) && (
+                                                  <div className="mt-0.5">
+                                                    <div className="font-medium text-gray-700 mb-0.5">Image prompt:</div>
+                                                    <div className="text-[10px] text-gray-500 italic">{String(creatorCardData.image_prompt || creatorCardData.intent.image_prompt)}</div>
+                                                  </div>
+                                                )}
+                                                {/* Video direction */}
+                                                {(creatorCardData?.video_prompt || creatorCardData?.intent?.video_prompt) && (
+                                                  <div className="mt-0.5">
+                                                    <div className="font-medium text-gray-700 mb-0.5">Video direction:</div>
+                                                    <div className="text-[10px] text-gray-500 italic">{String(creatorCardData.video_prompt || creatorCardData.intent.video_prompt)}</div>
+                                                  </div>
+                                                )}
+                                                {/* Platform notes */}
+                                                {Array.isArray(creatorCardData?.platform_notes) && creatorCardData.platform_notes.length > 0 && (
+                                                  <div><span className="font-medium">Platform notes:</span> {(creatorCardData.platform_notes as string[]).join(' · ')}</div>
+                                                )}
+                                                {/* Keywords + hashtags — same as text */}
+                                                {Array.isArray(creatorCardData?.keywords) && creatorCardData.keywords.length > 0 && (
+                                                  <div className="mt-0.5"><span className="font-medium">Keywords:</span> <span className="text-gray-500">{(creatorCardData.keywords as string[]).join(', ')}</span></div>
+                                                )}
+                                                {Array.isArray(creatorCardData?.hashtags) && creatorCardData.hashtags.length > 0 && (
+                                                  <div className="text-[10px] text-indigo-500 mt-0.5">{(creatorCardData.hashtags as string[]).slice(0, 6).map((h: string) => h.startsWith('#') ? h : `#${h}`).join(' ')}</div>
+                                                )}
                                               </div>
+                                            ) : (
+                                              /* --- TEXT content fields --- */
+                                              <div className="mt-1.5 space-y-0.5">
+                                                {/* Hook */}
+                                                {(creatorCardData?.hook || creatorCardData?.intent?.hook || topic?.topicContext?.writingIntent) && (
+                                                  <div><span className="font-medium">Hook:</span> <span className="italic text-gray-700">{String(creatorCardData?.hook || creatorCardData?.intent?.hook || topic.topicContext?.writingIntent)}</span></div>
+                                                )}
+                                                {/* Audience + problem + reader learns */}
+                                                {topic?.whoAreWeWritingFor && (
+                                                  <div><span className="font-medium">Audience:</span> {topic.whoAreWeWritingFor}</div>
+                                                )}
+                                                {topic?.whatProblemAreWeAddressing && (
+                                                  <div><span className="font-medium">Problem:</span> {topic.whatProblemAreWeAddressing}</div>
+                                                )}
+                                                {topic?.whatShouldReaderLearn && (
+                                                  <div><span className="font-medium">Reader learns:</span> {topic.whatShouldReaderLearn}</div>
+                                                )}
+                                                {/* Key points */}
+                                                {(() => {
+                                                  const kp: string[] | undefined = creatorCardData?.key_points || creatorCardData?.intent?.key_points;
+                                                  return Array.isArray(kp) && kp.length > 0 ? (
+                                                    <div className="mt-0.5">
+                                                      <div className="font-medium text-gray-700 mb-0.5">Key points:</div>
+                                                      <ul className="list-none space-y-0.5 text-[10px] text-gray-600">
+                                                        {(kp as string[]).map((pt, i) => <li key={i}>{"  "}{i + 1}. {pt}</li>)}
+                                                      </ul>
+                                                    </div>
+                                                  ) : null;
+                                                })()}
+                                                {/* SEO focus */}
+                                                {(creatorCardData?.seo_focus || creatorCardData?.intent?.seo_focus) && (
+                                                  <div><span className="font-medium">SEO focus:</span> {String(creatorCardData?.seo_focus || creatorCardData?.intent?.seo_focus)}</div>
+                                                )}
+                                                {/* Keywords */}
+                                                {(() => {
+                                                  const kw: string[] | undefined = creatorCardData?.keywords || creatorCardData?.intent?.keywords;
+                                                  return Array.isArray(kw) && kw.length > 0
+                                                    ? <div><span className="font-medium">Keywords:</span> <span className="text-gray-500">{(kw as string[]).join(', ')}</span></div>
+                                                    : null;
+                                                })()}
+                                                {/* Hashtags */}
+                                                {(() => {
+                                                  const ht: string[] | undefined = creatorCardData?.hashtags || creatorCardData?.intent?.hashtags;
+                                                  return Array.isArray(ht) && ht.length > 0
+                                                    ? <div className="text-[10px] text-indigo-500 mt-0.5">{(ht as string[]).slice(0, 6).map((h: string) => h.startsWith('#') ? h : `#${h}`).join(' ')}</div>
+                                                    : null;
+                                                })()}
+                                                {/* Repurpose angles */}
+                                                {(() => {
+                                                  const ra: string[] | undefined = creatorCardData?.repurpose_angles || creatorCardData?.intent?.repurpose_angles;
+                                                  return Array.isArray(ra) && ra.length > 0 ? (
+                                                    <div className="mt-0.5">
+                                                      <div className="font-medium text-gray-700 mb-0.5">Repurpose as:</div>
+                                                      <ul className="list-none text-[10px] text-gray-500 space-y-0.5">
+                                                        {(ra as string[]).map((a, i) => <li key={i}>• {a}</li>)}
+                                                      </ul>
+                                                    </div>
+                                                  ) : null;
+                                                })()}
+                                                {/* Tone + format */}
+                                                {topic?.desiredAction && (
+                                                  <div><span className="font-medium">CTA:</span> {topic.desiredAction}</div>
+                                                )}
+                                                {topic?.narrativeStyle && (
+                                                  <div><span className="font-medium">Tone:</span> {toneForUserDisplay(topic.narrativeStyle)}</div>
+                                                )}
+                                                {(() => {
+                                                  const line = getFormatLineForContentType(contentType, topic?.contentTypeGuidance, topic?.topicExecution?.platformTargets);
+                                                  return line ? <div><span className="font-medium">Format:</span> {line.replace(/^Format:\s*/i, '')}</div> : null;
+                                                })()}
+                                              </div>
+                                            )}
+
+                                            {/* Execution details — shared for both creator and text */}
+                                            <div className="mt-1.5 pt-1 border-t border-gray-100 space-y-0.5">
+                                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                                <span className="font-medium">Platform(s):</span>
+                                                {(topic?.topicExecution?.platformTargets || ['—']).map((plat: string) => (
+                                                  plat === '—' ? <span key="—">—</span> : <PlatformIcon key={plat} platform={plat} size={12} showLabel />
+                                                ))}
+                                              </div>
+                                              <div><span className="font-medium">CTA:</span> {topic?.topicExecution?.ctaType || '—'}</div>
+                                              <div><span className="font-medium">KPI:</span> {topic?.topicExecution?.kpiFocus || '—'}</div>
                                             </div>
-                                            {creatorBrief && (
-                                              <div className="text-[10px] text-gray-500 mt-0.5 truncate">{creatorBrief}</div>
-                                            )}
-                                            {topic?.topicContext?.writingIntent && (
-                                              <div className="mt-0.5"><span className="font-medium">{getIntentLabelForContentType(topic?.topicExecution?.contentType ?? (topic as any)?.content_type)}:</span> {topic.topicContext.writingIntent}</div>
-                                            )}
-                                            <div className="mt-1 pt-1 border-t border-gray-100">
-                                              <div className="font-medium text-gray-800">Execution details</div>
-                                              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5"><span className="font-medium">Platform(s):</span> {(topic?.topicExecution?.platformTargets || ['—']).map((plat) => (plat === '—' ? <span key="—">—</span> : <PlatformIcon key={plat} platform={plat} size={12} showLabel />))}</div>
-                                              <div className="mt-0.5"><span className="font-medium">Content type:</span> {topic?.topicExecution?.contentType || '—'}</div>
-                                              <div className="mt-0.5"><span className="font-medium">CTA:</span> {topic?.topicExecution?.ctaType || '—'}</div>
-                                              <div className="mt-0.5"><span className="font-medium">KPI target:</span> {topic?.topicExecution?.kpiFocus || '—'}</div>
-                                            </div>
-                                            {topic?.whoAreWeWritingFor && (
-                                              <div className="mt-0.5"><span className="font-medium">Who we write for:</span> {topic.whoAreWeWritingFor}</div>
-                                            )}
-                                            {topic?.whatProblemAreWeAddressing && (
-                                              <div className="mt-0.5"><span className="font-medium">Problem:</span> {topic.whatProblemAreWeAddressing}</div>
-                                            )}
-                                            {topic?.whatShouldReaderLearn && (
-                                              <div className="mt-0.5"><span className="font-medium">Reader learns:</span> {topic.whatShouldReaderLearn}</div>
-                                            )}
-                                            {topic?.desiredAction && (
-                                              <div className="mt-0.5"><span className="font-medium">Desired action:</span> {topic.desiredAction}</div>
-                                            )}
-                                            {topic?.narrativeStyle && (
-                                              <div className="mt-0.5"><span className="font-medium">Narrative style:</span> {toneForUserDisplay(topic.narrativeStyle)}</div>
-                                            )}
-                                            {(() => {
-                                              const contentType =
-                                                topic?.topicExecution?.contentType ??
-                                                (topic as any)?.contentType ??
-                                                (topic as any)?.content_type;
-                                              const line = getFormatLineForContentType(
-                                                contentType,
-                                                topic?.contentTypeGuidance,
-                                                topic?.topicExecution?.platformTargets
-                                              );
-                                              return line ? (
-                                                <div className="mt-0.5">
-                                                  <span className="font-medium">Format:</span> {line.replace(/^Format:\s*/i, '')}
-                                                </div>
-                                              ) : null;
-                                            })()}
-                                            <div className="mt-1 text-[10px] text-indigo-600">Click to open topic workspace</div>
+                                            <div className="mt-1 text-[10px] text-indigo-600">Click to open workspace</div>
                                           </button>
                                           );
                                         })}
@@ -3499,8 +3912,48 @@ export default function CampaignDetails() {
                             </div>
                           </div>
 
+                          {/* Week Plan view: show activity cards directly from blueprint execution_items */}
+                          {(campaign?.current_stage === 'week_plan' || campaign?.current_stage === 'twelve_week_plan') && bestDerivedTopics.length > 0 && (
+                            <div className="mt-6">
+                              <h4 className="font-semibold mb-3">Activity Cards <span className="text-xs font-normal text-gray-500 ml-1">({bestDerivedTopics.length} planned)</span></h4>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {(topicsWithExecution.length > 0 ? topicsWithExecution : bestDerivedTopics).map((topic: any, idx: number) => {
+                                  const ct = String(topic?.topicExecution?.contentType ?? topic?._contentType ?? 'post').toLowerCase();
+                                  const platform = topic?.topicExecution?.platformTargets?.[0] ?? topic?._platforms?.[0] ?? 'linkedin';
+                                  const colors = getActivityColorClasses(ct);
+                                  const ctIcon = ct.includes('video') || ct.includes('reel') ? '🎥'
+                                    : ct.includes('carousel') ? '🖼'
+                                    : ct.includes('blog') || ct.includes('article') ? '📝'
+                                    : ct.includes('newsletter') ? '📧'
+                                    : ct.includes('story') ? '⚡'
+                                    : '✍️';
+                                  return (
+                                    <div key={idx} className={`rounded-xl border p-3 bg-white shadow-sm ${colors.card}`}>
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <PlatformIcon platform={platform} size={16} />
+                                        <span className="text-xs font-semibold capitalize text-gray-700">{platform === 'x' ? 'X (Twitter)' : platform}</span>
+                                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize ${colors.badge}`}>{ctIcon} {ct.replace(/_/g, ' ')}</span>
+                                      </div>
+                                      <p className="text-sm font-semibold text-gray-900 mb-1 leading-snug">
+                                        {topic?.topicTitle || `Activity ${idx + 1}`}
+                                      </p>
+                                      {(topic?.briefSummary || topic?.intent?.brief_summary) && (
+                                        <p className="text-xs text-gray-500 leading-relaxed line-clamp-2">
+                                          {topic?.briefSummary || topic?.intent?.brief_summary}
+                                        </p>
+                                      )}
+                                      {topic?.topicExecution?.ctaType && (
+                                        <p className="text-[10px] text-gray-400 mt-1">CTA: {topic.topicExecution.ctaType}</p>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
                           {/* Daily Plans — drag-and-drop by day; regenerate or save & freeze */}
-                          <div className="mt-6">
+                          {campaign?.current_stage !== 'week_plan' && campaign?.current_stage !== 'twelve_week_plan' && <div className="mt-6">
                             <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                               <h4 className="font-semibold">Daily Content Plan</h4>
                               <div className="flex flex-wrap items-center gap-2">
@@ -3565,7 +4018,7 @@ export default function CampaignDetails() {
                             <p className="text-xs text-gray-500 mb-2">Distribution controls how the weekly plan is turned into the daily plan. Applied when you Regenerate or first generate. Drag items between days to reorder. Save & freeze to lock the plan for the next stage.</p>
                             {weekDailyPlans.length > 0 ? (
                               <div className="overflow-x-auto">
-                              <div className="grid grid-cols-7 gap-2 min-w-[480px]">
+                              <div className="grid grid-cols-7 gap-2 min-w-[700px]">
                                 {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(day => {
                                   const dayItems = (editedWeekDailyPlans[weekNumber] ?? weekDailyPlans).filter(d => d.dayOfWeek === day);
                                   const hasPlans = dayItems.length > 0;
@@ -3574,58 +4027,229 @@ export default function CampaignDetails() {
                                       key={day}
                                       onDragOver={handleDailyPlanDragOver}
                                       onDrop={(e) => handleDailyPlanDrop(weekNumber, day, e)}
-                                      className="border rounded p-2 min-h-[80px] hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors text-left"
+                                      className="border rounded-lg bg-white min-h-[120px] hover:border-indigo-300 hover:shadow-sm transition-all"
                                     >
+                                      {/* Day header */}
                                       <button
                                         type="button"
-                                        onClick={() => openCampaignCalendar(weekNumber, day)}
-                                        className="w-full text-left"
+                                        onClick={() => setSelectedWeekDay(
+                                          selectedWeekDay?.weekNumber === weekNumber && selectedWeekDay?.day === day
+                                            ? null
+                                            : { weekNumber, day }
+                                        )}
+                                        className={`w-full text-left px-2 py-1.5 border-b transition-colors rounded-t-lg flex items-center justify-between ${
+                                          selectedWeekDay?.weekNumber === weekNumber && selectedWeekDay?.day === day
+                                            ? 'bg-indigo-100 border-indigo-200'
+                                            : 'border-gray-100 hover:bg-indigo-50'
+                                        }`}
                                       >
-                                        <div className="text-xs font-medium text-gray-600 mb-1">{day}</div>
+                                        <div className={`text-xs font-semibold ${selectedWeekDay?.weekNumber === weekNumber && selectedWeekDay?.day === day ? 'text-indigo-700' : 'text-gray-700'}`}>{day.slice(0, 3)}</div>
+                                        {hasPlans && <span className="text-[9px] text-indigo-500 font-medium">{dayItems.length}</span>}
                                       </button>
-                                      {hasPlans ? (
-                                        <div className="space-y-1">
-                                          <div className="flex flex-wrap gap-1">
-                                            {dayItems.map((p) => {
-                                              const colors = getActivityColorClasses(p.contentType);
-                                              const topicLabel = (p.title || p.topic || '').trim().slice(0, 32);
-                                              return (
-                                                <div
-                                                  key={p.id}
-                                                  draggable
-                                                  onDragStart={(e) => handleDailyPlanDragStart(e, p.id, p.dayOfWeek)}
-                                                  className="flex items-start gap-1 cursor-grab active:cursor-grabbing group rounded border border-transparent hover:border-gray-300 p-0.5 -m-0.5"
-                                                >
-                                                  <GripVertical className="h-3 w-3 text-gray-400 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100" aria-hidden />
-                                                  <div className="min-w-0 flex-1">
-                                                    {topicLabel ? (
-                                                      <div className="text-[10px] text-gray-700 truncate" title={p.title || p.topic}>{topicLabel}{topicLabel.length >= 32 ? '…' : ''}</div>
-                                                    ) : null}
-                                                    <span
-                                                      className={`text-[10px] px-1.5 py-0.5 rounded border font-medium capitalize inline-flex items-center gap-1 ${colors.badge}`}
-                                                    >
-                                                      <PlatformIcon platform={p.platform} size={10} showLabel /> • {p.contentType}
-                                                    </span>
-                                                  </div>
-                                                </div>
-                                              );
-                                            })}
-                                          </div>
-                                          <div className={`w-2 h-2 rounded-full mt-1 ${
-                                            dayItems.some(d => d.status === 'completed') ? 'bg-green-500' :
-                                            dayItems.some(d => d.status === 'scheduled') ? 'bg-blue-500' : 'bg-gray-300'
-                                          }`} />
-                                          {dayItems.length > 1 && (
-                                            <div className="text-[10px] text-indigo-600 mt-0.5">{dayItems.length} items</div>
-                                          )}
-                                        </div>
-                                      ) : (
-                                        <div className="text-xs text-gray-400">No plan</div>
-                                      )}
+
+                                      {/* Activity cards */}
+                                      <div className="p-1.5 space-y-1.5">
+                                        {hasPlans ? dayItems.map((p) => {
+                                          const colors = getActivityColorClasses(p.contentType);
+                                          const topicLabel = (p.title || p.topic || '').trim();
+                                          const ct = (p.contentType || 'post').toLowerCase();
+                                          const ctIcon = ct.includes('video') || ct.includes('reel') ? '🎥'
+                                            : ct.includes('carousel') ? '🖼'
+                                            : ct.includes('story') ? '⚡'
+                                            : ct.includes('blog') || ct.includes('article') ? '📝'
+                                            : ct.includes('newsletter') ? '📧'
+                                            : ct.includes('image') || ct.includes('photo') ? '📸'
+                                            : '✉';
+                                          // Execution mode dot: green = AI-driven text, red = creator-dependent
+                                          const storedExecMode = (p.dailyObject as any)?.execution_mode as string | undefined;
+                                          const execMode = isCreatorDependentContentType(p.contentType)
+                                            ? 'CREATOR_REQUIRED'
+                                            : storedExecMode === 'CREATOR_REQUIRED' ? 'CREATOR_REQUIRED'
+                                            : storedExecMode === 'CONDITIONAL_AI' ? 'CONDITIONAL_AI'
+                                            : 'AI_AUTOMATED';
+                                          const execDotColor = execMode === 'AI_AUTOMATED'
+                                            ? 'bg-emerald-500' // 🟢 green = AI text-based
+                                            : execMode === 'CONDITIONAL_AI'
+                                            ? 'bg-amber-400'  // 🟡 amber = conditional
+                                            : 'bg-red-500';   // 🔴 red = creator required
+                                          const execDotTitle = execMode === 'AI_AUTOMATED' ? 'AI-driven (text-based)'
+                                            : execMode === 'CONDITIONAL_AI' ? 'Conditional AI (template needed)'
+                                            : 'Creator required';
+                                          return (
+                                            <div
+                                              key={p.id}
+                                              draggable
+                                              onDragStart={(e) => handleDailyPlanDragStart(e, p.id, p.dayOfWeek)}
+                                              className={`group relative rounded-lg border p-2 cursor-grab active:cursor-grabbing hover:shadow-sm transition-all ${colors.card}`}
+                                              title={topicLabel || ct}
+                                            >
+                                              {/* Grip */}
+                                              <GripVertical className="absolute right-1 top-1 h-3 w-3 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity" aria-hidden />
+
+                                              {/* Platform + content type + exec dot row */}
+                                              <div className="flex items-center gap-1 mb-1">
+                                                <span className={`w-2 h-2 rounded-full shrink-0 ${execDotColor}`} title={execDotTitle} />
+                                                <PlatformIcon platform={p.platform} size={12} />
+                                                <span className={`text-[10px] font-semibold px-1 py-0.5 rounded capitalize ${colors.badge}`}>
+                                                  {ctIcon} {ct.replace(/_/g, ' ')}
+                                                </span>
+                                              </div>
+
+                                              {/* Topic title */}
+                                              {topicLabel && (
+                                                <p className="text-[11px] font-medium text-gray-800 leading-tight line-clamp-2">
+                                                  {topicLabel}
+                                                </p>
+                                              )}
+                                            </div>
+                                          );
+                                        }) : (
+                                          <div className="py-4 text-center text-[10px] text-gray-400">No plan</div>
+                                        )}
+                                      </div>
                                     </div>
                                   );
                                 })}
                               </div>
+
+                              {/* ── Day detail panel — shown below grid when a day is selected ── */}
+                              {selectedWeekDay?.weekNumber === weekNumber && (() => {
+                                const selDay = selectedWeekDay.day;
+                                const selItems = (editedWeekDailyPlans[weekNumber] ?? weekDailyPlans).filter(d => d.dayOfWeek === selDay);
+                                if (selItems.length === 0) return (
+                                  <div className="mt-3 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-center text-sm text-gray-500">
+                                    No activities planned for {selDay}
+                                  </div>
+                                );
+                                return (
+                                  <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 overflow-hidden">
+                                    {/* Panel header */}
+                                    <div className="flex items-center justify-between px-4 py-2 bg-indigo-600">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-semibold text-white">{selDay}</span>
+                                        <span className="text-xs text-indigo-200">{selItems.length} activit{selItems.length !== 1 ? 'ies' : 'y'}</span>
+                                      </div>
+                                      <button onClick={() => setSelectedWeekDay(null)} className="text-indigo-200 hover:text-white text-sm leading-none">✕</button>
+                                    </div>
+
+                                    {/* Legend */}
+                                    <div className="flex items-center gap-4 px-4 py-2 bg-white border-b border-indigo-100 text-[10px] text-gray-500">
+                                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" /> AI-driven (text)</span>
+                                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" /> Conditional AI</span>
+                                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" /> Creator required</span>
+                                    </div>
+
+                                    {/* Activity cards */}
+                                    <div className="p-3 space-y-3">
+                                      {selItems.map((p) => {
+                                        const colors = getActivityColorClasses(p.contentType);
+                                        const ct = (p.contentType || 'post').toLowerCase();
+                                        const ctIcon = ct.includes('video') || ct.includes('reel') ? '🎥'
+                                          : ct.includes('carousel') ? '🖼'
+                                          : ct.includes('story') ? '⚡'
+                                          : ct.includes('blog') || ct.includes('article') ? '📝'
+                                          : ct.includes('newsletter') ? '📧'
+                                          : ct.includes('image') || ct.includes('photo') ? '📸'
+                                          : '✉';
+                                        const topicTitle = (p.title || p.topic || '').trim();
+                                        const kps = Array.isArray(p.keyPoints) && p.keyPoints.length > 0 ? p.keyPoints : null;
+                                        // Execution mode
+                                        const storedExecModeD = (p.dailyObject as any)?.execution_mode as string | undefined;
+                                        const execModeD = isCreatorDependentContentType(p.contentType)
+                                          ? 'CREATOR_REQUIRED'
+                                          : storedExecModeD === 'CREATOR_REQUIRED' ? 'CREATOR_REQUIRED'
+                                          : storedExecModeD === 'CONDITIONAL_AI' ? 'CONDITIONAL_AI'
+                                          : 'AI_AUTOMATED';
+                                        const execDotColorD = execModeD === 'AI_AUTOMATED' ? 'bg-emerald-500'
+                                          : execModeD === 'CONDITIONAL_AI' ? 'bg-amber-400'
+                                          : 'bg-red-500';
+                                        const execLabelD = execModeD === 'AI_AUTOMATED' ? 'AI-driven (text-based)'
+                                          : execModeD === 'CONDITIONAL_AI' ? 'Conditional AI'
+                                          : 'Creator required';
+                                        return (
+                                          <div key={p.id} className={`rounded-xl border p-3 bg-white shadow-sm ${colors.card}`}>
+                                            {/* Row 1: exec dot + platform + content type + status */}
+                                            <div className="flex items-center gap-2 mb-2">
+                                              <span className={`w-3 h-3 rounded-full shrink-0 ${execDotColorD}`} title={execLabelD} />
+                                              <PlatformIcon platform={p.platform} size={16} />
+                                              <span className="text-xs font-semibold capitalize text-gray-700">
+                                                {p.platform === 'x' ? 'X (Twitter)' : p.platform}
+                                              </span>
+                                              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize ${colors.badge}`}>
+                                                {ctIcon} {ct.replace(/_/g, ' ')}
+                                              </span>
+                                              <span className="text-[10px] text-gray-400 italic">{execLabelD}</span>
+                                              <span className={`ml-auto text-[10px] px-2 py-0.5 rounded-full capitalize font-medium ${
+                                                p.status === 'completed' ? 'bg-emerald-100 text-emerald-700'
+                                                  : p.status === 'scheduled' ? 'bg-blue-100 text-blue-700'
+                                                  : 'bg-gray-100 text-gray-500'
+                                              }`}>{p.status || 'draft'}</span>
+                                            </div>
+
+                                            {/* Topic title */}
+                                            {topicTitle && (
+                                              <p className="text-sm font-semibold text-gray-900 mb-1 leading-snug">{topicTitle}</p>
+                                            )}
+
+                                            {/* Description / summary / intro */}
+                                            {(p.description || p.summary || p.introObjective || p.objective) && (
+                                              <p className="text-xs text-gray-600 mb-2 leading-relaxed">
+                                                {p.description || p.summary || p.introObjective || p.objective}
+                                              </p>
+                                            )}
+
+                                            {/* Key points */}
+                                            {kps && (
+                                              <div className="mb-2">
+                                                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Key Points</p>
+                                                <ul className="space-y-0.5">
+                                                  {kps.slice(0, 4).map((kp, i) => (
+                                                    <li key={i} className="flex gap-1.5 text-xs text-gray-700">
+                                                      <span className="text-indigo-400 shrink-0 mt-0.5">•</span>
+                                                      <span>{kp}</span>
+                                                    </li>
+                                                  ))}
+                                                </ul>
+                                              </div>
+                                            )}
+
+                                            {/* Meta row: CTA, brand voice, hashtags */}
+                                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-500 border-t border-gray-100 pt-2 mt-1">
+                                              {p.cta && (
+                                                <span><span className="font-semibold text-gray-600">CTA:</span> {p.cta}</span>
+                                              )}
+                                              {p.brandVoice && (
+                                                <span><span className="font-semibold text-gray-600">Tone:</span> {p.brandVoice}</span>
+                                              )}
+                                              {p.themeLinkage && (
+                                                <span><span className="font-semibold text-gray-600">Theme:</span> {p.themeLinkage}</span>
+                                              )}
+                                              {p.formatNotes && (
+                                                <span><span className="font-semibold text-gray-600">Format:</span> {p.formatNotes}</span>
+                                              )}
+                                              {p.scheduledTime && (
+                                                <span><span className="font-semibold text-gray-600">Time:</span> {p.scheduledTime}</span>
+                                              )}
+                                            </div>
+
+                                            {/* Hashtags */}
+                                            {Array.isArray(p.hashtags) && p.hashtags.length > 0 && (
+                                              <div className="flex flex-wrap gap-1 mt-2">
+                                                {p.hashtags.slice(0, 6).map((h, i) => (
+                                                  <span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100">
+                                                    #{h.replace(/^#/, '')}
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+
                               </div>
                             ) : (
                               <div className="text-center py-4 text-gray-500">
@@ -3647,7 +4271,7 @@ export default function CampaignDetails() {
                                 </button>
                               </div>
                             )}
-                          </div>
+                          </div>}
                         </div>
                       )}
                     </div>
@@ -4147,6 +4771,5 @@ export default function CampaignDetails() {
     </div>
   );
 }
-
 
 

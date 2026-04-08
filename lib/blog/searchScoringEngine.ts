@@ -397,7 +397,9 @@ function computeSEOScore(
     metadata_completeness:  clamp(metadata_completeness, 0, 20),
   };
 
-  const score = clamp(Object.values(breakdown).reduce((s, v) => s + v, 0));
+  const rawScore = clamp(Object.values(breakdown).reduce((s, v) => s + v, 0));
+  // Keep obviously thin drafts in the same weak SEO band across template tiers.
+  const score = parsed.wordCount < 300 ? Math.min(rawScore, 20) : rawScore;
   return { score, breakdown };
 }
 

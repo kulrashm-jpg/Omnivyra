@@ -21,6 +21,7 @@ import {
 } from '@dnd-kit/sortable';
 import { calculateQualityScore, getPublishBlockers } from '../../lib/blog/blogValidation';
 import type { ContentBlock, BlockType } from '../../lib/blog/blockTypes';
+import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import type { MediaBlockItem } from './BlogMediaBlock';
 import {
   buildImageQuery,
@@ -35,6 +36,10 @@ import {
   insertBlockAfter,
   syncHeadingAnchors,
 } from '../../lib/blog/blockUtils';
+import {
+  getFormattedBlockClass,
+  getFormattedListClass,
+} from '../../lib/content/blockFormatting';
 import { migrateMarkdownToBlocks } from '../../lib/blog/blockMigration';
 import {
   BlockWrapper,
@@ -51,7 +56,10 @@ import {
   ReferencesBlockEditor,
   InternalLinkBlockEditor,
   SummaryBlockEditor,
+  ColumnsBlockEditor,
+  ImageStockSearchPopover,
 } from './blocks';
+import { isEnrichable, buildBlockContext, enrichBlock } from '../../lib/blog/blockEnrichService';
 import type {
   ParagraphBlock,
   HeadingBlock,
@@ -65,6 +73,7 @@ import type {
   ReferencesBlock,
   InternalLinkBlock,
   SummaryBlock,
+  ColumnsBlock,
 } from '../../lib/blog/blockTypes';
 
 const CATEGORY_OPTIONS = [
@@ -114,6 +123,7 @@ export type BlogFormState = {
   excerpt: string;
   content_markdown: string;
   content_blocks: ContentBlock[];
+  format_type?: BlogFormatType;
   featured_image_url: string;
   category: string;
   tags: string[];
@@ -131,6 +141,7 @@ const defaultState: BlogFormState = {
   excerpt: '',
   content_markdown: '',
   content_blocks: [],
+  format_type: undefined,
   featured_image_url: '',
   category: '',
   tags: [],
@@ -145,9 +156,12 @@ const defaultState: BlogFormState = {
 function slugFromTitle(title: string): string {
   return title
     .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
     .trim()
     .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9-]/g, '');
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
 }
 
 type Props = {
@@ -160,6 +174,8 @@ type Props = {
   onStateChange?: (state: BlogFormState) => void;
   /** External state patch (e.g., AI improvements) applied into the live form state. */
   externalPatch?: Partial<BlogFormState> | null;
+  /** Company ID for AI enrichment and stock image search */
+  companyId?: string;
 };
 
 // ── Per-block editor dispatcher ───────────────────────────────────────────────
@@ -196,6 +212,16 @@ function BlockEditor({
       return <InternalLinkBlockEditor block={block as InternalLinkBlock} onChange={(b) => onChange(b)} />;
     case 'summary':
       return <SummaryBlockEditor block={block as SummaryBlock} onChange={(b) => onChange(b)} />;
+    case 'columns':
+      return (
+        <ColumnsBlockEditor
+          block={block as ColumnsBlock}
+          onChange={(b) => onChange(b)}
+          renderBlock={(innerBlock, innerOnChange) => (
+            <BlockEditor block={innerBlock} onChange={innerOnChange} />
+          )}
+        />
+      );
   }
 }
 
@@ -238,10 +264,10 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
       const b = block as HeadingBlock;
       const lvl = b.level ?? 2;
       if (lvl === 2) return (
-        <h2 id={b.anchor} className="text-2xl font-bold text-gray-900 mt-10 mb-3 scroll-mt-20">{b.text}</h2>
+        <h2 id={b.anchor} className={getFormattedBlockClass(b, 'text-2xl font-bold text-gray-900 mt-10 mb-3 scroll-mt-20')}>{b.text}</h2>
       );
       return (
-        <h3 id={b.anchor} className="text-xl font-semibold text-gray-900 mt-8 mb-2 scroll-mt-20">{b.text}</h3>
+        <h3 id={b.anchor} className={getFormattedBlockClass(b, 'text-xl font-semibold text-gray-900 mt-8 mb-2 scroll-mt-20')}>{b.text}</h3>
       );
     }
 
@@ -251,7 +277,10 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
       return (
         // nosec — content is internal editor HTML, not user-supplied
         <div
-          className="text-gray-700 leading-relaxed mb-5 [&_a]:text-indigo-700 [&_a]:underline [&_strong]:font-semibold [&_em]:italic [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:rounded"
+          className={getFormattedBlockClass(
+            b,
+            'text-gray-700 leading-relaxed mb-5 [&_a]:text-indigo-700 [&_a]:underline [&_strong]:font-semibold [&_em]:italic [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:rounded',
+          )}
           dangerouslySetInnerHTML={{ __html: b.html ?? '' }}
         />
       );
@@ -261,9 +290,9 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
     case 'key_insights': {
       const b = block as KeyInsightsBlock;
       return (
-        <div className="rounded-xl border-l-4 border-indigo-500 bg-indigo-50 px-5 py-4 mb-6">
+        <div className={getFormattedBlockClass(b, 'rounded-xl border-l-4 border-indigo-500 bg-indigo-50 px-5 py-4 mb-6')}>
           <p className="font-semibold text-indigo-900 mb-2">{b.title ?? 'Key Insights'}</p>
-          <ol className="space-y-1.5 list-decimal list-inside">
+          <ol className={getFormattedListClass(b, 'space-y-1.5 list-decimal list-inside')}>
             {(b.items ?? []).map((item, i) => (
               <li key={i} className="text-sm text-indigo-800">{item}</li>
             ))}
@@ -281,7 +310,7 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
         warning: 'border-red-300 bg-red-50 text-red-900',
       };
       return (
-        <div className={`rounded-xl border px-5 py-4 mb-6 ${styles[b.variant] ?? styles.note}`}>
+        <div className={getFormattedBlockClass(b, `rounded-xl border px-5 py-4 mb-6 ${styles[b.variant] ?? styles.note}`)}>
           {b.title && <p className="font-semibold mb-1">{b.title}</p>}
           <p className="text-sm leading-relaxed">{b.body}</p>
         </div>
@@ -292,7 +321,7 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
     case 'quote': {
       const b = block as QuoteBlock;
       return (
-        <blockquote className="my-6 border-l-[3px] border-gray-400 pl-5">
+        <blockquote className={getFormattedBlockClass(b, 'my-6 border-l-[3px] border-gray-400 pl-5')}>
           <p className="text-lg italic text-gray-700 leading-relaxed">&ldquo;{b.text}&rdquo;</p>
           {(b.author || b.source) && (
             <footer className="mt-2 text-xs text-gray-500 not-italic">
@@ -312,7 +341,22 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
     case 'image': {
       const b = block as ImageBlock;
       if (!b.url) return null;
-      return <PreviewImage src={b.url} alt={b.alt} caption={b.caption} />;
+      return (
+        <>
+          <PreviewImage src={b.url} alt={b.alt} caption={b.caption} />
+          {b.attribution && (
+            <p className="text-center text-[10px] text-gray-400 italic -mt-6 mb-6">
+              {b.attributionUrl ? (
+                <a href={b.attributionUrl} target="_blank" rel="noopener noreferrer" className="hover:text-gray-600 underline">
+                  {b.attribution}
+                </a>
+              ) : (
+                b.attribution
+              )}
+            </p>
+          )}
+        </>
+      );
     }
 
     // ── Media (YouTube / Spotify / external link) ─────────────────────────────
@@ -326,7 +370,7 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
           embedId = u.searchParams.get('v') ?? u.pathname.replace('/', '');
         } catch { /* ignore */ }
         return (
-          <div className="my-8 overflow-hidden rounded-xl" style={{ aspectRatio: '16/9' }}>
+          <div className={getFormattedBlockClass(b, 'my-8 overflow-hidden rounded-xl')} style={{ aspectRatio: '16/9' }}>
             <iframe
               src={`https://www.youtube-nocookie.com/embed/${embedId}`}
               title={b.title ?? 'YouTube video'}
@@ -341,7 +385,7 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
         // Convert standard open.spotify URL to embed URL
         const embedUrl = b.url.replace('open.spotify.com/', 'open.spotify.com/embed/');
         return (
-          <div className="my-6">
+          <div className={getFormattedBlockClass(b, 'my-6')}>
             <iframe
               src={embedUrl}
               title={b.title ?? 'Spotify'}
@@ -358,7 +402,7 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
           href={b.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="my-6 flex items-start gap-4 rounded-xl border border-gray-200 bg-gray-50 px-5 py-4 no-underline hover:bg-gray-100 transition-colors"
+          className={getFormattedBlockClass(b, 'my-6 flex items-start gap-4 rounded-xl border border-gray-200 bg-gray-50 px-5 py-4 no-underline hover:bg-gray-100 transition-colors')}
         >
           <div className="min-w-0">
             {b.title && <p className="font-semibold text-gray-900 truncate">{b.title}</p>}
@@ -374,14 +418,14 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
       const b = block as DividerBlock;
       if (b.variant === 'section_break') {
         return (
-          <div className="my-10 flex items-center gap-4 text-gray-300">
+          <div className={getFormattedBlockClass(b, 'my-10 flex items-center gap-4 text-gray-300')}>
             <hr className="flex-1 border-gray-200" />
             <span className="text-xl">✦</span>
             <hr className="flex-1 border-gray-200" />
           </div>
         );
       }
-      return <hr className="my-6 border-gray-200" />;
+      return <hr className={getFormattedBlockClass(b, 'my-6 border-gray-200')} />;
     }
 
     // ── List ──────────────────────────────────────────────────────────────────
@@ -401,9 +445,9 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
           </li>
         ));
       return b.listType === 'numbered' ? (
-        <ol className="list-decimal list-outside pl-5 space-y-1.5 mb-5">{renderItems(b.items ?? [])}</ol>
+        <ol className={getFormattedListClass(b, 'list-decimal list-outside pl-5 space-y-1.5 mb-5')}>{renderItems(b.items ?? [])}</ol>
       ) : (
-        <ul className="list-disc list-outside pl-5 space-y-1.5 mb-5">{renderItems(b.items ?? [])}</ul>
+        <ul className={getFormattedListClass(b, 'list-disc list-outside pl-5 space-y-1.5 mb-5')}>{renderItems(b.items ?? [])}</ul>
       );
     }
 
@@ -411,9 +455,9 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
     case 'references': {
       const b = block as ReferencesBlock;
       return (
-        <div className="mt-10 border-t border-gray-200 pt-6">
+        <div className={getFormattedBlockClass(b, 'mt-10 border-t border-gray-200 pt-6')}>
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">References</p>
-          <ol className="space-y-2 list-decimal list-outside pl-5">
+          <ol className={getFormattedListClass(b, 'space-y-2 list-decimal list-outside pl-5')}>
             {(b.items ?? []).map((ref) => (
               <li key={ref.id} className="text-sm text-gray-600">
                 <a
@@ -435,7 +479,7 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
     case 'internal_link': {
       const b = block as InternalLinkBlock;
       return (
-        <div className="my-6 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50 to-white px-5 py-4 flex items-start gap-4">
+        <div className={getFormattedBlockClass(b, 'my-6 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50 to-white px-5 py-4 flex items-start gap-4')}>
           <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-100">
             <svg className="h-4 w-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -460,9 +504,26 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
     case 'summary': {
       const b = block as SummaryBlock;
       return (
-        <div className="mt-8 rounded-xl bg-gray-900 text-white px-6 py-5">
+        <div className={getFormattedBlockClass(b, 'mt-8 rounded-xl bg-gray-900 text-white px-6 py-5')}>
           <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">Summary</p>
           <p className="leading-relaxed text-gray-100">{b.body}</p>
+        </div>
+      );
+    }
+
+    // ── Columns ──────────────────────────────────────────────────────────────
+    case 'columns': {
+      const b = block as ColumnsBlock;
+      const gridClass = b.columnCount === 3 ? 'grid-cols-3' : b.columnCount === 2 ? 'grid-cols-2' : 'grid-cols-1';
+      return (
+        <div className={getFormattedBlockClass(b, `grid ${gridClass} gap-6 my-6`)}>
+          {b.columns.map((col) => (
+            <div key={col.id}>
+              {col.blocks.map((inner) => (
+                <PreviewBlock key={inner.id} block={inner} />
+              ))}
+            </div>
+          ))}
         </div>
       );
     }
@@ -482,6 +543,7 @@ export function BlogEditorForm({
   isSaving = false,
   onStateChange,
   externalPatch,
+  companyId,
 }: Props) {
   const [state, setState] = useState<BlogFormState>({
     ...defaultState,
@@ -598,6 +660,76 @@ export function BlogEditorForm({
     update({ content_blocks: insertBlockAfter(state.content_blocks, afterIndex, type) });
   };
 
+  // ── Stock image search + AI enrich state ──────────────────────────────────
+
+  const [stockSearchBlockIdx, setStockSearchBlockIdx] = useState<number | null>(null);
+  const [enrichLoadingBlockId, setEnrichLoadingBlockId] = useState<string | null>(null);
+
+  /** Find the nearest heading above a given block index (for image search context). */
+  const findNearestHeading = (blocks: ContentBlock[], idx: number): string => {
+    for (let i = idx - 1; i >= 0; i--) {
+      if (blocks[i].type === 'heading') return (blocks[i] as HeadingBlock).text;
+    }
+    return '';
+  };
+
+  const handleStockImageSelect = (idx: number, img: ImageResult) => {
+    const block = state.content_blocks[idx] as ImageBlock;
+    updateBlock(idx, {
+      ...block,
+      url: img.full,
+      alt: img.alt || block.alt,
+      attribution: `Photo by ${img.author} on ${img.source.charAt(0).toUpperCase() + img.source.slice(1)}`,
+      attributionUrl: img.attribution,
+    });
+    setStockSearchBlockIdx(null);
+  };
+
+  const handleEnrichBlock = async (idx: number) => {
+    if (!companyId) return;
+    const block = state.content_blocks[idx];
+    if (!isEnrichable(block.type)) return;
+
+    setEnrichLoadingBlockId(block.id);
+    try {
+      const { block: targetBlock, contextBlocks } = buildBlockContext(state.content_blocks, idx);
+      const result = await enrichBlock({
+        companyId,
+        block: targetBlock,
+        contextBlocks,
+        blogMeta: {
+          title: state.title,
+          excerpt: state.excerpt,
+          tags: state.tags,
+        },
+      });
+      updateBlock(idx, result.enriched_block);
+    } catch (err) {
+      console.error('[enrich-block] Failed:', err);
+    } finally {
+      setEnrichLoadingBlockId(null);
+    }
+  };
+
+  /** Determine AI action for a block: stock search for images, enrich for text blocks. */
+  const getAiAction = (block: ContentBlock, idx: number) => {
+    if (block.type === 'image') {
+      return {
+        onAiAction: () => setStockSearchBlockIdx(stockSearchBlockIdx === idx ? null : idx),
+        aiActionLabel: 'Stock Images',
+        aiActionLoading: false,
+      };
+    }
+    if (isEnrichable(block.type) && companyId) {
+      return {
+        onAiAction: () => handleEnrichBlock(idx),
+        aiActionLabel: 'Enrich with AI',
+        aiActionLoading: enrichLoadingBlockId === block.id,
+      };
+    }
+    return {};
+  };
+
   const handleDragStart = (event: DragStartEvent) => {
     setActiveBlockId(event.active.id as string);
   };
@@ -677,10 +809,13 @@ export function BlogEditorForm({
         <input
           type="text"
           value={state.slug}
-          onChange={(e) => update({ slug: e.target.value })}
+          onChange={(e) => update({ slug: slugFromTitle(e.target.value) })}
           className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm"
           placeholder="url-slug"
         />
+        {state.slug && (
+          <p className="mt-1 text-xs text-gray-400 font-mono truncate">/blog/{state.slug}</p>
+        )}
       </div>
 
       <div id="blog-field-excerpt">
@@ -921,8 +1056,31 @@ export function BlogEditorForm({
                     onMoveDown={() => handleMoveDown(i)}
                     onDelete={() => handleDelete(i)}
                     onDuplicate={() => handleDuplicate(i)}
+                    {...getAiAction(block, i)}
                   >
-                    <BlockEditor block={block} onChange={(b) => updateBlock(i, b)} />
+                    {block.type === 'image' ? (
+                      <>
+                        <ImageBlockEditor
+                          block={block as ImageBlock}
+                          onChange={(b) => updateBlock(i, b)}
+                          onSearchStock={() => setStockSearchBlockIdx(stockSearchBlockIdx === i ? null : i)}
+                        />
+                        {stockSearchBlockIdx === i && (
+                          <div className="mt-3">
+                            <ImageStockSearchPopover
+                              blogTitle={state.title}
+                              blogExcerpt={state.excerpt}
+                              blogTags={state.tags}
+                              nearestHeading={findNearestHeading(state.content_blocks, i)}
+                              onSelect={(img) => handleStockImageSelect(i, img)}
+                              onClose={() => setStockSearchBlockIdx(null)}
+                            />
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <BlockEditor block={block} onChange={(b) => updateBlock(i, b)} />
+                    )}
                   </BlockWrapper>
                   {/* "Add block" between / after each block */}
                   <BlockPicker onSelect={(type) => handleAddBlock(i, type)} />

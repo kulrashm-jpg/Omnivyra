@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { ChevronUp, ChevronDown, Trash2, Copy, GripVertical, ChevronDown as Collapse } from 'lucide-react';
+import { ChevronUp, ChevronDown, Trash2, Copy, GripVertical, ChevronDown as Collapse, Sparkles, Search, Loader2 } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { ContentBlock } from '../../../lib/blog/blockTypes';
@@ -16,6 +16,9 @@ type Props = {
   onMoveDown: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
+  onAiAction?: () => void;
+  aiActionLabel?: string;
+  aiActionLoading?: boolean;
 };
 
 // One-line preview text shown when collapsed
@@ -33,6 +36,10 @@ function blockPreview(block: ContentBlock): string {
     case 'references':   return block.items.map((r) => r.title).filter(Boolean).join(', ').slice(0, 80) || '(no references)';
     case 'internal_link': return block.title || block.slug || '(no slug)';
     case 'summary':      return block.body.slice(0, 80) || '(empty)';
+    case 'columns': {
+      const total = block.columns.reduce((n, c) => n + c.blocks.length, 0);
+      return `${block.columnCount}-column layout (${total} inner block${total !== 1 ? 's' : ''})`;
+    }
   }
 }
 
@@ -49,6 +56,7 @@ const VARIANT_BADGE: Record<string, string> = {
   references:    'bg-teal-100 text-teal-700',
   internal_link: 'bg-sky-100 text-sky-700',
   summary:       'bg-[#0A66C2]/10 text-[#0A66C2]',
+  columns:       'bg-cyan-100 text-cyan-700',
 };
 
 export function BlockWrapper({
@@ -60,6 +68,9 @@ export function BlockWrapper({
   onMoveDown,
   onDelete,
   onDuplicate,
+  onAiAction,
+  aiActionLabel,
+  aiActionLoading,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -121,6 +132,25 @@ export function BlockWrapper({
         )}
 
         <div className="ml-auto flex items-center gap-0.5">
+          {/* AI action button */}
+          {onAiAction && (
+            <button
+              type="button"
+              onClick={onAiAction}
+              disabled={aiActionLoading}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium text-purple-600 hover:bg-purple-50 hover:text-purple-800 disabled:opacity-50 transition-colors"
+              title={aiActionLabel || 'AI Action'}
+            >
+              {aiActionLoading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : block.type === 'image' ? (
+                <Search className="h-3 w-3" />
+              ) : (
+                <Sparkles className="h-3 w-3" />
+              )}
+              <span className="hidden sm:inline">{aiActionLabel}</span>
+            </button>
+          )}
           {/* Move up */}
           <button
             type="button"

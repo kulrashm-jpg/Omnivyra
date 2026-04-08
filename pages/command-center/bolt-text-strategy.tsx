@@ -13,6 +13,8 @@ import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';
+import { saveCampaignResume } from '../../lib/campaignResumeStore';
+import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
 
 type ContentFormat = 'post' | 'short_story' | 'article' | 'newsletter' | 'white_paper';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
@@ -170,11 +172,18 @@ function formatElapsed(ms: number): string {
   return s > 0 ? `${min}m ${s}s` : `${min}m`;
 }
 
+type ContentJobProgress = {
+  total: number; done: number; failed: number; active: number;
+  posts_scheduled: number; estimated_seconds_remaining: number | null;
+  is_complete: boolean;
+};
+
 /* ─── Inline BOLT progress tracker (shown inside the card) ──────────────── */
-function CardBoltProgress({ progress, theme, startedAt }: {
+function CardBoltProgress({ progress, theme, startedAt, contentJobs }: {
   progress: BOLTProgress;
   theme: typeof CARD_THEMES[0];
   startedAt: number;
+  contentJobs?: ContentJobProgress | null;
 }) {
   const [elapsedMs, setElapsedMs] = useState(Date.now() - startedAt);
 
@@ -183,9 +192,11 @@ function CardBoltProgress({ progress, theme, startedAt }: {
     return () => clearInterval(id);
   }, [startedAt]);
 
-  const currentIdx = stageIndex(progress.stage);
-  const pct = Math.min(100, Math.max(0, progress.progress_percentage ?? 0));
-  const isFailed = progress.status === 'failed';
+  const isCompleted = progress.status === 'completed';
+  const isFailed    = progress.status === 'failed';
+  // When completed, treat currentIdx as beyond the last stage so every step shows ✓
+  const currentIdx  = isCompleted ? BOLT_PIPELINE.length : stageIndex(progress.stage);
+  const pct         = isCompleted ? 100 : Math.min(100, Math.max(0, progress.progress_percentage ?? 0));
 
   return (
     <div className="px-4 pb-4 pt-3 bg-white border-t border-gray-100">
@@ -194,6 +205,8 @@ function CardBoltProgress({ progress, theme, startedAt }: {
         <div className="flex items-center gap-2">
           {isFailed ? (
             <span className="w-4 h-4 flex-shrink-0 text-red-500">✕</span>
+          ) : isCompleted ? (
+            <span className="w-4 h-4 flex-shrink-0 text-green-500 font-bold text-[13px]">✓</span>
           ) : (
             <svg className="animate-spin w-4 h-4 text-amber-500 flex-shrink-0" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
@@ -201,7 +214,7 @@ function CardBoltProgress({ progress, theme, startedAt }: {
             </svg>
           )}
           <span className="text-xs font-bold text-gray-800">
-            {isFailed ? 'BOLT failed' : '⚡ BOLT running'}
+            {isFailed ? 'BOLT failed' : isCompleted ? 'BOLT complete!' : '⚡ BOLT running'}
           </span>
         </div>
         <span className="text-[11px] text-gray-400">{formatElapsed(elapsedMs)}</span>
@@ -211,8 +224,7 @@ function CardBoltProgress({ progress, theme, startedAt }: {
       <div className="space-y-1.5 mb-3">
         {BOLT_PIPELINE.map((step, i) => {
           const isDone    = currentIdx > i;
-          const isCurrent = currentIdx === i;
-          const isPending = currentIdx < i;
+          const isCurrent = !isCompleted && currentIdx === i;
           return (
             <div key={step.stage} className="flex items-center gap-2">
               {/* dot */}
@@ -236,21 +248,73 @@ function CardBoltProgress({ progress, theme, startedAt }: {
         })}
       </div>
 
+      {/* Content job progress (queue-based, shown when workers are active) */}
+      {contentJobs && contentJobs.total > 0 && (
+        <div className="mb-3 bg-gray-50 rounded-lg p-2.5">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] font-semibold text-gray-700">
+              {contentJobs.is_complete
+                ? `${contentJobs.done} of ${contentJobs.total} topics scheduled`
+                : contentJobs.done === 0
+                  ? `Scheduling ${contentJobs.total} topics…`
+                  : `${contentJobs.done} of ${contentJobs.total} topics scheduled`}
+            </span>
+            {!contentJobs.is_complete && contentJobs.estimated_seconds_remaining != null && (
+              <span className="text-[10px] text-gray-400">
+                ~{contentJobs.estimated_seconds_remaining < 60
+                  ? `${contentJobs.estimated_seconds_remaining}s`
+                  : `${Math.ceil(contentJobs.estimated_seconds_remaining / 60)}m`} remaining
+              </span>
+            )}
+          </div>
+          {/* Topic progress bar */}
+          <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-700 ${contentJobs.is_complete ? 'bg-green-500' : 'bg-amber-400'}`}
+              style={{ width: `${contentJobs.total > 0 ? Math.round((contentJobs.done / contentJobs.total) * 100) : 0}%` }}
+            />
+          </div>
+          {/* Stats row */}
+          <div className="flex gap-3 mt-1.5">
+            {contentJobs.posts_scheduled > 0 && (
+              <span className="text-[10px] text-green-600 font-medium">{contentJobs.posts_scheduled} posts live</span>
+            )}
+            {contentJobs.active > 0 && (
+              <span className="text-[10px] text-amber-600">{contentJobs.active} generating</span>
+            )}
+            {contentJobs.failed > 0 && (
+              <span className="text-[10px] text-red-500">{contentJobs.failed} failed</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Progress bar */}
       {!isFailed && (
         <div>
           <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <div
-              className="h-full bg-amber-500 rounded-full transition-all duration-500"
+              className={`h-full rounded-full transition-all duration-500 ${isCompleted ? 'bg-green-500' : 'bg-amber-500'}`}
               style={{ width: `${pct}%` }}
             />
           </div>
           <div className="flex justify-between mt-1">
-            <span className="text-[10px] text-gray-400">{pct}%</span>
-            {progress.weeks_generated != null && progress.weeks_generated > 0 && (
+            {isCompleted && (!contentJobs || contentJobs.is_complete || contentJobs.total === 0) ? (
+              <span className="text-[10px] text-green-600 font-medium">Heading to calendar…</span>
+            ) : isCompleted && contentJobs && !contentJobs.is_complete ? (
+              <span className="text-[10px] text-amber-600 font-medium">Workers scheduling remaining posts…</span>
+            ) : (
+              <span className="text-[10px] text-gray-400">{pct}%</span>
+            )}
+            {!isCompleted && progress.weeks_generated != null && progress.weeks_generated > 0 && (
               <span className="text-[10px] text-amber-600">
                 {progress.weeks_generated}w generated
                 {(progress.daily_slots_created ?? 0) > 0 ? ` · ${progress.daily_slots_created} slots` : ''}
+              </span>
+            )}
+            {isCompleted && (progress.scheduled_posts_created ?? 0) > 0 && (!contentJobs || contentJobs.total === 0) && (
+              <span className="text-[10px] text-green-600">
+                {progress.scheduled_posts_created} posts scheduled
               </span>
             )}
           </div>
@@ -272,6 +336,7 @@ function StrategyCard({
   boltProgress,
   execStartedAt,
   anyExecuting,
+  contentJobProgress,
   onSelect,
 }: {
   card: BoltStrategyCard;
@@ -280,6 +345,7 @@ function StrategyCard({
   boltProgress: BOLTProgress | null;
   execStartedAt: number;
   anyExecuting: boolean;
+  contentJobProgress?: ContentJobProgress | null;
   onSelect: () => void;
 }) {
   const theme = CARD_THEMES[index % CARD_THEMES.length];
@@ -362,50 +428,106 @@ function StrategyCard({
         )}
       </div>
 
-      {/* Weekly arc — hidden while this card is running to make room for progress */}
-      {!isRunningThis && (
-        <div className="flex-1 px-5 py-4 space-y-3 bg-white">
-          <p className={`text-[10px] font-bold uppercase tracking-widest ${theme.accent} mb-1`}>Weekly Arc</p>
-          {card.weekThemes.map((wt) => (
-            <div key={wt.week} className="flex items-start gap-3">
-              {/* Week number dot */}
-              <span className={`flex-shrink-0 w-5 h-5 rounded-full ${theme.weekDot} flex items-center justify-center text-[10px] font-bold text-white mt-0.5`}>
-                {wt.week}
-              </span>
-              <div className="flex-1 min-w-0">
-                {/* Phase label + title */}
-                <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                  {wt.phase_label && (
-                    <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${theme.badge}`}>
-                      {wt.phase_label}
+      {/* Weekly arc — always shown; collapses to status-only while running */}
+      <div className={`flex-1 px-5 py-4 bg-white ${isRunningThis ? 'border-t border-gray-100' : ''}`}>
+        <div className="flex items-center justify-between mb-2">
+          <p className={`text-[10px] font-bold uppercase tracking-widest ${theme.accent}`}>Weekly Arc</p>
+          {/* Live week counter while running */}
+          {isRunningThis && boltProgress && (boltProgress as any).weeks_generated != null && (
+            <span className="text-[10px] text-amber-600 font-semibold">
+              {(boltProgress as any).weeks_generated}/{card.duration} weeks built
+            </span>
+          )}
+        </div>
+        <div className="space-y-2.5">
+          {card.weekThemes.map((wt) => {
+            // Derive per-week status from BOLT progress
+            const weeksBuilt: number = isRunningThis && boltProgress
+              ? ((boltProgress as any).weeks_generated ?? 0)
+              : 0;
+            const isCompleted = !isRunningThis && boltProgress === null ? false
+              : isRunningThis ? wt.week <= weeksBuilt
+              : false;
+            const isCurrent = isRunningThis && wt.week === weeksBuilt + 1;
+            const isPending = isRunningThis && wt.week > weeksBuilt + 1;
+
+            return (
+              <div key={wt.week} className={`flex items-start gap-3 rounded-lg px-2 py-1.5 transition-colors ${
+                isCurrent ? 'bg-amber-50 border border-amber-200'
+                  : isCompleted ? 'bg-emerald-50/60'
+                  : ''
+              }`}>
+                {/* Week number dot — shows check when done, spinner when active */}
+                <div className="flex-shrink-0 mt-0.5">
+                  {isCompleted ? (
+                    <span className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-[10px] font-bold text-white">✓</span>
+                  ) : isCurrent ? (
+                    <span className="w-5 h-5 rounded-full bg-amber-400 flex items-center justify-center">
+                      <svg className="animate-spin w-3 h-3 text-white" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                      </svg>
+                    </span>
+                  ) : (
+                    <span className={`w-5 h-5 rounded-full ${isPending ? 'bg-gray-200' : theme.weekDot} flex items-center justify-center text-[10px] font-bold ${isPending ? 'text-gray-400' : 'text-white'}`}>
+                      {wt.week}
                     </span>
                   )}
-                  <span className="text-xs font-semibold text-gray-800 leading-snug">{wt.title}</span>
                 </div>
-                {/* Objective */}
-                {wt.objective && (
-                  <p className="text-[10px] text-gray-500 leading-relaxed mt-0.5">{wt.objective}</p>
-                )}
-                {/* Content focus + CTA */}
-                {(wt.content_focus || wt.cta_focus) && (
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
-                    {wt.content_focus && (
-                      <span className="text-[9px] text-gray-400">
-                        <span className="font-semibold text-gray-500">Content:</span> {wt.content_focus}
+
+                <div className={`flex-1 min-w-0 ${isPending ? 'opacity-40' : ''}`}>
+                  {/* Phase label + status badge + title */}
+                  <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                    {wt.phase_label && (
+                      <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+                        isCompleted ? 'bg-emerald-100 text-emerald-700'
+                          : isCurrent ? 'bg-amber-100 text-amber-700'
+                          : theme.badge
+                      }`}>
+                        {wt.phase_label}
                       </span>
                     )}
-                    {wt.cta_focus && (
-                      <span className="text-[9px] text-gray-400">
-                        <span className="font-semibold text-gray-500">CTA:</span> {wt.cta_focus}
+                    {isCompleted && (
+                      <span className="text-[9px] font-semibold text-emerald-600 px-1.5 py-0.5 rounded-full bg-emerald-100">
+                        Plan ready
                       </span>
                     )}
+                    {isCurrent && (
+                      <span className="text-[9px] font-semibold text-amber-700 px-1.5 py-0.5 rounded-full bg-amber-100 animate-pulse">
+                        Building…
+                      </span>
+                    )}
+                    <span className={`text-xs font-semibold leading-snug ${isCompleted ? 'text-emerald-900' : 'text-gray-800'}`}>
+                      {wt.title}
+                    </span>
                   </div>
-                )}
+
+                  {/* Objective — hide for pending weeks to keep it compact */}
+                  {!isPending && wt.objective && (
+                    <p className="text-[10px] text-gray-500 leading-relaxed mt-0.5">{wt.objective}</p>
+                  )}
+
+                  {/* Content focus + CTA — only when not running or week is done */}
+                  {(!isRunningThis || isCompleted) && (wt.content_focus || wt.cta_focus) && (
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+                      {wt.content_focus && (
+                        <span className="text-[9px] text-gray-400">
+                          <span className="font-semibold text-gray-500">Content:</span> {wt.content_focus}
+                        </span>
+                      )}
+                      {wt.cta_focus && (
+                        <span className="text-[9px] text-gray-400">
+                          <span className="font-semibold text-gray-500">CTA:</span> {wt.cta_focus}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
-      )}
+      </div>
 
       {/* Inline BOLT progress — shown only on the executing card */}
       {isRunningThis && boltProgress && (
@@ -413,6 +535,7 @@ function StrategyCard({
           progress={boltProgress}
           theme={theme}
           startedAt={execStartedAt}
+          contentJobs={contentJobProgress}
         />
       )}
 
@@ -477,11 +600,19 @@ export default function BoltTextStrategyPage() {
   const [execProgress, setExecProgress] = useState<BOLTProgress | null>(null);
   const [execStartedAt, setExecStartedAt] = useState(0);
   const [execError, setExecError] = useState<string | null>(null);
+  // Queue-based content job progress (schedule outcome with 10+ platforms)
+  const [contentJobProgress, setContentJobProgress] = useState<{
+    total: number; done: number; failed: number; active: number;
+    posts_scheduled: number; estimated_seconds_remaining: number | null;
+    is_complete: boolean;
+  } | null>(null);
 
   // Confirmation step — set before launching BOLT
   const [confirmingCard, setConfirmingCard] = useState<BoltStrategyCard | null>(null);
 
   const cardsRef = useRef<HTMLDivElement>(null);
+  const sourceContentToken = typeof router.query.sourceContentToken === 'string' ? router.query.sourceContentToken : null;
+  const sourcePayload = readCampaignSourcePayload(sourceContentToken);
 
   // ── Restore state from sessionStorage on mount ──
   useEffect(() => {
@@ -507,6 +638,14 @@ export default function BoltTextStrategyPage() {
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!sourcePayload) return;
+    setTopic((prev) => prev.trim() ? prev : sourcePayload.suggestedTopic);
+    if (sourcePayload.targetWordCount && sourcePayload.targetWordCount >= 1600) {
+      setGoals((prev) => (prev.length > 0 ? prev : ['Thought Leadership']));
+    }
+  }, [sourcePayload]);
 
   // ── Persist state to sessionStorage on every change ──
   useEffect(() => {
@@ -721,6 +860,67 @@ export default function BoltTextStrategyPage() {
       if (!mounted) return;
 
       try { sessionStorage.removeItem(BOLT_STATE_KEY); } catch {}
+
+      // For schedule outcome: poll content-progress until all topic jobs are done.
+      // This handles the queue-based path where workers process jobs asynchronously
+      // (required for 10+ platform campaigns that can't run inline without timing out).
+      if (outcomeView === 'schedule') {
+        setExecProgress({ stage: 'schedule-writing-posts', status: 'completed', progress_percentage: 100 });
+
+        // Poll content job progress — workers may still be running after BOLT pipeline completes
+        const CONTENT_POLL_INTERVAL = 3000;
+        const CONTENT_DEADLINE = Date.now() + 20 * 60 * 1000; // 20 min max for large campaigns
+        let contentDone = false;
+
+        while (!contentDone && mounted) {
+          if (Date.now() > CONTENT_DEADLINE) break; // give up waiting — navigate anyway
+          await new Promise((r) => setTimeout(r, CONTENT_POLL_INTERVAL));
+          if (!mounted) return;
+
+          try {
+            const cpRes = await fetchWithAuth(`/api/bolt/content-progress?run_id=${encodeURIComponent(runId)}`);
+            // 404 = endpoint not deployed yet OR no queued jobs (inline path used) → navigate
+            if (cpRes.status === 404) { contentDone = true; break; }
+            if (cpRes.ok) {
+              const cp = await cpRes.json().catch(() => ({})) as {
+                total?: number; done?: number; failed?: number; active?: number;
+                posts_scheduled?: number; estimated_seconds_remaining?: number | null;
+                is_complete?: boolean;
+              };
+              if (!mounted) return;
+
+              const total = cp.total ?? 0;
+              const done  = cp.done  ?? 0;
+
+              if (total > 0) {
+                setContentJobProgress({
+                  total,
+                  done,
+                  failed:    cp.failed ?? 0,
+                  active:    cp.active ?? 0,
+                  posts_scheduled: cp.posts_scheduled ?? 0,
+                  estimated_seconds_remaining: cp.estimated_seconds_remaining ?? null,
+                  is_complete: cp.is_complete ?? false,
+                });
+                // Update main progress % so bar reflects content job progress
+                setExecProgress((prev) => prev ? {
+                  ...prev,
+                  progress_percentage: total > 0 ? Math.round((done / total) * 100) : 100,
+                  scheduled_posts_created: cp.posts_scheduled,
+                } : prev);
+              }
+
+              // No jobs queued (small campaign, inline path) OR all jobs done
+              if (total === 0 || cp.is_complete) contentDone = true;
+            }
+          } catch { /* transient — keep polling */ }
+        }
+
+        // Hold on completion screen for 2.5s so user sees the finished state
+        if (mounted) await new Promise((r) => setTimeout(r, 2500));
+        if (!mounted) return;
+      }
+
       setExecuting(false);
       setExecProgress(null);
 
@@ -732,12 +932,16 @@ export default function BoltTextStrategyPage() {
 
       const qs = new URLSearchParams({ companyId: companyId ?? '' });
       if (outcomeView === 'week_plan') {
+        saveCampaignResume(completedCampaignId, 'campaign-details', { companyId: companyId ?? '', mode: 'fast' });
         router.push(`/campaign-details/${completedCampaignId}?mode=fast&${qs.toString()}`);
       } else if (outcomeView === 'daily_plan') {
+        saveCampaignResume(completedCampaignId, 'campaign-daily-plan', { companyId: companyId ?? '' });
         router.push(`/campaign-daily-plan/${completedCampaignId}?${qs.toString()}`);
       } else if (outcomeView === 'schedule') {
-        router.push(`/dashboard?tab=calendar`);
+        saveCampaignResume(completedCampaignId, 'campaign-calendar', { companyId: companyId ?? '' });
+        router.push(`/campaign-calendar/${completedCampaignId}?${qs.toString()}`);
       } else {
+        saveCampaignResume(completedCampaignId, 'campaign-details', { companyId: companyId ?? '', mode: 'fast' });
         router.push(`/campaign-details/${completedCampaignId}?mode=fast&${qs.toString()}`);
       }
     } catch (err) {
@@ -820,6 +1024,15 @@ export default function BoltTextStrategyPage() {
         </div>
 
         {/* ── Top two-column: Form | Suggestions + Chat ── */}
+        {sourcePayload && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">Source Content Loaded</p>
+            <p className="mt-1 text-sm font-semibold text-gray-900">{sourcePayload.title}</p>
+            <p className="mt-1 text-xs text-gray-600">
+              We prefilled the campaign topic from this {sourcePayload.contentType}. Adjust it if you want a broader campaign angle.
+            </p>
+          </div>
+        )}
         <div className="flex gap-5 items-start">
 
           {/* LEFT: Form */}
@@ -1182,6 +1395,7 @@ export default function BoltTextStrategyPage() {
                     boltProgress={selectedIds.includes(card.id) ? execProgress : null}
                     execStartedAt={execStartedAt}
                     anyExecuting={executing}
+                    contentJobProgress={selectedIds.includes(card.id) ? contentJobProgress : null}
                     onSelect={() => handleCardSelect(card.id)}
                   />
                 ))}

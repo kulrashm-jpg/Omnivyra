@@ -76,6 +76,248 @@ function normalizePlatformKey(platform: string): string {
   return p;
 }
 
+/** Derive a meaningful pain point for synthesized slots (BOLT/legacy campaigns without AI-generated intents). */
+function deriveSynthPainPoint(topic: string): string {
+  const t = String(topic ?? '').trim().toLowerCase();
+  if (t.includes('pricing') || t.includes('price')) return 'Unclear value proposition and pricing expectations';
+  if (t.includes('onboarding')) return 'Slow onboarding and long time-to-value for new customers';
+  if (t.includes('trust') || t.includes('credibility')) return 'Low trust in the solution among potential buyers';
+  if (t.includes('lead') || t.includes('pipeline')) return 'Inconsistent lead flow and unpredictable pipeline';
+  if (t.includes('brand')) return 'Building brand recognition and differentiation in a crowded market';
+  if (t.includes('content')) return 'Creating content that resonates with the right audience consistently';
+  if (t.includes('growth') || t.includes('scale')) return 'Scaling reach and engagement without losing quality';
+  if (t.includes('social') || t.includes('community')) return 'Maintaining a consistent and engaging social media presence';
+  if (t.includes('seo') || t.includes('search') || t.includes('organic')) return 'Low organic visibility and inadequate search traffic';
+  if (t.includes('email') || t.includes('newsletter')) return 'Low open rates and declining subscriber engagement';
+  if (t.includes('retention') || t.includes('churn')) return 'High churn and difficulty retaining customers long-term';
+  if (t.includes('conversion') || t.includes('funnel')) return 'Weak conversion rates through the marketing funnel';
+  if (t.includes('product') || t.includes('feature')) return 'Communicating product value and differentiation clearly';
+  if (t.includes('team') || t.includes('culture')) return 'Aligning team and culture messaging with audience expectations';
+  const topicStr = String(topic ?? '').trim();
+  return topicStr ? `Uncertainty about ${topicStr} and how to approach it effectively` : 'Unclear next steps and priorities';
+}
+
+/** Derive a meaningful outcome promise for synthesized slots (BOLT/legacy campaigns without AI-generated intents). */
+function deriveSynthOutcomePromise(topic: string, contentType: string): string {
+  const t = String(topic ?? '').trim();
+  const ct = String(contentType ?? '').toLowerCase();
+  const safe = t || 'this topic';
+  if (ct === 'article' || ct === 'blog') return `Reader gains a deep understanding of ${safe} with actionable takeaways to apply immediately.`;
+  if (ct === 'video' || ct === 'reel') return `Viewer walks away with a clear mental model for ${safe} and knows the first step to take.`;
+  if (ct === 'carousel') return `Audience has a visual framework for ${safe} that they can reference and share.`;
+  if (ct === 'thread') return `Reader follows the full arc from problem to solution for ${safe} in a single sitting.`;
+  if (ct === 'poll') return `Audience reflects on their own stance on ${safe} and sees how peers think about it.`;
+  return `Reader understands ${safe}, why it matters now, and the next concrete step to take.`;
+}
+
+// ─── STOP WORDS for keyword extraction ─────────────────────────────────────
+const STOP_WORDS = new Set([
+  'this','that','with','from','have','will','your','their','about','what','when','where',
+  'which','there','these','those','some','into','over','than','then','them','they',
+  'also','each','most','make','more','such','only','both','does','here','just','like',
+  'very','much','even','well','back','been','come','good','give','know','long','many',
+  'much','need','same','take','tell','look','come','want','show','think','help',
+]);
+
+/** Extract meaningful SEO keywords from a topic string. */
+function deriveKeywords(topic: string, objective: string = ''): string[] {
+  const raw = `${topic} ${objective}`;
+  const words = raw.split(/[\s\-_,;:|\/\\]+/)
+    .map(w => w.replace(/[^a-zA-Z0-9]/g, '').toLowerCase())
+    .filter(w => w.length >= 4 && !STOP_WORDS.has(w));
+  // also add bigrams from the topic for SEO
+  const topicWords = String(topic ?? '').split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()).filter(w => w.length >= 3);
+  const bigrams: string[] = [];
+  for (let i = 0; i < topicWords.length - 1; i++) {
+    const bigram = `${topicWords[i]} ${topicWords[i+1]}`;
+    if (bigram.length > 6) bigrams.push(bigram);
+  }
+  const uniq = [...new Set([...words, ...bigrams])];
+  return uniq.slice(0, 10);
+}
+
+/** Derive SEO-optimised hashtags for a topic + content type. */
+function deriveHashtags(topic: string, contentType: string, objective: string = ''): string[] {
+  const t = String(topic ?? '').trim();
+  const ct = String(contentType ?? '').toLowerCase();
+  // Topic words → PascalCase tag
+  const topicTag = t.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('').replace(/[^a-zA-Z0-9]/g, '');
+  // Content type tag
+  const ctTag: Record<string, string> = {
+    article: 'ContentMarketing', blog: 'BlogPost', post: 'SocialMedia', thread: 'Thread',
+    newsletter: 'Newsletter', poll: 'Poll', video: 'VideoMarketing', reel: 'Reels',
+    carousel: 'Carousel', story: 'Stories',
+  };
+  const typeTag = ctTag[ct] ?? 'MarketingContent';
+  // Objective keyword
+  const objWords = String(objective ?? '').split(/\s+/).filter(w => w.length >= 5 && !STOP_WORDS.has(w.toLowerCase())).slice(0, 2);
+  const objTag = objWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+  const candidates = [topicTag, typeTag, 'Marketing', 'B2BMarketing', 'GrowthStrategy', objTag].filter(Boolean);
+  return [...new Set(candidates)].slice(0, 6);
+}
+
+/** Derive an opening hook for text content. */
+function deriveTextHook(topic: string, contentType: string): string {
+  const t = String(topic ?? '').trim();
+  const ct = String(contentType ?? '').toLowerCase();
+  if (!t) return 'Here is what most marketers get wrong — and how to fix it.';
+  if (ct === 'poll') return `Quick question: how do you currently approach ${t}?`;
+  if (ct === 'thread') return `A thread on ${t} — everything you need to know in 10 tweets. 🧵`;
+  if (ct === 'newsletter') return `This week we're breaking down ${t} — and why it matters more than ever.`;
+  if (ct === 'article' || ct === 'blog') return `Most businesses get ${t} completely wrong. Here's the framework that actually works.`;
+  // Generic social post hooks
+  const hooks = [
+    `Everyone talks about ${t}. Almost nobody does it right.`,
+    `${t} changed how we approach our marketing. Here's what we learned.`,
+    `The uncomfortable truth about ${t} (and what to do about it).`,
+    `If you're struggling with ${t}, this is for you.`,
+  ];
+  return hooks[Math.abs(t.length) % hooks.length]!;
+}
+
+/** Derive 4–5 key points to build content from. */
+function deriveKeyPoints(topic: string, objective: string, contentType: string): string[] {
+  const t = String(topic ?? '').trim();
+  const ct = String(contentType ?? '').toLowerCase();
+  const safe = t || 'this topic';
+  const isLongForm = ct === 'article' || ct === 'blog' || ct === 'newsletter';
+  const base = [
+    `Why ${safe} matters now and what changed in the market`,
+    `The most common mistakes when approaching ${safe}`,
+    `A proven framework for ${safe} that drives results`,
+    `How to measure success and iterate on your ${safe} strategy`,
+  ];
+  if (isLongForm) {
+    base.push(`Real-world example: how a brand used ${safe} to grow their audience`);
+    base.push(`Next steps: how to start implementing this today`);
+  } else {
+    base.push(`One actionable takeaway you can apply this week`);
+  }
+  return base;
+}
+
+/** Derive repurpose angles for a text content piece. */
+function deriveRepurposeAngles(topic: string, contentType: string): string[] {
+  const t = String(topic ?? '').trim();
+  const ct = String(contentType ?? '').toLowerCase();
+  const angles: string[] = [];
+  if (ct === 'article' || ct === 'blog') {
+    angles.push(`Break into 5-tweet thread highlighting each key point`);
+    angles.push(`Turn statistics/frameworks into LinkedIn carousel (5–7 slides)`);
+    angles.push(`Extract 3 pull quotes for standalone social posts`);
+    angles.push(`Record a 60-second video summary for Reels/Shorts`);
+    angles.push(`Condense into a LinkedIn newsletter intro with link-back`);
+  } else if (ct === 'post') {
+    angles.push(`Expand into a long-form article with research and examples`);
+    angles.push(`Turn into a visual carousel with one point per slide`);
+    angles.push(`Adapt as a poll to gauge audience opinion on ${t}`);
+    angles.push(`Record a 30-second video version for Reels`);
+  } else if (ct === 'thread') {
+    angles.push(`Compile into a blog post with expanded explanations`);
+    angles.push(`Turn each tweet into a slide for a LinkedIn carousel`);
+    angles.push(`Extract the strongest tweet as a standalone post`);
+  } else if (ct === 'carousel') {
+    angles.push(`Record a walkthrough video explaining each slide`);
+    angles.push(`Write a companion blog post expanding on each point`);
+    angles.push(`Extract 1 stat/insight per slide as individual posts`);
+  }
+  if (angles.length === 0) {
+    angles.push(`Repurpose as a short-form video summary`);
+    angles.push(`Expand into a long-form companion article`);
+    angles.push(`Extract key stats or quotes as standalone posts`);
+  }
+  return angles;
+}
+
+/** Derive SEO focus line for a topic. */
+function deriveSEOFocus(topic: string, objective: string = ''): string {
+  const t = String(topic ?? '').trim();
+  if (!t) return 'Brand authority and thought leadership';
+  const tl = t.toLowerCase();
+  if (tl.includes('how to') || tl.includes('guide') || tl.includes('step')) return `How-to search intent: "${t}" — target informational queries`;
+  if (tl.includes('vs') || tl.includes('compare') || tl.includes('best')) return `Comparison intent: position for "${t}" decision-stage queries`;
+  if (tl.includes('what is') || tl.includes('definition') || tl.includes('meaning')) return `Educational intent: own the definition of "${t}"`;
+  if (tl.includes('tool') || tl.includes('software') || tl.includes('platform')) return `Commercial intent: target buyers searching "${t} tools"`;
+  return `Thought leadership on "${t}" — target informational + branded queries`;
+}
+
+// ─── CREATOR-SPECIFIC derivation ───────────────────────────────────────────
+
+/** Derive a visual hook (first 3 seconds). */
+function deriveVisualHook(topic: string, contentType: string): string {
+  const t = String(topic ?? '').trim();
+  const ct = String(contentType ?? '').toLowerCase();
+  const safe = t || 'this topic';
+  if (ct === 'reel' || ct === 'video') {
+    const hooks = [
+      `Open on creator looking directly at camera: "You're probably getting ${safe} completely wrong — here's proof."`,
+      `Quick-cut montage of the problem, then freeze frame with text: "The fix is simpler than you think."`,
+      `Start mid-action: show a before/after result for ${safe} with no intro — let the result hook the viewer.`,
+      `Creator asks direct question to camera: "How much are you spending on ${safe} with zero ROI?" Pause. "Watch this."`,
+    ];
+    return hooks[Math.abs(topic.length) % hooks.length]!;
+  }
+  if (ct === 'carousel') return `Slide 1: Bold headline — "${safe}" with a single striking stat or question. No fluff, immediate value signal.`;
+  if (ct === 'story') return `Frame 1: Single striking stat or bold claim about ${safe} over a high-contrast background. Text only, 3 words max.`;
+  return `Open with the most surprising fact or contrarian statement about ${safe} to stop the scroll.`;
+}
+
+/** Derive image prompt for AI image generation (for static visuals). */
+function deriveImagePrompt(topic: string, contentType: string, platforms: string[]): string {
+  const t = String(topic ?? '').trim();
+  const ct = String(contentType ?? '').toLowerCase();
+  const isInstagram = platforms.some(p => String(p).toLowerCase().includes('instagram'));
+  const isLinkedIn = platforms.some(p => String(p).toLowerCase().includes('linkedin'));
+  const aspectRatio = isInstagram ? '1:1 square' : isLinkedIn ? '1.91:1 landscape' : '9:16 vertical';
+  const styleBase = isLinkedIn
+    ? 'clean, professional, minimal, corporate photography style, soft shadows'
+    : 'vibrant, modern, social-first design, bold typography overlay possible';
+  return `${aspectRatio} format — ${styleBase}. Subject: visual representation of "${t}". Mood: confident, forward-looking. No text overlays. High contrast. Real people or abstract concept art preferred. Brand-safe, no stock photo clichés.`;
+}
+
+/** Derive video/reel direction for creator. */
+function deriveVideoPrompt(topic: string, contentType: string, platforms: string[]): string {
+  const t = String(topic ?? '').trim();
+  const ct = String(contentType ?? '').toLowerCase();
+  const isTikTok = platforms.some(p => String(p).toLowerCase().includes('tiktok'));
+  const duration = isTikTok ? '15–30s' : ct === 'reel' ? '30–60s' : '60–90s';
+  const ratio = isTikTok || ct === 'reel' ? '9:16 vertical' : '16:9 horizontal';
+  return `${duration} ${ratio} video. Hook (0–3s): pattern interrupt — bold statement or surprising visual about "${t}". Build (3–20s): explain the core insight or process with on-screen text/b-roll. Payoff (final 5s): clear call to action — follow, comment, or click link. Captions: always on. Pacing: fast cuts (every 2–4s). Energy: confident, direct to camera or strong voiceover.`;
+}
+
+/** Derive scene-by-scene direction for longer creator content. */
+function deriveSceneDirection(topic: string, contentType: string): string {
+  const t = String(topic ?? '').trim();
+  const ct = String(contentType ?? '').toLowerCase();
+  const safe = t || 'the topic';
+  if (ct === 'carousel') {
+    return [
+      `Slide 1 (Hook): Bold headline stating the core problem or insight about ${safe}. One sentence, large text.`,
+      `Slide 2 (Context): Why this matters now — 1–2 sentences + supporting stat or data point.`,
+      `Slide 3–5 (Core value): Each slide covers one key point with a short headline + 2–3 bullet sub-points.`,
+      `Slide 6 (Case/example): Brief real-world example or before/after scenario.`,
+      `Slide 7 (CTA): Clear next step — "Save this", "Follow for more", or "Comment your question below".`,
+    ].join('\n');
+  }
+  if (ct === 'video' || ct === 'reel') {
+    return [
+      `Scene 1 (0–3s): Creator on camera or bold text-over — hook statement about ${safe}.`,
+      `Scene 2 (3–10s): Quick "here's what I mean" — show the problem visually or state a stat.`,
+      `Scene 3 (10–25s): The solution/framework — 3 rapid points with screen text reinforcing each.`,
+      `Scene 4 (25–35s): Proof — show a result, testimonial quote, or before/after.`,
+      `Scene 5 (35–end): CTA — "Comment X if you want the full guide" or "Follow for part 2".`,
+    ].join('\n');
+  }
+  if (ct === 'story') {
+    return [
+      `Frame 1: Single bold question about ${safe} — high contrast background, minimal text.`,
+      `Frame 2: Quick "here's the truth" statement with a striking visual or colour block.`,
+      `Frame 3: The one thing to do differently — swipe-up or sticker CTA.`,
+    ].join('\n');
+  }
+  return `Open with hook about ${safe} → deliver core value in 3 clear beats → close with CTA.`;
+}
+
 function normalizeTopicKey(topic: string): string {
   const s = String(topic || '').trim();
   const withoutIndex = s.replace(/^\(?\s*\d+\s*[\)\.\-:]\s*/g, '');
@@ -118,6 +360,16 @@ export type CreatorCard = {
   intent?: Record<string, unknown>;
   platform_notes?: string[];
   instructions_for_creator?: string;
+  // Text content enrichment
+  hook?: string;
+  key_points?: string[];
+  seo_focus?: string;
+  repurpose_angles?: string[];
+  // Creator content enrichment
+  visual_hook?: string;
+  image_prompt?: string;
+  video_prompt?: string;
+  scene_direction?: string;
 };
 
 /**
@@ -159,20 +411,20 @@ function buildCreatorCard(
     '';
 
   const topicStr = typeof item?.topicTitle === 'string' ? item.topicTitle.trim() : '';
-  const keywords: string[] =
-    topicStr.length > 0
-      ? topicStr
-          .split(/\s+/)
-          .map((w) => w.replace(/[^a-z0-9#]/gi, ''))
-          .filter((w) => w.length >= 2)
-          .slice(0, 12)
-      : [];
+  const contentType = String(item?.contentType || enrichedItem?.content_type || enrichedItem?.contentType || '').toLowerCase();
+  const isCreatorType = ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'shorts', 'tiktok'].includes(contentType);
 
+  // Keywords: enrich from topic + objective
+  const keywords: string[] = Array.isArray(enrichedItem?.keywords)
+    ? (enrichedItem.keywords as unknown[]).filter((k): k is string => typeof k === 'string').slice(0, 10)
+    : deriveKeywords(topicStr, objective);
+
+  // Hashtags: AI output takes priority, then week extras, then derived
   const hashtags: string[] = Array.isArray(enrichedItem?.hashtags)
-    ? enrichedItem.hashtags.filter((h: unknown) => typeof h === 'string').slice(0, 20)
+    ? enrichedItem.hashtags.filter((h: unknown) => typeof h === 'string').slice(0, 10)
     : Array.isArray((week?.week_extras as any)?.hashtag_suggestions)
-      ? ((week.week_extras as any).hashtag_suggestions as string[]).filter(Boolean).slice(0, 20)
-      : [];
+      ? ((week.week_extras as any).hashtag_suggestions as string[]).filter(Boolean).slice(0, 10)
+      : deriveHashtags(topicStr, contentType, objective);
 
   const intentShape: Record<string, unknown> = intent && typeof intent === 'object'
     ? {
@@ -193,18 +445,58 @@ function buildCreatorCard(
       ? [JSON.stringify(enrichedItem.format_requirements)]
       : [];
 
+  // ── TEXT enrichment ────────────────────────────────────────────────────
+  const hook = !isCreatorType
+    ? (typeof (intent as any)?.hook === 'string' && (intent as any).hook.trim()
+        ? String((intent as any).hook).trim()
+        : deriveTextHook(topicStr, contentType))
+    : undefined;
+  const key_points = !isCreatorType
+    ? (Array.isArray((intent as any)?.key_points) && (intent as any).key_points.length > 0
+        ? ((intent as any).key_points as unknown[]).filter((k): k is string => typeof k === 'string')
+        : deriveKeyPoints(topicStr, objective, contentType))
+    : undefined;
+  const seo_focus = !isCreatorType
+    ? (typeof (intent as any)?.seo_focus === 'string' && (intent as any).seo_focus.trim()
+        ? String((intent as any).seo_focus).trim()
+        : deriveSEOFocus(topicStr, objective))
+    : undefined;
+  const repurpose_angles = !isCreatorType
+    ? deriveRepurposeAngles(topicStr, contentType)
+    : undefined;
+
+  // ── CREATOR enrichment ─────────────────────────────────────────────────
+  const itemPlatforms = Array.isArray(item?.platformTargets) ? item.platformTargets : [];
+  const visual_hook = isCreatorType ? deriveVisualHook(topicStr, contentType) : undefined;
+  const image_prompt = isCreatorType ? deriveImagePrompt(topicStr, contentType, itemPlatforms) : undefined;
+  const video_prompt = (isCreatorType && contentType !== 'carousel') ? deriveVideoPrompt(topicStr, contentType, itemPlatforms) : undefined;
+  const scene_direction = isCreatorType ? deriveSceneDirection(topicStr, contentType) : undefined;
+
+  // ── Creator instructions block (rich) ──────────────────────────────────
   const instructionsParts: string[] = [];
   if (objective) instructionsParts.push(`Objective: ${objective}`);
-  if (summary) instructionsParts.push(`Summary: ${summary}`);
-  if (target_audience) instructionsParts.push(`Target audience: ${target_audience}`);
+  if (summary) instructionsParts.push(`Brief: ${summary}`);
+  if (target_audience) instructionsParts.push(`Audience: ${target_audience}`);
   if (item?.desiredAction || intent?.cta_type) {
-    instructionsParts.push(`Desired action: ${String(item?.desiredAction || intent?.cta_type || '').trim() || '—'}`);
+    instructionsParts.push(`CTA: ${String(item?.desiredAction || intent?.cta_type || '').trim() || '—'}`);
   }
-  if (item?.narrativeStyle) {
-    instructionsParts.push(`Tone: ${item.narrativeStyle}`);
+  if (item?.narrativeStyle) instructionsParts.push(`Tone: ${item.narrativeStyle}`);
+  if (isCreatorType) {
+    if (visual_hook) instructionsParts.push(`Visual hook (0–3s): ${visual_hook}`);
+    if (scene_direction) instructionsParts.push(`\nScene direction:\n${scene_direction}`);
+    if (image_prompt) instructionsParts.push(`\nImage prompt: ${image_prompt}`);
+    if (video_prompt) instructionsParts.push(`\nVideo direction: ${video_prompt}`);
+  } else {
+    if (hook) instructionsParts.push(`Opening hook: ${hook}`);
+    if (seo_focus) instructionsParts.push(`SEO focus: ${seo_focus}`);
+    if (key_points && key_points.length > 0) {
+      instructionsParts.push(`Key points to cover:\n${key_points.map((p, i) => `  ${i + 1}. ${p}`).join('\n')}`);
+    }
+    if (repurpose_angles && repurpose_angles.length > 0) {
+      instructionsParts.push(`Repurpose as:\n${repurpose_angles.map(a => `  • ${a}`).join('\n')}`);
+    }
   }
-  const instructions_for_creator =
-    instructionsParts.length > 0 ? instructionsParts.join('\n') : '';
+  const instructions_for_creator = instructionsParts.join('\n');
 
   return {
     theme: theme || undefined,
@@ -216,6 +508,16 @@ function buildCreatorCard(
     intent: Object.keys(intentShape).length > 0 ? intentShape : undefined,
     platform_notes: platform_notes.length > 0 ? platform_notes : undefined,
     instructions_for_creator: instructions_for_creator.trim() || undefined,
+    // Text
+    hook: hook || undefined,
+    key_points: key_points && key_points.length > 0 ? key_points : undefined,
+    seo_focus: seo_focus || undefined,
+    repurpose_angles: repurpose_angles && repurpose_angles.length > 0 ? repurpose_angles : undefined,
+    // Creator
+    visual_hook: visual_hook || undefined,
+    image_prompt: image_prompt || undefined,
+    video_prompt: video_prompt || undefined,
+    scene_direction: scene_direction || undefined,
   };
 }
 
@@ -516,7 +818,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         : undefined;
     const postsPerWeek: number | undefined =
       postsPerWeekBody != null && Number.isFinite(Number(postsPerWeekBody))
-        ? Math.max(2, Math.min(14, Math.floor(Number(postsPerWeekBody))))  // raised from 7→14 to handle multi-format totals
+        ? Math.max(2, Math.min(20, Math.floor(Number(postsPerWeekBody))))  // raised 7→14→20 to support up to 20 activity cards/week
         : undefined;
   // Resolve format_frequency: Record<string, number> or null
   const formatFrequency: Record<string, number> | null =
@@ -776,18 +1078,53 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         2,
         Object.values(weekBlueprint.platform_allocation || {}).reduce((sum: number, n: unknown) => sum + Number(n), 0) || 3
       );
+      // 1. Primary: topics_to_cover[] or topics[].topicTitle
       const rawTopics: string[] = Array.isArray(weekBlueprint.topics_to_cover) && (weekBlueprint.topics_to_cover as unknown[]).length > 0
         ? (weekBlueprint.topics_to_cover as unknown[]).map((t) => String(t ?? '').trim()).filter(Boolean)
         : Array.isArray(weekBlueprint.topics) && (weekBlueprint.topics as any[]).length > 0
           ? (weekBlueprint.topics as any[]).map((t: any) => String(t?.topicTitle ?? t ?? '').trim()).filter(Boolean)
           : [];
-      const topics = rawTopics.length > 0
+
+      // 2. Fallback: extract per-piece topics from platform_content_breakdown.
+      //    BOLT AI populates these as ["(1) Topic A", "(2) Topic B"] per content item.
+      //    Strip numeric prefixes like "(1) " so they read naturally.
+      const pcdTopics: string[] = [];
+      if (weekBlueprint.platform_content_breakdown && typeof weekBlueprint.platform_content_breakdown === 'object') {
+        const seen = new Set<string>();
+        for (const items of Object.values(weekBlueprint.platform_content_breakdown as Record<string, any[]>)) {
+          if (!Array.isArray(items)) continue;
+          for (const item of items) {
+            const perPieceTopics = Array.isArray(item?.topics) ? item.topics : (typeof item?.topic === 'string' && item.topic ? [item.topic] : []);
+            for (const raw of perPieceTopics) {
+              const clean = String(raw ?? '').replace(/^\(\d+\)\s*/, '').trim();
+              if (clean && !seen.has(clean.toLowerCase())) {
+                seen.add(clean.toLowerCase());
+                pcdTopics.push(clean);
+              }
+            }
+          }
+        }
+      }
+
+      // Use most specific topic list available: topics_to_cover > platform_content_breakdown > phase_label
+      const topics = rawTopics.length > 1
         ? rawTopics
-        : [String(weekBlueprint.phase_label || weekBlueprint.primary_objective || `Week ${weekNumber} content`).trim()];
+        : rawTopics.length === 1 && pcdTopics.length > 0
+          ? pcdTopics  // pcd gives more granularity than single topics_to_cover entry
+          : rawTopics.length === 1
+            ? rawTopics
+            : pcdTopics.length > 0
+              ? pcdTopics
+              : [String(weekBlueprint.phase_label || weekBlueprint.primary_objective || `Week ${weekNumber} content`).trim()];
+
       const ctaType = String(weekBlueprint.cta_type || 'Engage').trim() || 'Engage';
       const objective = String(weekBlueprint.primary_objective || weekBlueprint.phase_label || 'Build brand awareness').trim() || 'Build brand awareness';
       const defaultCountPerType = Math.max(1, Math.round(totalCount / contentTypes.length));
       let synthGlobalIdx = (weekNumber - 1) * totalCount;
+      // Use specific target audience from campaign context (built from execution_config.target_audience); fall back to generic
+      const synthTargetAudience = compressedContext?.target_audience || 'our target audience';
+      // Track a global topic index so different content types don't all start at topic 0
+      let globalTopicIdx = 0;
       for (const contentType of contentTypes) {
         // Honour per-format frequency from user selection; fall back to equal distribution
         const countPerType = formatFrequency?.[contentType] != null
@@ -796,15 +1133,38 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const topic_slots: Array<{ topic: string | null; global_progression_index: number; intent: any }> = [];
         for (let k = 0; k < countPerType; k++) {
           synthGlobalIdx++;
-          const topic = topics[k % topics.length]!;
+          // Advance through topics sequentially across all content types so each slot gets a distinct topic
+          const topic = topics[globalTopicIdx % topics.length]!;
+          globalTopicIdx++;
+          const isCreatorCt = ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'shorts'].includes(contentType);
           topic_slots.push({
             topic,
             global_progression_index: synthGlobalIdx,
             intent: {
               objective,
               cta_type: ctaType,
-              target_audience: 'our target audience',
+              target_audience: synthTargetAudience,
               brief_summary: `${topic}: ${objective}`,
+              pain_point: deriveSynthPainPoint(topic),
+              outcome_promise: deriveSynthOutcomePromise(topic, contentType),
+              // Text enrichment (non-creator types)
+              ...(!isCreatorCt ? {
+                hook: deriveTextHook(topic, contentType),
+                key_points: deriveKeyPoints(topic, objective, contentType),
+                seo_focus: deriveSEOFocus(topic, objective),
+                keywords: deriveKeywords(topic, objective),
+                hashtags: deriveHashtags(topic, contentType, objective),
+                repurpose_angles: deriveRepurposeAngles(topic, contentType),
+              } : {}),
+              // Creator enrichment
+              ...(isCreatorCt ? {
+                visual_hook: deriveVisualHook(topic, contentType),
+                image_prompt: deriveImagePrompt(topic, contentType, platforms),
+                video_prompt: contentType !== 'carousel' ? deriveVideoPrompt(topic, contentType, platforms) : undefined,
+                scene_direction: deriveSceneDirection(topic, contentType),
+                keywords: deriveKeywords(topic, objective),
+                hashtags: deriveHashtags(topic, contentType, objective),
+              } : {}),
             },
           });
         }

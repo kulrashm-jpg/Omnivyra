@@ -176,14 +176,18 @@ Each angle should be fundamentally different in:
 Format as JSON array with: type (analytical/contrarian/strategic), label, title, angle_summary (50 words), and hook (one sentence that appears on-screen)`;
 
   const response = await runCompletionWithOperation({
-    prompt: anglesPrompt,
-    system: systemPrompt,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: anglesPrompt },
+    ],
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    temperature: 0.7,
+    response_format: { type: 'json_object' },
     operation: 'creator_angles_generation',
-    company_id: undefined, // Will be in context
   });
 
   try {
-    const parsed = JSON.parse(response.content[0]?.text || '{}');
+    const parsed = JSON.parse(response.output || '{}');
     const angles = Array.isArray(parsed) ? parsed : parsed.angles || [];
     console.log(`[generateCreatorAngles] Parsed ${angles.length} angles from AI response`);
     return angles;
@@ -240,14 +244,18 @@ Requirements:
 Output ONLY valid JSON matching the ${contentType} format.`;
 
   const response = await runCompletionWithOperation({
-    prompt: contentPrompt,
-    system: systemPrompt,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: contentPrompt },
+    ],
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    temperature: 0,
+    response_format: { type: 'json_object' },
     operation: `creator_content_generation_${contentType}`,
-    company_id: undefined,
   });
 
   try {
-    const content = JSON.parse(response.content[0]?.text || '{}');
+    const content = JSON.parse(response.output || '{}');
     return {
       ...content,
       metadata: {
@@ -355,7 +363,7 @@ async function deductCredits(
  */
 async function recordCreatorContentFeedback(data: Record<string, unknown>): Promise<void> {
   try {
-    await recordCreatorFeedback(data);
+    await recordCreatorFeedback(data as any);
     console.debug('[creatorContentProcessor] Feedback recorded:', data);
   } catch (error) {
     console.warn('[creatorContentProcessor] Feedback recording failed (non-blocking):', error);

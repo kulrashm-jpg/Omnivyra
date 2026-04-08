@@ -18,11 +18,25 @@ interface WeekData {
   phase_label?: string;
   narrative_summary?: string;
   objective?: string;
+  primary_objective?: string;
   content_focus?: string;
   cta_focus?: string;
   contentFocus?: string;
   ctaFocus?: string;
   dailyObjective?: string;
+  cta_type?: string;
+  weekly_kpi_focus?: string;
+  total_weekly_content_count?: number;
+  // Rich AI-generated breakdown fields
+  platform_allocation?: Record<string, number>;          // e.g. { linkedin: 3, instagram: 2 }
+  topics_to_cover?: string[];                             // e.g. ["Topic A", "Topic B"]
+  content_type_mix?: string[];                            // e.g. ["2 authority posts", "1 educational"]
+  platform_content_breakdown?: Record<string, Array<{
+    type?: string;
+    count?: number;
+    topics?: string[];
+    platforms?: string[];
+  }>>;
   execution_items?: Array<{
     execution_id?: string;
     topic?: string;
@@ -68,7 +82,7 @@ export function weeksToCalendarPlan(weeks: unknown[]): ConvertedPlan {
 
     const wk = week as WeekData;
     const narrativeHint = wk.narrative_summary ?? theme;
-    const objective = wk.objective ?? wk.dailyObjective ?? narrativeHint ?? '';
+    const objective = wk.objective ?? wk.primary_objective ?? wk.dailyObjective ?? narrativeHint ?? '';
     const contentFocus = wk.content_focus ?? wk.contentFocus ?? theme ?? '';
     const ctaFocus = wk.cta_focus ?? wk.ctaFocus ?? '';
     if (phaseLabel && (!currentPhase || currentPhase.label !== phaseLabel)) {
@@ -110,6 +124,8 @@ export function weeksToCalendarPlan(weeks: unknown[]): ConvertedPlan {
           title: item.topic ?? item.title ?? (theme || `Week ${weekNum}`),
           theme,
           day,
+          objective: objective || undefined,
+          phase: phaseLabel || undefined,
         };
         activities.push(act);
         const dayKey = `${weekNum}-${day}`;
@@ -133,6 +149,8 @@ export function weeksToCalendarPlan(weeks: unknown[]): ConvertedPlan {
               title: slot.topic ?? exec.topic ?? (theme || `Week ${weekNum}`),
               theme,
               day,
+              objective: objective || undefined,
+              phase: phaseLabel || undefined,
             };
             activities.push(act);
             const dayKey = `${weekNum}-${day}`;
@@ -152,6 +170,8 @@ export function weeksToCalendarPlan(weeks: unknown[]): ConvertedPlan {
             title: exec.topic ?? (theme || `Week ${weekNum}`),
             theme,
             day,
+            objective: objective || undefined,
+            phase: phaseLabel || undefined,
           };
           activities.push(act);
           const dayKey = `${weekNum}-${day}`;
@@ -161,23 +181,109 @@ export function weeksToCalendarPlan(weeks: unknown[]): ConvertedPlan {
           daysByKey.get(dayKey)!.activities.push(act);
         }
       });
-    } else if (theme) {
-      const execId = `wk${weekNum}-theme`;
-      const act: CalendarPlanActivity = {
-        execution_id: execId,
-        week_number: weekNum,
-        platform: 'linkedin',
-        content_type: 'post',
-        title: theme,
-        theme,
-        day: 'Monday',
-      };
-      activities.push(act);
-      const dayKey = `${weekNum}-Monday`;
-      if (!daysByKey.has(dayKey)) {
-        daysByKey.set(dayKey, { week_number: weekNum, day: 'Monday', activities: [] });
+    } else {
+      // ── Expand from AI blueprint fields ─────────────────────────────────────
+      // The AI generates platform_allocation, topics_to_cover, and
+      // platform_content_breakdown. Turn them into individual activities.
+      const breakdown = wk.platform_content_breakdown;
+      const allocation = wk.platform_allocation;
+      const topics = Array.isArray(wk.topics_to_cover) ? wk.topics_to_cover : [];
+
+      const expandedActivities: CalendarPlanActivity[] = [];
+
+      if (breakdown && typeof breakdown === 'object' && Object.keys(breakdown).length > 0) {
+        // Use platform_content_breakdown for maximum detail
+        let actIdx = 0;
+        for (const [platform, items] of Object.entries(breakdown)) {
+          if (!Array.isArray(items)) continue;
+          for (const item of items) {
+            const count = item.count ?? 1;
+            const itemTopics = Array.isArray(item.topics) ? item.topics : [];
+            for (let c = 0; c < count; c++) {
+              const topic = itemTopics[c] ?? topics[actIdx % Math.max(1, topics.length)] ?? theme ?? `Week ${weekNum}`;
+              expandedActivities.push({
+                execution_id: `wk${weekNum}-${platform}-${actIdx + 1}`,
+                week_number: weekNum,
+                platform: platform.toLowerCase(),
+                content_type: item.type ?? 'post',
+                title: topic.replace(/^\(\d+\)\s*/, ''),  // strip "(1) " prefix from AI
+                theme,
+                day: DAYS[actIdx % 5],  // distribute Mon-Fri
+                objective: objective || undefined,
+                phase: phaseLabel || undefined,
+              });
+              actIdx++;
+            }
+          }
+        }
+      } else if (allocation && typeof allocation === 'object' && Object.keys(allocation).length > 0) {
+        // Fall back to platform_allocation + topics_to_cover
+        let actIdx = 0;
+        for (const [platform, count] of Object.entries(allocation)) {
+          const n = typeof count === 'number' ? count : 1;
+          for (let c = 0; c < n; c++) {
+            const topic = topics[actIdx % Math.max(1, topics.length)] ?? theme ?? `Week ${weekNum}`;
+            expandedActivities.push({
+              execution_id: `wk${weekNum}-${platform}-${actIdx + 1}`,
+              week_number: weekNum,
+              platform: platform.toLowerCase(),
+              content_type: 'post',
+              title: topic.replace(/^\(\d+\)\s*/, ''),
+              theme,
+              day: DAYS[actIdx % 5],
+              objective: objective || undefined,
+              phase: phaseLabel || undefined,
+            });
+            actIdx++;
+          }
+        }
+      } else if (topics.length > 0) {
+        // Just topics — distribute across days
+        topics.forEach((topic, ti) => {
+          expandedActivities.push({
+            execution_id: `wk${weekNum}-topic-${ti + 1}`,
+            week_number: weekNum,
+            platform: 'linkedin',
+            content_type: 'post',
+            title: topic.replace(/^\(\d+\)\s*/, ''),
+            theme,
+            day: DAYS[ti % 5],
+            objective: objective || undefined,
+            phase: phaseLabel || undefined,
+          });
+        });
       }
-      daysByKey.get(dayKey)!.activities.push(act);
+
+      if (expandedActivities.length > 0) {
+        for (const act of expandedActivities) {
+          activities.push(act);
+          const dayKey = `${weekNum}-${act.day}`;
+          if (!daysByKey.has(dayKey)) {
+            daysByKey.set(dayKey, { week_number: weekNum, day: act.day!, activities: [] });
+          }
+          daysByKey.get(dayKey)!.activities.push(act);
+        }
+      } else if (theme) {
+        // Absolute fallback — single themed activity
+        const execId = `wk${weekNum}-theme`;
+        const act: CalendarPlanActivity = {
+          execution_id: execId,
+          week_number: weekNum,
+          platform: 'linkedin',
+          content_type: 'post',
+          title: theme,
+          theme,
+          day: 'Monday',
+          objective: objective || undefined,
+          phase: phaseLabel || undefined,
+        };
+        activities.push(act);
+        const dayKey = `${weekNum}-Monday`;
+        if (!daysByKey.has(dayKey)) {
+          daysByKey.set(dayKey, { week_number: weekNum, day: 'Monday', activities: [] });
+        }
+        daysByKey.get(dayKey)!.activities.push(act);
+      }
     }
   });
 

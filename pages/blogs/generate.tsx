@@ -8,6 +8,7 @@ import { Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import BlogGenerateModal from '../../components/blog/BlogGenerateModal';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
+import { BLOG_FORMAT_OPTIONS, isValidBlogFormat, type BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 
 type BriefInsight = {
   company_id: string;
@@ -57,13 +58,17 @@ export default function BlogGeneratePage() {
   const prefillReason = typeof router.query.prefill_reason === 'string' ? router.query.prefill_reason.trim() : '';
   const prefillBriefToken = typeof router.query.prefill_brief === 'string' ? router.query.prefill_brief.trim() : '';
   const prefillCardToken = typeof router.query.prefill_card === 'string' ? router.query.prefill_card.trim() : '';
+  const prefillSuggestionsToken = typeof router.query.prefill_suggestions === 'string' ? router.query.prefill_suggestions.trim() : '';
+  const prefillFormat = typeof router.query.prefill_format === 'string' && isValidBlogFormat(router.query.prefill_format) ? router.query.prefill_format : null;
+
+  const prefillWords = typeof router.query.words === 'string' && ['800', '1200', '1600', '2000'].includes(router.query.words) ? router.query.words : null;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [posts, setPosts] = useState<BlogPost[]>([]);
   const [showGenerator, setShowGenerator] = useState(false);
   const [brief, setBrief] = useState<BriefInsight | null>(null);
-  const [targetWords, setTargetWords] = useState('1200');
+  const [targetWords, setTargetWords] = useState(prefillWords || (prefillFormat === 'pillar' ? '3000' : '1200'));
   const [uniquenessDirective, setUniquenessDirective] = useState('');
   const [mustInclude, setMustInclude] = useState('');
   const [campaignObjective, setCampaignObjective] = useState('');
@@ -73,6 +78,11 @@ export default function BlogGeneratePage() {
   const [suggestions, setSuggestions] = useState<DraftFieldSuggestions | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [formatType, setFormatType] = useState<BlogFormatType>(() => {
+    const qf = router.query.format;
+    if (typeof qf === 'string' && isValidBlogFormat(qf)) return qf;
+    return prefillFormat || 'standard';
+  });
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -135,6 +145,23 @@ export default function BlogGeneratePage() {
             sessionStorage.removeItem(prefillCardToken);
           }
         }
+
+        // Load pre-fetched suggestions from intelligence page
+        if (prefillSuggestionsToken && typeof window !== 'undefined') {
+          const rawSug = sessionStorage.getItem(prefillSuggestionsToken);
+          if (rawSug) {
+            try {
+              const parsed = JSON.parse(rawSug) as DraftFieldSuggestions;
+              setSuggestions(parsed);
+              // Auto-prime empty fields with first suggestion
+              if (parsed.uniqueness_directive_options?.[0]) setUniquenessDirective(parsed.uniqueness_directive_options[0]);
+              if (parsed.must_include_points_options?.[0]) setMustInclude(parsed.must_include_points_options[0]);
+              if (parsed.campaign_objective_options?.[0]) setCampaignObjective(parsed.campaign_objective_options[0]);
+              if (parsed.trend_context_options?.[0]) setTrendContext(parsed.trend_context_options[0]);
+            } catch {}
+            sessionStorage.removeItem(prefillSuggestionsToken);
+          }
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to initialize generator.');
       } finally {
@@ -145,7 +172,7 @@ export default function BlogGeneratePage() {
     if (selectedCompanyId) {
       void bootstrap();
     }
-  }, [selectedCompanyId, prefillBriefToken, prefillCardToken]);
+  }, [selectedCompanyId, prefillBriefToken, prefillCardToken, prefillSuggestionsToken]);
 
   const handleGenerated = (
     output: BlogGenerationOutput & { content_blocks?: unknown[] },
@@ -164,6 +191,7 @@ export default function BlogGeneratePage() {
       brief,
       company_id: selectedCompanyId,
       prefillTopic,
+      target_word_count: parseInt(targetWords, 10) || 1200,
       savedAt: new Date().toISOString(),
     };
 
@@ -197,6 +225,7 @@ export default function BlogGeneratePage() {
             mustInclude,
             campaignObjective,
             trendContext,
+            target_word_count: targetWords,
           },
         }),
       });
@@ -236,16 +265,16 @@ export default function BlogGeneratePage() {
   return (
     <>
       <Head>
-        <title>Generate Draft | Blog Intelligence</title>
+        <title>{formatType === 'pillar' ? 'Generate Guide | Pillar Content' : 'Generate Draft | Blog Intelligence'}</title>
       </Head>
       <div className="min-h-screen bg-gray-50 p-6">
         <div className="mx-auto max-w-3xl rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between gap-3 mb-5">
             <div>
-              <p className="text-xs text-gray-500">Blog Intelligence</p>
-              <h1 className="text-2xl font-bold text-gray-900">Generate Draft Before Writing</h1>
+              <p className="text-xs text-gray-500">{formatType === 'pillar' ? 'Guide / Pillar Content' : 'Blog Intelligence'}</p>
+              <h1 className="text-2xl font-bold text-gray-900">{formatType === 'pillar' ? 'Generate Guide Draft' : 'Generate Draft Before Writing'}</h1>
             </div>
-            <Link href="/blogs" className="text-sm text-gray-600 hover:text-gray-900">
+            <Link href={`/blogs/intelligence${prefillWords ? `?words=${prefillWords}` : ''}`} className="text-sm text-gray-600 hover:text-gray-900">
               ← Back
             </Link>
           </div>
@@ -311,6 +340,22 @@ export default function BlogGeneratePage() {
                   <option value="1200">~1200 words (standard deep article)</option>
                   <option value="1600">~1600 words (authority deep-dive)</option>
                   <option value="2000">~2000 words (pillar long-form)</option>
+                  {formatType === 'pillar' && <option value="3000">~3000 words (comprehensive guide)</option>}
+                  {formatType === 'pillar' && <option value="4000">~4000 words (in-depth guide)</option>}
+                  {formatType === 'pillar' && <option value="5000">~5000 words (definitive pillar)</option>}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Content Format</label>
+                <select
+                  value={formatType}
+                  onChange={(e) => setFormatType(e.target.value as BlogFormatType)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm bg-white"
+                >
+                  {BLOG_FORMAT_OPTIONS.map(f => (
+                    <option key={f.value} value={f.value}>{f.label} — {f.description}</option>
+                  ))}
                 </select>
               </div>
 
@@ -471,6 +516,7 @@ export default function BlogGeneratePage() {
           initialIntent={brief?.intent}
           initialTone={brief?.tone}
           initialRelatedBlogs={brief?.related_titles ?? []}
+          initialFormatType={formatType}
           baseAnswers={{
             ...(brief ? {
               company_context: brief.company_context,

@@ -6,14 +6,10 @@ import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { PlatformTabs } from '@/components/engagement/PlatformTabs';
-import { OpportunityRadar, type OpportunityRadarCategory } from '@/components/engagement/OpportunityRadar';
 import { ThreadList } from '@/components/engagement/ThreadList';
 import { ThreadView } from '@/components/engagement/ThreadView';
 import { AIEngagementAssistant } from '@/components/engagement/AIEngagementAssistant';
 import { WorkQueueSummary } from '@/components/engagement/WorkQueueSummary';
-import { ConversationMonitorHeader } from '@/components/engagement/ConversationMonitorHeader';
-import { TrendingTopicsPanel, type TrendingTopic } from '@/components/engagement/TrendingTopicsPanel';
-import { TopicPlaybookPanel } from '@/components/engagement/TopicPlaybookPanel';
 import { useEngagementInbox } from '@/hooks/useEngagementInbox';
 import { usePlatformCounts } from '@/hooks/usePlatformCounts';
 import { useWorkQueue } from '@/hooks/useWorkQueue';
@@ -21,6 +17,17 @@ import { useCompanyIntegrations } from '@/hooks/useCompanyIntegrations';
 import { useEngagementMessages } from '@/hooks/useEngagementMessages';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 import { recordEngagementEvent } from '@/lib/engagementTelemetry';
+
+type EngagementReadiness = {
+  connected_platforms: string[];
+  active_social_accounts: number;
+  published_posts: number;
+  ingestion_candidates: number;
+  raw_comments: number;
+  messages: number;
+  threads: number;
+  blockers: string[];
+};
 
 export interface InboxDashboardProps {
   organizationId: string;
@@ -34,14 +41,14 @@ export function InboxDashboard({
   const router = useRouter();
   const [selectedPlatform, setSelectedPlatform] = useState<string>('all');
   const [selectedThread, setSelectedThread] = useState<InboxThread | null>(null);
-  const [selectedOpportunityCategory, setSelectedOpportunityCategory] = useState<OpportunityRadarCategory | null>(null);
-  const [selectedTopic, setSelectedTopic] = useState<TrendingTopic | null>(null);
   const [mobileTab, setMobileTab] = useState<'threads' | 'conversation' | 'assistant'>('threads');
   const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
-  const [trendingTopicsCount, setTrendingTopicsCount] = useState(0);
   const [authorFilter, setAuthorFilter] = useState<{ authorName: string; platform: string } | null>(
     null
   );
+  const [readiness, setReadiness] = useState<EngagementReadiness | null>(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [readinessError, setReadinessError] = useState<string | null>(null);
 
   const filters = useMemo(
     () => ({
@@ -63,42 +70,14 @@ export function InboxDashboard({
   const threadIdFromUrl = typeof router.query.thread === 'string' ? router.query.thread : null;
 
   const filteredItems = useMemo((): InboxThread[] => {
-    let list = items;
-    if (authorFilter) {
-      list = list.filter(
-        (t) =>
-          (t.author_name === authorFilter.authorName ||
-            t.author_username === authorFilter.authorName) &&
-          t.platform === authorFilter.platform
-      );
-    }
-    if (!selectedOpportunityCategory) return list;
-    return list.filter((t) => {
-      const cat = (t.classification_category ?? '').toLowerCase();
-      switch (selectedOpportunityCategory) {
-        case 'buying_intent':
-          return t.lead_detected || (t.lead_score ?? 0) > 0;
-        case 'competitor_complaints':
-          return cat === 'competitor_complaint' || cat === 'problem_discussion';
-        case 'product_comparisons':
-          return cat === 'product_comparison';
-        case 'recommendation_requests':
-          return cat === 'recommendation_request';
-        case 'general_opportunities':
-          return (
-            t.opportunity_indicator &&
-            !t.lead_detected &&
-            (t.lead_score ?? 0) <= 0 &&
-            cat !== 'competitor_complaint' &&
-            cat !== 'problem_discussion' &&
-            cat !== 'product_comparison' &&
-            cat !== 'recommendation_request'
-          );
-        default:
-          return true;
-      }
-    });
-  }, [items, selectedOpportunityCategory, authorFilter]);
+    if (!authorFilter) return items;
+    return items.filter(
+      (t) =>
+        (t.author_name === authorFilter.authorName ||
+          t.author_username === authorFilter.authorName) &&
+        t.platform === authorFilter.platform
+    );
+  }, [items, authorFilter]);
 
   useEffect(() => {
     if (!threadIdFromUrl || items.length === 0) return;
@@ -107,10 +86,45 @@ export function InboxDashboard({
   }, [threadIdFromUrl, items]);
 
   useEffect(() => {
-    if ((!selectedOpportunityCategory && !selectedTopic) || !selectedThread) return;
+    if (!selectedThread) return;
     const stillInFilter = filteredItems.some((t) => t.thread_id === selectedThread.thread_id);
     if (!stillInFilter) setSelectedThread(null);
-  }, [selectedOpportunityCategory, selectedTopic, selectedThread, filteredItems]);
+  }, [selectedThread, filteredItems]);
+
+  const fetchReadiness = useCallback(async () => {
+    if (!organizationId) {
+      setReadiness(null);
+      setReadinessError(null);
+      setReadinessLoading(false);
+      return;
+    }
+
+    setReadinessLoading(true);
+    setReadinessError(null);
+    try {
+      const params = new URLSearchParams({
+        organization_id: organizationId,
+        organizationId: organizationId,
+      });
+      const res = await fetch(`/api/engagement/readiness?${params.toString()}`, {
+        credentials: 'include',
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.error || body.message || 'Failed to load engagement readiness');
+      }
+      setReadiness(body as EngagementReadiness);
+    } catch (err) {
+      setReadiness(null);
+      setReadinessError(err instanceof Error ? err.message : 'Failed to load engagement readiness');
+    } finally {
+      setReadinessLoading(false);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    void fetchReadiness();
+  }, [fetchReadiness]);
 
   const handleSelectThread = useCallback(
     (thread: InboxThread) => {
@@ -168,7 +182,57 @@ export function InboxDashboard({
     refresh();
     refreshCounts();
     refreshWorkQueue();
-  }, [refresh, refreshCounts, refreshWorkQueue]);
+    fetchReadiness();
+  }, [refresh, refreshCounts, refreshWorkQueue, fetchReadiness]);
+
+  const totalThreads = useMemo(
+    () => Object.values(counts).reduce((sum, entry) => sum + (entry?.thread_count ?? 0), 0),
+    [counts]
+  );
+  const connectedLabels = useMemo(
+    () => integrations.map((integration) => integration.label),
+    [integrations]
+  );
+  const showReadinessEmptyState =
+    !loading && !authorFilter && filteredItems.length === 0;
+  const platformScopeLabel = selectedPlatform === 'all'
+    ? 'all connected platforms'
+    : integrations.find((integration) => integration.platform === selectedPlatform)?.label || selectedPlatform;
+  const captureChecklist = useMemo(() => {
+    const base = [
+      'Comments and replies on published posts from connected platforms',
+      'Thread-level inbox items grouped by platform, priority, and conversation type',
+      'AI-assisted response suggestions, lead signals, and next-action guidance',
+    ];
+    if (connectedLabels.length > 0) {
+      return base.map((item, index) =>
+        index === 0 ? `${item}. Current connection scope: ${connectedLabels.join(', ')}.` : item
+      );
+    }
+    return base;
+  }, [connectedLabels]);
+  const testChecklist = useMemo(() => {
+    if (connectedLabels.length === 0) {
+      return [
+        'Connect at least one social account in Social Platforms.',
+        'Publish a post from the connected workspace so the platform creates a real post ID.',
+        'Create an external comment or reply on that published post, then refresh this page.',
+      ];
+    }
+
+    return [
+      `Publish one post from ${connectedLabels[0]} using this workspace connection.`,
+      'Add a real external comment or reply on that post from another account.',
+      'Refresh Engagement Center and confirm the thread appears under All and the platform tab.',
+      'Open the thread and verify AI recommendations, reply, and like actions are available.',
+    ];
+  }, [connectedLabels]);
+  const readinessBlockers = readiness?.blockers ?? [];
+  const topStatusMessage = readinessLoading
+    ? 'Checking engagement readiness...'
+    : readinessError
+      ? readinessError
+      : readinessBlockers[0] || null;
 
   const handleMarkResolved = useCallback(() => {
     if (organizationId && selectedThread) {
@@ -316,7 +380,12 @@ export function InboxDashboard({
     <div className={`flex flex-col h-full ${className}`}>
       <header className="shrink-0 px-4 py-3 border-b border-slate-200 bg-white">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-slate-900">Engagement Command Center</h1>
+          <div>
+            <h1 className="text-xl font-semibold text-slate-900">Engagement Center</h1>
+            <p className="mt-1 text-sm text-slate-600">
+              Manage conversations, replies, and next actions from your connected platforms.
+            </p>
+          </div>
           <div className="flex items-center gap-2">
             <Link href="/engagement/leads" className="text-sm text-blue-600 hover:text-blue-800">
               Potential Leads
@@ -340,38 +409,19 @@ export function InboxDashboard({
           loading={countsLoading || workQueueLoading}
           className="mt-3"
         />
-        <OpportunityRadar
-          organizationId={organizationId}
-          selectedCategory={selectedOpportunityCategory}
-          onSelectCategory={setSelectedOpportunityCategory}
-        />
         {error && (
           <div className="mt-2 p-2 rounded bg-red-50 text-red-700 text-sm" role="alert">
             {error}
           </div>
         )}
+        {!error && (countsError || workQueueError) && (
+          <div className="mt-2 p-2 rounded bg-amber-50 text-amber-800 text-sm" role="status">
+            {countsError || workQueueError}
+          </div>
+        )}
       </header>
 
       <WorkQueueSummary workQueue={workQueue} loading={workQueueLoading} />
-
-      <ConversationMonitorHeader
-        items={filteredItems}
-        loading={loading}
-        trendingTopicsCount={trendingTopicsCount}
-      />
-
-      <TrendingTopicsPanel
-        organizationId={organizationId}
-        selectedTopic={selectedTopic}
-        onSelectTopic={setSelectedTopic}
-        windowHours={24}
-        onTopicsLoaded={(topics) => setTrendingTopicsCount(topics.length)}
-      />
-
-      <TopicPlaybookPanel
-        organizationId={organizationId}
-        selectedTopic={selectedTopic}
-      />
 
       {/* Mobile tab bar (< 768px) */}
       <div className="md:hidden shrink-0 flex border-b border-slate-200 bg-white">
@@ -422,11 +472,94 @@ export function InboxDashboard({
             emptyMessage={
               authorFilter
                 ? `No threads from ${authorFilter.authorName} on ${authorFilter.platform}.`
-                : selectedTopic
-                  ? 'No threads match this topic.'
-                  : selectedOpportunityCategory
-                    ? 'No threads match this opportunity filter.'
-                    : 'No threads in inbox.'
+                : 'No threads in inbox.'
+            }
+            emptyState={
+              showReadinessEmptyState ? (
+                <div className="w-full max-w-md rounded-xl border border-slate-200 bg-slate-50 p-4 text-left text-sm text-slate-600 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900">
+                        Engagement is connected, but no activity has reached the inbox yet.
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-600">
+                        The current view is scoped to {platformScopeLabel}. Once real engagement is pulled in, the thread list will populate here.
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 border border-slate-200">
+                      {totalThreads} thread{totalThreads === 1 ? '' : 's'}
+                    </span>
+                  </div>
+
+                  {topStatusMessage && (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      {topStatusMessage}
+                    </div>
+                  )}
+
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg bg-white p-3 border border-slate-200">
+                      <div className="text-slate-500">Connected Accounts</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-900">
+                        {readiness?.active_social_accounts ?? integrations.length}
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-white p-3 border border-slate-200">
+                      <div className="text-slate-500">Published Posts</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-900">
+                        {readiness?.published_posts ?? 0}
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-white p-3 border border-slate-200">
+                      <div className="text-slate-500">Raw Comments</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-900">
+                        {readiness?.raw_comments ?? 0}
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-white p-3 border border-slate-200">
+                      <div className="text-slate-500">Unified Threads</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-900">
+                        {readiness?.threads ?? totalThreads}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      What This Captures Today
+                    </div>
+                    <ul className="mt-2 space-y-2 text-sm text-slate-700">
+                      {captureChecklist.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Best Validation Flow
+                    </div>
+                    <ol className="mt-2 space-y-2 text-sm text-slate-700 list-decimal list-inside">
+                      {testChecklist.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ol>
+                  </div>
+
+                  {readinessBlockers.length > 1 && (
+                    <div className="mt-4">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Remaining Gaps
+                      </div>
+                      <ul className="mt-2 space-y-2 text-sm text-slate-700">
+                        {readinessBlockers.slice(1).map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ) : undefined
             }
             authorFilter={authorFilter}
             onClearAuthorFilter={authorFilter ? () => setAuthorFilter(null) : undefined}
@@ -478,7 +611,7 @@ export function InboxDashboard({
               onClick={() => setAiDrawerOpen(!aiDrawerOpen)}
               className="p-2 text-sm text-slate-600 hover:bg-slate-100 rounded"
             >
-              AI Insights {aiDrawerOpen ? '▼' : '▶'}
+              Copilot {aiDrawerOpen ? '▼' : '▶'}
             </button>
           </div>
           {/* Tablet AI drawer overlay */}
@@ -493,7 +626,7 @@ export function InboxDashboard({
               />
               <div className="absolute right-0 top-0 bottom-0 w-full max-w-sm bg-white shadow-xl flex flex-col">
                 <div className="shrink-0 flex items-center justify-between p-3 border-b border-slate-200">
-                  <span className="font-medium">AI Engagement Assistant</span>
+                  <span className="font-medium">Engagement Copilot</span>
                   <button
                     type="button"
                     onClick={() => setAiDrawerOpen(false)}

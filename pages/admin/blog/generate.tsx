@@ -7,6 +7,7 @@ import { useRouter } from 'next/router';
 import { Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import BlogGenerateModal from '../../../components/blog/BlogGenerateModal';
 import type { BlogGenerationOutput } from '../../../lib/blog/blogGenerationEngine';
+import { BLOG_FORMAT_OPTIONS, type BlogFormatType } from '../../../lib/blog/blogStructureTemplates';
 
 type CompanyOption = {
   id: string;
@@ -82,6 +83,7 @@ export default function AdminBlogGeneratePage() {
   const [suggestions, setSuggestions] = useState<DraftFieldSuggestions | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [formatType, setFormatType] = useState<BlogFormatType>('standard');
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -173,6 +175,7 @@ export default function AdminBlogGeneratePage() {
       brief,
       selectedCompanyId,
       prefillTopic,
+      target_word_count: parseInt(targetWords, 10) || 1200,
       savedAt: new Date().toISOString(),
     };
 
@@ -206,6 +209,7 @@ export default function AdminBlogGeneratePage() {
             mustInclude,
             campaignObjective,
             trendContext,
+            target_word_count: targetWords,
           },
         }),
       });
@@ -334,6 +338,19 @@ export default function AdminBlogGeneratePage() {
                   <option value="1200">~1200 words (standard deep article)</option>
                   <option value="1600">~1600 words (authority deep-dive)</option>
                   <option value="2000">~2000 words (pillar long-form)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Content Format</label>
+                <select
+                  value={formatType}
+                  onChange={(e) => setFormatType(e.target.value as BlogFormatType)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm bg-white"
+                >
+                  {BLOG_FORMAT_OPTIONS.map(f => (
+                    <option key={f.value} value={f.value}>{f.label} — {f.description}</option>
+                  ))}
                 </select>
               </div>
 
@@ -494,6 +511,7 @@ export default function AdminBlogGeneratePage() {
           initialIntent={brief?.intent}
           initialTone={brief?.tone}
           initialRelatedBlogs={brief?.related_titles ?? []}
+          initialFormatType={formatType}
           baseAnswers={{
             ...(brief ? {
               company_context: brief.company_context,

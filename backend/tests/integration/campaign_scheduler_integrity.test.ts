@@ -11,6 +11,17 @@ jest.mock('../../services/GovernanceEventService', () => ({
   recordGovernanceEvent: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../../services/structuredPlanScheduler', () => ({
+  ScheduleEligibilityError: class ScheduleEligibilityError extends Error {
+    code: string;
+    details: unknown;
+
+    constructor(details: unknown, code = 'SCHEDULE_NOT_READY') {
+      super('Campaign has creator-dependent activities that are not ready for scheduling');
+      this.name = 'ScheduleEligibilityError';
+      this.code = code;
+      this.details = details;
+    }
+  },
   scheduleStructuredPlan: jest.fn(),
 }));
 jest.mock('../../services/campaignBlueprintService', () => {

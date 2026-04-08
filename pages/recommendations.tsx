@@ -112,6 +112,8 @@ type RecommendationEngineResult = {
   };
 };
 
+type IntelligentMixState = import('./command-center/intelligent-mix-strategy').IntelligentMixState;
+
 type DetectedOpportunity = {
   topic: string;
   category?: string | null;
@@ -140,8 +142,6 @@ type ExternalApiOption = {
 
 const OPPORTUNITY_TAB_TYPES: { type: string; label: string }[] = [
   { type: 'TREND', label: 'Trend Campaigns' },
-  { type: 'LEAD', label: 'Active Leads' },
-  { type: 'PULSE', label: 'Market Pulse' },
 ];
 
 export default function RecommendationsPage() {
@@ -252,6 +252,18 @@ export default function RecommendationsPage() {
   >('reach');
   const [activeOpportunityTab, setActiveOpportunityTab] = useState<string>('TREND');
   const [prefillBlogId, setPrefillBlogId] = useState<string | null>(null);
+  const intelligentMixContext = useMemo<IntelligentMixState | null>(() => {
+    try {
+      if (typeof router.query.intelligentMix !== 'string' || router.query.intelligentMix !== '1') {
+        return null;
+      }
+      if (typeof window === 'undefined') return null;
+      const raw = sessionStorage.getItem('intelligent-mix-strategy-state');
+      return raw ? JSON.parse(raw) as IntelligentMixState : null;
+    } catch {
+      return null;
+    }
+  }, [router.query.intelligentMix]);
   const [opportunityRegions, setOpportunityRegions] = useState<string>('');
   const [trendStrategicIntents, setTrendStrategicIntents] = useState<string[]>([]);
   const [engineOverrides, setEngineOverrides] = useState<Record<string, string>>({});
@@ -345,6 +357,13 @@ export default function RecommendationsPage() {
       setActiveOpportunityTab('TREND');
     }
   }, [router.isReady, router.query.companyId, router.query.tab, router.query.campaignId, router.query.blog_id]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    if (activeOpportunityTab !== 'LEAD' && activeOpportunityTab !== 'PULSE') return;
+    const intelTab = activeOpportunityTab === 'LEAD' ? 'active-leads' : 'market-pulse';
+    void router.replace(`/dashboard?tab=intelligence&intelTab=${intelTab}`);
+  }, [activeOpportunityTab, router]);
 
   useEffect(() => {
     if (!selectedCompanyId) {
@@ -1347,6 +1366,16 @@ export default function RecommendationsPage() {
               </button>
             ))}
           </div>
+          <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
+            Market Pulse and Active Leads now live in the dashboard Intelligence hub.
+            <button
+              type="button"
+              onClick={() => void router.push('/dashboard?tab=intelligence&intelTab=intelligence')}
+              className="ml-2 font-semibold underline"
+            >
+              Open Intelligence
+            </button>
+          </div>
           <div className="min-h-[120px] pt-2">
             {activeOpportunityTab === 'TREND' && (
               <TrendCampaignsTab
@@ -1367,6 +1396,7 @@ export default function RecommendationsPage() {
                 viewMode={viewMode}
                 campaignId={selectedCampaignId || null}
                 initialBlogId={prefillBlogId}
+                intelligentMixContext={intelligentMixContext}
               />
             )}
             {activeOpportunityTab === 'LEAD' && (
@@ -1931,39 +1961,6 @@ export default function RecommendationsPage() {
             </div>
           </div>
         )}
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold text-gray-900">External API Selection</h2>
-          <p className="text-xs text-gray-500 mt-1">
-            Defaults come from company settings. You can override per request.
-          </p>
-          {isApiLoading ? (
-            <div className="text-xs text-gray-500 mt-3">Loading API defaults...</div>
-          ) : (
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-700">
-              {availableApis.length === 0 && (
-                <div className="text-xs text-gray-500">No external APIs configured.</div>
-              )}
-              {availableApis.map((api) => (
-                <label
-                  key={api.id}
-                  className="flex items-center gap-2 border rounded-lg px-3 py-2"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedApiIds.includes(api.id)}
-                    onChange={() => toggleApiSelection(api.id)}
-                    disabled={!selectedCompanyId}
-                  />
-                  <span className="font-semibold">{api.name}</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
-                    {api.is_global_preset ? 'Global (Virality)' : 'Tenant-Provided'}
-                  </span>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
 
         {errorMessage && (
           <div className="bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg p-3">

@@ -6,6 +6,9 @@
  */
 
 import type { ContentBlock } from './blockTypes';
+import { flattenBlocks } from './blockUtils';
+import type { BlogFormatType, FormatValidationOverrides } from './blogStructureTemplates';
+import { getStructureRules } from './blogStructureTemplates';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -40,6 +43,7 @@ export interface QualityScore {
     hasSummary:       boolean;
     hasReferences:    boolean;
     shortParaCount:   number; // paragraphs < 50 words
+    targetWordCount:  number; // user-selected target (800/1200/1600/2000)
   };
 }
 
@@ -49,6 +53,12 @@ export type FormMeta = {
   seo_meta_title:       string;
   seo_meta_description: string;
   tags:                 string[];
+  /** User-selected word count target from the generation modal (800/1200/1600/2000). Defaults to 800. */
+  target_word_count?:   number;
+  /** Blog format type — adjusts structural validation rules. Defaults to 'standard'. */
+  format_type?:         BlogFormatType;
+  /** Content type — articles/whitepapers get reduced SEO/linking weight, increased depth weight. */
+  content_type?:        'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide';
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -67,6 +77,16 @@ export function calculateQualityScore(
   blocks: ContentBlock[],
   form: FormMeta,
 ): QualityScore {
+  const targetWords = form.target_word_count && form.target_word_count >= 300 ? form.target_word_count : 800;
+  const formatType: BlogFormatType = form.format_type || 'standard';
+
+  // Get format-specific validation overrides (null for 'standard')
+  const formatRules = getStructureRules(formatType, targetWords);
+  const overrides: FormatValidationOverrides | null = formatRules?.validation_overrides ?? null;
+
+  // Flatten column blocks so nested content is analysed
+  const flat = flattenBlocks(blocks);
+
   // ── Analyse blocks ────────────────────────────────────────────────────────
   let h2Count = 0;
   let h3Count = 0;
@@ -79,11 +99,14 @@ export function calculateQualityScore(
   let totalWords = 0;
   let shortParaCount = 0;
 
-  for (const block of blocks) {
+  for (const block of flat) {
     switch (block.type) {
       case 'heading':
-        if (block.level === 2) h2Count++;
-        if (block.level === 3) h3Count++;
+        // Only count headings that have actual text content
+        if (block.text.trim().length > 0) {
+          if (block.level === 2) h2Count++;
+          if (block.level === 3) h3Count++;
+        }
         break;
 
       case 'key_insights': {
@@ -114,7 +137,8 @@ export function calculateQualityScore(
       case 'paragraph': {
         const wc = wordCount(stripHtml(block.html));
         totalWords += wc;
-        if (wc < 50) shortParaCount++;
+        // Only count as "short" if the paragraph has some content but not enough
+        if (wc > 0 && wc < 50) shortParaCount++;
         break;
       }
 
@@ -139,32 +163,40 @@ export function calculateQualityScore(
   });
 
   // ── Structure score (0–25) ────────────────────────────────────────────────
+  const minH2 = overrides?.min_h2 ?? 3;
+  const needsSummary    = overrides ? overrides.requires_summary     : true;
+  const needsReferences = overrides ? overrides.requires_references  : true;
+  const needsKeyInsights = overrides ? overrides.requires_key_insights : true;
+
   let structure = 0;
-  if (h2Count >= 3)       structure += 10;
-  else if (h2Count >= 2)  structure += 6;
-  else if (h2Count >= 1)  structure += 3;
-  if (hasKeyInsights)     structure += 5;
-  if (hasSummary)         structure += 5;
-  if (hasReferences)      structure += 5;
+  if (h2Count >= minH2)       structure += 10;
+  else if (h2Count >= Math.max(1, minH2 - 1)) structure += 6;
+  else if (h2Count >= 1)      structure += 3;
+  if (needsKeyInsights ? hasKeyInsights : true) structure += 5;
+  if (needsSummary ? hasSummary : true)         structure += 5;
+  if (needsReferences ? hasReferences : true)   structure += 5;
 
   // ── Depth score (0–25) ────────────────────────────────────────────────────
   let depth = 0;
-  if (totalWords >= 1200)      depth += 15;
-  else if (totalWords >= 800)  depth += 12;
-  else if (totalWords >= 500)  depth += 8;
-  else if (totalWords >= 300)  depth += 4;
-  else if (totalWords >= 150)  depth += 2;
+  // Only award depth points if there is actual content
+  if (totalWords > 0) {
+    if (totalWords >= targetWords)            depth += 15;
+    else if (totalWords >= targetWords * 0.7) depth += 12;
+    else if (totalWords >= targetWords * 0.5) depth += 8;
+    else if (totalWords >= targetWords * 0.3) depth += 4;
+    else if (totalWords >= 150)               depth += 2;
 
-  if (shortParaCount === 0)    depth += 5;
-  else if (shortParaCount <= 1) depth += 3;
-  else if (shortParaCount <= 3) depth += 1;
+    if (shortParaCount === 0)    depth += 5;
+    else if (shortParaCount <= 1) depth += 3;
+    else if (shortParaCount <= 3) depth += 1;
 
-  const avgWords = blocks.filter(b => b.type === 'paragraph').length > 0
-    ? totalWords / blocks.filter(b => b.type === 'paragraph').length
-    : 0;
-  if (avgWords >= 120)          depth += 5;
-  else if (avgWords >= 80)      depth += 3;
-  else if (avgWords >= 50)      depth += 1;
+    const avgWords = blocks.filter(b => b.type === 'paragraph').length > 0
+      ? totalWords / blocks.filter(b => b.type === 'paragraph').length
+      : 0;
+    if (avgWords >= 120)          depth += 5;
+    else if (avgWords >= 80)      depth += 3;
+    else if (avgWords >= 50)      depth += 1;
+  }
 
   // ── SEO score (0–25) ──────────────────────────────────────────────────────
   let seo = 0;
@@ -192,22 +224,43 @@ export function calculateQualityScore(
   if (refsCount >= 3)                   geo += 4;
   else if (refsCount >= 1)              geo += 2;
 
-  // ── Linking score (0–10) ─────────────────────────────────────────────────
+  // ── Linking score (0–10) — not applicable for articles or whitepapers ──────
   let linking = 0;
-  if (internalLinks >= 2)               linking += 10;
-  else if (internalLinks === 1)         linking += 5;
+  if (form.content_type !== 'article' && form.content_type !== 'whitepaper' && form.content_type !== 'guide') {
+    if (internalLinks >= 2)               linking += 10;
+    else if (internalLinks === 1)         linking += 5;
+  }
+
+  // ── Content-type weight rescaling ─────────────────────────────────────────
+  // Blog:       Structure 25 + Depth 25 + SEO 25 + GEO 15 + Linking 10 = 100
+  // Article:    Structure 25 + Depth 35 + SEO 15 + GEO 15 + Linking  0 =  90
+  // Whitepaper: Structure 25 + Depth 30 + SEO 15 + GEO 15 + Linking  0 =  85
+  // Guide:      Structure 25 + Depth 30 + SEO 15 + GEO 15 + Linking  0 =  85
+  // Newsletter: Structure 25 + Depth 20 + SEO 15 + GEO 20 + Linking 10 =  90
+  // Story:      Structure 20 + Depth 30 + SEO 10 + GEO 20 + Linking  0 =  80
+  const isArticle    = form.content_type === 'article';
+  const isWhitepaper = form.content_type === 'whitepaper';
+  const isNewsletter = form.content_type === 'newsletter';
+  const isStory      = form.content_type === 'story';
+  const isGuide      = form.content_type === 'guide';
+
+  const finalStructure = isStory ? Math.min(20, Math.round(structure * 0.8)) : structure;
+  const finalDepth     = (isWhitepaper || isGuide) ? Math.min(30, Math.round(depth * 1.2)) : isArticle ? Math.min(35, Math.round(depth * 1.4)) : isStory ? Math.min(30, Math.round(depth * 1.2)) : isNewsletter ? Math.min(20, Math.round(depth * 0.8)) : depth;
+  const finalSeo       = isStory ? Math.min(10, Math.round(seo * 0.4)) : (isArticle || isWhitepaper || isNewsletter || isGuide) ? Math.min(15, Math.round(seo * 0.6)) : seo;
+  const finalGeo       = (isNewsletter || isStory) ? Math.min(20, Math.round(geo * 1.33)) : geo;
+  const finalLinking   = (isArticle || isWhitepaper || isStory || isGuide) ? 0 : linking;
 
   // ── Issues ───────────────────────────────────────────────────────────────
   const issues: ValidationIssue[] = [];
 
-  // Hard errors (block publish)
-  if (h2Count < 3)
-    issues.push({ severity: 'error', category: 'structure', message: `At least 3 H2 sections required (found ${h2Count})` });
-  if (!hasKeyInsights)
+  // Hard errors (block publish) — format-aware
+  if (h2Count < minH2)
+    issues.push({ severity: 'error', category: 'structure', message: `At least ${minH2} H2 sections required (found ${h2Count})` });
+  if (needsKeyInsights && !hasKeyInsights)
     issues.push({ severity: 'error', category: 'structure', message: 'Key Insights block must have at least 1 filled item' });
-  if (!hasSummary)
+  if (needsSummary && !hasSummary)
     issues.push({ severity: 'error', category: 'structure', message: 'Summary block must be filled in' });
-  if (!hasReferences)
+  if (needsReferences && !hasReferences)
     issues.push({ severity: 'error', category: 'structure', message: 'References block must have at least 1 entry' });
   if (imagesMissingAlt > 0)
     issues.push({ severity: 'error', category: 'seo', message: `${imagesMissingAlt} image${imagesMissingAlt > 1 ? 's' : ''} missing alt text` });
@@ -219,20 +272,21 @@ export function calculateQualityScore(
     issues.push({ severity: 'warning', category: 'seo', message: 'Add a custom meta title for better search ranking' });
   if (!form.seo_meta_description?.trim())
     issues.push({ severity: 'warning', category: 'seo', message: 'Add a meta description for search engines' });
-  if (totalWords < 500)
-    issues.push({ severity: 'warning', category: 'depth', message: `Content is short (${totalWords} words) — aim for 800+` });
+  if (totalWords < targetWords * 0.6)
+    issues.push({ severity: 'warning', category: 'depth', message: `Content is short (${totalWords} words) — aim for ${targetWords}+` });
   if (shortParaCount > 2)
     issues.push({ severity: 'warning', category: 'depth', message: `${shortParaCount} sections under 50 words — add supporting detail` });
-  if (internalLinks === 0)
+  if (internalLinks === 0 && form.content_type !== 'article' && form.content_type !== 'whitepaper' && form.content_type !== 'guide')
     issues.push({ severity: 'warning', category: 'linking', message: 'Add internal links to related Omnivyra articles' });
   if (refsCount < 3)
     issues.push({ severity: 'warning', category: 'geo', message: `Add ${3 - refsCount} more reference${3 - refsCount > 1 ? 's' : ''} for GEO authority (found ${refsCount})` });
 
-  const total = Math.min(100, structure + depth + seo + geo + linking);
+  const maxScore = (isWhitepaper || isGuide) ? 85 : isStory ? 80 : (isArticle || isNewsletter) ? 90 : 100;
+  const total = Math.min(maxScore, finalStructure + finalDepth + finalSeo + finalGeo + finalLinking);
 
   return {
     total,
-    breakdown: { structure, depth, seo, geo, linking },
+    breakdown: { structure: finalStructure, depth: finalDepth, seo: finalSeo, geo: finalGeo, linking: finalLinking },
     issues,
     meta: {
       h2Count,
@@ -245,6 +299,7 @@ export function calculateQualityScore(
       hasSummary,
       hasReferences,
       shortParaCount,
+      targetWordCount: targetWords,
     },
   };
 }

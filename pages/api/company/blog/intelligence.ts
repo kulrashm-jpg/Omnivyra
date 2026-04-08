@@ -1,47 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { getUserRole, isSuperAdmin, Role, getCompanyRoleIncludingInvited } from '@/backend/services/rbacService';
-
-async function ensureCompanyAccess(
-  req: NextApiRequest,
-  res: NextApiResponse,
-  companyId: string,
-): Promise<{ userId: string; role: Role | null } | null> {
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
-  }
-
-  const superAdmin = await isSuperAdmin(user.id);
-  if (superAdmin) {
-    return { userId: user.id, role: Role.SUPER_ADMIN };
-  }
-
-  let { role, error: roleError } = await getUserRole(user.id, companyId);
-  if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
-    const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
-    if (
-      fallbackRole === Role.COMPANY_ADMIN ||
-      fallbackRole === Role.ADMIN ||
-      fallbackRole === Role.SUPER_ADMIN
-    ) {
-      role = fallbackRole;
-      roleError = null;
-    }
-  }
-  if (roleError) {
-    res.status(403).json({ error: roleError === 'COMPANY_ACCESS_DENIED' ? 'COMPANY_ACCESS_DENIED' : 'FORBIDDEN_ROLE' });
-    return null;
-  }
-  if (!role) {
-    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    return null;
-  }
-
-  return { userId: user.id, role };
-}
+import { enforceCompanyAccess } from '@/backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -52,7 +11,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'company_id is required' });
   }
 
-  const auth = await ensureCompanyAccess(req, res, company_id);
+  const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
 
   try {

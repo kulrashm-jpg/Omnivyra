@@ -2,7 +2,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import { improveBlogDraft, type ImprovementArea } from '../../../lib/content/contentImprovementEngine';
+import type { ImprovementArea } from '../../../lib/content/contentImprovementEngine';
+import { runOwnedImprovement } from '../../../lib/content/runOwnedImprovement';
 import type { ContentBlock } from '../../../lib/blog/blockTypes';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -42,10 +43,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const profile = await getProfile(company_id, { autoRefine: false, languageRefine: false });
 
-    if (contentType !== 'blog') {
-      return res.status(400).json({ error: 'Only blog contentType is supported in this version' });
-    }
-
     const draftObj = draft as {
       title?: string;
       excerpt?: string;
@@ -53,9 +50,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       seo_meta_description?: string;
       tags?: string[];
       content_blocks?: ContentBlock[];
+      target_word_count?: number;
+      format_type?: string;
     };
 
-    const result = await improveBlogDraft({
+    const baseInput = {
       companyId: company_id,
       area: area as ImprovementArea,
       draft: {
@@ -65,6 +64,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         seo_meta_description: draftObj.seo_meta_description || '',
         tags: Array.isArray(draftObj.tags) ? draftObj.tags : [],
         content_blocks: Array.isArray(draftObj.content_blocks) ? draftObj.content_blocks : [],
+        target_word_count: typeof draftObj.target_word_count === 'number' ? draftObj.target_word_count : undefined,
+        format_type: typeof draftObj.format_type === 'string' ? draftObj.format_type : undefined,
       },
       context: {
         contentType,
@@ -73,7 +74,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         trendContext: typeof trendContext === 'string' ? trendContext : undefined,
       },
       companyProfile: profile,
-    });
+    } as const;
+
+    const result = await runOwnedImprovement(baseInput);
 
     return res.status(200).json(result);
   } catch (err) {

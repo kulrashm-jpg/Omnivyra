@@ -13,7 +13,7 @@ describe('renderTextSanitizer', () => {
   });
 
   it('removes fallback boilerplate and duplicate sentences', () => {
-    expect(isFallbackRenderText('Available signals indicate limited data coverage')).toBe(true);
+    expect(isFallbackRenderText('Available signals indicate limited decision coverage')).toBe(true);
     expect(
       sanitizeRenderText(
         'Search visibility is weak. Search visibility is weak. This is reducing click share.',
@@ -26,7 +26,7 @@ describe('renderTextSanitizer', () => {
     expect(
       sanitizeRenderLines(
         [
-          'Available signals indicate limited data coverage',
+          '',
           'Primary CTA appears below the fold and slows conversion.',
           'Primary CTA appears below the fold and slows conversion.',
           'Proof blocks are missing on service pages.',

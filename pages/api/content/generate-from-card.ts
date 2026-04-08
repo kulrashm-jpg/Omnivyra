@@ -9,9 +9,9 @@
  *   2. Parsing and validating the strategic card payload
  *   3. Calling cardToContentBridge() to map card → BlogGenerationRequest
  *   4. Injecting company profile context (same as /api/blogs/generate)
- *   5. Calling runBlogGeneration() and returning the result
+ *   5. Calling the owned content-type runner and returning the result
  *
- * ALL generation logic lives in lib/blog/runBlogGeneration.ts.
+ * Generation is routed through lib/content/runOwnedGeneration.ts.
  * ALL bridge logic lives in lib/content/cardToContentBridge.ts.
  * Zero generation logic is permitted in this file.
  *
@@ -34,9 +34,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
-import { runBlogGeneration } from '../../../lib/blog/runBlogGeneration';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { buildFormattedStyleInstructions } from '../../../lib/content/writingStyleEngine';
+import { runOwnedGeneration } from '../../../lib/content/runOwnedGeneration';
 import {
   cardToContentBridge,
   cardToBlogRequest,
@@ -147,7 +147,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // ── 4. Generate ──────────────────────────────────────────────────────────────
-  const result = await runBlogGeneration(generationRequest);
+  const result = await runOwnedGeneration(generationRequest);
 
   // ── 5. Depth + insight correction (post-generation) ─────────────────────────
   // Runs only on full-mode successful generation — skips clarification + angles modes.

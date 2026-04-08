@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import ContentRenderer, { CarouselContent, PLATFORM_HIGHLIGHT } from './ContentRenderer';
-import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical, Send } from 'lucide-react';
+import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical, Send, Brain } from 'lucide-react';
 import PlatformIcon from './ui/PlatformIcon';
 import { getPlatformLabel } from '../utils/platformIcons';
 import { useCompanyContext } from './CompanyContext';
@@ -12,6 +12,7 @@ import { navigateToCampaign, buildResumeUrl, loadCampaignResume } from '../lib/c
 import FloatingChatPanel, { type CollaborationMessage } from './collaboration/FloatingChatPanel';
 import DayDetailPanel, { type DayActivity } from './collaboration/DayDetailPanel';
 import ReportAutomationActivityFeed from './dashboard/ReportAutomationActivityFeed';
+import IntelligenceWorkspace, { type IntelligenceWorkspaceView } from './dashboard/IntelligenceWorkspace';
 
 interface Campaign {
   id: string;
@@ -131,9 +132,16 @@ export default function DashboardPage() {
     // Allow deep-linking to a specific tab via ?tab=calendar etc.
     if (typeof window !== 'undefined') {
       const p = new URLSearchParams(window.location.search).get('tab');
-      if (p === 'calendar' || p === 'campaigns' || p === 'team' || p === 'analytics' || p === 'integrations') return p;
+      if (p === 'calendar' || p === 'campaigns' || p === 'team' || p === 'analytics' || p === 'integrations' || p === 'intelligence') return p;
     }
     return 'overview';
+  });
+  const [intelligenceView, setIntelligenceView] = useState<IntelligenceWorkspaceView>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search).get('intelTab');
+      if (p === 'market-pulse' || p === 'active-leads' || p === 'intelligence') return p;
+    }
+    return 'intelligence';
   });
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [stats, setStats] = useState<DashboardStats>({
@@ -219,13 +227,17 @@ export default function DashboardPage() {
   const CAMPAIGN_STAGES = [
     { id: 'all', label: 'All' },
     { id: 'planning', label: 'Planning' },
-    { id: 'twelve_week_plan', label: 'Week Plan' },
+    { id: 'week_plan', label: 'Week Plan' },
     { id: 'daily_plan', label: 'Daily Plan' },
     { id: 'schedule', label: 'Schedule' },
   ] as const;
   const filteredCampaigns = stageFilter === 'all'
     ? campaigns
-    : campaigns.filter((c) => (c.current_stage || c.status) === stageFilter);
+    : campaigns.filter((c) => {
+        const stage = c.current_stage || c.status;
+        if (stageFilter === 'week_plan') return stage === 'week_plan' || stage === 'twelve_week_plan';
+        return stage === stageFilter;
+      });
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     const token = await getAuthToken();
@@ -454,12 +466,14 @@ export default function DashboardPage() {
   const getPlatformColorForCalendar = (platform: string): string => {
     const p = (platform || '').toLowerCase();
     const map: Record<string, string> = {
-      linkedin: 'bg-blue-100 text-blue-700 border-blue-200',
-      facebook: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+      linkedin:  'bg-blue-100 text-blue-700 border-blue-200',
+      facebook:  'bg-indigo-100 text-indigo-700 border-indigo-200',
       instagram: 'bg-pink-100 text-pink-700 border-pink-200',
-      youtube: 'bg-red-100 text-red-700 border-red-200',
-      twitter: 'bg-gray-900 text-gray-100 border-gray-700',
-      x: 'bg-gray-900 text-gray-100 border-gray-700',
+      youtube:   'bg-red-100 text-red-700 border-red-200',
+      twitter:   'bg-gray-900 text-gray-100 border-gray-700',
+      x:         'bg-gray-900 text-gray-100 border-gray-700',
+      tiktok:    'bg-black text-white border-gray-800',
+      pinterest: 'bg-rose-100 text-rose-700 border-rose-200',
     };
     return map[p] || 'bg-gray-100 text-gray-700 border-gray-200';
   };
@@ -502,11 +516,13 @@ export default function DashboardPage() {
   /** Feature 4: Platform color strip (left border 4px) */
   const getPlatformBorderColor = (platform: string): string => {
     const p = (platform || '').toLowerCase();
-    if (p === 'linkedin') return 'border-l-blue-500';
-    if (p === 'instagram') return 'border-l-pink-500';
-    if (p === 'youtube') return 'border-l-red-500';
+    if (p === 'linkedin')            return 'border-l-blue-500';
+    if (p === 'instagram')           return 'border-l-pink-500';
+    if (p === 'youtube')             return 'border-l-red-500';
     if (p === 'twitter' || p === 'x') return 'border-l-gray-900';
-    if (p === 'facebook') return 'border-l-indigo-500';
+    if (p === 'facebook')            return 'border-l-indigo-500';
+    if (p === 'tiktok')              return 'border-l-black';
+    if (p === 'pinterest')           return 'border-l-rose-500';
     return 'border-l-gray-400';
   };
 
@@ -589,6 +605,41 @@ export default function DashboardPage() {
   const handleActivityEventClick = (evt: ActivityEvent, e?: React.MouseEvent) => {
     e?.stopPropagation();
     setPostPreview(evt);
+  };
+
+  const handleRescheduleFromModal = async (postId: string, newDate: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await fetchWithAuth('/api/schedule/reschedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduled_post_id: postId, new_date: newDate, companyId: selectedCompanyId }),
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { success: false, error: data?.error || 'Reschedule failed' };
+      // Update local calendar state
+      setCalendarActivityEvents((prev) => {
+        const next = { ...prev };
+        // Remove from old date
+        for (const [dk, evts] of Object.entries(next)) {
+          const filtered = evts.filter((a) => a.scheduled_post_id !== postId);
+          if (filtered.length !== evts.length) {
+            if (filtered.length === 0) delete next[dk];
+            else next[dk] = filtered;
+          }
+        }
+        // Add to new date with updated date field
+        const existing = next[newDate] || [];
+        const updated = { ...(postPreview as ActivityEvent), date: newDate, scheduled_for: newDate + 'T09:00:00Z' };
+        next[newDate] = [...existing.filter((a) => a.scheduled_post_id !== postId), updated];
+        return next;
+      });
+      setPostPreview((p) => p ? { ...p, date: newDate, scheduled_for: newDate + 'T09:00:00Z' } : p);
+      notify('success', 'Post rescheduled');
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error' };
+    }
   };
 
   const handlePublishNow = async (postId: string): Promise<{ success: boolean; error?: string }> => {
@@ -999,7 +1050,8 @@ export default function DashboardPage() {
   const getStageColor = (stage: string) => {
     const stageMap: Record<string, string> = {
       planning: 'from-blue-500 to-cyan-600',
-      twelve_week_plan: 'from-indigo-500 to-purple-600',
+      week_plan: 'from-indigo-500 to-purple-600',
+      twelve_week_plan: 'from-indigo-500 to-purple-600', // legacy
       daily_plan: 'from-amber-500 to-orange-600',
       schedule: 'from-green-500 to-emerald-600',
       active: 'from-green-500 to-emerald-600',
@@ -1010,6 +1062,11 @@ export default function DashboardPage() {
 
   const getStageLabel = (stage: string, durationWeeks?: number | null) =>
     getStageLabelWithDuration(stage, durationWeeks);
+
+  const openIntelligenceTab = useCallback((view: IntelligenceWorkspaceView = 'intelligence') => {
+    setIntelligenceView(view);
+    setActiveTab('intelligence');
+  }, []);
 
   if (isLoading) {
     return (
@@ -1149,6 +1206,7 @@ export default function DashboardPage() {
           {[
             { id: 'overview', label: 'Overview', icon: BarChart3 },
             { id: 'campaigns', label: 'Campaigns', icon: Target },
+            { id: 'intelligence', label: 'Intelligence', icon: Brain },
             { id: 'team', label: 'Team', icon: Users },
             { id: 'analytics', label: 'Analytics', icon: TrendingUp },
             { id: 'calendar', label: 'Calendar', icon: Calendar },
@@ -1529,18 +1587,18 @@ export default function DashboardPage() {
               <div data-tour-id="recommendations-card" className="bg-white border border-gray-200 border-l-4 border-l-emerald-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="p-2 bg-emerald-50 rounded-lg">
-                    <TrendingUp className="h-5 w-5 text-emerald-600" />
+                    <Brain className="h-5 w-5 text-emerald-600" />
                   </div>
-                  <h3 className="text-base font-semibold text-gray-900 leading-snug">Recommendations</h3>
+                  <h3 className="text-base font-semibold text-gray-900 leading-snug">Intelligence Hub</h3>
                 </div>
                 <p className="text-sm text-gray-500 mb-4 flex-1 leading-relaxed">
-                  Generate trend-based campaign recommendations
+                  Bring together strategic intelligence, market pulse, and active leads in one place
                 </p>
                 <button
-                  onClick={() => window.location.href = '/recommendations'}
+                  onClick={() => openIntelligenceTab('intelligence')}
                   className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
-                  View Recommendations
+                  Open Intelligence
                 </button>
               </div>
               <div className="bg-white border border-gray-200 border-l-4 border-l-green-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
@@ -1565,6 +1623,16 @@ export default function DashboardPage() {
                 </div>
               </div>
             )}
+
+        {/* Campaigns Tab */}
+        {activeTab === 'intelligence' && (
+          <IntelligenceWorkspace
+            companyId={selectedCompanyId || null}
+            activeView={intelligenceView}
+            onViewChange={setIntelligenceView}
+            fetchWithAuth={fetchWithAuth}
+          />
+        )}
 
         {/* Campaigns Tab */}
         {activeTab === 'campaigns' && (
@@ -2163,9 +2231,12 @@ export default function DashboardPage() {
                     const hasDayChat = getMsgTotal(dayCount) > 0;
                     const dayUnread = getMsgUnread(dayCount);
                     return (
-                      <button
+                      <div
                         key={dateKey}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => { setCalendarSelectedDate(dateKey); setDayDetailPanelDate(dateKey); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { setCalendarSelectedDate(dateKey); setDayDetailPanelDate(dateKey); } }}
                         onDragOver={(e) => { e.preventDefault(); setDropTargetDate(dateKey); }}
                         onDragLeave={() => setDropTargetDate((d) => (d === dateKey ? null : d))}
                         onDrop={(e) => {
@@ -2173,7 +2244,7 @@ export default function DashboardPage() {
                           setDropTargetDate(null);
                           if (draggedActivity?.scheduled_post_id) handleRescheduleDrop(dateKey);
                         }}
-                        className={`h-28 text-left p-2 rounded-lg border transition-colors relative ${
+                        className={`h-28 text-left p-2 rounded-lg border transition-colors relative cursor-pointer ${
                           isSelected
                             ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200'
                             : dropTargetDate === dateKey
@@ -2209,21 +2280,30 @@ export default function DashboardPage() {
                                   draggable={isDraggable}
                                   onDragStart={(e) => { if (isDraggable) { e.stopPropagation(); e.dataTransfer.setData('application/json', JSON.stringify(item)); setDraggedActivity(item); } }}
                                   onDragEnd={() => setDraggedActivity(null)}
-                                  onClick={(e) => { e.stopPropagation(); handleActivityEventClick(item); }}
-                                  className={`text-[11px] px-1.5 py-0.5 rounded truncate inline-flex items-center gap-0.5 cursor-pointer hover:opacity-90 border-l-4 ${borderColor} ${colorClass}`}
-                                  title={isOverdue ? 'Overdue — click to post now' : undefined}
+                                  onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleActivityEventClick(item); }}
+                                  role="button"
+                                  tabIndex={0}
+                                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleActivityEventClick(item); } }}
+                                  className={`w-full text-[11px] px-1.5 py-1 rounded flex items-center gap-0.5 cursor-pointer hover:opacity-90 active:scale-95 border-l-4 ${borderColor} ${colorClass}`}
+                                  title={`${getPlatformLabel(item.platform)} · ${item.content_type?.replace(/_/g, ' ')} · ${item.title}${isOverdue ? ' (overdue)' : ''}`}
                                 >
                                   {isOverdue && <span className="text-red-500 font-bold shrink-0">!</span>}
-                                  {!isOverdue && isDraggable && <GripVertical className="w-3 h-3 shrink-0 opacity-50" />}
-                                  <PlatformIcon platform={item.platform} size={10} />
-                                  <span>{getPlatformLabel(item.platform)} — {item.title}</span>
-                                  {<RepurposeDots index={item.repurpose_index} total={item.repurpose_total} contentType={item.content_type} />}
+                                  {!isOverdue && isDraggable && <GripVertical className="w-3 h-3 shrink-0 opacity-40" />}
+                                  <PlatformIcon platform={item.platform} size={11} />
+                                  <span className="font-semibold shrink-0">{getPlatformLabel(item.platform)}</span>
+                                  <span className="opacity-50 shrink-0 hidden sm:inline">{item.content_type?.replace(/_/g, ' ') || 'post'}</span>
+                                  <span className="truncate flex-1 min-w-0">{item.title}</span>
                                 </div>
                               );
                             }
                             const appearance = getCalendarStageAppearance((item as CalendarActivity).stage);
                             return (
-                              <div key={`${dateKey}-${(item as CalendarActivity).campaign.id}-${index}`} className={`text-[11px] px-1.5 py-0.5 rounded truncate ${appearance.badge}`}>
+                              <div
+                                key={`${dateKey}-${(item as CalendarActivity).campaign.id}-${index}`}
+                                onClick={(e) => { e.stopPropagation(); setDayDetailPanelDate(dateKey); }}
+                                className={`w-full text-[11px] px-1.5 py-1 rounded truncate cursor-pointer hover:opacity-80 ${appearance.badge}`}
+                                title={(item as CalendarActivity).label}
+                              >
                                 {(item as CalendarActivity).label}
                               </div>
                             );
@@ -2238,7 +2318,7 @@ export default function DashboardPage() {
                           )}
                         </div>
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -2579,22 +2659,47 @@ export default function DashboardPage() {
         />
       )}
       {dayDetailPanelDate && user?.userId && (() => {
-        const dayActivities: DayActivity[] = getCalendarDayItems(parseDateKey(dayDetailPanelDate))
-          .filter((i): i is ActivityEvent => isActivityEvent(i))
-          .map((a) => ({
-            execution_id: a.execution_id,
-            scheduled_post_id: a.scheduled_post_id,
-            platform: a.platform,
-            title: a.title,
-            content_type: a.content_type,
-            repurpose_index: a.repurpose_index,
-            repurpose_total: a.repurpose_total,
-            date: a.date,
-            time: undefined,
-            campaign_id: a.campaign_id,
-          }));
+        const allDayItems = getCalendarDayItems(parseDateKey(dayDetailPanelDate));
+        // Map ActivityEvents fully (so modal has all data); CalendarActivity items shown as planned
+        const dayActivities: DayActivity[] = allDayItems.map((item, idx) => {
+          if (isActivityEvent(item)) {
+            return {
+              execution_id: item.execution_id,
+              scheduled_post_id: item.scheduled_post_id,
+              platform: item.platform,
+              title: item.title,
+              content_type: item.content_type,
+              repurpose_index: item.repurpose_index,
+              repurpose_total: item.repurpose_total,
+              date: item.date,
+              scheduled_for: item.scheduled_for,
+              status: item.status,
+              is_overdue: item.is_overdue,
+              content: item.content,
+              campaign_id: item.campaign_id,
+              time: item.scheduled_for
+                ? new Date(item.scheduled_for).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                : undefined,
+            } as DayActivity;
+          }
+          // CalendarActivity fallback — show as planned entry
+          const ca = item as CalendarActivity;
+          return {
+            platform: '',
+            title: ca.label || ca.campaign?.name || 'Planned',
+            content_type: ca.stage || 'planned',
+            campaign_id: ca.campaign?.id || '',
+            date: dayDetailPanelDate,
+          } as DayActivity;
+        });
         const dayCampaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : (calendarFilteredCampaigns[0]?.id ?? '');
         const dayMsgCount = calendarMessageCounts[dayDetailPanelDate];
+        // Build lookup map from scheduled_post_id → full ActivityEvent for modal
+        const activityEventMap: Record<string, ActivityEvent> = {};
+        allDayItems.filter(isActivityEvent).forEach((a) => {
+          if (a.scheduled_post_id) activityEventMap[a.scheduled_post_id] = a;
+          if (a.execution_id) activityEventMap[a.execution_id] = a;
+        });
         return (
           <DayDetailPanel
             dateKey={dayDetailPanelDate}
@@ -2610,7 +2715,14 @@ export default function DashboardPage() {
               setChatPanel({ mode: 'day', campaignId: dayCampaignId, date: dayDetailPanelDate });
             }}
             onActivityClick={(act) => {
-              if (act.execution_id) {
+              // Priority: open PostPreviewModal if we have a full ActivityEvent
+              const fullEvt = (act.scheduled_post_id && activityEventMap[act.scheduled_post_id])
+                || (act.execution_id && activityEventMap[act.execution_id])
+                || null;
+              if (fullEvt) {
+                setDayDetailPanelDate(null);
+                setPostPreview(fullEvt);
+              } else if (act.execution_id) {
                 router.push(`/activity-workspace?campaignId=${encodeURIComponent(act.campaign_id)}&executionId=${encodeURIComponent(act.execution_id)}`);
               }
             }}
@@ -2624,6 +2736,7 @@ export default function DashboardPage() {
           event={postPreview}
           onClose={() => setPostPreview(null)}
           onPublish={handlePublishNow}
+          onReschedule={handleRescheduleFromModal}
           onOpenWorkspace={(evt) => {
             setPostPreview(null);
             if (evt.execution_id) {
@@ -2745,175 +2858,377 @@ function PostPreviewModal({
   onClose,
   onOpenWorkspace,
   onPublish,
+  onReschedule,
 }: {
   event: ActivityEvent;
   onClose: () => void;
   onOpenWorkspace: (evt: ActivityEvent) => void;
   onPublish?: (postId: string) => Promise<{ success: boolean; error?: string }>;
+  onReschedule?: (postId: string, newDate: string) => Promise<{ success: boolean; error?: string }>;
 }) {
   const [publishState, setPublishState] = React.useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [publishError, setPublishError] = React.useState('');
   const [currentStatus, setCurrentStatus] = React.useState(event.status);
+  const [showReschedule, setShowReschedule] = React.useState(false);
+  const [rescheduleDate, setRescheduleDate] = React.useState(event.date || '');
+  const [rescheduleState, setRescheduleState] = React.useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [rescheduleError, setRescheduleError] = React.useState('');
 
   const canPublish = !!event.scheduled_post_id && !!onPublish && currentStatus !== 'published';
+  const canReschedule = !!event.scheduled_post_id && !!onReschedule && currentStatus !== 'published';
 
   const handlePublish = async () => {
     if (!event.scheduled_post_id || !onPublish) return;
     setPublishState('loading');
     setPublishError('');
     const result = await onPublish(event.scheduled_post_id);
-    if (result.success) {
-      setPublishState('success');
-      setCurrentStatus('published');
-    } else {
-      setPublishState('error');
-      setPublishError(result.error || 'Failed to publish');
-    }
+    if (result.success) { setPublishState('success'); setCurrentStatus('published'); }
+    else { setPublishState('error'); setPublishError(result.error || 'Failed to publish'); }
+  };
+
+  const handleRescheduleConfirm = async () => {
+    if (!event.scheduled_post_id || !onReschedule || !rescheduleDate) return;
+    setRescheduleState('loading');
+    setRescheduleError('');
+    const result = await onReschedule(event.scheduled_post_id, rescheduleDate);
+    if (result.success) { setRescheduleState('success'); setShowReschedule(false); }
+    else { setRescheduleState('error'); setRescheduleError(result.error || 'Failed to reschedule'); }
   };
 
   const platform = (event.platform || '').toLowerCase().trim();
   const contentType = (event.content_type || 'post').toLowerCase().replace(/[\s-]/g, '_');
   const cfg = PLATFORM_CONFIG[platform] ?? DEFAULT_PLATFORM_CONFIG;
-
   const content = event.content?.trim() || null;
   const platformLabel = platform === 'x' ? 'X (Twitter)' : platform.charAt(0).toUpperCase() + platform.slice(1);
   const scheduledDate = event.scheduled_for
     ? new Date(event.scheduled_for).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
     : event.date || '';
+  const showCharCount = cfg.charLimit != null;
 
+  const isLinkedIn = platform === 'linkedin';
+  const isX = platform === 'x' || platform === 'twitter';
   const isInstagram = platform === 'instagram';
   const isTikTok = platform === 'tiktok';
   const isYouTube = platform === 'youtube';
-  const isVisualMedia = ['reel', 'short', 'video', 'story', 'image'].includes(contentType);
-  const isLinkedInArticle = platform === 'linkedin' && contentType === 'article';
-  const cardBg = isLinkedInArticle ? 'bg-gray-50' : cfg.cardBg;
-  const showCharCount = cfg.charLimit != null;
+  const isFacebook = platform === 'facebook';
+  const isPinterest = platform === 'pinterest';
+  const isLinkedInArticle = isLinkedIn && contentType === 'article';
+  const isVisualMedia = ['reel', 'short', 'video', 'story', 'image', 'carousel'].includes(contentType);
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        className={`w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh] ${
+          isTikTok ? 'max-w-xs bg-black rounded-3xl' : 'max-w-md bg-white rounded-2xl'
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* ── Header bar ── */}
-        <div className={`flex items-center justify-between px-4 py-3 shrink-0 ${cfg.headerBg}`}>
+        <div className={`flex items-center justify-between px-4 py-2.5 shrink-0 ${cfg.headerBg}`}>
           <div className="flex items-center gap-2">
-            <PlatformIcon platform={platform} size={18} />
-            <span className="font-semibold text-sm">{platformLabel} Preview</span>
-            <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/20 capitalize">
+            <PlatformIcon platform={platform} size={16} />
+            <span className="font-semibold text-sm">{platformLabel}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 capitalize">
               {event.content_type?.replace(/_/g, ' ') || 'post'}
             </span>
           </div>
-          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+          <button onClick={onClose} className="text-white/80 hover:text-white text-base leading-none p-1">✕</button>
         </div>
 
-        {/* ── Post card (scrollable) ── */}
-        <div className={`flex-1 overflow-y-auto ${cardBg}`}>
-          <div className="p-4">
+        {/* ── Native Platform Preview (scrollable) ── */}
+        <div className="flex-1 overflow-y-auto">
 
-            {/* Profile row */}
-            <div className="flex items-center gap-3 mb-3">
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0 ${cfg.avatarBg}`}>
-                <PlatformIcon platform={platform} size={20} />
-              </div>
-              <div className="min-w-0">
-                <p className={`text-sm font-semibold ${isTikTok ? 'text-white' : 'text-gray-900'}`}>Your Brand</p>
-                <p className={`text-xs ${isTikTok ? 'text-gray-400' : 'text-gray-500'}`}>
-                  {scheduledDate ? `Scheduled · ${scheduledDate}` : 'Scheduled post'}
-                </p>
-              </div>
-            </div>
-
-            {/* LinkedIn Article banner */}
-            {isLinkedInArticle && (
-              <div className="mb-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-lg px-3 py-2">
-                <p className="text-[11px] text-blue-600 font-medium uppercase tracking-wide mb-0.5">Article</p>
-                <p className="text-base font-bold text-gray-900 leading-snug">{event.title}</p>
-              </div>
-            )}
-
-            {/* Title (non-article) */}
-            {!isLinkedInArticle && (
-              <p className={`text-sm font-semibold mb-2 ${isTikTok ? 'text-white' : 'text-gray-900'}`}>{event.title}</p>
-            )}
-
-            {/* ── Content body — routed through ContentRenderer ── */}
-            <ContentRenderer
-              content={content ?? ''}
-              platform={platform}
-              contentType={contentType}
-              accentBg={cfg.avatarBg}
-              showCharCount={showCharCount}
-              emptyText="Content not yet generated — open in workspace to generate."
-              className={cfg.fontCls}
-            />
-
-            {/* Visual media placeholder (Instagram / TikTok / Reels / Stories) */}
-            {(isInstagram || isTikTok || isVisualMedia) && (
-              <div className={`mt-3 w-full rounded-xl flex items-center justify-center ${
-                isTikTok
-                  ? 'aspect-[9/16] max-h-48 bg-gray-900 border border-gray-700'
-                  : isInstagram && contentType === 'story'
-                    ? 'aspect-[9/16] max-h-48 bg-gradient-to-br from-purple-100 to-orange-100'
-                    : 'aspect-square max-h-40 bg-gradient-to-br from-purple-100 via-pink-100 to-orange-100'
-              }`}>
-                <div className="text-center opacity-50">
-                  <PlatformIcon platform={platform} size={28} />
-                  <p className={`text-xs mt-1 ${isTikTok ? 'text-gray-400' : 'text-gray-500'}`}>
-                    {contentType === 'reel' || contentType === 'short' ? 'Video / Reel'
-                      : contentType === 'story' ? 'Story'
-                      : contentType === 'video' ? 'Video'
-                      : 'Image / Media'}
-                  </p>
+          {/* ══ TIKTOK ══ */}
+          {isTikTok && (
+            <div className="bg-black relative">
+              {/* Video area */}
+              <div className="relative bg-gradient-to-b from-gray-900 to-black" style={{ aspectRatio: '9/16', maxHeight: '52vh' }}>
+                <div className="absolute inset-0 flex flex-col justify-end p-3">
+                  {/* Right side actions */}
+                  <div className="absolute right-2 bottom-24 flex flex-col items-center gap-4">
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white border-2 border-white ${cfg.avatarBg}`}>
+                      <PlatformIcon platform="tiktok" size={14} />
+                    </div>
+                    {[['❤', '0'], ['💬', '0'], ['↩', '0'], ['⊕', '']].map(([icon, count], i) => (
+                      <div key={i} className="flex flex-col items-center">
+                        <span className="text-white text-xl">{icon}</span>
+                        {count && <span className="text-white text-[10px]">{count}</span>}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Bottom caption */}
+                  <div className="pr-12">
+                    <p className="text-white font-semibold text-sm mb-1">@yourbrand</p>
+                    <p className="text-white text-xs leading-relaxed line-clamp-3">{content || event.title}</p>
+                    <div className="mt-1 flex items-center gap-1">
+                      <span className="text-white text-[10px] opacity-70">♫ Original sound · yourbrand</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-20">
+                  <PlatformIcon platform="tiktok" size={40} />
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {/* YouTube thumbnail placeholder */}
-            {isYouTube && (
-              <div className="mt-3 w-full aspect-video bg-gray-800 rounded-xl flex items-center justify-center">
-                <div className="text-center opacity-50">
-                  <PlatformIcon platform="youtube" size={36} />
-                  <p className="text-xs text-gray-400 mt-1">Video Thumbnail</p>
+          {/* ══ INSTAGRAM ══ */}
+          {isInstagram && (
+            <div className="bg-white">
+              {/* Header */}
+              <div className="flex items-center justify-between px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-orange-400 flex items-center justify-center text-white shrink-0">
+                    <PlatformIcon platform="instagram" size={14} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-gray-900 leading-none">yourbrand</p>
+                    <p className="text-[10px] text-gray-500">{scheduledDate || 'Scheduled'}</p>
+                  </div>
+                </div>
+                <span className="text-gray-400 text-lg">•••</span>
+              </div>
+              {/* Media */}
+              {(isVisualMedia || contentType === 'post') && (
+                <div className={`w-full bg-gradient-to-br from-purple-100 via-pink-100 to-orange-100 flex items-center justify-center ${
+                  contentType === 'story' ? 'aspect-[9/16] max-h-52' : 'aspect-square'
+                }`}>
+                  <div className="text-center opacity-40">
+                    <PlatformIcon platform="instagram" size={32} />
+                    <p className="text-xs text-gray-500 mt-1">
+                      {contentType === 'reel' ? 'Reel' : contentType === 'story' ? 'Story' : contentType === 'carousel' ? 'Carousel' : 'Photo'}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {/* Actions */}
+              <div className="px-3 pt-2 flex items-center gap-3 text-gray-800">
+                <span>❤</span><span>💬</span><span>📤</span>
+                <span className="ml-auto">🔖</span>
+              </div>
+              {/* Caption */}
+              <div className="px-3 py-2">
+                <p className="text-xs text-gray-900"><span className="font-semibold">yourbrand</span> {content ? <span className="line-clamp-3">{content}</span> : <span className="text-gray-400 italic">No caption yet</span>}</p>
+              </div>
+            </div>
+          )}
+
+          {/* ══ X / TWITTER ══ */}
+          {isX && (
+            <div className="bg-white px-4 py-3">
+              <div className="flex gap-3">
+                <div className="w-10 h-10 rounded-full bg-black flex items-center justify-center text-white shrink-0">
+                  <PlatformIcon platform="x" size={18} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className="text-sm font-bold text-gray-900">Your Brand</span>
+                    <span className="text-sm text-gray-500">@yourbrand</span>
+                    <span className="text-gray-400 text-xs ml-auto">{scheduledDate || 'Scheduled'}</span>
+                  </div>
+                  <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="No content yet — open in workspace." className="text-[15px] text-gray-900 leading-relaxed" />
+                  {isVisualMedia && (
+                    <div className="mt-2 rounded-xl overflow-hidden border border-gray-200 bg-gray-100 aspect-video flex items-center justify-center">
+                      <div className="text-center opacity-40">
+                        <PlatformIcon platform="x" size={28} />
+                        <p className="text-xs text-gray-500 mt-1">{contentType === 'video' ? 'Video' : 'Media'}</p>
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-3 flex items-center gap-5 text-gray-400 text-xs">
+                    {['💬 0', '🔁 0', '❤ 0', '🔖', '📤'].map((a, i) => <span key={i}>{a}</span>)}
+                  </div>
                 </div>
               </div>
-            )}
-
-            {/* ── Engagement row ── */}
-            <div className={`mt-4 pt-3 border-t flex items-center gap-4 text-xs ${
-              isTikTok ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-400'
-            }`}>
-              {cfg.engagements.map((label, i) => (
-                <span key={i} className="flex items-center gap-1 select-none">{label}</span>
-              ))}
             </div>
-          </div>
+          )}
+
+          {/* ══ LINKEDIN ══ */}
+          {isLinkedIn && (
+            <div className="bg-white">
+              <div className="px-4 pt-3 pb-2">
+                <div className="flex items-start gap-3 mb-3">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0 ${cfg.avatarBg}`}>
+                    <PlatformIcon platform="linkedin" size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 leading-tight">Your Brand</p>
+                    <p className="text-[11px] text-gray-500 leading-tight">Company · {scheduledDate || 'Scheduled'}</p>
+                    <span className="text-[10px] text-gray-400 flex items-center gap-0.5">🌐 Anyone</span>
+                  </div>
+                  <span className="ml-auto text-gray-400 text-sm shrink-0">•••</span>
+                </div>
+                {isLinkedInArticle && (
+                  <div className="mb-3 border border-gray-200 rounded-lg overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-5">
+                      <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wide mb-1">Article</p>
+                      <p className="text-base font-bold text-gray-900 leading-snug">{event.title}</p>
+                      <p className="text-xs text-gray-500 mt-1">Your Brand · LinkedIn Article</p>
+                    </div>
+                  </div>
+                )}
+                <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="No content yet — open in workspace." className="text-sm text-gray-800 leading-relaxed" />
+                {isVisualMedia && !isLinkedInArticle && (
+                  <div className="mt-3 rounded-lg overflow-hidden bg-gray-100 aspect-video flex items-center justify-center border border-gray-200">
+                    <div className="text-center opacity-40">
+                      <PlatformIcon platform="linkedin" size={28} />
+                      <p className="text-xs text-gray-500 mt-1">{contentType === 'video' ? 'Video' : contentType === 'carousel' ? 'Carousel' : 'Image'}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="px-4 py-2 border-t border-gray-100">
+                <div className="flex items-center gap-1 text-xs text-gray-500">
+                  {cfg.engagements.map((a, i) => <span key={i} className="flex items-center gap-1 px-2 py-1 hover:bg-gray-50 rounded">{a}</span>)}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ══ FACEBOOK ══ */}
+          {isFacebook && (
+            <div className="bg-white">
+              <div className="px-4 pt-3 pb-2">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-10 h-10 rounded-full bg-[#1877F2] flex items-center justify-center text-white shrink-0">
+                    <PlatformIcon platform="facebook" size={18} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Your Brand</p>
+                    <p className="text-[11px] text-gray-500 flex items-center gap-1">{scheduledDate || 'Scheduled'} · <span>🌐</span></p>
+                  </div>
+                  <span className="ml-auto text-gray-400">•••</span>
+                </div>
+                <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="No content yet — open in workspace." className="text-sm text-gray-800 leading-relaxed" />
+                {isVisualMedia && (
+                  <div className="mt-3 -mx-4 bg-gray-100 aspect-video flex items-center justify-center">
+                    <div className="text-center opacity-40">
+                      <PlatformIcon platform="facebook" size={32} />
+                      <p className="text-xs text-gray-500 mt-1">Photo / Video</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="px-4 py-2 border-t border-gray-100 flex items-center gap-1 text-xs text-gray-600">
+                {cfg.engagements.map((a, i) => <span key={i} className="flex-1 flex items-center justify-center gap-1 py-1 hover:bg-gray-50 rounded font-medium">{a}</span>)}
+              </div>
+            </div>
+          )}
+
+          {/* ══ YOUTUBE ══ */}
+          {isYouTube && (
+            <div className="bg-[#F9F9F9]">
+              <div className="aspect-video bg-gray-800 flex items-center justify-center relative">
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-14 h-14 bg-[#FF0000] rounded-full flex items-center justify-center opacity-80">
+                    <span className="text-white text-xl">▶</span>
+                  </div>
+                </div>
+                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 p-3">
+                  <p className="text-white text-xs font-medium line-clamp-2">{event.title}</p>
+                </div>
+              </div>
+              <div className="p-3">
+                <p className="text-sm font-semibold text-gray-900 leading-snug mb-2 line-clamp-2">{event.title}</p>
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-8 h-8 rounded-full bg-[#FF0000] flex items-center justify-center text-white shrink-0">
+                    <PlatformIcon platform="youtube" size={14} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-gray-900">Your Brand</p>
+                    <p className="text-[10px] text-gray-500">Scheduled · {scheduledDate}</p>
+                  </div>
+                </div>
+                <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={false} emptyText="No description yet." className="text-xs text-gray-600 leading-relaxed" />
+              </div>
+            </div>
+          )}
+
+          {/* ══ PINTEREST ══ */}
+          {isPinterest && (
+            <div className="bg-white">
+              <div className="aspect-[2/3] max-h-64 bg-gradient-to-br from-rose-100 to-orange-100 flex items-center justify-center rounded-2xl mx-3 mt-3 overflow-hidden">
+                <div className="text-center opacity-40">
+                  <PlatformIcon platform="pinterest" size={36} />
+                  <p className="text-xs text-gray-500 mt-1">Pin Image</p>
+                </div>
+              </div>
+              <div className="px-4 py-3">
+                <p className="text-base font-bold text-gray-900 mb-1">{event.title}</p>
+                <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={false} emptyText="No description yet." className="text-sm text-gray-600 leading-relaxed" />
+              </div>
+            </div>
+          )}
+
+          {/* ══ FALLBACK (any other platform) ══ */}
+          {!isTikTok && !isInstagram && !isX && !isLinkedIn && !isFacebook && !isYouTube && !isPinterest && (
+            <div className="bg-white p-4">
+              <div className="flex items-center gap-3 mb-3">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0 ${cfg.avatarBg}`}>
+                  <PlatformIcon platform={platform} size={18} />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Your Brand</p>
+                  <p className="text-xs text-gray-500">{scheduledDate || 'Scheduled'}</p>
+                </div>
+              </div>
+              <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="No content yet — open in workspace." className={cfg.fontCls} />
+            </div>
+          )}
         </div>
 
         {/* ── Footer ── */}
         <div className="flex flex-col gap-2 px-4 py-3 border-t border-gray-200 bg-white shrink-0">
-          {/* Publish error */}
+
+          {/* Reschedule picker */}
+          {showReschedule && (
+            <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+              <Calendar className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+              <input
+                type="date"
+                value={rescheduleDate}
+                onChange={(e) => setRescheduleDate(e.target.value)}
+                className="flex-1 text-sm bg-transparent outline-none text-gray-800"
+                min={new Date().toISOString().slice(0, 10)}
+              />
+              <button
+                onClick={handleRescheduleConfirm}
+                disabled={rescheduleState === 'loading' || !rescheduleDate}
+                className="px-3 py-1 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-md disabled:opacity-50"
+              >
+                {rescheduleState === 'loading' ? '…' : 'Move'}
+              </button>
+              <button onClick={() => { setShowReschedule(false); setRescheduleState('idle'); setRescheduleError(''); }} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+            </div>
+          )}
+
+          {/* Feedback messages */}
+          {rescheduleState === 'error' && (
+            <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-1.5">{rescheduleError}</p>
+          )}
+          {rescheduleState === 'success' && (
+            <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-1.5 font-medium">✓ Post moved to {rescheduleDate}</p>
+          )}
           {publishState === 'error' && (
             <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-1.5">{publishError}</p>
           )}
-          {/* Publish success */}
           {publishState === 'success' && (
-            <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-1.5 font-medium">
-              ✓ Post published successfully!
-            </p>
+            <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-1.5 font-medium">✓ Post published successfully!</p>
           )}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
+
+          <div className="flex items-center justify-between gap-2">
+            {/* Left: status badges */}
+            <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap min-w-0">
               {event.repurpose_total > 1 && (
-                <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
-                  Repurpose {event.repurpose_index}/{event.repurpose_total}
+                <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 shrink-0">
+                  {event.repurpose_index}/{event.repurpose_total}
                 </span>
               )}
               {currentStatus && (
-                <span className={`px-2 py-0.5 rounded-full capitalize ${
+                <span className={`px-2 py-0.5 rounded-full capitalize shrink-0 ${
                   currentStatus === 'published' ? 'bg-emerald-100 text-emerald-700'
                     : event.is_overdue ? 'bg-red-100 text-red-700'
                     : currentStatus === 'scheduled' ? 'bg-blue-100 text-blue-700'
@@ -2923,46 +3238,41 @@ function PostPreviewModal({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={onClose}
-                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100"
-              >
-                Close
-              </button>
+
+            {/* Right: action buttons */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {canReschedule && publishState !== 'success' && (
+                <button
+                  onClick={() => { setShowReschedule((v) => !v); setRescheduleState('idle'); setRescheduleError(''); }}
+                  className={`px-2.5 py-1.5 text-sm rounded-lg flex items-center gap-1 transition-colors ${
+                    showReschedule ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'
+                  }`}
+                  title="Reschedule"
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline text-xs">Reschedule</span>
+                </button>
+              )}
               {canPublish && publishState !== 'success' && (
                 <button
                   onClick={handlePublish}
                   disabled={publishState === 'loading'}
-                  className={`px-4 py-1.5 text-sm font-medium rounded-lg flex items-center gap-1.5 transition-colors ${
-                    event.is_overdue
-                      ? 'bg-red-600 hover:bg-red-700 text-white disabled:opacity-60'
-                      : 'bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-60'
+                  className={`px-3 py-1.5 text-sm font-medium rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-60 ${
+                    event.is_overdue ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'
                   }`}
                 >
-                  {publishState === 'loading' ? (
-                    <>
-                      <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 100 16v-4l-3 3 3 3v-4a8 8 0 01-8-8z"/>
-                      </svg>
-                      Posting...
-                    </>
-                  ) : (
-                    <>
-                      <Send className="w-3.5 h-3.5" />
-                      {event.is_overdue ? 'Post Now' : 'Post Now'}
-                    </>
-                  )}
+                  {publishState === 'loading'
+                    ? <><svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 100 16v-4l-3 3 3 3v-4a8 8 0 01-8-8z"/></svg>Posting...</>
+                    : <><Send className="w-3.5 h-3.5" />Post Now</>}
                 </button>
               )}
               {publishState !== 'success' && (
                 <button
                   onClick={() => onOpenWorkspace(event)}
-                  className="px-4 py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1.5"
+                  className="px-3 py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1.5"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
-                  Open in Workspace
+                  <span className="hidden sm:inline">Workspace</span>
                 </button>
               )}
             </div>

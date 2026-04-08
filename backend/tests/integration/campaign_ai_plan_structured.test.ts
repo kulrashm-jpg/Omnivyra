@@ -1,8 +1,48 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 
+jest.mock('../../services/campaignAiOrchestrator', () => ({
+  runCampaignAiPlan: jest.fn().mockResolvedValue({
+    mode: 'generate_plan',
+    snapshot_hash: 'hash123',
+    raw_plan_text: 'Test campaign plan output',
+    omnivyre_decision: {
+      recommendation: 'HOLD',
+      confidence: 0.7,
+    },
+    plan: {
+      weeks: [
+        {
+          week: 1,
+          theme: 'Launch',
+          phase_label: 'Launch',
+          primary_objective: 'Launch objective',
+          platform_allocation: { linkedin: 8 },
+          content_type_mix: ['8 post'],
+          cta_type: 'None',
+          total_weekly_content_count: 8,
+          weekly_kpi_focus: 'Reach growth',
+          daily: [
+            {
+              day: 'Monday',
+              objective: 'Introduce campaign',
+              content: 'Post announcement',
+              platforms: { linkedin: 'Post announcement' },
+            },
+          ],
+        },
+      ],
+    },
+  }),
+  CampaignAiMode: {},
+  normalizeCapacityCounts: jest.fn((value) => value),
+  normalizeCapacityCountsWithBreakdown: jest.fn((value) => value),
+}));
+
 jest.mock('../../db/campaignPlanStore', () => ({
   __esModule: true,
-  saveStructuredCampaignPlan: jest.fn(),
+  saveAiCampaignPlan: jest.fn(),
+  saveDraftBlueprint: jest.fn(),
+  getLatestDraftPlan: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../../services/viralityAdvisorService', () => ({
@@ -31,6 +71,40 @@ jest.mock('../../services/viralitySnapshotBuilder', () => ({
 jest.mock('../../services/campaignPlanningInputsService', () => ({
   getCampaignPlanningInputs: jest.fn().mockResolvedValue(null),
   saveCampaignPlanningInputs: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../../db/supabaseClient', () => ({
+  supabase: {
+    from: jest.fn((table: string) => {
+      if (table === 'campaign_versions') {
+        return {
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          order: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockReturnThis(),
+          maybeSingle: jest.fn().mockResolvedValue({ data: { company_id: 'comp123' }, error: null }),
+        };
+      }
+
+      return {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        order: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+      };
+    }),
+  },
+}));
+
+jest.mock('../../services/rbacService', () => ({
+  getUserCompanyRole: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'COMPANY_ADMIN' }),
+  getCompanyRoleIncludingInvited: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../../services/campaignRoleService', () => ({
+  resolveEffectiveCampaignRole: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'COMPANY_ADMIN' }),
+  isCompanyOverrideRole: jest.fn().mockReturnValue(true),
 }));
 
 jest.mock('../../services/deterministicWeeklySkeleton', () => ({
@@ -143,8 +217,7 @@ describe('Campaign AI Plan Structured', () => {
   it('persists and returns structured plan', async () => {
     const { assessVirality } = require('../../services/viralityAdvisorService');
     const { requestDecision } = require('../../services/omnivyreClient');
-    const { parseAiPlanToWeeks } = require('../../services/campaignPlanParser');
-    const { saveStructuredCampaignPlan } = require('../../db/campaignPlanStore');
+    const { saveAiCampaignPlan, saveDraftBlueprint } = require('../../db/campaignPlanStore');
 
     (assessVirality as jest.Mock).mockResolvedValue({
       snapshot_hash: 'hash123',
@@ -168,43 +241,6 @@ describe('Campaign AI Plan Structured', () => {
       trace_id: 'trace123',
       policy_version: 'default',
       timestamp: '2026-01-01T00:00:00Z',
-    });
-
-    (parseAiPlanToWeeks as jest.Mock).mockResolvedValue({
-      weeks: Array.from({ length: 12 }, (_, idx) => {
-        const week = idx + 1;
-        return {
-          week,
-          theme: week === 1 ? 'Launch' : `Week ${week} Theme`,
-          phase_label: week === 1 ? 'Launch' : 'Audience Activation',
-          primary_objective: week === 1 ? 'Launch objective' : `Objective for week ${week}`,
-          platform_allocation: { linkedin: 8 },
-          content_type_mix: ['8 post'],
-          cta_type: 'None',
-          total_weekly_content_count: 8,
-          weekly_kpi_focus: 'Reach growth',
-          daily:
-            week === 1
-              ? [
-                  {
-                    day: 'Monday',
-                    objective: 'Introduce campaign',
-                    content: 'Post announcement',
-                    platforms: { linkedin: 'Post announcement' },
-                    hashtags: ['launch', 'brand'],
-                    seo_keywords: ['launch strategy', 'brand awareness'],
-                    meta_title: 'Launch Week',
-                    meta_description: 'Kickoff content plan',
-                    hook: 'Start strong',
-                    cta: 'Learn more',
-                    best_time: '09:00',
-                    effort_score: 3,
-                    success_projection: 78,
-                  },
-                ]
-              : [],
-        };
-      }),
     });
 
     const req = {
@@ -239,21 +275,30 @@ describe('Campaign AI Plan Structured', () => {
     const handler = (await import('../../../pages/api/campaigns/ai/plan')).default;
     await handler(req, res);
 
-    expect(saveStructuredCampaignPlan).toHaveBeenCalledWith(
+    expect(saveAiCampaignPlan).toHaveBeenCalledWith(
       expect.objectContaining({
         campaignId: 'camp123',
         snapshot_hash: 'hash123',
-        weeks: expect.arrayContaining([
-          expect.objectContaining({
-            week: 1,
-            theme: 'Launch',
-            daily: expect.any(Array),
-          }),
-        ]),
         omnivyre_decision: expect.objectContaining({
           recommendation: 'HOLD',
         }),
-        raw_plan_text: 'Test campaign plan output',
+        response: 'Test campaign plan output',
+      })
+    );
+
+    expect(saveDraftBlueprint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        campaignId: 'camp123',
+        blueprint: expect.objectContaining({
+          campaign_id: 'camp123',
+          weeks: expect.arrayContaining([
+            expect.objectContaining({
+              week_number: 1,
+              phase_label: 'Launch',
+              primary_objective: 'Launch objective',
+            }),
+          ]),
+        }),
       })
     );
 

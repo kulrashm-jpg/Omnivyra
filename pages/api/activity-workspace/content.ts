@@ -10,6 +10,7 @@ import { processContent } from '@/backend/services/unifiedContentProcessor';
 import { supabase } from '@/backend/db/supabaseClient';
 import { hasEnoughCredits } from '@/backend/services/creditDeductionService';
 import { deductCreditsAwaited } from '@/backend/services/creditExecutionService';
+import { updateActivity } from '@/backend/services/executionPlannerPersistence';
 
 type WorkspaceAction = 'generate_master' | 'generate_variants' | 'refine_variant' | 'improve_variant' | 'improve_variant_all';
 type ImprovementType = 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
@@ -20,33 +21,87 @@ function asObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** Merge master_content into daily_content_plans.content JSON blob for the given activity row. */
-async function persistMasterToDb(activityId: string, master: MasterContentPayload): Promise<void> {
-  if (!activityId || activityId.startsWith('workspace-')) return; // transient ID, nothing to persist
+async function loadActivityContentEnvelope(activityId: string): Promise<Record<string, unknown> | null> {
+  if (!activityId || activityId.startsWith('workspace-')) return null; // transient ID, nothing to persist
   try {
     const { data: row } = await supabase
       .from('daily_content_plans')
       .select('content')
       .eq('id', activityId)
       .maybeSingle();
-    if (!row) return;
-    let existing: Record<string, unknown> = {};
-    try { existing = typeof row.content === 'string' ? JSON.parse(row.content) : (row.content ?? {}); } catch { /* ignore */ }
-    const updated = { ...existing, master_content: master };
-    await supabase
-      .from('daily_content_plans')
-      .update({ content: JSON.stringify(updated), updated_at: new Date().toISOString() })
-      .eq('id', activityId);
+    if (!row) return null;
+    try {
+      return typeof row.content === 'string' ? JSON.parse(row.content) : (row.content ?? {});
+    } catch {
+      return {};
+    }
   } catch (err) {
-    console.warn('[activity-workspace/content] persistMasterToDb failed:', (err as Error)?.message);
+    console.warn('[activity-workspace/content] loadActivityContentEnvelope failed:', (err as Error)?.message);
+    return null;
   }
+}
+
+async function persistContentEnvelopeToDb(
+  activityId: string,
+  transform: (existing: Record<string, unknown>) => Record<string, unknown>
+): Promise<void> {
+  if (!activityId || activityId.startsWith('workspace-')) return;
+  try {
+    const existing = (await loadActivityContentEnvelope(activityId)) ?? {};
+    const updated = transform(existing);
+    await updateActivity(activityId, { content: JSON.stringify(updated) }, 'board');
+  } catch (err) {
+    console.warn('[activity-workspace/content] persistContentEnvelopeToDb failed:', (err as Error)?.message);
+  }
+}
+
+/** Merge master_content into daily_content_plans.content JSON blob for the given activity row. */
+async function persistMasterToDb(activityId: string, master: MasterContentPayload): Promise<void> {
+  await persistContentEnvelopeToDb(activityId, (existing) => ({ ...existing, master_content: master }));
+}
+
+async function persistVariantsToDb(
+  activityId: string,
+  variants: Array<Record<string, unknown>>,
+  master: Record<string, unknown> | null | undefined
+): Promise<void> {
+  await persistContentEnvelopeToDb(activityId, (existing) => {
+    const previous = Array.isArray(existing.platform_variants) ? (existing.platform_variants as Array<Record<string, unknown>>) : [];
+    const merged = new Map<string, Record<string, unknown>>();
+
+    for (const variant of previous) {
+      const key = `${String((variant as any)?.platform || '').trim().toLowerCase()}::${String((variant as any)?.content_type || '').trim().toLowerCase()}`;
+      if (key !== '::') merged.set(key, variant);
+    }
+    for (const variant of variants) {
+      const key = `${String((variant as any)?.platform || '').trim().toLowerCase()}::${String((variant as any)?.content_type || '').trim().toLowerCase()}`;
+      if (key !== '::') merged.set(key, variant);
+    }
+
+    const variantList = Array.from(merged.values());
+    const primaryGenerated = variantList.find((variant) => {
+      const content = String((variant as any)?.generated_content || '').trim();
+      return content.length > 0 && !isFailedVariant(variant);
+    });
+
+    return {
+      ...existing,
+      ...(master ? { master_content: master } : {}),
+      platform_variants: variantList,
+      ...(primaryGenerated ? { generated_content: String((primaryGenerated as any).generated_content || '').trim() } : {}),
+      content_status: variantList.length > 0 ? 'repurposed' : existing.content_status,
+      repurposed_at: variantList.length > 0 ? new Date().toISOString() : existing.repurposed_at,
+    };
+  });
 }
 
 const FAILED_VARIANT_PREFIXES = [
   '[PLATFORM ADAPTATION FAILED]',
-  '[PLATFORM MEDIA BLUEPRINT]',
   '[MASTER GENERATION FAILED',
 ];
+// Note: [PLATFORM MEDIA BLUEPRINT] is NOT a failure — it is a valid creator-activity placeholder
+// indicating the variant requires a media asset. It is returned as a successful variant so the
+// client can show a "waiting for media" state rather than an error.
 
 function isFailedVariant(v: unknown): boolean {
   const content = String((v as any)?.generated_content ?? '').trim();
@@ -114,12 +169,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
         // Store hashtags in discoverability_meta only — do NOT append to generated_content.
         // The preview layer renders hashtags from discoverability_meta.hashtags separately.
-        const improved_variant = {
-          ...variant,
-          discoverability_meta: discoverabilityMeta,
-          generated_content: currentContent,
-        };
-        return res.status(200).json({ success: true, improved_variant });
+      const improved_variant = {
+        ...variant,
+        discoverability_meta: discoverabilityMeta,
+        generated_content: currentContent,
+      };
+      const activityDbId = String((req.body as any)?.activity?.id || '').trim();
+      await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
+      return res.status(200).json({ success: true, improved_variant });
       }
 
       if (!['IMPROVE_CTA', 'IMPROVE_HOOK'].includes(improvementType)) {
@@ -203,6 +260,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...variant,
         generated_content: revised,
       };
+      const activityDbId = String((req.body as any)?.activity?.id || '').trim();
+      await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
       if (companyId) await deductCreditsAwaited(companyId, 'content_rewrite', { note: `Improve ${improvementType.toLowerCase()}` });
       return res.status(200).json({ success: true, improved_variant });
     }
@@ -310,6 +369,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         generated_content: revisedContent,
         ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
       };
+      const activityDbId = String((req.body as any)?.activity?.id || '').trim();
+      await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
       if (companyId) await deductCreditsAwaited(companyId, 'content_rewrite', { note: `Improve all: ${improvementTypes.join(', ')}` });
       return res.status(200).json({ success: true, improved_variant });
     }
@@ -429,6 +490,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       refined = refinedOutput.content || refined;
 
       if (companyId) await deductCreditsAwaited(companyId, 'content_rewrite', { note: 'Content refinement' });
+      const activityDbId = String((req.body as any)?.activity?.id || '').trim();
+      await persistVariantsToDb(activityDbId, [{
+        platform,
+        content_type: contentType,
+        generated_content: refined,
+        generation_status: 'generated',
+        refinement_status: 'in_progress',
+        refinement_finalized: false,
+      }], asObject((dailyExecutionItemRaw as any)?.master_content));
       return res.status(200).json({
         success: true,
         refined_content: refined,
@@ -486,6 +556,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         master_content: (itemWithMaster as any).master_content,
       });
     }
+
+    await persistVariantsToDb(
+      activityDbId,
+      successfulVariants as Array<Record<string, unknown>>,
+      ((itemWithMaster as any).master_content ?? null) as Record<string, unknown> | null
+    );
 
     // Charge content_basic per platform variant successfully generated
     if (companyId && successfulVariants.length > 0) {

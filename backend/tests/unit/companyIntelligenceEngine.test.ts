@@ -30,7 +30,7 @@ describe('companyIntelligenceEngine', () => {
 
     it('returns null when relevance below threshold', () => {
       const result = computeCompanyRelevance(
-        { id: 's1', topic: 'unrelated random words xyz' },
+        { id: 's1', topic: 'unrelated random words xyz', relevance_score: 0 },
         'company-1',
         CONTEXT
       );

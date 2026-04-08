@@ -201,6 +201,7 @@ export async function generateThemesForCampaignWeeks(
       results.push(theme_title);
     }
 
+    return results;
   } catch {
     // Fall through to progression engine
   }

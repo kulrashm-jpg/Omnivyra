@@ -13,6 +13,12 @@ import { getBoltQueue } from '../../../backend/queue/boltQueue';
 import { getUserFriendlyMessage } from '../../../backend/utils/userFriendlyErrors';
 import { executeBoltPipeline } from '../../../backend/services/boltPipelineService';
 
+function normalizeOptionalUuid(value: unknown): string | null {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return null;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text) ? text : null;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -39,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const payload = {
       companyId,
-      userId: access.userId,
+      userId: normalizeOptionalUuid(access.userId),
       generatedCampaignId: body.generatedCampaignId ?? null,
       sourceStrategicTheme: body.sourceStrategicTheme ?? {},
       executionConfig: body.executionConfig ?? {},
@@ -99,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .insert({
         company_id: companyId,
         target_campaign_id: generatedCampaignId && typeof generatedCampaignId === 'string' && generatedCampaignId.trim() ? generatedCampaignId.trim() : null,
-        user_id: access.userId,
+        user_id: normalizeOptionalUuid(access.userId),
         current_stage: 'source-recommendation',
         status: 'started',
         progress_percentage: 0,

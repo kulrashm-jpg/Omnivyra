@@ -4,9 +4,6 @@ import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 export const fetchWithAuth = async (input: RequestInfo, init?: RequestInit & { forceRefresh?: boolean }) => {
   // Try to get a token first
   let token = await getAuthToken();
-  console.log('📍 fetchWithAuth - initial token check:', token ? '✅ yes' : '❌ no');
-
-  console.log('📤 Sending request with cookies + token:', token ? 'Bearer' : 'none');
   
   const mergedHeaders: Record<string, string> = {};
   const initHeaders = init?.headers;

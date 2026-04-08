@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '@/components/CompanyContext';
+import { POST_FORMAT_OPTIONS, getThreadStructureRules, type PostFormatType } from '../../lib/blog/blogStructureTemplates';
 
 type ContentFormat = 'story' | 'whitepaper' | 'post';
 type ContextMode = 'company' | 'focused' | 'none';
@@ -62,6 +63,7 @@ function buildBrief(params: {
   alignmentScore: number;
   channels: string;
   exclusions: string;
+  postFormat?: PostFormatType;
 }): string {
   const meta = FORMAT_META[params.format];
   const contextBlock =
@@ -71,8 +73,11 @@ function buildBrief(params: {
         ? `Use focused context objective: ${params.focusedObjective || 'Specific campaign objective will be provided.'}`
         : 'No external context. Create from first principles with broad relevance.';
 
+  const isThread = params.format === 'post' && params.postFormat === 'thread';
+  const threadRules = isThread ? getThreadStructureRules() : null;
+
   return [
-    `CONTENT FORMAT: ${meta.label}`,
+    `CONTENT FORMAT: ${isThread ? 'Thread / Multi-Post Series' : meta.label}`,
     `COMPANY: ${params.companyName || 'Current company'}`,
     `CONTEXT MODE: ${params.contextMode}`,
     contextBlock,
@@ -92,15 +97,26 @@ function buildBrief(params: {
     `- Target channels: ${params.channels || meta.defaultChannels.join(', ')}`,
     `- Exclusions / guardrails: ${params.exclusions || 'Avoid generic claims, off-brand tone, and unverifiable data.'}`,
     '',
-    'QUALITY REQUIREMENTS',
-    '- Strong opening hook in first 1-2 lines',
-    '- Clear narrative flow with concrete examples',
-    '- Distinctive point of view aligned with company positioning',
-    '- Practical takeaway and clear CTA',
-    '',
-    `FORMAT GUIDANCE (${meta.label})`,
-    `- Recommended length: ${meta.recommendedLength}`,
-    `- Tone: ${meta.toneHint}`,
+    ...(isThread && threadRules ? [
+      'THREAD INSTRUCTIONS',
+      'Write as a thread. Each section should feel like an individual post.',
+      threadRules.structure_rules_prompt,
+      '',
+      'OUTPUT:',
+      'Return posts as a numbered list (1., 2., 3., etc). Each post is 1–3 lines.',
+      `Minimum ${threadRules.validation_overrides.min_posts} posts, maximum ${threadRules.validation_overrides.max_posts} posts.`,
+      '',
+    ] : [
+      'QUALITY REQUIREMENTS',
+      '- Strong opening hook in first 1-2 lines',
+      '- Clear narrative flow with concrete examples',
+      '- Distinctive point of view aligned with company positioning',
+      '- Practical takeaway and clear CTA',
+      '',
+    ]),
+    `FORMAT GUIDANCE (${isThread ? 'Thread' : meta.label})`,
+    `- Recommended length: ${isThread ? '5-10 posts, ~50 words each' : meta.recommendedLength}`,
+    `- Tone: ${isThread ? 'Punchy, engaging, conversational' : meta.toneHint}`,
   ].join('\n');
 }
 
@@ -110,6 +126,9 @@ export default function ContentStudioFormatPage() {
 
   const format = parseFormat(router.query.format);
   const meta = FORMAT_META[format];
+
+  // Pre-select thread format from query param (e.g. /content-studio/post?postFormat=thread)
+  const initialPostFormat = router.query.postFormat === 'thread' ? 'thread' : 'standard';
 
   const [contextMode, setContextMode] = useState<ContextMode>('company');
   const [companyContext, setCompanyContext] = useState('');
@@ -130,6 +149,9 @@ export default function ContentStudioFormatPage() {
   const [intelligenceError, setIntelligenceError] = useState<string | null>(null);
   const [intelligenceSignals, setIntelligenceSignals] = useState<string[]>([]);
   const [knowledgeSeries, setKnowledgeSeries] = useState<Array<{ node: string; description: string }>>([]);
+  const [postFormat, setPostFormat] = useState<PostFormatType>(initialPostFormat);
+  const [threadPosts, setThreadPosts] = useState<string[]>([]);
+  const [threadCopied, setThreadCopied] = useState(false);
 
   useEffect(() => {
     if (authChecked && !user?.userId) {
@@ -222,8 +244,23 @@ export default function ContentStudioFormatPage() {
       alignmentScore,
       channels,
       exclusions,
+      postFormat: format === 'post' ? postFormat : undefined,
     });
     setGeneratedBrief(brief);
+
+    // For thread format, generate starter thread posts from key message + proof points
+    if (format === 'post' && postFormat === 'thread') {
+      const hookPost = keyMessage || 'Your hook post goes here — make it stop the scroll.';
+      const proofList = proofPoints
+        .split(/[,\n|]/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      const bodyPosts = proofList.length > 0
+        ? proofList.map(p => p)
+        : ['Expand on your first point here.', 'Add a surprising stat or counter-intuitive insight.', 'Share a mini case study or example.'];
+      const ctaPost = cta || 'Your CTA — what should readers do next?';
+      setThreadPosts([hookPost, ...bodyPosts, ctaPost]);
+    }
   };
 
   const handleApplyIntelligence = () => {
@@ -279,6 +316,38 @@ export default function ContentStudioFormatPage() {
   const handleCopyBrief = async () => {
     if (!generatedBrief) return;
     await navigator.clipboard.writeText(generatedBrief).catch(() => null);
+  };
+
+  const handleUpdateThreadPost = (index: number, value: string) => {
+    setThreadPosts(prev => prev.map((p, i) => i === index ? value : p));
+  };
+
+  const handleAddThreadPost = (afterIndex: number) => {
+    setThreadPosts(prev => [...prev.slice(0, afterIndex + 1), '', ...prev.slice(afterIndex + 1)]);
+  };
+
+  const handleRemoveThreadPost = (index: number) => {
+    if (threadPosts.length <= 3) return; // minimum 3 posts
+    setThreadPosts(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleMoveThreadPost = (index: number, direction: 'up' | 'down') => {
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= threadPosts.length) return;
+    setThreadPosts(prev => {
+      const next = [...prev];
+      [next[index], next[newIndex]] = [next[newIndex], next[index]];
+      return next;
+    });
+  };
+
+  const handleCopyAsThread = async () => {
+    const formatted = threadPosts
+      .map((post, i) => `${i + 1}/${threadPosts.length}\n${post}`)
+      .join('\n\n---\n\n');
+    await navigator.clipboard.writeText(formatted).catch(() => null);
+    setThreadCopied(true);
+    setTimeout(() => setThreadCopied(false), 2000);
   };
 
   return (
@@ -337,6 +406,26 @@ export default function ContentStudioFormatPage() {
                   ))}
                 </div>
               </div>
+
+              {format === 'post' && (
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900 mb-3">Post Format</h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {POST_FORMAT_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setPostFormat(opt.value)}
+                        className={`text-left border rounded-xl p-3 transition-colors ${
+                          postFormat === opt.value ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <p className="font-semibold text-sm text-gray-900">{opt.label}</p>
+                        <p className="text-xs text-gray-500 mt-1">{opt.description}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {contextMode === 'company' && (
                 <div>
@@ -550,8 +639,19 @@ export default function ContentStudioFormatPage() {
 
               <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-5">
                 <h3 className="text-sm font-bold text-yellow-900 mb-1">Format Guidance</h3>
-                <p className="text-xs text-yellow-800">Recommended length: {meta.recommendedLength}</p>
-                <p className="text-xs text-yellow-800 mt-1">Tone suggestion: {meta.toneHint}</p>
+                {format === 'post' && postFormat === 'thread' ? (
+                  <>
+                    <p className="text-xs text-yellow-800">Format: Thread / Multi-Post Series</p>
+                    <p className="text-xs text-yellow-800 mt-1">Posts: 5–10 posts, each 1–3 lines</p>
+                    <p className="text-xs text-yellow-800 mt-1">Tone: Punchy, engaging, conversational</p>
+                    <p className="text-xs text-yellow-800 mt-1">Platforms: LinkedIn, Twitter/X</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-yellow-800">Recommended length: {meta.recommendedLength}</p>
+                    <p className="text-xs text-yellow-800 mt-1">Tone suggestion: {meta.toneHint}</p>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -562,6 +662,103 @@ export default function ContentStudioFormatPage() {
               <pre className="whitespace-pre-wrap text-sm text-gray-700 bg-gray-50 rounded-lg border border-gray-200 p-4 overflow-auto">
                 {generatedBrief}
               </pre>
+            </div>
+          )}
+
+          {/* ── Thread Editor ──────────────────────────────────────────────── */}
+          {threadPosts.length > 0 && format === 'post' && postFormat === 'thread' && (
+            <div className="mt-6 bg-white border border-green-200 rounded-2xl p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">Thread Editor</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">{threadPosts.length} posts &middot; Edit, reorder, or add posts below</p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleCopyAsThread}
+                    className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg transition-colors"
+                  >
+                    {threadCopied ? 'Copied!' : 'Copy as Thread'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {threadPosts.map((post, idx) => {
+                  const isHook = idx === 0;
+                  const isCta = idx === threadPosts.length - 1;
+                  const label = isHook ? 'Hook' : isCta ? 'CTA / Takeaway' : `Post ${idx + 1}`;
+                  const badgeColor = isHook ? 'bg-amber-100 text-amber-800' : isCta ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700';
+
+                  return (
+                    <div key={idx} className="border border-gray-200 rounded-xl p-3 bg-gray-50/50 group">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-gray-400">{idx + 1}/{threadPosts.length}</span>
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${badgeColor}`}>{label}</span>
+                        </div>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => handleMoveThreadPost(idx, 'up')}
+                            disabled={idx === 0}
+                            className="p-1 text-gray-400 hover:text-gray-700 disabled:opacity-30"
+                            title="Move up"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => handleMoveThreadPost(idx, 'down')}
+                            disabled={idx === threadPosts.length - 1}
+                            className="p-1 text-gray-400 hover:text-gray-700 disabled:opacity-30"
+                            title="Move down"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => handleAddThreadPost(idx)}
+                            className="p-1 text-gray-400 hover:text-green-600"
+                            title="Add post after"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => handleRemoveThreadPost(idx)}
+                            disabled={threadPosts.length <= 3}
+                            className="p-1 text-gray-400 hover:text-red-500 disabled:opacity-30"
+                            title="Remove post"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                      <textarea
+                        value={post}
+                        onChange={(e) => handleUpdateThreadPost(idx, e.target.value)}
+                        rows={2}
+                        placeholder={isHook ? 'Your scroll-stopping hook...' : isCta ? 'Final CTA or key takeaway...' : 'One clear idea per post...'}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-400 resize-none"
+                      />
+                      <div className="flex justify-between mt-1">
+                        <span className="text-[10px] text-gray-400">{post.split(/\s+/).filter(Boolean).length} words</span>
+                        <span className="text-[10px] text-gray-400">{post.length} chars</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+                <span>Tip: Each post should deliver one standalone idea. Keep it punchy.</span>
+                <span className="font-semibold">{threadPosts.reduce((sum, p) => sum + p.split(/\s+/).filter(Boolean).length, 0)} total words</span>
+              </div>
             </div>
           )}
 

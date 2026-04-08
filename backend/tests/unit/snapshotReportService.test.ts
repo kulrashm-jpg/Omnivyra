@@ -68,12 +68,15 @@ function makeDecision(params: {
   description: string;
   recommendation: string;
   actionType?: PersistedDecisionObject['action_type'];
+  actionPayload?: Record<string, unknown>;
   impactTraffic?: number;
   impactConversion?: number;
   impactRevenue?: number;
   priorityScore?: number;
+  effortScore?: number;
   confidenceScore?: number;
   reportTier?: PersistedDecisionObject['report_tier'];
+  evidence?: Record<string, unknown>;
 }): PersistedDecisionObject {
   const now = new Date('2026-03-31T00:00:00.000Z').toISOString();
   return {
@@ -86,17 +89,17 @@ function makeDecision(params: {
     issue_type: params.issueType,
     title: params.title,
     description: params.description,
-    evidence: { seed: true },
+    evidence: params.evidence ?? { seed: true },
     impact_traffic: params.impactTraffic ?? 50,
     impact_conversion: params.impactConversion ?? 30,
     impact_revenue: params.impactRevenue ?? 20,
     priority_score: params.priorityScore ?? 60,
-    effort_score: 20,
+    effort_score: params.effortScore ?? 20,
     execution_score: 60,
     confidence_score: params.confidenceScore ?? 0.8,
     recommendation: params.recommendation,
     action_type: params.actionType ?? 'improve_content',
-    action_payload: {},
+    action_payload: params.actionPayload ?? {},
     status: 'open',
     last_changed_by: 'system',
     created_at: now,
@@ -321,5 +324,134 @@ describe('snapshotReportService', () => {
     expect(priorities.every((item) => item.expected_upside.length > 20)).toBe(true);
     expect(report.sections.every((section) => section.actions.every((item, index, list) => index === 0 || rank[list[index - 1].priority_type] <= rank[item.priority_type]))).toBe(true);
     expect(priorities.every((item, index, list) => index === 0 || rank[list[index - 1].priority_type] <= rank[item.priority_type])).toBe(true);
+  });
+
+  it('builds structured action recommendations from real gap data', () => {
+    const resolvedInput = makeResolvedInput({
+      companyName: 'SignalStack',
+      websiteDomain: 'signalstack.io',
+      businessType: 'SaaS',
+      geography: 'United States',
+      companyContext: {
+        marketFocus: 'B2B SaaS',
+        productServices: ['workflow automation'],
+        targetCustomer: null,
+        idealCustomerProfile: null,
+        brandPositioning: null,
+        competitiveAdvantages: null,
+        teamSize: null,
+        foundedYear: null,
+        revenueRange: null,
+      },
+    });
+
+    const report = composeSnapshotReportFromDecisions({
+      companyId: 'company-1',
+      snapshotDecisions: [
+        makeDecision({
+          id: 'content-gap-1',
+          issueType: 'competitor_content_gap',
+          title: 'Competitors cover more buying-stage content than signalstack.io',
+          description: 'Comparison and decision-stage pages are missing for the highest-intent SaaS alternatives.',
+          recommendation: 'Build comparison and proof pages around the buying-stage topics competitors already own.',
+          actionType: 'improve_content',
+          priorityScore: 88,
+          effortScore: 34,
+          impactTraffic: 81,
+          impactConversion: 66,
+          actionPayload: {
+            optimization_focus: 'comparison_pages',
+            thin_pages: ['https://signalstack.io/product', 'https://signalstack.io/pricing'],
+          },
+        }),
+      ],
+      resolvedInput,
+      publicAudit: {
+        site_structure: {
+          homepage: 'https://signalstack.io/',
+          product_pages: ['https://signalstack.io/product'],
+          pricing_pages: ['https://signalstack.io/pricing'],
+          blog_pages: ['https://signalstack.io/blog/getting-started'],
+          contact_pages: [],
+          geo_pages: [],
+        },
+        geo_aeo_context: {
+          queries: [],
+          entities: [],
+          answerable_content_pct: null,
+          structured_content_pct: null,
+          citation_ready_pct: null,
+          answer_coverage_score: null,
+          entity_clarity_score: null,
+          topical_authority_score: null,
+          citation_readiness_score: null,
+          content_structure_score: null,
+          freshness_score: null,
+        },
+        decisions: [
+          makeDecision({
+            id: 'audit-thin-pages',
+            issueType: 'weak_content_depth',
+            title: 'Core pages are too thin or weakly structured to perform well in search',
+            description: 'Important pages are too thin.',
+            recommendation: 'Deepen the important pages first.',
+            actionType: 'improve_content',
+            actionPayload: {
+              optimization_focus: 'page_depth',
+              thin_pages: ['https://signalstack.io/product', 'https://signalstack.io/pricing'],
+            },
+          }),
+        ],
+      },
+      competitorIntelligenceOverride: {
+        detected_competitors: [
+          {
+            name: 'FlowPilot',
+            domain: 'flowpilot.io',
+            classification: 'direct_competitor',
+            source: 'manual',
+            relevance_score: 0.91,
+            rationale: 'Direct workflow automation competitor',
+          },
+        ],
+        generated_gaps: [
+          {
+            gap_type: 'content_gap',
+            issue_type: 'competitor_content_gap',
+            title: 'Competitors cover more buying-stage content than signalstack.io',
+            insight: 'SignalStack lacks comparison and decision-stage content.',
+            why_it_matters: 'Buyers shortlist alternatives before reaching the site.',
+            recommendation: 'Build /vs/ pages and comparison content.',
+            action_type: 'improve_content',
+            expected_outcome: 'The site should compete more often in high-intent search and comparison moments.',
+            effort_level: 'medium',
+            impact_score: 88,
+            confidence_score: 0.86,
+            leading_competitors: ['flowpilot.io'],
+          },
+        ],
+        summary: 'Competitors are ahead on buying-stage coverage.',
+        comparison: null,
+        discovery_metadata: {
+          serp_status: 'live',
+          serp_domains_found: 1,
+          is_fallback_used: false,
+        },
+      } as any,
+    });
+
+    const action = report.seo_executive_summary.top_3_actions[0];
+
+    expect(action.title.length).toBeGreaterThan(5);
+    expect(action.reasoning.length).toBeGreaterThan(20);
+    expect(action.tactics.length).toBeGreaterThanOrEqual(3);
+    expect(action.focus_page.length).toBeGreaterThan(0);
+    expect(action.timeline.short.length).toBeGreaterThan(0);
+    expect(action.timeline.mid.length).toBeGreaterThan(0);
+    expect(action.timeline.long.length).toBeGreaterThan(0);
+    expect(action.confidence).toBeGreaterThan(0);
+    expect(action.tactics.join(' ')).toContain('directories');
+    expect(action.tactics.join(' ')).toContain('proof-led asset');
+    expect(action.tactics.join(' ')).toContain('outreach sequence');
   });
 });

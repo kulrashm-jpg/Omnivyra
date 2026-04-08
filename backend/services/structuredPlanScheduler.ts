@@ -1,7 +1,10 @@
 import { supabase } from '../db/supabaseClient';
 import { getPlatformRules, listPlatformCatalog } from './platformIntelligenceService';
 import { generateContentForDailyPlans } from './boltContentGenerationForSchedule';
+import { processBlockSchedule } from './boltScheduleBlockProcessor';
 import { evaluateScheduleEligibility } from './campaignScheduleEligibilityService';
+import { getContentQueue } from '../queue/contentGenerationQueues';
+import type { BoltContentJobData } from '../queue/jobProcessors/boltContentJobProcessor';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -253,6 +256,56 @@ type DailyPlanRow = {
   content?: string | null;
 };
 
+function tryParseDailyPlanContent(value: unknown): Record<string, unknown> | null {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+  return typeof value === 'object' ? (value as Record<string, unknown>) : null;
+}
+
+function isPlaceholderLikeScheduledContent(content: string | null | undefined): boolean {
+  const text = String(content || '').trim();
+  if (!text) return true;
+  return (
+    /^\s*content for\b/i.test(text) ||
+    /^\s*content placeholder\b/i.test(text) ||
+    /^\s*execution job content placeholder\b/i.test(text) ||
+    text.startsWith('[PLATFORM ADAPTATION FAILED]') ||
+    text.startsWith('[MASTER GENERATION FAILED') ||
+    text.startsWith('[MASTER CONTENT PLACEHOLDER]') ||
+    text.startsWith('[PLATFORM MEDIA BLUEPRINT]') ||
+    text.startsWith('[MEDIA BLUEPRINT]')
+  );
+}
+
+function extractResolvedContentFromDailyPlan(row: DailyPlanRow): string | null {
+  const parsed = tryParseDailyPlanContent(row.content);
+  if (!parsed) return null;
+
+  const direct = String(parsed.generated_content ?? '').trim();
+  if (direct && !isPlaceholderLikeScheduledContent(direct)) return direct;
+
+  const variants = Array.isArray(parsed.platform_variants) ? parsed.platform_variants : [];
+  const match = variants.find((variant) =>
+    String((variant as any)?.platform || '').trim().toLowerCase() === String(row.platform || '').trim().toLowerCase() &&
+    String((variant as any)?.content_type || '').trim().toLowerCase() === String(row.content_type || 'post').trim().toLowerCase()
+  );
+  const variantContent = String((match as any)?.generated_content || '').trim();
+  if (variantContent && !isPlaceholderLikeScheduledContent(variantContent)) return variantContent;
+
+  const master = parsed.master_content && typeof parsed.master_content === 'object'
+    ? String((parsed.master_content as any).content || '').trim()
+    : '';
+  if (master && !isPlaceholderLikeScheduledContent(master)) return master;
+
+  return null;
+}
+
 /**
  * Build scheduled_for Date from daily plan date + time.
  * date: YYYY-MM-DD; scheduled_time: HH:MM or HH:MM:SS or ISO string
@@ -340,10 +393,15 @@ function scheduleFromDailyPlans(
     const contentType = String(row.content_type || 'post').trim().toLowerCase();
     const topic = String(row.topic || row.title || '').trim();
     const generatedContent = contentMap?.get(row.id);
-    const contentPlaceholder = topic
-      ? `Content for "${topic}" — ${platform} ${contentType}`
-      : `Content placeholder — ${platform} ${contentType}`;
-    const content = (generatedContent && generatedContent.trim()) ? generatedContent : contentPlaceholder;
+    const persistedResolvedContent = extractResolvedContentFromDailyPlan(row);
+    const content =
+      (generatedContent && generatedContent.trim() && !isPlaceholderLikeScheduledContent(generatedContent) ? generatedContent : null) ||
+      persistedResolvedContent;
+
+    if (!content) {
+      if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
+      continue;
+    }
 
     const scheduledFor = buildScheduledForFromDailyPlan(row.date, row.scheduled_time ?? undefined);
     const platformForDb = toDbPlatformKey(platform);
@@ -592,7 +650,229 @@ export type ScheduleStructuredPlanOptions = {
   frequencyPerWeek?: number;
   /** Platform keys to use as fallback when platform_allocation is empty. */
   eligiblePlatforms?: string[];
+  /**
+   * BOLT execution run ID. When provided with generateContent=true, jobs are queued
+   * to BullMQ instead of processed inline — required for large campaigns (10+ platforms).
+   */
+  run_id?: string;
 };
+
+// ---------------------------------------------------------------------------
+// Queue-based BOLT content job creation
+// ---------------------------------------------------------------------------
+
+const CONTENT_TYPE_PRIORITY_MAP: Record<string, number> = {
+  blog: 1, article: 2, white_paper: 2, newsletter: 3,
+  short_story: 3, thread: 4, post: 5, carousel: 5,
+  image: 5, story: 5, reel: 5, short: 5, video: 5, poll: 5,
+};
+
+function topicGroupKeyForQueue(row: DailyPlanRow): string {
+  let parsed: Record<string, unknown> = {};
+  if (row.content && typeof row.content === 'string') {
+    try { parsed = JSON.parse(row.content); } catch { /* ok */ }
+  } else if (row.content && typeof row.content === 'object') {
+    parsed = row.content as Record<string, unknown>;
+  }
+  const src  = String((parsed as any).source_execution_id ?? '').trim();
+  const mid  = String((parsed as any).master_content_id    ?? '').trim();
+  const eid  = String((parsed as any).execution_id         ?? '').trim();
+  const topic = String(row.topic || row.title || (parsed as any).topicTitle || '').trim() || 'untitled';
+  const week  = Number(row.week_number) || 1;
+  if (src) return `shared::${src}::${week}`;
+  if (mid) return `master::${mid}::${week}`;
+  if (eid) return `unique::${eid}::${week}`;
+  return `topic::${topic}::${week}`;
+}
+
+/**
+ * Group daily_content_plans rows into topic groups, create bolt_content_jobs rows
+ * in DB, create platform_content_slots rows, then push to the bolt-content-jobs
+ * BullMQ queue. Returns the number of jobs queued.
+ *
+ * IMPORTANT: `normalize` converts raw platform values from daily_content_plans
+ * (e.g. 'LinkedIn', 'twitter') to canonical keys (e.g. 'linkedin', 'x') that
+ * match the accountMap keys. Without this, all platforms are silently dropped.
+ */
+async function queueBoltContentJobs(
+  runId: string,
+  campaignId: string,
+  dailyPlans: DailyPlanRow[],
+  campaign: { start_date: string; user_id: string; company_id?: string | null },
+  accountMap: Map<string, string>,
+  typeMapByPlatform: Record<string, Record<string, string>>,
+  normalize: PlatformNormalizer,
+): Promise<number> {
+  const companyId = campaign.company_id ?? null;
+
+  // Group rows by content_type × topic
+  const contentTypeGroups = new Map<string, Map<string, DailyPlanRow[]>>();
+  for (const row of dailyPlans) {
+    const ct  = String(row.content_type || 'post').toLowerCase().trim();
+    const key = topicGroupKeyForQueue(row);
+    if (!contentTypeGroups.has(ct)) contentTypeGroups.set(ct, new Map());
+    const topicMap = contentTypeGroups.get(ct)!;
+    const list = topicMap.get(key) ?? [];
+    list.push(row);
+    topicMap.set(key, list);
+  }
+
+  // Flatten into job descriptors
+  type JobDescriptor = {
+    contentType: string;
+    topic: string;
+    rows: DailyPlanRow[];
+    priority: number;
+    platformTargets: Array<{ platform: string; content_type: string; raw_platform: string }>;
+    enriched: Record<string, unknown>;
+  };
+
+  const jobs: JobDescriptor[] = [];
+  for (const [ct, topicMap] of contentTypeGroups.entries()) {
+    for (const rows of topicMap.values()) {
+      const first  = rows[0]!;
+      let parsed: Record<string, unknown> = {};
+      if (first.content && typeof first.content === 'string') {
+        try { parsed = JSON.parse(first.content); } catch { /* ok */ }
+      } else if (first.content && typeof first.content === 'object') {
+        parsed = first.content as Record<string, unknown>;
+      }
+      const topic = String(
+        first.topic || first.title || (parsed as any).topicTitle || ''
+      ).trim() || 'Untitled';
+
+      // CRITICAL: normalize raw platform values before checking accountMap.
+      // daily_content_plans stores raw values like 'LinkedIn', 'twitter', 'Instagram'.
+      // accountMap keys are canonical: 'linkedin', 'x', 'instagram'.
+      const platformTargets = rows.map((r) => {
+        const rawPlatform = String(r.platform || '').trim().toLowerCase();
+        const canonical   = normalize(rawPlatform);
+        if (!canonical || !accountMap.has(canonical)) return null;
+        return {
+          platform:     canonical,           // normalized — used for accountMap lookup
+          raw_platform: rawPlatform,         // original — stored for debugging
+          content_type: String(r.content_type || 'post').trim().toLowerCase(),
+        };
+      }).filter((t): t is NonNullable<typeof t> => t !== null);
+
+      if (platformTargets.length === 0) {
+        console.warn('[schedule] queueBoltContentJobs: no valid platforms for topic', {
+          topic, ct,
+          rawPlatforms: rows.map((r) => r.platform),
+          accountMapKeys: Array.from(accountMap.keys()),
+        });
+        continue;
+      }
+
+      jobs.push({
+        contentType: ct,
+        topic,
+        rows,
+        priority: CONTENT_TYPE_PRIORITY_MAP[ct] ?? 5,
+        platformTargets,
+        enriched: {
+          topic: first.topic || first.title || '',
+          title: first.title || first.topic || '',
+          ...parsed,
+        },
+      });
+    }
+  }
+
+  if (jobs.length === 0) {
+    console.warn('[schedule] queueBoltContentJobs: 0 jobs after platform normalization', {
+      dailyPlansCount: dailyPlans.length,
+      accountMapKeys: Array.from(accountMap.keys()),
+      rawPlatforms: [...new Set(dailyPlans.map((r) => r.platform))],
+    });
+    return 0;
+  }
+
+  // Serialize accountMap for job payload (Map isn't JSON-serialisable).
+  // Keys are canonical platform names — processor must use canonical name for lookup.
+  const accountMapObj: Record<string, string> = {};
+  accountMap.forEach((v, k) => { accountMapObj[k] = v; });
+
+  const queue = getContentQueue('bolt-content-jobs');
+  let queued = 0;
+
+  for (const jd of jobs) {
+    // 1. Insert bolt_content_jobs row
+    const { data: jobRow, error: jobInsertErr } = await supabase
+      .from('bolt_content_jobs')
+      .insert({
+        run_id:         runId,
+        campaign_id:    campaignId,
+        daily_plan_ids: jd.rows.map((r) => r.id),
+        content_type:   jd.contentType,
+        topic:          jd.topic,
+        priority:       jd.priority,
+        status:         'pending',
+      })
+      .select('id')
+      .maybeSingle();
+
+    if (jobInsertErr || !jobRow) {
+      console.warn('[schedule] bolt_content_jobs insert failed:', jobInsertErr?.message, { topic: jd.topic });
+      continue;
+    }
+
+    const boltJobId = (jobRow as any).id as string;
+
+    // 2. Insert platform_content_slots (one per daily_plan row)
+    const slotRows = jd.rows.map((r) => ({
+      campaign_id:   campaignId,
+      daily_plan_id: r.id,
+      bolt_job_id:   boltJobId,
+      platform:      String(r.platform || '').toLowerCase(),
+      content_type:  String(r.content_type || 'post').toLowerCase(),
+      scheduled_for: r.date ? new Date(`${String(r.date).slice(0, 10)}T09:00:00Z`).toISOString() : null,
+      status:        'empty',
+    }));
+
+    // Insert in batches of 50 to avoid Supabase payload limits
+    for (let i = 0; i < slotRows.length; i += 50) {
+      const batch = slotRows.slice(i, i + 50);
+      const { error: slotErr } = await supabase.from('platform_content_slots').insert(batch);
+      if (slotErr) console.warn('[schedule] platform_content_slots insert error:', slotErr.message);
+    }
+
+    // 3. Mark job as queued and push to BullMQ
+    await supabase
+      .from('bolt_content_jobs')
+      .update({ status: 'queued' })
+      .eq('id', boltJobId);
+
+    const jobData: BoltContentJobData = {
+      run_id:               runId,
+      campaign_id:          campaignId,
+      bolt_job_id:          boltJobId,
+      topic:                jd.topic,
+      content_type:         jd.contentType,
+      daily_plan_ids:       jd.rows.map((r) => r.id),
+      enriched:             jd.enriched,
+      platform_targets:     jd.platformTargets,
+      campaign: {
+        start_date: campaign.start_date,
+        user_id:    campaign.user_id,
+        company_id: companyId,
+      },
+      account_map:          accountMapObj,
+      type_map_by_platform: typeMapByPlatform,
+    };
+
+    await queue.add(`bolt-topic-${boltJobId}`, jobData, {
+      priority: jd.priority,
+      attempts: 3,
+      backoff:  { type: 'exponential', delay: 3000 },
+    });
+
+    queued++;
+  }
+
+  console.log('[schedule] queueBoltContentJobs done', { runId, queued, totalJobs: jobs.length });
+  return queued;
+}
 
 export class ScheduleEligibilityError extends Error {
   code = 'SCHEDULE_NOT_READY';
@@ -686,53 +966,134 @@ export async function scheduleStructuredPlan(
     }
   }
 
-  // STEP 1: Prefer BOLT-generated daily_content_plans when they exist
+  // STEP 1: Prefer BOLT-generated daily_content_plans when they exist.
+  // NOTE: execution_mode and creator_asset are optional columns — if they don't exist in the
+  // DB schema, Supabase returns an error and hasDailyPlans becomes false, causing placeholder
+  // content. We select only guaranteed-to-exist core columns and handle optional ones gracefully.
   const { data: dailyPlans, error: dailyPlansError } = await supabase
     .from('daily_content_plans')
-    .select('id, campaign_id, week_number, day_of_week, date, platform, content_type, title, topic, scheduled_time, content, execution_mode, creator_asset')
+    .select('id, campaign_id, week_number, day_of_week, date, platform, content_type, title, topic, scheduled_time, content')
     .eq('campaign_id', campaignId)
     .order('date', { ascending: true })
     .order('week_number', { ascending: true });
 
+  if (dailyPlansError) {
+    console.warn('[schedule] daily_content_plans query failed — falling back to allocation scheduling', dailyPlansError.message);
+  }
+
   const hasDailyPlans = !dailyPlansError && Array.isArray(dailyPlans) && dailyPlans.length > 0;
 
   if (hasDailyPlans && Array.isArray(dailyPlans)) {
-    const eligibility = evaluateScheduleEligibility(dailyPlans as Array<{
-      id?: string | null;
-      title?: string | null;
-      platform?: string | null;
-      content_type?: string | null;
-      execution_mode?: string | null;
-      creator_asset?: unknown;
-    }>);
+    // execution_mode and creator_asset are optional columns not always selected —
+    // pass them as undefined so eligibility check treats all rows as text-schedulable.
+    const eligibility = evaluateScheduleEligibility(dailyPlans.map((r: any) => ({
+      id: r.id ?? null,
+      title: r.title ?? null,
+      platform: r.platform ?? null,
+      content_type: r.content_type ?? null,
+      execution_mode: r.execution_mode ?? null,
+      creator_asset: r.creator_asset ?? null,
+    })));
     if (!eligibility.eligible) {
       throw new ScheduleEligibilityError(eligibility);
     }
   }
 
-  let contentMap: Map<string, string> | undefined;
+  // ── CONTENT SCHEDULING PATH (BOLT schedule outcome with daily plans) ─────────
+  console.log('[schedule] routing decision', {
+    hasDailyPlans,
+    dailyPlansCount: Array.isArray(dailyPlans) ? dailyPlans.length : 0,
+    generateContent: options?.generateContent,
+    run_id: options?.run_id ?? null,
+    companyId,
+    accountMapSize: accountMap.size,
+    firstPlanPlatform: Array.isArray(dailyPlans) && dailyPlans.length > 0 ? (dailyPlans[0] as any)?.platform : null,
+  });
+
   if (hasDailyPlans && options?.generateContent && dailyPlans) {
-    try {
-      contentMap = await generateContentForDailyPlans(campaignId, dailyPlans as DailyPlanRow[], {
-        onPhase: (phase) => {
-          if (phase === 'creating') options?.onProgress?.('schedule-creating-content');
-          if (phase === 'repurposing') options?.onProgress?.('schedule-repurposing-content');
-        },
-      });
-      options?.onProgress?.('schedule-writing-posts');
-    } catch (err) {
-      console.warn('[schedule] Content generation failed, using placeholders:', (err as Error)?.message);
+    // ── QUEUE PATH: run_id present → queue jobs for async processing ────────
+    // Required for large campaigns (10+ platforms × 5+ content types × 3+/week)
+    // where in-process generation would exceed HTTP timeout limits.
+    if (options?.run_id) {
+      try {
+        options?.onProgress?.('schedule-queuing-jobs');
+        const jobCount = await queueBoltContentJobs(
+          options.run_id,
+          campaignId,
+          dailyPlans as DailyPlanRow[],
+          { ...campaign, company_id: companyId },
+          accountMap,
+          typeMapByPlatform,
+          normalize,
+        );
+        console.log('[schedule] Queued bolt content jobs', { run_id: options.run_id, jobCount });
+        if (jobCount > 0) {
+          options?.onProgress?.('schedule-writing-posts');
+          return {
+            scheduled_count:         0,    // jobs run async — count comes from workers
+            skipped_count:           0,
+            skipped_platforms:       [],
+            already_scheduled_count: 0,
+            queued_job_count:        jobCount,
+          } as any;
+        }
+        // jobCount === 0 means all inserts failed — fall through to inline block processor
+        console.warn('[schedule] Queue path produced 0 jobs, falling back to inline block processor');
+      } catch (err) {
+        console.warn('[schedule] Queue path failed, falling back to inline block processor:', (err as Error)?.message);
+        // Fall through to inline block processor
+      }
     }
+
+    // ── INLINE BLOCK PROCESSOR: no run_id → process synchronously ───────────
+    // Used for small campaigns or when BullMQ is unavailable.
+    try {
+      options?.onProgress?.('schedule-creating-content');
+      const blockResult = await processBlockSchedule(
+        campaignId,
+        dailyPlans as DailyPlanRow[],
+        { ...campaign, company_id: companyId },
+        accountMap,
+        normalize,
+        typeMapByPlatform,
+        {
+          onProgress: (event) => {
+            if (event.phase === 'block-start') {
+              options?.onProgress?.(`schedule-block-${event.contentType}`);
+            } else if (event.phase === 'topic-master') {
+              options?.onProgress?.('schedule-creating-content');
+            } else if (event.phase === 'platform-done') {
+              options?.onProgress?.('schedule-repurposing-content');
+            } else if (event.phase === 'block-complete') {
+              options?.onProgress?.('schedule-writing-posts');
+            }
+          },
+        }
+      );
+      return {
+        scheduled_count:         blockResult.scheduled_count,
+        skipped_count:           blockResult.skipped_count,
+        skipped_platforms:       blockResult.skipped_platforms,
+        already_scheduled_count: 0,
+      };
+    } catch (err) {
+      console.warn('[schedule] Block processor failed, falling back to legacy path:', (err as Error)?.message);
+      // Fall through to legacy path below
+    }
+  }
+
+  // ── LEGACY / FALLBACK PATH ─────────────────────────────────────────────────
+  // Used when: no daily plans, generateContent is false, or block processor threw.
+  let contentMap: Map<string, string> | undefined;
+  if (hasDailyPlans && !options?.generateContent && dailyPlans) {
+    // No-generate path: try to use any already-finalized content stored in daily plans
+    // (no LLM calls; if content is placeholder, post will be skipped)
   }
 
   // STEP 2–4: Fallback chain when no daily plans
   const schedulableJobs = extractSchedulableJobsFromWeeks(plan.weeks as any[]);
   const hasExecutionJobs = schedulableJobs.length > 0;
   const useLegacy = isLegacyPlan(plan.weeks);
-
-  if (hasDailyPlans && options?.generateContent && !contentMap) {
-    options?.onProgress?.('schedule-writing-posts');
-  }
 
   const { scheduledPosts, skippedPlatforms } = hasDailyPlans
     ? scheduleFromDailyPlans(

@@ -39,7 +39,7 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
       'Sentiment tracking and priority alerts',
     ],
     cta: 'Open Engagement Center',
-    route: '/community-ai',
+    route: '/engagement',
     accentFrom: 'from-orange-50',
     accentTo: 'to-amber-50',
     borderColor: 'border-orange-200',
@@ -57,8 +57,8 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
       'Emerging trend identification',
       'Actionable market opportunity alerts',
     ],
-    cta: 'View Market Pulse',
-    route: '/market-analysis',
+    cta: 'Open in Intelligence',
+    route: '/dashboard?tab=intelligence&intelTab=market-pulse',
     accentFrom: 'from-blue-50',
     accentTo: 'to-cyan-50',
     borderColor: 'border-blue-200',
@@ -76,8 +76,8 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
       'Lead nurture sequences and follow-ups',
       'Integration-ready for your CRM',
     ],
-    cta: 'View Active Leads',
-    route: '/leads',
+    cta: 'Open in Intelligence',
+    route: '/dashboard?tab=intelligence&intelTab=active-leads',
     accentFrom: 'from-purple-50',
     accentTo: 'to-violet-50',
     borderColor: 'border-purple-200',
@@ -96,7 +96,7 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
       'Weekly AI-generated intelligence briefs',
     ],
     cta: 'Open Intelligence',
-    route: '/marketing-intelligence',
+    route: '/dashboard?tab=intelligence&intelTab=intelligence',
     accentFrom: 'from-indigo-50',
     accentTo: 'to-slate-50',
     borderColor: 'border-indigo-200',
@@ -144,8 +144,8 @@ export default function EngagementSubPage() {
           <div className="text-5xl mb-3">💬</div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Engagement & Intelligence</h1>
           <p className="text-gray-500 max-w-xl mx-auto">
-            Monitor your community, track the market, manage leads, and access deep AI-powered intelligence
-            to stay ahead of the competition.
+            Monitor your community, then move into a single intelligence workspace for market pulse,
+            active leads, and strategic campaign visibility.
           </p>
         </div>
 

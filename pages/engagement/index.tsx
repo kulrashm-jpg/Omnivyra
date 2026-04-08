@@ -1,6 +1,6 @@
 /**
- * Engagement Command Center
- * Three-panel layout: ThreadList | ThreadView | AIEngagementAssistant
+ * Engagement Center
+ * Operational workspace for inbox, replies, and engagement next steps.
  */
 
 import React from 'react';
@@ -15,7 +15,7 @@ export default function EngagementCommandCenterPage() {
   return (
     <>
       <Head>
-        <title>Engagement Command Center</title>
+        <title>Engagement Center</title>
       </Head>
       <div className="flex flex-col h-[calc(100vh-4rem)]">
         <InboxDashboard organizationId={organizationId} className="flex-1 min-h-0" />

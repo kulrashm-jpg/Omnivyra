@@ -1,5 +1,4 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
-import { ChevronDown } from 'lucide-react';
 import {
   applyRecommendationStrategicCardDraft,
   buildRecommendationStrategicCard,
@@ -71,15 +70,6 @@ type RecommendationBlueprintCardProps = {
   recommendation: Record<string, unknown>;
   onRefineRecommendation?: (recommendation: Record<string, unknown>) => Promise<void> | void;
   onBuildCampaignBlueprint?: () => Promise<void> | void;
-  /** Receives outcomeView, durationWeeks, campaignMode and contentFormats from BOLT options. */
-  onBuildCampaignFast?: (options?: {
-    outcomeView?: BoltOutcomeView;
-    durationWeeks?: number;
-    campaignMode?: BoltCampaignMode;
-    contentFormats?: BoltContentFormat[];
-  }) => Promise<void> | void;
-  /** When true, BOLT is in progress for this card (show loading, disable button). */
-  fastLoading?: boolean;
   onMarkLongTerm?: () => Promise<void> | void;
   onArchive?: () => Promise<void> | void;
   /** Journey signal: show small badge (only when campaigns_count > 0). */
@@ -101,11 +91,8 @@ type RecommendationBlueprintCardProps = {
    * Hides the Campaign Mode / dropdown UI and shows a single "⚡ BOLT (Text)" button
    * that fires immediately with the preset options.
    */
-  boltTextPreset?: {
-    outcomeView: BoltOutcomeView;
-    durationWeeks: number;
-    contentFormat: BoltContentFormat;
-  };
+  /** Optional duration override from the current flow (e.g. Intelligent Mix selected weeks). */
+  durationWeeksOverride?: number | null;
 };
 
 export type JourneyState = 'past' | 'current' | 'upcoming' | null;
@@ -707,9 +694,6 @@ function getPrimaryActionLabel(tier: ConfidenceTier): string {
   }
 }
 
-function getExpandActionLabel(tier: ConfidenceTier): string {
-  return tier === 'low' ? 'Explore Strategy Details' : 'Expand Theme Strategy';
-}
 
 /** AI confidence framing banner — visible in both FULL and MINIMAL. Uses existing card data only. */
 function RecommendationConfidenceBanner(props: {
@@ -744,8 +728,6 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
     recommendation,
     onRefineRecommendation,
     onBuildCampaignBlueprint,
-    onBuildCampaignFast,
-    fastLoading,
     onMarkLongTerm,
     onArchive,
     strategyStatus,
@@ -755,47 +737,13 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
     executionBadge,
     upcomingBadge,
     buildError,
-    boltTextPreset,
+    durationWeeksOverride,
   } = props;
   const [expanded, setExpanded] = useState(false);
   const [minimized, setMinimized] = useState(true);
   const [busy, setBusy] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
   const [refinementDraft, setRefinementDraft] = useState<RecommendationStrategicCardDraft | null>(null);
-  const [boltMenuOpen, setBoltMenuOpen] = useState(false);
-  const [boltOutcomeView, setBoltOutcomeView] = useState<BoltOutcomeView>('schedule');
-  const [boltDurationWeeks, setBoltDurationWeeks] = useState<number>(4);
-  const [boltCampaignMode, setBoltCampaignMode] = useState<BoltCampaignMode>('text_based');
-  const [boltContentFormats, setBoltContentFormats] = useState<BoltContentFormat[]>(['post']);
-  const boltMenuRef = useRef<HTMLDivElement>(null);
-
-  // When switching to creator_dependent, cap outcome at daily_plan; reset formats to first option
-  const handleBoltModeChange = (mode: BoltCampaignMode) => {
-    setBoltCampaignMode(mode);
-    setBoltContentFormats([BOLT_CONTENT_FORMATS[mode][0].value]);
-    if (mode === 'creator_dependent' && boltOutcomeView === 'schedule') {
-      setBoltOutcomeView('daily_plan');
-    }
-  };
-
-  const toggleContentFormat = (fmt: BoltContentFormat) => {
-    setBoltContentFormats((prev) =>
-      prev.includes(fmt)
-        ? prev.length > 1 ? prev.filter((f) => f !== fmt) : prev  // keep at least one
-        : [...prev, fmt]
-    );
-  };
-
-  useEffect(() => {
-    if (!boltMenuOpen) return;
-    const onOutside = (e: MouseEvent) => {
-      if (boltMenuRef.current && !boltMenuRef.current.contains(e.target as Node)) {
-        setBoltMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onOutside);
-    return () => document.removeEventListener('mousedown', onOutside);
-  }, [boltMenuOpen]);
   const isMinimal = viewMode === 'MINIMAL';
   const journeyState = getJourneyState({ strategyStatus, isTopPriority, resurfaced });
   const memoryState = getStrategicMemoryState({ strategyStatus, isTopPriority, resurfaced });
@@ -837,6 +785,10 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
   const executionBlock = strategicCard.execution;
   const snapshotBlock = strategicCard.company_context_snapshot;
   const blueprint = strategicCard.blueprint;
+  const displayDurationWeeks =
+    typeof durationWeeksOverride === 'number' && Number.isFinite(durationWeeksOverride) && durationWeeksOverride > 0
+      ? Math.floor(durationWeeksOverride)
+      : blueprint.duration_weeks;
 
   const openRefinement = () => {
     setRefinementDraft(buildRecommendationStrategicCardDraft(rec));
@@ -1072,9 +1024,9 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
           <section className="mt-4 pt-4 border-t border-gray-200">
             <h4 className="text-sm font-semibold text-gray-800 mb-2">Campaign preview</h4>
             <div className="text-sm text-gray-700 space-y-1">
-              {blueprint.duration_weeks != null ? (
+              {displayDurationWeeks != null ? (
                 <div>
-                  <span className="text-gray-500 font-medium">Duration:</span> {blueprint.duration_weeks} weeks
+                  <span className="text-gray-500 font-medium">Duration:</span> {displayDurationWeeks} weeks
                 </div>
               ) : null}
               {blueprint.primary_recommendations.length > 0 ? (
@@ -1103,127 +1055,6 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             >
               {getPrimaryActionLabel(confidenceBannerContent.tier)}
             </button>
-            {/* ── BOLT button: single preset button (from BOLT Text setup page) or full dropdown ── */}
-            {boltTextPreset ? (
-              <button
-                type="button"
-                title={`Run BOLT (Text) · ${boltTextPreset.contentFormat} · ${boltTextPreset.durationWeeks}w · ${boltTextPreset.outcomeView}`}
-                onClick={() =>
-                  run(() =>
-                    onBuildCampaignFast?.({
-                      outcomeView: boltTextPreset.outcomeView,
-                      durationWeeks: boltTextPreset.durationWeeks,
-                      campaignMode: 'text_based',
-                      contentFormats: [boltTextPreset.contentFormat],
-                    })
-                  )
-                }
-                disabled={busy || fastLoading || !onBuildCampaignFast}
-                className="min-w-[140px] h-[36px] px-4 py-2 text-sm font-semibold rounded-lg border border-amber-400 bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition flex items-center justify-center gap-1.5 shadow-sm"
-              >
-                {fastLoading ? '⚡ Generating…' : '⚡ BOLT (Text)'}
-              </button>
-            ) : (
-              <div className="relative" ref={boltMenuRef}>
-                <button
-                  type="button"
-                  title="Choose duration (1–4 weeks) and where to see the outcome"
-                  onClick={() => (boltMenuOpen ? setBoltMenuOpen(false) : setBoltMenuOpen(true))}
-                  disabled={busy || fastLoading || !onBuildCampaignFast}
-                  className="min-w-[110px] h-[36px] px-4 py-2 text-sm font-medium rounded-lg border border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50 transition flex items-center justify-center gap-1"
-                >
-                  {fastLoading ? '⚡ Generating Plan…' : '⚡ BOLT'}
-                  <ChevronDown className={`h-4 w-4 transition ${boltMenuOpen ? 'rotate-180' : ''}`} />
-                </button>
-                {boltMenuOpen && (
-                  <div className="absolute left-0 top-full mt-1 z-50 min-w-[260px] rounded-xl border border-gray-200 bg-white shadow-xl py-2">
-                    {/* Campaign Mode */}
-                    <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Campaign Mode</div>
-                    <div className="flex gap-2 px-3 pb-2">
-                      {(['text_based', 'creator_dependent'] as BoltCampaignMode[]).map((mode) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => handleBoltModeChange(mode)}
-                          className={`flex-1 py-1.5 text-xs font-medium rounded-md border transition ${
-                            boltCampaignMode === mode
-                              ? 'bg-amber-500 text-white border-amber-500'
-                              : 'bg-white text-gray-600 border-gray-300 hover:border-amber-400'
-                          }`}
-                        >
-                          {mode === 'text_based' ? 'Text Based' : 'Creator'}
-                        </button>
-                      ))}
-                    </div>
-                    {/* Content Format */}
-                    <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Content Format</div>
-                    <div className="flex flex-wrap gap-1.5 px-3 py-2">
-                      {BOLT_CONTENT_FORMATS[boltCampaignMode].map((fmt) => (
-                        <button
-                          key={fmt.value}
-                          type="button"
-                          onClick={() => toggleContentFormat(fmt.value)}
-                          className={`px-2 py-1 text-xs rounded-full border transition ${
-                            boltContentFormats.includes(fmt.value)
-                              ? 'bg-amber-100 text-amber-800 border-amber-400'
-                              : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'
-                          }`}
-                        >
-                          {fmt.label}
-                        </button>
-                      ))}
-                    </div>
-                    {/* Duration */}
-                    <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Campaign Duration</div>
-                    <div className="flex gap-1.5 px-3 py-2">
-                      {BOLT_DURATION_OPTIONS.map((opt) => (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          onClick={() => setBoltDurationWeeks(opt.value)}
-                          className={`flex-1 py-1 text-xs font-medium rounded-md border transition ${
-                            boltDurationWeeks === opt.value
-                              ? 'bg-amber-500 text-white border-amber-500'
-                              : 'bg-white text-gray-600 border-gray-300 hover:border-amber-400'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                    {/* Stop At */}
-                    <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Stop At</div>
-                    {BOLT_OUTCOME_OPTIONS_BY_MODE[boltCampaignMode].map((opt) => (
-                      <label key={opt.value} className="flex items-center gap-2 px-3 py-1.5 hover:bg-amber-50 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="boltOutcome"
-                          checked={boltOutcomeView === opt.value}
-                          onChange={() => setBoltOutcomeView(opt.value)}
-                          className="rounded-full border-amber-400 text-amber-600 focus:ring-amber-500"
-                        />
-                        <span className="text-sm text-gray-700">{opt.label}</span>
-                        {opt.hint && <span className="text-xs text-gray-400 ml-auto">{opt.hint}</span>}
-                      </label>
-                    ))}
-                    {/* Run */}
-                    <div className="border-t border-gray-100 mt-2 pt-2 px-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          run(() => onBuildCampaignFast?.({ outcomeView: boltOutcomeView, durationWeeks: boltDurationWeeks, campaignMode: boltCampaignMode, contentFormats: boltContentFormats }));
-                          setBoltMenuOpen(false);
-                        }}
-                        disabled={busy || fastLoading || !onBuildCampaignFast}
-                        className="w-full py-2 text-sm font-medium rounded-md bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
-                      >
-                        Run BOLT
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
             <button
               type="button"
               onClick={() => (isRefining ? closeRefinement() : openRefinement())}
@@ -1231,20 +1062,6 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
               className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 disabled:opacity-50"
             >
               {isRefining ? 'Close Refine' : 'Refine Card'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (minimized) {
-                  setMinimized(false);
-                  setExpanded(true);
-                } else {
-                  setExpanded((v) => !v);
-                }
-              }}
-              className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-600 text-indigo-600 hover:bg-indigo-50"
-            >
-              {getExpandActionLabel(confidenceBannerContent.tier)}
             </button>
             <button
               type="button"
@@ -1428,11 +1245,11 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
         </section>
       )}
 
-      {!minimized && (blueprint.duration_weeks != null || blueprint.progression_summary || blueprint.primary_recommendations.length > 0 || blueprint.supporting_recommendations.length > 0) && (
+      {!minimized && (displayDurationWeeks != null || blueprint.progression_summary || blueprint.primary_recommendations.length > 0 || blueprint.supporting_recommendations.length > 0) && (
         <section className="mt-4 pt-4 border-t border-gray-200">
           <h4 className="text-sm font-semibold text-gray-800 mb-2">What This Could Turn Into</h4>
           <div className="text-sm text-gray-700 space-y-1">
-            {blueprint.duration_weeks != null ? <div><span className="text-gray-500 font-medium">Duration:</span> {blueprint.duration_weeks} weeks</div> : null}
+            {displayDurationWeeks != null ? <div><span className="text-gray-500 font-medium">Duration:</span> {displayDurationWeeks} weeks</div> : null}
             {blueprint.progression_summary ? <div><span className="text-gray-500 font-medium">Progression:</span> <span className="whitespace-pre-wrap break-words">{blueprint.progression_summary}</span></div> : null}
             {blueprint.primary_recommendations.length > 0 ? <div><span className="text-gray-500 font-medium">Primary:</span> {blueprint.primary_recommendations.join(', ')}</div> : null}
             {blueprint.supporting_recommendations.length > 0 ? <div><span className="text-gray-500 font-medium">Supporting:</span> {blueprint.supporting_recommendations.join(', ')}</div> : null}
@@ -1456,105 +1273,6 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
           >
             {getPrimaryActionLabel(confidenceBannerContent.tier)}
           </button>
-          <div className="relative" ref={boltMenuRef}>
-            <button
-              type="button"
-              title="Choose duration (1–4 weeks) and where to see the outcome"
-              onClick={() => (boltMenuOpen ? setBoltMenuOpen(false) : setBoltMenuOpen(true))}
-              disabled={busy || fastLoading || !onBuildCampaignFast}
-              className="min-w-[110px] h-[36px] px-4 py-2 text-sm font-medium rounded-lg border border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50 transition flex items-center justify-center gap-1"
-            >
-              {fastLoading ? '⚡ Generating Plan…' : '⚡ BOLT'}
-              <ChevronDown className={`h-4 w-4 transition ${boltMenuOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {boltMenuOpen && (
-              <div className="absolute left-0 top-full mt-1 z-50 min-w-[260px] rounded-xl border border-gray-200 bg-white shadow-xl py-2">
-                {/* Campaign Mode */}
-                <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Campaign Mode</div>
-                <div className="flex gap-2 px-3 pb-2">
-                  {(['text_based', 'creator_dependent'] as BoltCampaignMode[]).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => handleBoltModeChange(mode)}
-                      className={`flex-1 py-1.5 text-xs font-medium rounded-md border transition ${
-                        boltCampaignMode === mode
-                          ? 'bg-amber-500 text-white border-amber-500'
-                          : 'bg-white text-gray-600 border-gray-300 hover:border-amber-400'
-                      }`}
-                    >
-                      {mode === 'text_based' ? 'Text Based' : 'Creator'}
-                    </button>
-                  ))}
-                </div>
-                {/* Content Format */}
-                <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Content Format</div>
-                <div className="flex flex-wrap gap-1.5 px-3 py-2">
-                  {BOLT_CONTENT_FORMATS[boltCampaignMode].map((fmt) => (
-                    <button
-                      key={fmt.value}
-                      type="button"
-                      onClick={() => toggleContentFormat(fmt.value)}
-                      className={`px-2 py-1 text-xs rounded-full border transition ${
-                        boltContentFormats.includes(fmt.value)
-                          ? 'bg-amber-100 text-amber-800 border-amber-400'
-                          : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'
-                      }`}
-                    >
-                      {fmt.label}
-                    </button>
-                  ))}
-                </div>
-                {/* Duration */}
-                <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Campaign Duration</div>
-                <div className="flex gap-1.5 px-3 py-2">
-                  {BOLT_DURATION_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setBoltDurationWeeks(opt.value)}
-                      className={`flex-1 py-1 text-xs font-medium rounded-md border transition ${
-                        boltDurationWeeks === opt.value
-                          ? 'bg-amber-500 text-white border-amber-500'
-                          : 'bg-white text-gray-600 border-gray-300 hover:border-amber-400'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-                {/* Stop At */}
-                <div className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Stop At</div>
-                {BOLT_OUTCOME_OPTIONS_BY_MODE[boltCampaignMode].map((opt) => (
-                  <label key={opt.value} className="flex items-center gap-2 px-3 py-1.5 hover:bg-amber-50 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="boltOutcomeAlt"
-                      checked={boltOutcomeView === opt.value}
-                      onChange={() => setBoltOutcomeView(opt.value)}
-                      className="rounded-full border-amber-400 text-amber-600 focus:ring-amber-500"
-                    />
-                    <span className="text-sm text-gray-700">{opt.label}</span>
-                    {opt.hint && <span className="text-xs text-gray-400 ml-auto">{opt.hint}</span>}
-                  </label>
-                ))}
-                {/* Run */}
-                <div className="border-t border-gray-100 mt-2 pt-2 px-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      run(() => onBuildCampaignFast?.({ outcomeView: boltOutcomeView, durationWeeks: boltDurationWeeks, campaignMode: boltCampaignMode, contentFormats: boltContentFormats }));
-                      setBoltMenuOpen(false);
-                    }}
-                    disabled={busy || fastLoading || !onBuildCampaignFast}
-                    className="w-full py-2 text-sm font-medium rounded-md bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
-                  >
-                    Run BOLT
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
           <button
             type="button"
             onClick={() => (isRefining ? closeRefinement() : openRefinement())}
@@ -1562,20 +1280,6 @@ export default function RecommendationBlueprintCard(props: RecommendationBluepri
             className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 disabled:opacity-50"
           >
             {isRefining ? 'Close Refine' : 'Refine Card'}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (minimized) {
-                setMinimized(false);
-                setExpanded(true);
-              } else {
-                setExpanded((v) => !v);
-              }
-            }}
-            className="px-4 py-2 text-sm font-medium rounded-lg border border-indigo-600 text-indigo-600 hover:bg-indigo-50"
-          >
-            {getExpandActionLabel(confidenceBannerContent.tier)}
           </button>
           <button
             type="button"

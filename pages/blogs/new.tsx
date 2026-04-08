@@ -5,18 +5,22 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../components/blog/BlogEditorForm';
-import { BlogQualityPanel, type ImproveArea } from '../../components/blog/BlogQualityPanel';
+import { ContentQualityPanel, type ImproveArea } from '../../components/content/ContentQualityPanel';
 import { createDefaultBlogTemplate } from '../../lib/blog/blogTemplate';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../lib/blog/topicDetection';
-import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
+import { AlertTriangle, XCircle, Loader2, Copy, Download, CheckCircle2 } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
+import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
+import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
 
 const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
 
 type PrefillPayload = {
   output?: (BlogGenerationOutput & { content_blocks?: unknown[] }) | null;
   source?: string;
+  target_word_count?: number;
+  format_type?: BlogFormatType;
 };
 
 export default function BlogNewPage() {
@@ -30,6 +34,14 @@ export default function BlogNewPage() {
   const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
   const [editorPatch, setEditorPatch] = useState<Partial<BlogFormState> | null>(null);
   const [improvingArea, setImprovingArea] = useState<ImproveArea | null>(null);
+  const [targetWordCount, setTargetWordCount] = useState<number>(800);
+  const [formatType, setFormatType] = useState<BlogFormatType | undefined>(undefined);
+  const [primaryKeyword, setPrimaryKeyword] = useState<string | null>(null);
+  const [secondaryKeywords, setSecondaryKeywords] = useState<string[] | null>(null);
+  const [showUseMenu, setShowUseMenu] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [markingUsed, setMarkingUsed] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
 
   // Duplication detection
   const [existingPosts, setExistingPosts] = useState<ExistingPostMeta[]>([]);
@@ -80,6 +92,8 @@ export default function BlogNewPage() {
             seo_meta_description: liveState.seo_meta_description,
             tags: liveState.tags,
             content_blocks: liveState.content_blocks,
+            target_word_count: targetWordCount,
+            format_type: liveState.format_type || formatType,
           },
         }),
       });
@@ -101,12 +115,8 @@ export default function BlogNewPage() {
         });
       }
 
-      const delta = Number(data?.scoreDelta || 0);
-      const after = Number(data?.afterScore || 0);
       setPrefillNotice(
-        delta > 0
-          ? `AI improved ${area}. Score +${delta} (now ${after}/100). Review and publish when ready.`
-          : `AI improvement applied for ${area}. Review changes and run again if needed.`,
+        `AI improved ${area}. Review the updated draft and quality panel for the refreshed score.`,
       );
       jumpToImproveArea(area);
     } catch (e) {
@@ -152,6 +162,12 @@ export default function BlogNewPage() {
 
       const parsed = JSON.parse(raw) as PrefillPayload;
       const output = parsed?.output;
+      if (parsed?.target_word_count && parsed.target_word_count >= 300) {
+        setTargetWordCount(parsed.target_word_count);
+      }
+      if (typeof parsed?.format_type === 'string' && parsed.format_type.trim()) {
+        setFormatType(parsed.format_type);
+      }
       if (output) {
         setPrefillInitial({
           title: output.title || '',
@@ -164,7 +180,12 @@ export default function BlogNewPage() {
             ? (output.content_blocks as BlogFormState['content_blocks'])
             : DEFAULT_TEMPLATE,
           content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
+          format_type: typeof parsed?.format_type === 'string' ? parsed.format_type : undefined,
         });
+        // Extract SEO keywords from generated output (attached by BlogGenerateModal)
+        const outputAny = output as unknown as Record<string, unknown>;
+        if (typeof outputAny.primary_keyword === 'string') setPrimaryKeyword(outputAny.primary_keyword);
+        if (Array.isArray(outputAny.secondary_keywords)) setSecondaryKeywords(outputAny.secondary_keywords as string[]);
         if (parsed.source === 'company_blog_intelligence') {
           setPrefillNotice('Draft prefilled from your blog intelligence. Review and publish when ready.');
         }
@@ -230,15 +251,86 @@ export default function BlogNewPage() {
           status:               state.status,
           is_featured:          state.is_featured,
           published_at:         state.status === 'published' ? new Date().toISOString() : state.published_at || undefined,
+          primary_keyword:      primaryKeyword || undefined,
+          secondary_keywords:   secondaryKeywords?.length ? secondaryKeywords : undefined,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Save failed');
-      router.push('/blogs');
+      setSavedId(data.id ?? null);
+      setPrefillNotice('Blog post saved. You can now copy, export, or mark it as used.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleCreateCampaign = () => {
+    if (!liveState?.title?.trim()) {
+      setError('Add a title before creating a campaign from this content.');
+      return;
+    }
+    launchCampaignFromContent({
+      router,
+      contentType: 'blog',
+      title: liveState.title,
+      excerpt: liveState.excerpt,
+      tags: liveState.tags,
+      targetWordCount,
+      formatType: liveState.format_type || formatType,
+      sourceId: savedId,
+      contentMarkdown: liveState.content_markdown,
+    });
+  };
+
+  const handleCopy = () => {
+    if (!liveState) return;
+    const text = liveState.content_markdown || liveState.title || '';
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const handleExport = () => {
+    if (!liveState) return;
+    const text = `# ${liveState.title}\n\n${liveState.content_markdown || ''}`;
+    const blob = new Blob([text], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(liveState.title || 'blog-post').toLowerCase().replace(/\s+/g, '-')}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleMarkUsed = async (platform?: string) => {
+    if (!savedId || !selectedCompanyId) {
+      setError('Save the post first before marking it as used.');
+      return;
+    }
+    setMarkingUsed(true);
+    try {
+      const res = await fetch('/api/content/mark-used', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content_id: savedId,
+          content_type: 'blog',
+          company_id: selectedCompanyId,
+          platform,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to mark as used');
+      setPrefillNotice(`Blog post marked as used${platform ? ` on ${platform}` : ''}.`);
+      setShowUseMenu(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to mark as used');
+    } finally {
+      setMarkingUsed(false);
     }
   };
 
@@ -332,12 +424,58 @@ export default function BlogNewPage() {
                 onStateChange={setLiveState}
                 externalPatch={editorPatch}
               />
+
+              <div className="mt-6 border-t border-gray-200 pt-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-700">Use / Share</h3>
+                  {savedId && (
+                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-600">Saved</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCopy}
+                    className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    {copied ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? 'Copied!' : 'Copy Content'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExport}
+                    className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Export
+                  </button>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowUseMenu(!showUseMenu)}
+                      disabled={markingUsed}
+                      className="flex items-center gap-1.5 rounded-lg bg-[#0B5ED7] px-3 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
+                    >
+                      {markingUsed ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                      Mark as Used
+                    </button>
+                    {showUseMenu && (
+                      <div className="absolute left-0 top-full z-20 mt-1 w-44 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                        <button onClick={() => handleMarkUsed()} className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50">General use</button>
+                        <button onClick={() => handleMarkUsed('website')} className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50">Website</button>
+                        <button onClick={() => handleMarkUsed('linkedin')} className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50">LinkedIn</button>
+                        <button onClick={() => handleMarkUsed('email')} className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50">Email</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* ── Quality panel (sticky right sidebar) ────────────────────── */}
             <div className="hidden xl:block w-[280px] shrink-0 sticky top-6 self-start">
               {liveState && (
-                <BlogQualityPanel
+                <ContentQualityPanel
                   blocks={liveState.content_blocks}
                   formState={{
                     title:                liveState.title,
@@ -345,10 +483,14 @@ export default function BlogNewPage() {
                     seo_meta_title:       liveState.seo_meta_title,
                     seo_meta_description: liveState.seo_meta_description,
                     tags:                 liveState.tags,
+                    target_word_count:    targetWordCount,
+                    content_type:         'blog',
+                    format_type:          liveState.format_type || formatType,
                   }}
                   onImprove={jumpToImproveArea}
                   onAutoImprove={autoImproveArea}
                   improvingArea={improvingArea}
+                  onCreateCampaign={handleCreateCampaign}
                 />
               )}
             </div>

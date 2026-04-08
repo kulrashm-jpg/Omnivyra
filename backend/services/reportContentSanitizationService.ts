@@ -1,5 +1,4 @@
-const SIGNAL_BASED_FALLBACK =
-  'Available signals indicate limited data coverage, but early patterns suggest gaps in coverage and structure.';
+const SIGNAL_BASED_FALLBACK = '';
 
 type SignalId = 'authority_gap' | 'content_gap' | 'technical_constraint';
 

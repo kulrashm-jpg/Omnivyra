@@ -1979,13 +1979,15 @@ export default function ActivityWorkspacePage() {
         <>
         {isCreatorActivity ? (
         /* ── Creator Brief ─────────────────────────────────────────────── */
-        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-semibold text-gray-900">Creator Brief</h2>
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 uppercase tracking-wide">
               {contentType.charAt(0).toUpperCase() + contentType.slice(1)}
             </span>
           </div>
+
+          {/* ── Core brief fields ── */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
             <div>
               <div className="text-gray-500">Content theme</div>
@@ -2030,6 +2032,190 @@ export default function ActivityWorkspacePage() {
               </div>
             ) : null}
           </div>
+
+          {/* ── Content-type specific production guide ── */}
+          {(() => {
+            const narrativeStyle = String((creatorCard?.intent as any)?.narrative_style || writerBrief?.narrativeStyle || '');
+            const painPoint = String((creatorCard?.intent as any)?.pain_point || intent?.pain_point || '');
+            const outcomePromise = String((creatorCard?.intent as any)?.outcome_promise || intent?.outcome_promise || '');
+            const briefSummary = String((creatorCard?.intent as any)?.brief_summary || creatorCard?.summary || writerBrief?.writingIntent || '');
+            const keywords = (creatorCard?.keywords as string[] | undefined) ?? [];
+
+            if (['video'].includes(contentType)) {
+              return (
+                <div className="border-t border-gray-100 pt-3 space-y-3">
+                  <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Video Production Guide</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <div className="text-gray-500">Hook concept (first 5–10s)</div>
+                      <div className="text-gray-900">{painPoint || briefSummary || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Estimated duration</div>
+                      <div className="text-gray-900">3–8 minutes</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Visual style</div>
+                      <div className="text-gray-900">{narrativeStyle || 'Conversational, on-camera or screen-record'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Voiceover / talking points</div>
+                      <div className="text-gray-900">{outcomePromise || briefSummary || '—'}</div>
+                    </div>
+                    {keywords.length > 0 && (
+                      <div className="md:col-span-2">
+                        <div className="text-gray-500">B-roll suggestions</div>
+                        <div className="text-gray-900">Visuals related to: {keywords.slice(0, 6).join(', ')}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            if (['reel', 'short'].includes(contentType)) {
+              return (
+                <div className="border-t border-gray-100 pt-3 space-y-3">
+                  <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Reel / Short Production Guide</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <div className="text-gray-500">Hook (first 3s)</div>
+                      <div className="text-gray-900">{painPoint || briefSummary || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Target duration</div>
+                      <div className="text-gray-900">15–60 seconds</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Music / audio vibe</div>
+                      <div className="text-gray-900">{narrativeStyle ? `Match the ${narrativeStyle.toLowerCase()} tone` : 'Upbeat, trending audio'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Caption style</div>
+                      <div className="text-gray-900">Punchy, on-screen text overlays — mirror spoken words</div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <div className="text-gray-500">Core message</div>
+                      <div className="text-gray-900">{outcomePromise || briefSummary || '—'}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            if (['carousel'].includes(contentType)) {
+              const slideCount = Math.min(Math.max(keywords.length + 2, 5), 10);
+              return (
+                <div className="border-t border-gray-100 pt-3 space-y-3">
+                  <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Carousel Production Guide</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <div className="text-gray-500">Suggested slide count</div>
+                      <div className="text-gray-900">{slideCount} slides</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Visual theme</div>
+                      <div className="text-gray-900">{narrativeStyle || 'Clean, branded layout with consistent typography'}</div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <div className="text-gray-500">Slide flow</div>
+                      <div className="text-gray-900">
+                        Slide 1: Hook / bold statement — Slides 2–{slideCount - 1}: {keywords.length > 0 ? keywords.slice(0, slideCount - 2).join(' → ') : 'Key points / value delivery'} — Slide {slideCount}: CTA
+                      </div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <div className="text-gray-500">Key message per slide</div>
+                      <div className="text-gray-900">{briefSummary || outcomePromise || '—'}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            if (['image', 'infographic'].includes(contentType)) {
+              return (
+                <div className="border-t border-gray-100 pt-3 space-y-3">
+                  <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Image / Graphic Production Guide</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <div className="text-gray-500">Key message</div>
+                      <div className="text-gray-900">{briefSummary || painPoint || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Visual style</div>
+                      <div className="text-gray-900">{narrativeStyle || 'On-brand, high-contrast, minimal text'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Outcome to convey</div>
+                      <div className="text-gray-900">{outcomePromise || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Design notes</div>
+                      <div className="text-gray-900">Use brand colours · headline + supporting visual · CTA overlay optional</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            if (['podcast'].includes(contentType)) {
+              return (
+                <div className="border-t border-gray-100 pt-3 space-y-3">
+                  <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Podcast Episode Guide</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <div className="text-gray-500">Episode angle</div>
+                      <div className="text-gray-900">{painPoint || briefSummary || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Listener takeaway</div>
+                      <div className="text-gray-900">{outcomePromise || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Tone / format</div>
+                      <div className="text-gray-900">{narrativeStyle || 'Conversational interview or solo deep-dive'}</div>
+                    </div>
+                    {keywords.length > 0 && (
+                      <div className="md:col-span-2">
+                        <div className="text-gray-500">Key talking points</div>
+                        <div className="text-gray-900">{keywords.slice(0, 8).join(', ')}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            if (['story'].includes(contentType)) {
+              return (
+                <div className="border-t border-gray-100 pt-3 space-y-3">
+                  <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Story Production Guide</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <div className="text-gray-500">Story arc</div>
+                      <div className="text-gray-900">Hook frame → Value reveal → Swipe-up / link CTA</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Visual style</div>
+                      <div className="text-gray-900">{narrativeStyle || 'Vertical 9:16 · bold text overlays · on-brand palette'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Core message</div>
+                      <div className="text-gray-900">{briefSummary || painPoint || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Interactive elements</div>
+                      <div className="text-gray-900">Poll, question sticker, or countdown timer where applicable</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            return null;
+          })()}
+
+          {/* ── Instructions / content brief ── */}
           {creatorCard?.instructions_for_creator && (
             <div className="border-t border-gray-100 pt-3">
               <div className="text-gray-500 text-sm mb-1">Instructions for creator</div>
@@ -2170,6 +2356,13 @@ export default function ActivityWorkspacePage() {
             executionId={String(payload?.activityId ?? (dailyRaw?.execution_id ?? ''))}
             weekNumber={Number(payload?.weekNumber) || 1}
             day={String(payload?.day ?? 'Monday')}
+            objective={String(intent?.objective || writerBrief?.topicGoal || '')}
+            targetAudience={String(creatorCard?.target_audience || writerBrief?.whoAreWeWritingFor || intent?.target_audience || '')}
+            existingHashtags={
+              Array.isArray(creatorCard?.hashtags) ? (creatorCard.hashtags as string[])
+              : Array.isArray((dailyRaw as any)?.hashtags) ? (dailyRaw as any).hashtags as string[]
+              : []
+            }
             onNotice={notify}
           />
         )}
@@ -2399,7 +2592,9 @@ export default function ActivityWorkspacePage() {
             <div className="space-y-4">
               {schedules.map((item, idx) => {
                 const matchedVariant = findVariantForSchedule(item);
-                const hasContent = !!String((matchedVariant as any)?.generated_content || '').trim();
+                const rawGeneratedContent = String((matchedVariant as any)?.generated_content || '').trim();
+                const isMediaBlueprint = rawGeneratedContent.startsWith('[PLATFORM MEDIA BLUEPRINT]');
+                const hasContent = !!rawGeneratedContent && !isMediaBlueprint;
                 const repurposeLabel = idx === 0 ? 'Repurpose' : `Repurpose ${idx + 1}`;
                 const isRepurposing = !!repurposingByScheduleId[item.id];
                 const isBusy = isRepurposing || isGeneratingMaster;
@@ -2462,7 +2657,18 @@ export default function ActivityWorkspacePage() {
                     </div>
 
                     {/* Card body */}
-                    {hasContent ? (
+                    {isMediaBlueprint ? (
+                      <div className="p-5 flex items-start gap-3 bg-blue-50/40">
+                        <div className="text-2xl">🎬</div>
+                        <div>
+                          <div className="text-sm font-semibold text-blue-800 mb-0.5">Media asset required</div>
+                          <div className="text-xs text-blue-700">
+                            This {item.contentType} variant is waiting for your creator to upload the media asset (video, image, or audio).
+                            Once the asset is attached via the Creator Panel below, regenerate to produce the final platform-ready post copy.
+                          </div>
+                        </div>
+                      </div>
+                    ) : hasContent ? (
                       <div className="divide-y divide-gray-100">
 
                         {/* Rich content preview */}

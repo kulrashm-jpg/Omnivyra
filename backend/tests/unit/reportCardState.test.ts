@@ -83,7 +83,7 @@ describe('report card state', () => {
 
     expect(getReportCardAvailabilityState(context)).toBe('generating');
     expect(getReportCTALabel(context)).toBe('Generating...');
-    expect(getReportCTARoute(context)).toBe('/reports/generate?type=free');
+    expect(getReportCTARoute(context)).toBe('/reports/digital-authority-snapshot');
     expect(getReportCardState(context)).toBe('in_progress');
   });
 });

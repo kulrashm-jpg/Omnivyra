@@ -1,6 +1,6 @@
 import PDFDocument from 'pdfkit';
 import { assertNoFallback, sanitizeRenderLines, sanitizeRenderText, sanitizeTextArtifacts } from './renderTextSanitizer';
-import { renderReportHtmlTemplate } from './reportHtmlTemplateRenderer';
+import { renderOmnivyraSnapshotMasterHtml, renderReportHtmlTemplate } from './reportHtmlTemplateRenderer';
 import { renderPdfFromHtml } from './htmlToPdfRenderer';
 
 type PDFDoc = InstanceType<typeof PDFDocument>;
@@ -32,6 +32,18 @@ type PdfNextStep = {
   action: string;
   description: string;
   steps: string[];
+  reasoning?: string;
+  tactics?: string[];
+  focusPage?: string;
+  timeline?: {
+    short: string;
+    mid: string;
+    long: string;
+  };
+  priority?: 'high' | 'medium' | 'low';
+  impact?: 'high' | 'medium' | 'low';
+  effort?: 'low' | 'medium' | 'high';
+  confidence?: number;
   expectedOutcome: string;
   expectedUpside: string;
   effortLevel: EffortLevel;
@@ -66,6 +78,10 @@ export type PdfReportPayload = {
   generatedDate: string;
   diagnosis: string;
   summary: string;
+  confidenceSource?: string;
+  scoreExplanation?: {
+    limitingFactors?: string[];
+  };
   seoExecutiveSummary?: {
     overallHealthScore: number;
     primaryProblem: {
@@ -76,11 +92,21 @@ export type PdfReportPayload = {
     };
     top3Actions: Array<{
       actionTitle: string;
+      title?: string;
       priority: 'high' | 'medium' | 'low';
       expectedImpact: 'high' | 'medium' | 'low';
       effort: 'low' | 'medium' | 'high';
       linkedVisual: 'radar' | 'matrix' | 'funnel' | 'crawl';
       reasoning: string;
+      tactics?: string[];
+      focusPage?: string;
+      timeline?: {
+        short: string;
+        mid: string;
+        long: string;
+      };
+      impact?: 'high' | 'medium' | 'low';
+      confidence?: number;
     }>;
     growthOpportunity: {
       title: string;
@@ -343,6 +369,29 @@ export type PdfReportPayload = {
   insights: PdfInsight[];
   nextSteps: PdfNextStep[];
 };
+
+function wrapInHtmlShell(segment: string, sourceHtml: string): string {
+  const styleMatch = sourceHtml.match(/<style>([\s\S]*?)<\/style>/i);
+  const styles = styleMatch ? `<style>${styleMatch[1]}</style>` : '';
+  const normalizedSegment = /id=["']pdf-report["']/i.test(segment)
+    ? segment
+    : `<div id="pdf-report">${segment}</div>`;
+  const wrappedSegment = /class=["'][^"']*\breport-page\b/i.test(segment)
+    ? normalizedSegment
+    : `<main class="report-page">${normalizedSegment}</main>`;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />${styles}</head><body>${wrappedSegment}</body></html>`;
+}
+
+function extractPdfSegment(html: string): string {
+  const markedMatch = html.match(/<!--\s*PDF-SEGMENT-START\s*-->([\s\S]*?)<!--\s*PDF-SEGMENT-END\s*-->/i);
+  if (markedMatch) return wrapInHtmlShell(markedMatch[1], html);
+
+  const match = html.match(/<div id="pdf-report">([\s\S]*?)<\/div>\s*<!--.*SEGMENT B/i);
+  if (match) return wrapInHtmlShell(match[1], html);
+
+  const fallbackMatch = html.match(/<div id="pdf-report">([\s\S]*?)<\/div>/i);
+  return fallbackMatch ? wrapInHtmlShell(fallbackMatch[1], html) : html;
+}
 
 const PAGE = {
   size: 'A4' as const,
@@ -670,12 +719,20 @@ function drawHorizontalIssueBars(
 
 export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer> {
   try {
-    const { html } = renderReportHtmlTemplate(payload);
-    const htmlPdf = await renderPdfFromHtml(html);
+    const html = payload.reportType === 'snapshot'
+      ? renderOmnivyraSnapshotMasterHtml(payload).html
+      : renderReportHtmlTemplate(payload).html;
+    const htmlPdf = await renderPdfFromHtml(extractPdfSegment(html));
     if (htmlPdf.length > 0) {
       return htmlPdf;
     }
+    if (payload.reportType === 'snapshot') {
+      throw new Error('Snapshot PDF HTML render returned an empty buffer.');
+    }
   } catch (error) {
+    if (payload.reportType === 'snapshot') {
+      throw new Error(`[reportPdfRenderer] Snapshot PDF must use the HTML renderer. Legacy PDF fallback was blocked. ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (process.env.NODE_ENV !== 'test') {
       console.warn('[reportPdfRenderer] HTML-first PDF render failed, falling back to PDFKit:', error);
     }
@@ -956,7 +1013,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
         ? dedupedUnifiedActions.map((action, index) =>
             `${index + 1}. [${action.source === 'geo_aeo' ? 'GEO' : 'SEO'}] ${truncate(action.actionTitle, 72)} (${action.priority} priority, ${action.effort} effort)`
           )
-        : ['Available signals indicate limited data coverage'],
+        : [],
       leftX,
       unifiedActionsY,
       contentWidth,
@@ -996,7 +1053,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
         {
           background: COLORS.panel,
           border: COLORS.border,
-          badges: [{ label: 'Available signals indicate limited data coverage', color: COLORS.medium }],
+          badges: [],
         },
       );
     } else {
@@ -1074,9 +1131,9 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
         'Keyword gap analysis',
         [
           'Missing keywords (top 5):',
-          ...(topMissingKeywords.length > 0 ? topMissingKeywords : ['Available signals indicate limited data coverage']),
+          ...(topMissingKeywords.length > 0 ? topMissingKeywords : []),
           'Weak keywords (top 5):',
-          ...(topWeakKeywords.length > 0 ? topWeakKeywords : ['Available signals indicate limited data coverage']),
+          ...(topWeakKeywords.length > 0 ? topWeakKeywords : []),
         ],
         leftX,
         gapsY,
@@ -1089,7 +1146,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
         'AI answer gap analysis',
         [
           'Missing answers (top 5):',
-          ...(topMissingAnswers.length > 0 ? topMissingAnswers : ['Available signals indicate limited data coverage']),
+          ...(topMissingAnswers.length > 0 ? topMissingAnswers : []),
           `Primary gap reasoning: ${truncate(summary.primaryGap.reasoning, 96)}`,
         ],
         leftX + contentWidth * 0.54 + 14,
@@ -1114,7 +1171,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
         {
           background: COLORS.panel,
           border: COLORS.border,
-          badges: [{ label: 'Available signals indicate limited data coverage', color: COLORS.medium }],
+          badges: [],
         },
       );
     } else {
@@ -1234,7 +1291,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
       exec.growthOpportunity?.title || 'Growth opportunity',
       exec.growthOpportunity
         ? `${truncate(exec.growthOpportunity.estimatedUpside, 180)}\n\n${truncate(exec.growthOpportunity.basedOn, 160)}`
-        : 'Available signals indicate limited data coverage',
+        : '',
       leftX,
       doc.y,
       contentWidth,
@@ -1290,10 +1347,10 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
     drawSimpleListCard(
       'Drop-off reasons',
       [
-        `Ranking issues: ${visuals.searchVisibilityFunnel.drop_off_reason_distribution?.ranking_issue_pct ?? 'Available signals indicate limited data coverage'}${typeof visuals.searchVisibilityFunnel.drop_off_reason_distribution?.ranking_issue_pct === 'number' ? '%' : ''}`,
-        `CTR issues: ${visuals.searchVisibilityFunnel.drop_off_reason_distribution?.ctr_issue_pct ?? 'Available signals indicate limited data coverage'}${typeof visuals.searchVisibilityFunnel.drop_off_reason_distribution?.ctr_issue_pct === 'number' ? '%' : ''}`,
-        `Intent mismatch: ${visuals.searchVisibilityFunnel.drop_off_reason_distribution?.intent_mismatch_pct ?? 'Available signals indicate limited data coverage'}${typeof visuals.searchVisibilityFunnel.drop_off_reason_distribution?.intent_mismatch_pct === 'number' ? '%' : ''}`,
-        `Estimated lost clicks: ${visuals.searchVisibilityFunnel.estimated_lost_clicks ?? 'Available signals indicate limited data coverage'}`,
+        `Ranking issues: ${visuals.searchVisibilityFunnel.drop_off_reason_distribution?.ranking_issue_pct ?? ''}${typeof visuals.searchVisibilityFunnel.drop_off_reason_distribution?.ranking_issue_pct === 'number' ? '%' : ''}`,
+        `CTR issues: ${visuals.searchVisibilityFunnel.drop_off_reason_distribution?.ctr_issue_pct ?? ''}${typeof visuals.searchVisibilityFunnel.drop_off_reason_distribution?.ctr_issue_pct === 'number' ? '%' : ''}`,
+        `Intent mismatch: ${visuals.searchVisibilityFunnel.drop_off_reason_distribution?.intent_mismatch_pct ?? ''}${typeof visuals.searchVisibilityFunnel.drop_off_reason_distribution?.intent_mismatch_pct === 'number' ? '%' : ''}`,
+        `Estimated lost clicks: ${visuals.searchVisibilityFunnel.estimated_lost_clicks ?? ''}`,
       ],
       funnelX,
       chartY + 180,
@@ -1333,7 +1390,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
         ? visuals.opportunityCoverageMatrix.opportunities.slice(0, 4).map((item) =>
             `${item.keyword}: opp ${item.opportunity_score}, coverage ${item.coverage_score}, value ${item.opportunity_value_score ?? 'N/A'}`
           )
-        : ['Available signals indicate limited data coverage'],
+        : [],
       leftX + 236,
       doc.y + 22,
       contentWidth - 236,
@@ -1357,9 +1414,9 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
     drawSimpleListCard(
       'Top technical issues summary',
       [
-        `Critical: ${visuals.crawlHealthBreakdown.severity_split?.critical ?? 'Available signals indicate limited data coverage'}`,
-        `Moderate: ${visuals.crawlHealthBreakdown.severity_split?.moderate ?? 'Available signals indicate limited data coverage'}`,
-        `Low: ${visuals.crawlHealthBreakdown.severity_split?.low ?? 'Available signals indicate limited data coverage'}`,
+        `Critical: ${visuals.crawlHealthBreakdown.severity_split?.critical ?? ''}`,
+        `Moderate: ${visuals.crawlHealthBreakdown.severity_split?.moderate ?? ''}`,
+        `Low: ${visuals.crawlHealthBreakdown.severity_split?.low ?? ''}`,
         `Classification: ${visuals.crawlHealthBreakdown.severity_split?.classification ?? 'unclassified'}`,
       ],
       leftX,
@@ -1415,7 +1472,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
         geoExec.visibilityOpportunity?.title || 'Visibility opportunity',
         geoExec.visibilityOpportunity
           ? `${truncate(geoExec.visibilityOpportunity.estimatedAiExposure, 170)}\n\n${truncate(geoExec.visibilityOpportunity.basedOn, 150)}`
-          : 'Available signals indicate limited data coverage',
+          : '',
         leftX,
         geoActionsY + 204,
         contentWidth,
@@ -1429,7 +1486,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
       drawTextBlock(
         doc,
         'GEO/AEO executive summary',
-        'Available signals indicate limited data coverage',
+        '',
         leftX,
         doc.y,
         contentWidth,
@@ -1466,7 +1523,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
         'Query coverage highlights',
         geoVisuals.queryAnswerCoverageMap.queries.length > 0
           ? geoVisuals.queryAnswerCoverageMap.queries.slice(0, 5).map((query) => `${query.query}: ${query.coverage} (${query.answer_quality_score}/100)`)
-          : ['Available signals indicate limited data coverage'],
+          : [],
         leftX,
         geoChartY + 280,
         geoRadarWidth - 10,
@@ -1492,7 +1549,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
         'Entity authority map',
         geoVisuals.entityAuthorityMap.entities.length > 0
           ? geoVisuals.entityAuthorityMap.entities.slice(0, 5).map((entity) => `${entity.entity}: relevance ${entity.relevance_score}, coverage ${entity.coverage_score}`)
-          : ['Available signals indicate limited data coverage'],
+          : [],
         geoRightX,
         geoChartY + 208,
         geoRadarWidth,
@@ -1502,9 +1559,9 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
       drawSimpleListCard(
         'Drop-off reasons',
         [
-          `Answer gap: ${geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.answer_gap_pct ?? 'Available signals indicate limited data coverage'}${typeof geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.answer_gap_pct === 'number' ? '%' : ''}`,
-          `Structure gap: ${geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.structure_gap_pct ?? 'Available signals indicate limited data coverage'}${typeof geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.structure_gap_pct === 'number' ? '%' : ''}`,
-          `Citation gap: ${geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.citation_gap_pct ?? 'Available signals indicate limited data coverage'}${typeof geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.citation_gap_pct === 'number' ? '%' : ''}`,
+          `Answer gap: ${geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.answer_gap_pct ?? ''}${typeof geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.answer_gap_pct === 'number' ? '%' : ''}`,
+          `Structure gap: ${geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.structure_gap_pct ?? ''}${typeof geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.structure_gap_pct === 'number' ? '%' : ''}`,
+          `Citation gap: ${geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.citation_gap_pct ?? ''}${typeof geoVisuals.answerExtractionFunnel.drop_off_reason_distribution.citation_gap_pct === 'number' ? '%' : ''}`,
         ],
         geoRightX,
         geoChartY + 334,
@@ -1516,7 +1573,7 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
       drawTextBlock(
         doc,
         'GEO/AEO visuals',
-        'Available signals indicate limited data coverage',
+        '',
         leftX,
         doc.y,
         contentWidth,
@@ -1535,16 +1592,16 @@ export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer
       doc,
       'Data confidence explanation',
       [
-        `Unified confidence: ${unified?.confidence ?? 'Available signals indicate limited data coverage'}`,
+        `Unified confidence: ${unified?.confidence ?? ''}`,
         `SEO executive confidence: ${exec.confidence}`,
         `SEO radar confidence: ${visuals.seoCapabilityRadar.confidence}`,
         `SEO matrix confidence: ${visuals.opportunityCoverageMatrix.confidence}`,
         `SEO funnel confidence: ${visuals.searchVisibilityFunnel.confidence}`,
         `SEO crawl confidence: ${visuals.crawlHealthBreakdown.confidence}`,
-        `GEO/AEO executive confidence: ${geoExec?.confidence ?? 'Available signals indicate limited data coverage'}`,
-        `GEO/AEO radar confidence: ${geoVisuals?.aiAnswerPresenceRadar.confidence ?? 'Available signals indicate limited data coverage'}`,
-        `GEO/AEO query confidence: ${geoVisuals?.queryAnswerCoverageMap.confidence ?? 'Available signals indicate limited data coverage'}`,
-        `GEO/AEO funnel confidence: ${geoVisuals?.answerExtractionFunnel.confidence ?? 'Available signals indicate limited data coverage'}`,
+        `GEO/AEO executive confidence: ${geoExec?.confidence ?? ''}`,
+        `GEO/AEO radar confidence: ${geoVisuals?.aiAnswerPresenceRadar.confidence ?? ''}`,
+        `GEO/AEO query confidence: ${geoVisuals?.queryAnswerCoverageMap.confidence ?? ''}`,
+        `GEO/AEO funnel confidence: ${geoVisuals?.answerExtractionFunnel.confidence ?? ''}`,
       ].join('\n'),
       leftX,
       doc.y,

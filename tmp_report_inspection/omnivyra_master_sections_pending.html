@@ -1,0 +1,145 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Omnivyra Snapshot Master Report</title><style>* { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: -apple-system, 'Segoe UI', Arial, sans-serif; font-size: 13px; color: #111827; background: #fff; } .report-section { padding: 28px 32px; min-height: 100vh; position: relative; } .section-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 1px solid #E5E7EB; margin-bottom: 20px; font-size: 11px; color: #9CA3AF; letter-spacing: 0.04em; } .section-header .company-name { font-weight: 600; color: #374151; } h1 { font-size: 22px; font-weight: 600; color: #111827; margin-bottom: 6px; } h2 { font-size: 16px; font-weight: 600; color: #111827; margin-bottom: 12px; } h3 { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 6px; } .label { font-size: 10px; font-weight: 600; color: #6B7280; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px; } .card { background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; padding: 14px 16px; } .card-accent-red { border-left: 3px solid #EF4444; border-radius: 0 8px 8px 0; } .card-accent-green { border-left: 3px solid #22C55E; border-radius: 0 8px 8px 0; } .card-accent-blue { border-left: 3px solid #3B82F6; border-radius: 0 8px 8px 0; } .card-accent-amber { border-left: 3px solid #F59E0B; border-radius: 0 8px 8px 0; } .card-pending { background: #F9FAFB; border: 1px dashed #D1D5DB; border-radius: 8px; padding: 20px; text-align: center; color: #6B7280; font-size: 13px; } .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; } .score-big { font-size: 40px; font-weight: 700; color: #111827; line-height: 1; } .score-med { font-size: 22px; font-weight: 600; color: #111827; } .score-missing { font-size: 22px; font-weight: 600; color: #9CA3AF; } .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 20px; } .badge-blue { background: #EFF6FF; color: #1D4ED8; } .badge-amber { background: #FFFBEB; color: #92400E; } .badge-red { background: #FEF2F2; color: #991B1B; } .badge-green { background: #F0FDF4; color: #166534; } .badge-gray { background: #F3F4F6; color: #374151; } .bar-track { background: #E5E7EB; border-radius: 4px; height: 8px; margin-top: 4px; } .bar-fill { height: 8px; border-radius: 4px; background: #3B82F6; } .bar-fill-amber { background: #F59E0B; } .bar-fill-red { background: #EF4444; } .bar-fill-green { background: #22C55E; } .divider { border: none; border-top: 1px solid #E5E7EB; margin: 16px 0; } .action-card { border: 1px solid #E5E7EB; border-radius: 8px; padding: 14px 16px; margin-bottom: 10px; } .action-card .tactics { margin-top: 8px; padding-left: 16px; } .action-card .tactics li { margin-bottom: 4px; font-size: 12px; color: #374151; } .action-card .timeline { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; } .action-card .timeline-item { background: #F9FAFB; border-radius: 6px; padding: 8px 10px; font-size: 11px; color: #6B7280; } .action-card .timeline-item strong { display: block; color: #111827; margin-bottom: 2px; } .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; } .traj-row { display: flex; align-items: center; gap: 16px; background: #F9FAFB; border-radius: 8px; padding: 14px 18px; } .traj-step { text-align: center; } .traj-step .num { font-size: 28px; font-weight: 700; color: #111827; } .traj-step .lbl { font-size: 10px; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.04em; } .traj-arrow { color: #9CA3AF; font-size: 20px; } .comp-row { display: grid; grid-template-columns: 80px 1fr 100px; gap: 8px; align-items: center; margin-bottom: 10px; } .comp-label { font-size: 12px; color: #6B7280; } .comp-bars { position: relative; height: 18px; } .comp-bar-user { position: absolute; top: 0; height: 8px; border-radius: 4px; background: #3B82F6; } .comp-bar-comp { position: absolute; bottom: 0; height: 8px; border-radius: 4px; background: #F59E0B; } .comp-val { font-size: 11px; color: #6B7280; text-align: right; } .pending-note { font-size: 11px; color: #9CA3AF; font-style: italic; margin-top: 4px; } @media print { .report-section { page-break-before: always; page-break-inside: avoid; min-height: auto; } .report-section:first-child { page-break-before: avoid; } .no-break { page-break-inside: avoid; } }</style></head><body><div class="report-section" id="section-1">
+    <div class="section-header">
+      <span class="company-name">Omnivyra</span>
+      <span class="report-title">Digital Authority Snapshot</span>
+      <span class="report-date">Apr 4, 2026</span>
+    </div>
+  <h1>Omnivyra</h1><div style="color:#3B82F6;font-weight:600;margin-bottom:16px;">www.omnivyra.com</div><div style="display:grid;grid-template-columns:120px 1fr;gap:16px;align-items:center;"><div class="card no-break" style="width:120px;height:120px;border-radius:999px;display:flex;flex-direction:column;justify-content:center;align-items:center;background:#F9FAFB;"><div class="label">Overall</div><div class="score-big">24</div></div><div><div class="tags" style="margin-top:0;"><span class="badge badge-amber">EARLY-STAGE</span><span class="badge badge-green">CONFIDENCE: MEDIUM</span><span class="badge badge-blue">--</span></div><div class="card card-accent-blue no-break" style="margin-top:12px;"><div>Thin authority and buying-stage content coverage</div></div></div></div><hr class="divider" /><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;"><div><div class="label">Overall Score</div><div class="score-med">24</div></div><div><div class="label">Stage</div><div class="score-med">EARLY-STAGE</div></div><div><div class="label">Confidence</div><div class="score-med">CONFIDENCE: MEDIUM</div></div><div><div class="label">Movement</div><div class="score-med">--</div></div></div></div><div class="report-section" id="section-2">
+    <div class="section-header">
+      <span class="company-name">Omnivyra</span>
+      <span class="report-title">Digital Authority Snapshot</span>
+      <span class="report-date">Apr 4, 2026</span>
+    </div>
+  <div class="label">Strategic Position</div><h2>Strategic Position</h2><div class="grid-2"><article class="card card-accent-blue no-break"><h3>What&#39;s Broken</h3><p>Thin authority and content signals.</p></article><article class="card card-accent-green no-break"><h3>What To Fix First</h3><p>Fix authority and content proof first.</p></article><article class="card card-accent-amber no-break"><h3>What To Delay</h3><p>Delay low-impact expansion.</p></article><article class="card card-accent-red no-break"><h3>If Ignored</h3><p>Credibility stays weak.</p></article></div><hr class="divider" /><h3>Strategic Strength</h3><div class="grid-2"><div class="card no-break"><div class="label">Position</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill bar-fill-green" style="width:0%"></div></div></div><div class="card no-break"><div class="label">Growth</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill bar-fill-green" style="width:0%"></div></div></div><div class="card no-break"><div class="label">Risk</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill bar-fill-green" style="width:0%"></div></div></div><div class="card no-break"><div class="label">Positioning</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill bar-fill-green" style="width:0%"></div></div></div></div></div><div class="report-section" id="section-3">
+    <div class="section-header">
+      <span class="company-name">Omnivyra</span>
+      <span class="report-title">Digital Authority Snapshot</span>
+      <span class="report-date">Apr 4, 2026</span>
+    </div>
+  <div class="label">Performance Scores</div><h2>Performance Scores</h2><div class="grid-3"><div class="card"><div class="label">Content Quality</div><div class="score-med">24</div><div class="bar-track"><div class="bar-fill bar-fill-red" style="width:24%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Measures whether core pages answer buyer questions with enough depth.</div></div><div class="card"><div class="label">Publishing Frequency</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill " style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Shows whether publishing depth is strong enough to sustain momentum.</div></div><div class="card"><div class="label">Reach</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill " style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Captures current search reach from available signals.</div></div><div class="card"><div class="label">Engagement</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill " style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Reflects whether impressions are converting into visits.</div></div><div class="card"><div class="label">Authority</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill " style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Indicates how established the domain appears relative to the market.</div></div><div class="card"><div class="label">Conversion</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill " style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Represents how clearly high-intent pages guide a buyer toward action.</div></div><div class="card"><div class="label">Coverage</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill " style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Shows how much of the demand landscape the report can measure.</div></div><div class="card"><div class="label">Platforms</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill " style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Platform strength needs wider distribution data to score accurately.</div></div><div class="card"><div class="label">AEO Readiness</div><div class="score-med">0</div><div class="bar-track"><div class="bar-fill bar-fill-red" style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Shows how ready the site is for answer engines and AI discovery.</div></div></div></div><div class="report-section" id="section-4">
+    <div class="section-header">
+      <span class="company-name">Omnivyra</span>
+      <span class="report-title">Digital Authority Snapshot</span>
+      <span class="report-date">Apr 4, 2026</span>
+    </div>
+  <div class="label">Competitor Intelligence</div><h2>Competitor Intelligence</h2><div class="card-pending no-break">No competitor data available yet. Add competitor domains in settings to unlock this section.</div></div><div class="report-section" id="section-5">
+    <div class="section-header">
+      <span class="company-name">Omnivyra</span>
+      <span class="report-title">Digital Authority Snapshot</span>
+      <span class="report-date">Apr 4, 2026</span>
+    </div>
+  <div class="label">SEO Deep Dive</div><h2>SEO Deep Dive</h2><div class="grid-2"><article class="card no-break"><div class="label">Technical SEO</div><div class="score-med">41</div><div class="bar-track"><div class="bar-fill bar-fill-amber" style="width:41%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">STRONG</div></article><article class="card no-break"><div class="label">Keyword Research</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill " style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Pending — connect GSC</div></article><article class="card no-break"><div class="label">Rank Tracking</div><div class="score-missing">--</div><div class="bar-track"><div class="bar-fill " style="width:0%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">Pending — connect GSC</div></article><article class="card no-break"><div class="label">Content Depth</div><div class="score-med">24</div><div class="bar-track"><div class="bar-fill bar-fill-red" style="width:24%"></div></div><div style="font-size:11px;color:#6B7280;margin-top:4px;">STRONG</div></article></div><div class="grid-2" style="margin-top:12px;"><article class="card no-break"><h3>Strong Keywords</h3><div class="pending-note">No strong keywords available yet.</div></article><article class="card no-break"><h3>Crawl Health Breakdown</h3><p>Metadata 1</p><p>Structure 2</p><p>Internal Links 1</p><p>Crawl Depth 0</p></article></div></div><div class="report-section" id="section-6">
+    <div class="section-header">
+      <span class="company-name">Omnivyra</span>
+      <span class="report-title">Digital Authority Snapshot</span>
+      <span class="report-date">Apr 4, 2026</span>
+    </div>
+  <div class="label">AI Visibility</div><h2>AI Visibility</h2><div class="card-pending no-break">AI visibility cannot be measured yet - add structured content and FAQ sections to your key pages.</div><div class="grid-3" style="margin-top:12px;"></div></div><div class="report-section" id="section-7">
+    <div class="section-header">
+      <span class="company-name">Omnivyra</span>
+      <span class="report-title">Digital Authority Snapshot</span>
+      <span class="report-date">Apr 4, 2026</span>
+    </div>
+  <div class="label">Backlink & Authority</div><h2>Backlink & Authority</h2><div class="card-pending no-break">Backlink data pending. Backlinks show where external sites cite and trust your domain. They matter because authority supports search visibility, credibility, and commercial page performance.</div><div style="margin-top:12px;">
+    <article class="action-card no-break">
+      <div class="badge badge-blue">1</div>
+      <div>
+        <h3>Build trust pages and authority proof</h3>
+        <p>Authority proof is too thin for confident buyers.</p>
+        <div class="label" style="margin-top:8px;">Start here:</div><div>comparison</div>
+        <div class="label" style="margin-top:8px;">Tactics</div><ol class="tactics"><li>Add customer proof blocks</li><li>Publish credibility pages</li><li>Strengthen trust copy</li></ol>
+        <div class="timeline">
+          <div class="timeline-item"><strong>2-4 weeks</strong>Launch core proof blocks.</div>
+          <div class="timeline-item"><strong>1-3 months</strong>Expand to key pages.</div>
+          <div class="timeline-item"><strong>3-6 months</strong>Compound trust signals.</div>
+        </div>
+        <div class="tags"><span class="badge badge-gray">HIGH</span><span class="badge badge-gray">HIGH</span><span class="badge badge-gray">MEDIUM</span></div>
+      </div>
+    </article>
+  
+    <article class="action-card no-break">
+      <div class="badge badge-blue">2</div>
+      <div>
+        <h3>Earn directory and publication backlinks</h3>
+        <p>Backlink coverage is missing from trusted sources.</p>
+        <div class="label" style="margin-top:8px;">Start here:</div><div>authority</div>
+        <div class="label" style="margin-top:8px;">Tactics</div><ol class="tactics"><li>Submit to niche directories</li><li>Pitch trade publications</li><li>Collect partner mentions</li></ol>
+        <div class="timeline">
+          <div class="timeline-item"><strong>2-4 weeks</strong>Start outreach.</div>
+          <div class="timeline-item"><strong>1-3 months</strong>Win first links.</div>
+          <div class="timeline-item"><strong>3-6 months</strong>Sustain link growth.</div>
+        </div>
+        <div class="tags"><span class="badge badge-gray">HIGH</span><span class="badge badge-gray">MEDIUM</span><span class="badge badge-gray">MEDIUM</span></div>
+      </div>
+    </article>
+  
+    <article class="action-card no-break">
+      <div class="badge badge-blue">3</div>
+      <div>
+        <h3>Strengthen authority messaging on decision pages</h3>
+        <p>Credibility and trust language are too weak.</p>
+        <div class="label" style="margin-top:8px;">Start here:</div><div>decision pages</div>
+        <div class="label" style="margin-top:8px;">Tactics</div><ol class="tactics"><li>Add trust badges</li><li>Add reviewer quotes</li><li>Add publication mentions</li></ol>
+        <div class="timeline">
+          <div class="timeline-item"><strong>2-4 weeks</strong>Refresh messaging.</div>
+          <div class="timeline-item"><strong>1-3 months</strong>Measure engagement.</div>
+          <div class="timeline-item"><strong>3-6 months</strong>Roll out broadly.</div>
+        </div>
+        <div class="tags"><span class="badge badge-gray">MEDIUM</span><span class="badge badge-gray">MEDIUM</span><span class="badge badge-gray">LOW</span></div>
+      </div>
+    </article>
+  </div></div><div class="report-section" id="section-8">
+    <div class="section-header">
+      <span class="company-name">Omnivyra</span>
+      <span class="report-title">Digital Authority Snapshot</span>
+      <span class="report-date">Apr 4, 2026</span>
+    </div>
+  <div class="label">Action Plan</div><h2>Action Plan</h2><div class="traj-row no-break"><div class="traj-step"><div class="lbl">Current</div><div class="num">24</div></div><div class="traj-arrow">-></div><div class="traj-step"><div class="lbl">Next</div><div class="num">28</div></div><div class="traj-arrow">-></div><div class="traj-step"><div class="lbl">Future</div><div class="num">34</div></div></div><div style="margin-top:12px;">
+    <article class="action-card no-break">
+      <div class="badge badge-blue">1</div>
+      <div>
+        <h3>Build trust pages and authority proof</h3>
+        <p>Authority proof is too thin for confident buyers.</p>
+        <div class="label" style="margin-top:8px;">Start here:</div><div>comparison</div>
+        <div class="label" style="margin-top:8px;">Tactics</div><ol class="tactics"><li>Add customer proof blocks</li><li>Publish credibility pages</li><li>Strengthen trust copy</li></ol>
+        <div class="timeline">
+          <div class="timeline-item"><strong>2-4 weeks</strong>Launch core proof blocks.</div>
+          <div class="timeline-item"><strong>1-3 months</strong>Expand to key pages.</div>
+          <div class="timeline-item"><strong>3-6 months</strong>Compound trust signals.</div>
+        </div>
+        <div class="tags"><span class="badge badge-gray">HIGH</span><span class="badge badge-gray">HIGH</span><span class="badge badge-gray">MEDIUM</span></div>
+      </div>
+    </article>
+  
+    <article class="action-card no-break">
+      <div class="badge badge-blue">2</div>
+      <div>
+        <h3>Earn directory and publication backlinks</h3>
+        <p>Backlink coverage is missing from trusted sources.</p>
+        <div class="label" style="margin-top:8px;">Start here:</div><div>authority</div>
+        <div class="label" style="margin-top:8px;">Tactics</div><ol class="tactics"><li>Submit to niche directories</li><li>Pitch trade publications</li><li>Collect partner mentions</li></ol>
+        <div class="timeline">
+          <div class="timeline-item"><strong>2-4 weeks</strong>Start outreach.</div>
+          <div class="timeline-item"><strong>1-3 months</strong>Win first links.</div>
+          <div class="timeline-item"><strong>3-6 months</strong>Sustain link growth.</div>
+        </div>
+        <div class="tags"><span class="badge badge-gray">HIGH</span><span class="badge badge-gray">MEDIUM</span><span class="badge badge-gray">MEDIUM</span></div>
+      </div>
+    </article>
+  
+    <article class="action-card no-break">
+      <div class="badge badge-blue">3</div>
+      <div>
+        <h3>Strengthen authority messaging on decision pages</h3>
+        <p>Credibility and trust language are too weak.</p>
+        <div class="label" style="margin-top:8px;">Start here:</div><div>decision pages</div>
+        <div class="label" style="margin-top:8px;">Tactics</div><ol class="tactics"><li>Add trust badges</li><li>Add reviewer quotes</li><li>Add publication mentions</li></ol>
+        <div class="timeline">
+          <div class="timeline-item"><strong>2-4 weeks</strong>Refresh messaging.</div>
+          <div class="timeline-item"><strong>1-3 months</strong>Measure engagement.</div>
+          <div class="timeline-item"><strong>3-6 months</strong>Roll out broadly.</div>
+        </div>
+        <div class="tags"><span class="badge badge-gray">MEDIUM</span><span class="badge badge-gray">MEDIUM</span><span class="badge badge-gray">LOW</span></div>
+      </div>
+    </article>
+  </div><div class="grid-3" style="margin-top:12px;"><div class="card"><div class="label">0-30 days</div><div>Build trust pages and authority proof / Earn directory and publication backlinks</div></div><div class="card"><div class="label">31-60 days</div><div>Strengthen authority messaging on decision pages</div></div><div class="card"><div class="label">61-90 days</div><div></div></div></div></div></body></html>

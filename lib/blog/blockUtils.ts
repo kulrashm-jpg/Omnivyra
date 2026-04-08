@@ -3,7 +3,7 @@
  * Pure functions — no side effects, no imports from React.
  */
 
-import type { ContentBlock, BlockType, ListItem } from './blockTypes';
+import type { ContentBlock, BlockType, ListItem, ColumnsBlock, ColumnCell } from './blockTypes';
 
 // ── ID generation ─────────────────────────────────────────────────────────────
 
@@ -69,6 +69,17 @@ export function createBlock(type: BlockType): ContentBlock {
 
     case 'summary':
       return { id, type: 'summary', body: '' };
+
+    case 'columns':
+      return {
+        id,
+        type: 'columns',
+        columnCount: 2,
+        columns: [
+          { id: newId(), blocks: [] },
+          { id: newId(), blocks: [] },
+        ],
+      };
   }
 }
 
@@ -112,6 +123,8 @@ export function extractTextFromBlock(block: ContentBlock): string {
       return block.body;
     case 'divider':
       return '';
+    case 'columns':
+      return block.columns.flatMap((col) => col.blocks.map(extractTextFromBlock)).join(' ');
   }
 }
 
@@ -150,7 +163,19 @@ export function deleteBlock(blocks: ContentBlock[], index: number): ContentBlock
 
 export function duplicateBlock(blocks: ContentBlock[], index: number): ContentBlock[] {
   const block = blocks[index];
-  const clone: ContentBlock = { ...block, id: newId() } as ContentBlock;
+  let clone: ContentBlock;
+  if (block.type === 'columns') {
+    clone = {
+      ...block,
+      id: newId(),
+      columns: block.columns.map((col) => ({
+        id: newId(),
+        blocks: col.blocks.map((b) => ({ ...b, id: newId() }) as ContentBlock),
+      })),
+    };
+  } else {
+    clone = { ...block, id: newId() } as ContentBlock;
+  }
   const next = [...blocks];
   next.splice(index + 1, 0, clone);
   return next;
@@ -173,20 +198,33 @@ export function insertBlockAfter(
 
 export function syncHeadingAnchors(blocks: ContentBlock[]): ContentBlock[] {
   const seenAnchors = new Set<string>();
-  return blocks.map((block) => {
-    if (block.type !== 'heading') return block;
-    let anchor = generateAnchor(block.text);
-    if (!anchor) anchor = block.id.slice(0, 8);
-    // Deduplicate: append index suffix if anchor already used
-    let candidate = anchor;
-    let suffix = 2;
-    while (seenAnchors.has(candidate)) {
-      candidate = `${anchor}-${suffix}`;
-      suffix++;
+
+  function syncBlock(block: ContentBlock): ContentBlock {
+    if (block.type === 'heading') {
+      let anchor = generateAnchor(block.text);
+      if (!anchor) anchor = block.id.slice(0, 8);
+      let candidate = anchor;
+      let suffix = 2;
+      while (seenAnchors.has(candidate)) {
+        candidate = `${anchor}-${suffix}`;
+        suffix++;
+      }
+      seenAnchors.add(candidate);
+      return { ...block, anchor: candidate };
     }
-    seenAnchors.add(candidate);
-    return { ...block, anchor: candidate };
-  });
+    if (block.type === 'columns') {
+      return {
+        ...block,
+        columns: block.columns.map((col) => ({
+          ...col,
+          blocks: col.blocks.map(syncBlock),
+        })),
+      };
+    }
+    return block;
+  }
+
+  return blocks.map(syncBlock);
 }
 
 // ── TOC extraction ────────────────────────────────────────────────────────────
@@ -199,7 +237,57 @@ export interface TocEntry {
 }
 
 export function extractToc(blocks: ContentBlock[]): TocEntry[] {
-  return blocks
-    .filter((b): b is import('./blockTypes').HeadingBlock => b.type === 'heading')
-    .map((b) => ({ level: b.level, text: b.text, anchor: b.anchor }));
+  const entries: TocEntry[] = [];
+  for (const b of blocks) {
+    if (b.type === 'heading') {
+      entries.push({ level: b.level, text: b.text, anchor: b.anchor });
+    } else if (b.type === 'columns') {
+      for (const col of b.columns) {
+        entries.push(...extractToc(col.blocks));
+      }
+    }
+  }
+  return entries;
+}
+
+// ── Column layout helpers ────────────────────────────────────────────────────
+
+/**
+ * Set column count on a ColumnsBlock. When shrinking, merges removed columns'
+ * blocks into the last surviving column so no content is lost.
+ */
+export function setColumnCount(block: ColumnsBlock, count: 1 | 2 | 3): ColumnsBlock {
+  if (count === block.columnCount) return block;
+  if (count > block.columnCount) {
+    const extra: ColumnCell[] = Array.from(
+      { length: count - block.columnCount },
+      () => ({ id: newId(), blocks: [] }),
+    );
+    return { ...block, columnCount: count, columns: [...block.columns, ...extra] };
+  }
+  // Shrinking: merge removed columns' blocks into the last surviving column
+  const kept = block.columns.slice(0, count);
+  const removed = block.columns.slice(count);
+  const lastKept = kept[kept.length - 1];
+  const mergedLast: ColumnCell = {
+    ...lastKept,
+    blocks: [...lastKept.blocks, ...removed.flatMap((c) => c.blocks)],
+  };
+  return { ...block, columnCount: count, columns: [...kept.slice(0, -1), mergedLast] };
+}
+
+// ── Flatten blocks (recurse into columns) ────────────────────────────────────
+
+/** Returns all leaf blocks including those nested inside column cells. */
+export function flattenBlocks(blocks: ContentBlock[]): ContentBlock[] {
+  const result: ContentBlock[] = [];
+  for (const b of blocks) {
+    result.push(b);
+    if (b.type === 'columns') {
+      for (const col of b.columns) {
+        result.push(...flattenBlocks(col.blocks));
+      }
+    }
+  }
+  return result;
 }

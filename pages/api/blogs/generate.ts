@@ -1,13 +1,12 @@
 /**
  * POST /api/blogs/generate
  *
- * Company Admin blog generation via unified content engine.
+ * Company Admin blog generation.
  *
- * Routes to blogContentAdapter which:
- *   1. Auth: enforceCompanyAccess + COMPANY_ADMIN role only
- *   2. Company context injection (writing style, audience, brand voice)
- *   3. Queue job to content-blog queue for processing
- *   4. Returns jobId and polling URL
+ * Supports the full BlogGenerateModal flow:
+ *   mode: 'angles'  → synchronous angle generation via runBlogGeneration
+ *   mode: 'full'    → synchronous full blog generation via runBlogGeneration
+ *   (no mode)       → queue-based generation via blogContentAdapter (legacy)
  *
  * Super Admin uses /api/admin/blog/generate (public_blogs, SA role only).
  *
@@ -15,6 +14,14 @@
  * {
  *   company_id:       string,
  *   topic:            string,
+ *   mode?:            'angles' | 'full',
+ *   cluster?:         string,
+ *   intent?:          string,
+ *   answers?:         Record<string, string>,
+ *   selected_angle?:  BlogAngle,
+ *   tone?:            string,
+ *   related_blogs?:   string[],
+ *   series_blog_ids?: string[],
  *   audience?:        string,
  *   angle_preference?: 'analytical' | 'contrarian' | 'strategic',
  * }
@@ -26,6 +33,12 @@ import { enforceRole, Role } from '../../../backend/services/rbacService';
 import { generateBlogContent } from '../../../backend/adapters/commandCenter/blogContentAdapter';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { buildFormattedStyleInstructions } from '../../../lib/content/writingStyleEngine';
+import {
+  runBlogGeneration,
+  type BlogGenerationRequest,
+} from '../../../lib/blog/runBlogGeneration';
+import type { BlogAngle } from '../../../lib/blog/blogGenerationEngine';
+import { isValidBlogFormat } from '../../../lib/blog/blogStructureTemplates';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -33,8 +46,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const {
     company_id,
     topic,
+    mode,
+    cluster,
+    intent,
+    answers,
+    selected_angle,
+    tone,
+    related_blogs,
+    series_blog_ids,
     audience,
     angle_preference,
+    format_type,
+    template_blocks,
+    template_name,
+    target_word_count,
   } = req.body ?? {};
 
   if (!company_id || typeof company_id !== 'string')
@@ -48,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const roleGate = await enforceRole({
     req, res, companyId: company_id,
-    allowedRoles: [Role.COMPANY_ADMIN],
+    allowedRoles: [Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.CONTENT_REVIEWER, Role.CONTENT_PUBLISHER, Role.SUPER_ADMIN],
   });
   if (!roleGate) return;
 
@@ -67,7 +92,79 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.warn('[blogs/generate] profile enrichment failed:', err);
   }
 
-  // ── 3. Queue to unified content generation ──────────────────────────────────
+  // ── 3. Route based on mode ────────────────────────────────────────────────
+  const resolvedMode = mode === 'angles' || mode === 'full' ? mode : undefined;
+
+  // Mode 'angles' or 'full': use runBlogGeneration (synchronous, supports the
+  // BlogGenerateModal 4-step flow with clarification + angle picker)
+  if (resolvedMode) {
+    try {
+      const profileAny = (companyProfile || {}) as Record<string, unknown>;
+      const str = (key: string): string | undefined => {
+        const v = profileAny[key];
+        return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+      };
+      const strArr = (key: string): string[] | undefined => {
+        const v = profileAny[key];
+        return Array.isArray(v) && v.length > 0 ? v.filter((s: unknown) => typeof s === 'string') as string[] : undefined;
+      };
+
+      const generationRequest: BlogGenerationRequest = {
+        company_id,
+        mode:             resolvedMode,
+        topic:            String(topic).trim(),
+        cluster:          typeof cluster === 'string' ? cluster.trim() : undefined,
+        intent:           typeof intent === 'string' ? intent.trim() : undefined,
+        related_blogs:    Array.isArray(related_blogs)
+          ? related_blogs.filter((b: unknown) => typeof b === 'string')
+          : undefined,
+        series_blog_ids:  Array.isArray(series_blog_ids)
+          ? series_blog_ids.filter((id: unknown) => typeof id === 'string')
+          : undefined,
+        answers:          (() => {
+          const a = answers && typeof answers === 'object' ? answers as Record<string, string> : {};
+          if (target_word_count && !a.target_word_count) a.target_word_count = String(target_word_count);
+          return Object.keys(a).length > 0 ? a : undefined;
+        })(),
+        selected_angle:   selected_angle as BlogAngle | undefined,
+        tone:             typeof tone === 'string' ? tone.trim() : undefined,
+        blogTable:        'blogs',  // Company Admin always uses blogs table
+        formatType:       isValidBlogFormat(format_type) ? format_type : 'standard',
+        template_blocks:  Array.isArray(template_blocks) ? template_blocks : undefined,
+        template_name:    typeof template_name === 'string' ? template_name : undefined,
+        companyContext: {
+          audience:                 str('target_audience') || str('audience'),
+          brand_voice:              str('brand_voice') || str('writing_style'),
+          industry:                 str('industry'),
+          writingStyleInstructions,
+          companyName:              str('name'),
+          uniqueValue:              str('unique_value'),
+          competitiveAdvantages:    str('competitive_advantages'),
+          productsServices:         str('products_services'),
+          contentThemes:            str('content_themes'),
+          campaignFocus:            str('campaign_focus'),
+          growthPriorities:         str('growth_priorities'),
+          coreProblemStatement:     str('core_problem_statement'),
+          painSymptoms:             strArr('pain_symptoms'),
+          authorityDomains:         strArr('authority_domains'),
+          desiredTransformation:    str('desired_transformation'),
+          keyMessages:              str('key_messages'),
+          goals:                    str('goals'),
+          geography:                str('geography'),
+        },
+      };
+
+      const result = await runBlogGeneration(generationRequest);
+      return res.status(200).json(result);
+    } catch (error) {
+      console.error('[blogs/generate] runBlogGeneration error:', error);
+      return res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to generate blog',
+      });
+    }
+  }
+
+  // ── No mode: legacy queue-based generation ────────────────────────────────
   try {
     const { getContentQueue } = await import('../../../backend/queue/contentGenerationQueues');
     const contentGenerationQueue = getContentQueue('content-blog');
@@ -90,5 +187,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
-
-

@@ -420,38 +420,28 @@ export function normalizeCapacityCountsWithBreakdown(value: unknown): Structured
   return { ...EMPTY_CAPACITY_COUNTS };
 }
 
-/** Planning UI labels (from content capacity form) map to internal capacity keys. */
+/** Planning UI labels (from content capacity form) map to internal capacity keys.
+ *  Keys are lowercased at lookup time so both 'Article' and 'article' resolve to 'blog'. */
 const PLANNING_LABEL_TO_KEY: Record<string, keyof StructuredCapacityCounts> = {
-  Posts: 'post',
-  'Text posts': 'post',
-  'Text post': 'post',
-  Post: 'post',
-  posts: 'post',
-  Videos: 'video',
-  Video: 'video',
-  'Long Videos': 'video',
-  Reels: 'video',
-  Shorts: 'video',
-  Songs: 'video',
-  Audio: 'video',
-  Podcasts: 'video',
-  Spaces: 'video',
-  Carousels: 'post',
-  Images: 'post',
-  Image: 'post',
-  Blogs: 'blog',
-  Blog: 'blog',
-  Articles: 'blog',
-  Article: 'blog',
-  'White Papers': 'blog',
-  Newsletters: 'blog',
-  Webinars: 'blog',
-  Slides: 'blog',
-  Slideware: 'blog',
-  Stories: 'story',
-  Story: 'story',
-  Threads: 'thread',
-  Thread: 'thread',
+  // post
+  post: 'post', posts: 'post', 'text post': 'post', 'text posts': 'post',
+  carousel: 'post', carousels: 'post', image: 'post', images: 'post',
+  // video
+  video: 'video', videos: 'video', 'long videos': 'video', 'long video': 'video',
+  reel: 'video', reels: 'video', short: 'video', shorts: 'video',
+  song: 'video', songs: 'video', audio: 'video', podcast: 'video', podcasts: 'video',
+  space: 'video', spaces: 'video',
+  // blog
+  blog: 'blog', blogs: 'blog',
+  article: 'blog', articles: 'blog',
+  newsletter: 'blog', newsletters: 'blog',
+  'white paper': 'blog', 'white papers': 'blog', whitepaper: 'blog', whitepapers: 'blog',
+  webinar: 'blog', webinars: 'blog',
+  slide: 'blog', slides: 'blog', slideware: 'blog',
+  // story
+  story: 'story', stories: 'story',
+  // thread
+  thread: 'thread', threads: 'thread',
 };
 
 export function normalizeCapacityCounts(value: unknown): StructuredCapacityCounts {
@@ -462,7 +452,8 @@ export function normalizeCapacityCounts(value: unknown): StructuredCapacityCount
       if (k === 'breakdown' || k === '_declared_none' || k === 'declared_none' || k === 'declaredNone') continue;
       const n = clampInt(typeof v === 'number' ? v : Number(v));
       if (n <= 0) continue;
-      const key = PLANNING_LABEL_TO_KEY[k] ?? (k.toLowerCase() as keyof StructuredCapacityCounts);
+      // Lowercase the key for case-insensitive lookup so both 'Article' and 'article' map to 'blog'.
+      const key = PLANNING_LABEL_TO_KEY[k.toLowerCase()] ?? PLANNING_LABEL_TO_KEY[k] ?? (k.toLowerCase() as keyof StructuredCapacityCounts);
       if (key && key in out) {
         out[key] += n;
       } else if (['post', 'video', 'blog', 'story', 'thread'].includes(String(k).toLowerCase())) {
@@ -4357,8 +4348,43 @@ export async function runCampaignAiPlan(
       ...mapRecommendationContextToGatherKeys(input.recommendationContext ?? null),
       ...fromHistory,
     };
+    const minimalEc =
+      (minimalPrefilled as Record<string, unknown>).execution_config &&
+      typeof (minimalPrefilled as Record<string, unknown>).execution_config === 'object'
+        ? ((minimalPrefilled as Record<string, unknown>).execution_config as Record<string, unknown>)
+        : {};
     const hasExplicitCapacityAnswer = (v: unknown) =>
       v != null && (typeof v === 'object' || (typeof v === 'string' && String(v).trim().length > 0));
+    const hasMeaningfulGatherValue = (key: string, value: unknown): boolean => {
+      if (key === 'platforms') {
+        if (Array.isArray(value)) return value.length > 0;
+        return value != null && String(value).trim().length > 0;
+      }
+      if (key === 'platform_content_requests') {
+        if (Array.isArray(value)) return value.length > 0;
+        if (value && typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0;
+        return value != null && String(value).trim().length > 0;
+      }
+      if (key === 'exclusive_campaigns') {
+        if (Array.isArray(value)) return true;
+        return value != null && String(value).trim().length > 0;
+      }
+      if (key === 'available_content') {
+        if (value && typeof value === 'object') {
+          const obj = value as Record<string, unknown>;
+          if (Boolean((obj as any)._declared_none || (obj as any).declared_none || (obj as any).declaredNone)) return true;
+        }
+        return value != null && (typeof value === 'object' || String(value).trim().length > 0);
+      }
+      if (key === 'content_capacity' || key === 'weekly_capacity') {
+        if (value && typeof value === 'object') {
+          const obj = value as Record<string, unknown>;
+          if (Boolean((obj as any)._declared_none || (obj as any).declared_none || (obj as any).declaredNone)) return true;
+        }
+        return value != null && (typeof value === 'object' || String(value).trim().length > 0);
+      }
+      return value != null && (typeof value !== 'string' || String(value).trim().length > 0);
+    };
     const fromHistoryHasAvailable =
       fromHistory?.available_content != null &&
       (hasExplicitCapacityAnswer(fromHistory.available_content) ||
@@ -4370,8 +4396,10 @@ export async function runCampaignAiPlan(
         (REQUIRED_EXECUTION_FIELDS as unknown as string[]).filter((k) => {
           if (k === 'available_content') return fromHistoryHasAvailable;
           if (k === 'content_capacity' || k === 'weekly_capacity') return fromHistoryHasCapacity;
-          const v = (minimalPrefilled as Record<string, unknown>)[k];
-          return v != null && (typeof v !== 'string' || String(v).trim().length > 0);
+          const v =
+            (minimalPrefilled as Record<string, unknown>)[k] ??
+            minimalEc[k];
+          return hasMeaningfulGatherValue(k, v);
         })
       )
     );
@@ -4714,18 +4742,53 @@ export async function runCampaignAiPlan(
   const computeQaPrefilledKeys = (values: Record<string, unknown>) => {
     const ec = (values as any)?.execution_config as Record<string, unknown> | null | undefined;
     const tentativeStart = (values as any)?.tentative_start ?? ec?.tentative_start;
+    const hasTrustedIntelligentMixPrefill =
+      (values as any)?.intelligent_mix_prefill === true || ec?.intelligent_mix_prefill === true;
+    const hasMeaningfulGatherValue = (key: string, value: unknown): boolean => {
+      if (key === 'platforms') {
+        if (Array.isArray(value)) return value.length > 0;
+        return value != null && String(value).trim().length > 0;
+      }
+      if (key === 'platform_content_requests') {
+        if (Array.isArray(value)) return value.length > 0;
+        if (value && typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0;
+        return value != null && String(value).trim().length > 0;
+      }
+      if (key === 'exclusive_campaigns') {
+        if (Array.isArray(value)) return true;
+        return value != null && String(value).trim().length > 0;
+      }
+      if (key === 'available_content') return hasMeaningfulProvidedValue(value);
+      if (key === 'weekly_capacity' || key === 'content_capacity') return hasExplicitCapacityAnswer(value);
+      return value != null && (typeof value !== 'string' || String(value).trim().length > 0);
+    };
     // Include tentative_start when in execution_config (ensure previously captured is not repeated)
     const keysToCheck = new Set(Object.keys(values || {}));
     if (ec?.tentative_start != null) keysToCheck.add('tentative_start');
+    if (ec?.platforms != null) keysToCheck.add('platforms');
+    if (ec?.platform_content_requests != null) keysToCheck.add('platform_content_requests');
+    if (ec?.exclusive_campaigns != null) keysToCheck.add('exclusive_campaigns');
+    if (ec?.available_content != null) keysToCheck.add('available_content');
+    if (ec?.content_capacity != null) keysToCheck.add('content_capacity');
     return Array.from(keysToCheck).filter((k) => {
-      if (k === 'available_content') return incomingHasAvailableContent || fromHistoryHasAvailableContent;
+      if (k === 'available_content') {
+        return (
+          incomingHasAvailableContent ||
+          fromHistoryHasAvailableContent ||
+          (hasTrustedIntelligentMixPrefill && hasMeaningfulProvidedValue((values as any)?.available_content ?? ec?.available_content))
+        );
+      }
       if (k === 'weekly_capacity' || k === 'content_capacity')
-        return incomingHasWeeklyCapacity || fromHistoryHasContentCapacity;
+        return (
+          incomingHasWeeklyCapacity ||
+          fromHistoryHasContentCapacity ||
+          (hasTrustedIntelligentMixPrefill && hasExplicitCapacityAnswer((values as any)?.[k] ?? ec?.[k]))
+        );
       if (k === 'tentative_start') {
         const t = typeof tentativeStart === 'string' ? tentativeStart.trim() : '';
         return /^\d{4}-\d{2}-\d{2}$/.test(t) && t >= trustedUtcTodayISO;
       }
-      return (values as any)?.[k] != null;
+      return hasMeaningfulGatherValue(k, (values as any)?.[k] ?? ec?.[k]);
     });
   };
 

@@ -1,5 +1,4 @@
 const FALLBACK_PATTERNS = [
-  /available signals indicate limited data coverage/i,
   /available signals indicate limited decision coverage/i,
   /competitor benchmarking is limited in this report run/i,
   /re-run with richer/i,

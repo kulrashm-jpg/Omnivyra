@@ -114,6 +114,21 @@ export const CONTENT_QUEUE_CONFIG: Record<string, QueueConfig> = {
     removeOnFail: { age: 604800 },
   },
 
+  // ─── BOLT CONTENT JOBS QUEUE ────────────────────────────────────────────
+  // Processes one topic group per job (master + variants + schedule inserts).
+  // Priority 1-5 based on content type; blog/article run first.
+  // Separate from text content queues — BOLT jobs don't go through unified engine.
+
+  'bolt-content-jobs': {
+    concurrency: 3,           // 3 topic groups in parallel (safe for Claude rate limits)
+    priority: 2,              // High priority — user is waiting for calendar to populate
+    limiter: { max: 6, duration: 1000 },
+    defaultBackoff: { type: 'exponential', delay: 3000 },
+    attempts: 3,
+    removeOnComplete: { age: 86400 }, // keep 24h for progress polling
+    removeOnFail:     { age: 604800 }, // 7 days for debugging
+  },
+
   // ─── CREATOR CONTENT QUEUES ─────────────────────────────────────────────
 
   // Video Script: high complexity, requires rich context, medium volume
@@ -299,6 +314,32 @@ export async function startCreatorContentWorkers(processor: (job: any) => Promis
       concurrency: config.concurrency,
     });
   }
+}
+
+/**
+ * Start the BOLT content job worker.
+ * One worker processes one topic group at a time (master + variants + inserts).
+ * Concurrency=3 means up to 3 topic groups run in parallel per server instance.
+ */
+export async function startBoltContentWorkers(processor: (job: any) => Promise<any>): Promise<void> {
+  const config = CONTENT_QUEUE_CONFIG['bolt-content-jobs']!;
+  const worker = new Worker('bolt-content-jobs', processor, {
+    connection: getConnectionConfig(),
+    concurrency: config.concurrency,
+  });
+
+  worker.on('completed', (job) => {
+    console.info('[bolt-content-worker][completed]', {
+      jobId: job.id,
+      processingTime: (job.finishedOn ?? 0) - (job.processedOn ?? 0),
+    });
+  });
+
+  worker.on('failed', (job, error) => {
+    console.error('[bolt-content-worker][failed]', { jobId: job?.id, error: String(error) });
+  });
+
+  console.info('[bolt-content-worker] started, concurrency=', config.concurrency);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -196,7 +196,7 @@ describe('contentGenerationPipeline', () => {
     const item = out[0].daily_execution_items[0];
     expect(item.master_content.id).toBe('master-existing');
     expect(item.master_content.content).toBe('EXISTING MASTER');
-    expect(mockedGenerateCampaignPlan).toHaveBeenCalledTimes(1);
+    expect(mockedRunCompletionWithOperation).toHaveBeenCalledTimes(1);
   });
 
   it('detects media-dependent content types case-insensitively', () => {
@@ -207,6 +207,7 @@ describe('contentGenerationPipeline', () => {
   });
 
   it('media content remains blueprint and does not call AI', async () => {
+    mockedRunCompletionWithOperation.mockRejectedValue(new Error('media generation unavailable'));
     const master = await generateMasterContentFromIntent({
       execution_id: 'wk3-exec-2',
       content_type: 'video',
@@ -218,7 +219,7 @@ describe('contentGenerationPipeline', () => {
     expect(master.content_type_mode).toBe('media_blueprint');
     expect(master.required_media).toBe(true);
     expect(master.media_status).toBe('missing');
-    expect(mockedGenerateCampaignPlan).not.toHaveBeenCalled();
+    expect(mockedRunCompletionWithOperation).toHaveBeenCalledTimes(1);
   });
 
   it('generates platform media blueprint variant for media-dependent target', async () => {
@@ -272,7 +273,7 @@ describe('contentGenerationPipeline', () => {
   });
 
   it('failed generation fallback path returns deterministic failed payload', async () => {
-    mockedGenerateCampaignPlan.mockRejectedValue(new Error('gateway unavailable'));
+    mockedRunCompletionWithOperation.mockRejectedValue(new Error('gateway unavailable'));
     const master = await generateMasterContentFromIntent({
       execution_id: 'wk9-exec-2',
       content_type: 'post',
@@ -286,7 +287,7 @@ describe('contentGenerationPipeline', () => {
   });
 
   it('variant adapts differently per platform (mocked outputs)', async () => {
-    mockedGenerateCampaignPlan
+    mockedRunCompletionWithOperation
       .mockResolvedValueOnce({
         output: 'LinkedIn specific adapted copy.',
         metadata: {
@@ -347,7 +348,7 @@ describe('contentGenerationPipeline', () => {
   });
 
   it('variant adaptation fallback returns failed payload when AI fails', async () => {
-    mockedGenerateCampaignPlan.mockRejectedValue(new Error('variant adapt fail'));
+    mockedRunCompletionWithOperation.mockRejectedValue(new Error('variant adapt fail'));
     const variants = await buildPlatformVariantsFromMaster({
       execution_id: 'wk8-exec-3',
       content_type: 'post',

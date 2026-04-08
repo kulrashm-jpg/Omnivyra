@@ -77,8 +77,8 @@ describe('strategyContextService', () => {
   it('rejects unknown platform (no fallback)', () => {
     const input = {
       duration_weeks: 12,
-      platforms: ['facebook'],
-      posting_frequency: { facebook: 3 },
+      platforms: ['snapchat'],
+      posting_frequency: { snapchat: 3 },
     };
     expect(() => normalizeStrategyContext(input)).toThrow(StrategyContextValidationError);
     expect(() => normalizeStrategyContext(input)).toThrow(/Unknown platform/);

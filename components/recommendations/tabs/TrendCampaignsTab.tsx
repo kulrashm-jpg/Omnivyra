@@ -365,8 +365,29 @@ function StrategicFlowSummary(props: { state: StrategicFlowState }) {
 import type { StrategyStatusPayload } from '../../strategy/StrategyIntelligencePanel';
 
 export default function TrendCampaignsTab(props: OpportunityTabProps) {
-  const { companyId, regions, engineRecommendations, fetchWithAuth, strategicIntents, onStrategicIntentsChange, viewMode, campaignId, initialBlogId } = props;
+  const { companyId, regions, engineRecommendations, fetchWithAuth, strategicIntents, onStrategicIntentsChange, viewMode, campaignId, initialBlogId, intelligentMixContext: intelligentMixProp } = props;
   const router = useRouter();
+
+  // Extended Intelligent Mix context type (includes optional campaign focus fields added later)
+  type IntelligentMixContextWithFocus = import('@/pages/command-center/intelligent-mix-strategy').IntelligentMixState & {
+    communicationStyle?: string[];
+    primaryCampaignType?: PrimaryCampaignTypeId;
+    secondaryCampaignTypes?: SecondaryOptionId[];
+  };
+
+  // ── Intelligent Mix context: from prop or sessionStorage ─────────────────
+  const intelligentMixContext = React.useMemo(() => {
+    if (intelligentMixProp) return intelligentMixProp;
+    try {
+      const raw = sessionStorage.getItem('intelligent-mix-strategy-state');
+      if (raw) {
+        const q = router.query as Record<string, string | undefined>;
+        // Only apply if arriving via intelligentMix=1 query param (not on every visit)
+        if (q.intelligentMix === '1') return JSON.parse(raw) as import('@/pages/command-center/intelligent-mix-strategy').IntelligentMixState;
+      }
+    } catch { /* ignore */ }
+    return null;
+  }, [intelligentMixProp, router.isReady, router.query.intelligentMix]);
 
   // ── BOLT (Text) preset from setup page query params ──────────────────────
   const boltTextPreset = React.useMemo(() => {
@@ -440,6 +461,13 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [strategyStatusPayload, setStrategyStatusPayload] = useState<StrategyStatusPayload | null>(null);
   /** Recommendation snapshot id -> state (ACTIVE | ARCHIVED | LONG_TERM). From API + optimistic updates. */
   const [recommendationUserStateMap, setRecommendationUserStateMap] = useState<Record<string, string>>({});
+  const [recommendationSignals, setRecommendationSignals] = useState<{
+    archived: number;
+    longTerm: number;
+    adopted: number;
+    totalRecommendations: number;
+    adoptionRate: number;
+  } | null>(null);
   /** Recommendation snapshot IDs already used by this company to create a campaign (hide from list). */
   const [usedRecommendationIds, setUsedRecommendationIds] = useState<Set<string>>(new Set());
   /** Campaign created when user clicked "Generate Strategic Themes"; card is saved to this campaign when they click "Build Campaign Blueprint". */
@@ -557,6 +585,132 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   const [tentativeStartDate, setTentativeStartDate] = useState<Date | undefined>();
   const [campaignGoal, setCampaignGoal] = useState<string | null>(null);
   const [executionCalendarOpen, setExecutionCalendarOpen] = useState(false);
+  // Whether the execution config was pre-filled from Intelligent Mix (controls banner + hiding duplicate fields)
+  const [mixPreFilled, setMixPreFilled] = useState(false);
+  const [showStrategicSetupEditor, setShowStrategicSetupEditor] = useState(false);
+  const autoRunIntelligentMixRef = useRef(false);
+
+  // Tracks whether we've already applied the Intelligent Mix context — prevents re-running when
+  // intelligentMixContext reference changes (JSON.parse returns a new object each useMemo call).
+  const appliedMixSignatureRef = useRef<string | null>(null);
+  const intelligentMixSignature = useMemo(() => {
+    if (!intelligentMixContext) return null;
+    try {
+      return JSON.stringify(intelligentMixContext);
+    } catch {
+      return '__unserializable_mix_context__';
+    }
+  }, [intelligentMixContext]);
+
+  // Pre-fill execution config from Intelligent Mix context on mount (runs only once).
+  // Deps are stable primitives — NOT the intelligentMixContext object which gets a new reference on
+  // every parent render (parent passes JSON.parse result as IIFE, creating a new object each time).
+  useEffect(() => {
+    if (!intelligentMixContext || !intelligentMixSignature) return;
+    if (appliedMixSignatureRef.current === intelligentMixSignature) return;
+    appliedMixSignatureRef.current = intelligentMixSignature;
+    let appliedAnyPrefill = false;
+    // target_audience — use first audience item
+    if (intelligentMixContext.audience?.length && !targetAudience) {
+      setTargetAudience(intelligentMixContext.audience[0]);
+      appliedAnyPrefill = true;
+    }
+    // campaign_goal — derive from primary campaign type
+    const ctx = intelligentMixContext as IntelligentMixContextWithFocus;
+    if (ctx.primaryCampaignType && !campaignGoal) {
+      const label = ctx.primaryCampaignType;
+      // Map engine IDs to display labels for campaignGoal field
+      const goalMap: Record<string, string> = {
+        brand_awareness: 'Awareness',
+        lead_generation: 'Leads',
+        engagement_growth: 'Engagement',
+        product_promotion: 'Product',
+        authority_positioning: 'Awareness',
+        network_expansion: 'Awareness',
+        personal_brand_promotion: 'Awareness',
+        third_party: 'Awareness',
+      };
+      if (label) {
+        setCampaignGoal(goalMap[label] ?? 'Awareness');
+        appliedAnyPrefill = true;
+      }
+    }
+    // frequency — total per week across all formats
+    if (!frequencyPerWeek) {
+      const textTotal = (intelligentMixContext.textFormats ?? []).reduce(
+        (s, f) => s + (intelligentMixContext.textFrequency?.[f] ?? 1), 0
+      );
+      const creatorTotal = (intelligentMixContext.creatorFormats ?? []).reduce(
+        (s, f) => s + (intelligentMixContext.creatorFrequency?.[f] ?? 1), 0
+      );
+      const total = textTotal + creatorTotal;
+      if (total > 0) {
+        setFrequencyPerWeek(`${total}/w`);
+        appliedAnyPrefill = true;
+      }
+    }
+    // start date
+    if (intelligentMixContext.startDate && !tentativeStartDate) {
+      setTentativeStartDate(new Date(intelligentMixContext.startDate + 'T00:00:00'));
+      appliedAnyPrefill = true;
+    }
+    // communication style
+    if (ctx.communicationStyle?.length && communicationStyle.length === 0) {
+      setCommunicationStyle(ctx.communicationStyle);
+      appliedAnyPrefill = true;
+    }
+    // campaign focus — guarded to avoid overwriting user edits
+    const canApplyPrimaryPrefill =
+      ctx.primaryCampaignType &&
+      primaryCampaignType === 'brand_awareness' &&
+      secondaryCampaignTypes.length === 0 &&
+      primaryCampaignType !== ctx.primaryCampaignType;
+    if (canApplyPrimaryPrefill) {
+      setPrimaryCampaignType(ctx.primaryCampaignType);
+      appliedAnyPrefill = true;
+    }
+    if (ctx.secondaryCampaignTypes?.length && secondaryCampaignTypes.length === 0) {
+      setSecondaryCampaignTypes(ctx.secondaryCampaignTypes);
+      appliedAnyPrefill = true;
+    }
+    if (ctx.contextMode && contextMode === 'FULL') {
+      setContextMode(ctx.contextMode);
+      appliedAnyPrefill = true;
+    }
+    if (ctx.focusedModules?.length && focusedModules.length === 0) {
+      setFocusedModules(ctx.focusedModules);
+      appliedAnyPrefill = true;
+    }
+    if (ctx.additionalDirection && !additionalDirection.trim()) {
+      setAdditionalDirection(ctx.additionalDirection);
+      appliedAnyPrefill = true;
+    }
+    if (ctx.selectedAspects?.length && selectedAspects.length === 0) {
+      setSelectedAspects(ctx.selectedAspects);
+      appliedAnyPrefill = true;
+    }
+    if (ctx.selectedFacets?.length && selectedFacets.length === 0) {
+      setSelectedFacets(ctx.selectedFacets);
+      appliedAnyPrefill = true;
+    }
+    if (ctx.strategicText && !strategicText.trim()) {
+      setStrategicText(ctx.strategicText);
+      appliedAnyPrefill = true;
+    }
+    if (ctx.regionsInput && !regionInput.trim()) {
+      setRegionInput(ctx.regionsInput);
+      appliedAnyPrefill = true;
+    }
+    if (appliedAnyPrefill || !mixPreFilled) {
+      setExecutionCollapsed(true);
+      setMixPreFilled(true);
+    }
+    if (ctx.autoGenerateThemes) {
+      setShowStrategicSetupEditor(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intelligentMixContext, intelligentMixSignature]);
+
   useEffect(() => {
     if (!professionalDropdownOpen) {
       setProfessionalDropdownRect(null);
@@ -606,10 +760,25 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
     return engineRecommendationCards.filter((c) => {
       const snapshotId = typeof c.recommendation?.id === 'string' ? c.recommendation.id.trim() : '';
       if (snapshotId && recommendationUserStateMap[snapshotId] === 'ARCHIVED') return false;
+      if (snapshotId && recommendationUserStateMap[snapshotId] === 'LONG_TERM') return false;
       if (snapshotId && usedRecommendationIds.has(snapshotId)) return false;
       return true;
     });
   }, [engineRecommendationCards, recommendationUserStateMap, usedRecommendationIds]);
+
+  const archivedEngineCards = useMemo(() => {
+    return engineRecommendationCards.filter((c) => {
+      const snapshotId = typeof c.recommendation?.id === 'string' ? c.recommendation.id.trim() : '';
+      return !!snapshotId && recommendationUserStateMap[snapshotId] === 'ARCHIVED';
+    });
+  }, [engineRecommendationCards, recommendationUserStateMap]);
+
+  const longTermEngineCards = useMemo(() => {
+    return engineRecommendationCards.filter((c) => {
+      const snapshotId = typeof c.recommendation?.id === 'string' ? c.recommendation.id.trim() : '';
+      return !!snapshotId && recommendationUserStateMap[snapshotId] === 'LONG_TERM';
+    });
+  }, [engineRecommendationCards, recommendationUserStateMap]);
 
   /** Cards with effective strategyStatus; sorted by mode (continue → continuation first, expand → expansion first, balanced → original order). */
   const visibleEngineCardsWithStatus = useMemo(() => {
@@ -725,6 +894,10 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
   }, [rankedEngineCardsWithStatus]);
 
   const strategicFlowState = workspaceSummaryData.flowState;
+  const highlightedState =
+    typeof router.query.state === 'string' && (router.query.state === 'ARCHIVED' || router.query.state === 'LONG_TERM')
+      ? router.query.state
+      : null;
 
   /** Suggested strategy mode from momentum (deterministic, no backend). Shown only when campaigns_count >= 2. */
   const suggestedStrategyMode = useMemo((): 'balanced' | 'continue' | 'expand' | null => {
@@ -1050,6 +1223,44 @@ Generate strategic campaign pillars to capture this demand.`;
       .catch(() => setStrategyStatusPayload(null));
   }, [campaignId, fetchWithAuth]);
 
+  useEffect(() => {
+    if (!companyId || !fetchWithAuth) {
+      setRecommendationUserStateMap({});
+      setRecommendationSignals(null);
+      return;
+    }
+    let cancelled = false;
+    fetchWithAuth(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`)
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((data) => {
+        if (cancelled) return;
+        setRecommendationUserStateMap(data && typeof data === 'object' ? data as Record<string, string> : {});
+      })
+      .catch(() => {
+        if (!cancelled) setRecommendationUserStateMap({});
+      });
+    fetchWithAuth(`/api/recommendations/strategy-signals?companyId=${encodeURIComponent(companyId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        setRecommendationSignals(data && typeof data === 'object'
+          ? {
+              archived: Number((data as any).archived) || 0,
+              longTerm: Number((data as any).longTerm) || 0,
+              adopted: Number((data as any).adopted) || 0,
+              totalRecommendations: Number((data as any).totalRecommendations) || 0,
+              adoptionRate: Number((data as any).adoptionRate) || 0,
+            }
+          : null);
+      })
+      .catch(() => {
+        if (!cancelled) setRecommendationSignals(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, fetchWithAuth]);
+
   const handleViewIntelligence = async (id: string) => {
     try {
       const res = await fetchWithAuth(`/api/recommendations/job/${id}`);
@@ -1219,11 +1430,55 @@ Generate strategic campaign pillars to capture this demand.`;
   }, [targetAudience, campaignGoal, frequencyPerWeek, tentativeStartDate, communicationStyle]);
 
   useEffect(() => {
-    if (requiredExecutionFields.completed) setShowMissingFieldsMessage(false);
-  }, [requiredExecutionFields.completed]);
+    if (requiredExecutionFields.completed) {
+      setShowMissingFieldsMessage(false);
+    } else if (mixPreFilled) {
+      // Fields are missing even though Intelligent Mix pre-filled — show the config so user can complete them
+      setExecutionCollapsed(false);
+    }
+  }, [requiredExecutionFields.completed, mixPreFilled]);
 
   const isExecutionFormComplete = requiredExecutionFields.completed;
   const isExecutionValid = isExecutionFormComplete;
+  const hasStrategicMixPrefill = Boolean(
+    intelligentMixContext &&
+    (
+      (intelligentMixContext as IntelligentMixContextWithFocus).contextMode ||
+      (intelligentMixContext as IntelligentMixContextWithFocus).strategicText ||
+      (intelligentMixContext as IntelligentMixContextWithFocus).selectedAspects?.length ||
+      (intelligentMixContext as IntelligentMixContextWithFocus).selectedFacets?.length ||
+      (intelligentMixContext as IntelligentMixContextWithFocus).regionsInput
+    )
+  );
+
+  const buildAiChatExecutionConfig = (options?: { keyMessages?: string | null; campaignDuration?: number }) => {
+    if (!isExecutionFormComplete || !targetAudience || !frequencyPerWeek || !tentativeStartDate || !campaignGoal) {
+      return null;
+    }
+
+    const resolvedDuration =
+      options?.campaignDuration ??
+      ((intelligentMixContext as { duration?: number } | null)?.duration ?? 4);
+    const trimmedKeyMessage = typeof options?.keyMessages === 'string' ? options.keyMessages.trim() : '';
+
+    return {
+      target_audience: targetAudience,
+      professional_segment: professionalSegments[0] ?? null,
+      professional_segments: professionalSegments,
+      communication_style: communicationStyle,
+      content_depth: contentDepth ?? null,
+      frequency_per_week: frequencyPerWeek,
+      tentative_start: tentativeStartDate.toISOString(),
+      campaign_goal: campaignGoal,
+      available_content: 'none',
+      content_capacity: `${frequencyPerWeek} posts per week`,
+      action_expectation: campaignGoal,
+      exclusive_campaigns: 'none',
+      campaign_duration: resolvedDuration,
+      intelligent_mix_prefill: true,
+      ...(trimmedKeyMessage ? { key_messages: trimmedKeyMessage.slice(0, 200) } : {}),
+    };
+  };
 
   const executionFieldKeyToLabel: Record<string, string> = {
     targetAudience: 'Target Audience',
@@ -1250,11 +1505,28 @@ Generate strategic campaign pillars to capture this demand.`;
   const handleRunClick = () => {
     if (!isExecutionFormComplete && !isSubmitting) {
       setShowMissingFieldsMessage(true);
-      focusFirstMissingExecutionField();
+      if (!mixPreFilled) focusFirstMissingExecutionField();
       return;
     }
     handleRun();
   };
+
+  useEffect(() => {
+    const ctx = intelligentMixContext as IntelligentMixContextWithFocus | null;
+    if (!ctx?.autoGenerateThemes || autoRunIntelligentMixRef.current) return;
+    if (!companyId || hasRun || isSubmitting || !isExecutionValid) return;
+    if (contextMode === 'NONE' && !additionalDirection.trim()) return;
+    autoRunIntelligentMixRef.current = true;
+    handleRun();
+  }, [
+    intelligentMixContext,
+    companyId,
+    hasRun,
+    isSubmitting,
+    isExecutionValid,
+    contextMode,
+    additionalDirection,
+  ]);
 
   const handleRun = async () => {
     setValidationError(null);
@@ -1484,6 +1756,32 @@ Generate strategic campaign pillars to capture this demand.`;
           Job History
         </button>
       </header>
+      {hasStrategicMixPrefill && !showStrategicSetupEditor && (
+        <div className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-teal-900">Strategic setup loaded from Intelligent Mix</h3>
+              <p className="text-xs text-teal-700 mt-1">Context mode, strategic direction, offerings, and geography were carried forward. Theme generation continues with those inputs.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowStrategicSetupEditor(true)}
+              className="shrink-0 text-xs text-teal-700 hover:text-teal-900 underline"
+            >
+              Edit setup
+            </button>
+          </div>
+          <div className="rounded-lg border border-teal-100 bg-white/70 px-4 py-3">
+            <h4 className="text-xs font-semibold text-teal-900 mb-2">Strategic Intent Summary</h4>
+            {intentSummary.type === 'warning' ? (
+              <p className="text-sm text-amber-700">{intentSummary.text}</p>
+            ) : (
+              <div className="text-sm text-teal-900">{intentSummary.text}</div>
+            )}
+          </div>
+        </div>
+      )}
+      {(!hasStrategicMixPrefill || showStrategicSetupEditor) && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="rounded-lg border border-gray-200 p-4 space-y-4">
           <EngineContextPanel
@@ -1514,9 +1812,48 @@ Generate strategic campaign pillars to capture this demand.`;
           />
         </div>
       </div>
+      )}
+      {/* Intelligent Mix context banner */}
+      {mixPreFilled && intelligentMixContext && (
+        <div className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 font-semibold text-teal-800">
+              <span>🤖</span> Intelligent Mix — campaign context loaded
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                try { sessionStorage.removeItem('intelligent-mix-strategy-state'); } catch { /* ignore */ }
+                setMixPreFilled(false);
+                setExecutionCollapsed(false);
+              }}
+              className="text-xs text-teal-600 hover:text-teal-800 underline"
+            >
+              Clear &amp; start fresh
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-teal-700">
+            {intelligentMixContext.primaryCampaignType && (
+              <span><span className="font-medium">Goal:</span> {(intelligentMixContext as IntelligentMixContextWithFocus & { primaryCampaignType: string }).primaryCampaignType.replace(/_/g, ' ')}{(intelligentMixContext as IntelligentMixContextWithFocus).secondaryCampaignTypes?.length ? ` + ${(intelligentMixContext as IntelligentMixContextWithFocus).secondaryCampaignTypes!.length} supporting` : ''}</span>
+            )}
+            <span><span className="font-medium">Audience:</span> {intelligentMixContext.audience.join(', ')}</span>
+            <span><span className="font-medium">Duration:</span> {intelligentMixContext.duration} weeks</span>
+            <span><span className="font-medium">Start:</span> {new Date(intelligentMixContext.startDate + 'T00:00:00').toLocaleDateString(undefined, { dateStyle: 'medium' })}</span>
+            {intelligentMixContext.textFormats.length > 0 && (
+              <span><span className="font-medium">Text:</span> {intelligentMixContext.textFormats.map((f) => `${f}×${intelligentMixContext.textFrequency?.[f] ?? 1}`).join(', ')}</span>
+            )}
+            {intelligentMixContext.creatorFormats.length > 0 && (
+              <span><span className="font-medium">Creator:</span> {intelligentMixContext.creatorFormats.map((f) => `${f}×${intelligentMixContext.creatorFrequency?.[f] ?? 1}`).join(', ')}</span>
+            )}
+          </div>
+          <p className="text-xs text-teal-600">Goals and audience can be further refined by the AI chat below. Trend signals will enrich your audience profile.</p>
+        </div>
+      )}
+
+      {(!mixPreFilled || !isExecutionFormComplete) && (
       <div className="border rounded-xl p-4 space-y-4 bg-muted/20">
         <div className="flex justify-between items-center">
-          <h3 className="text-sm font-semibold">Execution Configuration</h3>
+          <h3 className="text-sm font-semibold">Execution Configuration {mixPreFilled && <span className="text-xs font-normal text-teal-600 ml-1">(pre-filled from Intelligent Mix)</span>}</h3>
           {executionCollapsed ? (
             <Button variant="ghost" size="sm" onClick={() => setExecutionCollapsed(false)}>
               Edit
@@ -1557,6 +1894,14 @@ Generate strategic campaign pillars to capture this demand.`;
             </div>
             {/* Row 1: Target Audience (left) | Start Date (right) */}
             <div className="flex flex-wrap items-end justify-between gap-4">
+              {/* Target Audience — hidden when pre-filled from Intelligent Mix */}
+              {mixPreFilled ? (
+                <div className="space-y-1 min-w-0 rounded-lg border border-teal-200 bg-teal-50 p-3">
+                  <div className="text-xs font-medium text-teal-700">Target Audience <span className="font-normal text-teal-500">(from Intelligent Mix)</span></div>
+                  <div className="text-sm font-semibold text-teal-900">{targetAudience ?? '—'}</div>
+                  <button type="button" onClick={() => setExecutionCollapsed(false)} className="text-[10px] text-teal-600 underline">Change</button>
+                </div>
+              ) : (
               <div
                 ref={(el) => { executionSectionRefs.current.targetAudience = el; }}
                 className={`space-y-2 min-w-0 rounded-lg border p-3 transition-colors ${!targetAudience ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
@@ -1631,6 +1976,15 @@ Generate strategic campaign pillars to capture this demand.`;
                 )}
               </div>
               </div>
+              )}
+              {/* Start Date — hidden when pre-filled from Intelligent Mix */}
+              {mixPreFilled ? (
+                <div className="space-y-1 shrink-0 rounded-lg border border-teal-200 bg-teal-50 p-3">
+                  <div className="text-xs font-medium text-teal-700">Start Date <span className="font-normal text-teal-500">(from Intelligent Mix)</span></div>
+                  <div className="text-sm font-semibold text-teal-900">{tentativeStartDate ? tentativeStartDate.toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—'}</div>
+                  <button type="button" onClick={() => setExecutionCollapsed(false)} className="text-[10px] text-teal-600 underline">Change</button>
+                </div>
+              ) : (
               <div
                 ref={(el) => { executionSectionRefs.current.startDate = el; }}
                 className={`space-y-1.5 shrink-0 rounded-lg border p-3 transition-colors ${!tentativeStartDate ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
@@ -1669,9 +2023,17 @@ Generate strategic campaign pillars to capture this demand.`;
                   )}
                 </div>
               </div>
-              </div>
+              )}
             </div>
             <div className="flex flex-nowrap items-end gap-4 overflow-x-auto pb-1">
+              {/* Campaign Goal — hidden when pre-filled from Intelligent Mix */}
+              {mixPreFilled ? (
+                <div className="space-y-1 shrink-0 rounded-lg border border-teal-200 bg-teal-50 p-3">
+                  <div className="text-xs font-medium text-teal-700">Campaign Goal <span className="font-normal text-teal-500">(from Intelligent Mix)</span></div>
+                  <div className="text-sm font-semibold text-teal-900">{campaignGoal ?? '—'}</div>
+                  <button type="button" onClick={() => setMixPreFilled(false)} className="text-[10px] text-teal-600 underline">Change</button>
+                </div>
+              ) : (
               <div
                 ref={(el) => { executionSectionRefs.current.campaignGoal = el; }}
                 className={`space-y-1.5 shrink-0 rounded-lg border p-3 transition-colors ${!campaignGoal ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
@@ -1695,6 +2057,7 @@ Generate strategic campaign pillars to capture this demand.`;
                 ))}
               </div>
               </div>
+              )}
               <div className="space-y-1.5 shrink-0">
                 <label className="block text-xs font-medium text-gray-600" title="How detailed should each piece of content be?">Content Depth</label>
                 <div className="flex flex-nowrap gap-1.5" role="group">
@@ -1713,6 +2076,14 @@ Generate strategic campaign pillars to capture this demand.`;
                 ))}
               </div>
               </div>
+              {/* Frequency per week — hidden when pre-filled from Intelligent Mix */}
+              {mixPreFilled ? (
+                <div className="space-y-1 shrink-0 rounded-lg border border-teal-200 bg-teal-50 p-3 w-28">
+                  <div className="text-xs font-medium text-teal-700">Freq/week <span className="font-normal text-teal-500">(Mix)</span></div>
+                  <div className="text-sm font-semibold text-teal-900">{frequencyPerWeek ?? '—'}</div>
+                  <button type="button" onClick={() => setMixPreFilled(false)} className="text-[10px] text-teal-600 underline">Change</button>
+                </div>
+              ) : (
               <div
                 ref={(el) => { executionSectionRefs.current.frequencyPerWeek = el; }}
                 className={`space-y-1.5 shrink-0 w-24 rounded-lg border p-3 transition-colors ${!frequencyPerWeek ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
@@ -1734,6 +2105,7 @@ Generate strategic campaign pillars to capture this demand.`;
                   <option value="Daily">Daily</option>
                 </select>
               </div>
+              )}
               <div
                 ref={(el) => { executionSectionRefs.current.communicationStyle = el; }}
                 className={`space-y-1.5 shrink-0 min-w-[12rem] rounded-lg border p-3 transition-colors ${communicationStyle.length === 0 ? 'border-red-300 bg-red-50' : 'border-transparent bg-transparent'}`}
@@ -1765,15 +2137,20 @@ Generate strategic campaign pillars to capture this demand.`;
               </div>
               </div>
             </div>
+          </div>
           </>
           )}
         </div>
       </div>
+      )}
+      {(!hasStrategicMixPrefill || showStrategicSetupEditor) && (
       <StrategicAspectSelector
         aspects={aspects}
         selectedAspects={selectedAspects}
         onAspectsChange={setSelectedAspects}
       />
+      )}
+      {(!hasStrategicMixPrefill || showStrategicSetupEditor) && (
       <OfferingFacetSelector
         selectedAspect={selectedAspects.length > 0 ? selectedAspects[0] : null}
         offerings={offeringFacetCards}
@@ -1781,99 +2158,8 @@ Generate strategic campaign pillars to capture this demand.`;
         onChange={setSelectedFacets}
         mode={contextMode}
       />
-      <div className="rounded-lg border border-gray-200 p-4 space-y-4">
-        <h3 className="text-sm font-semibold text-gray-800">Campaign focus &amp; goals</h3>
-        <p className="text-xs text-gray-500">
-          Choose one primary focus; optional supporting goals appear below.
-        </p>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-2">Campaign focus (choose one)</label>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {PRIMARY_OPTIONS.map((opt) => {
-              const selected = primaryCampaignType === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => selectPrimary(opt.id)}
-                  className={`rounded-xl border-2 px-4 py-3 text-left text-sm font-medium transition-colors ${
-                    selected
-                      ? 'border-indigo-500 bg-indigo-50 text-indigo-800'
-                      : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        {primaryCampaignType && primaryCampaignType !== 'third_party' && (
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-2">Supporting goals (optional)</label>
-            <p className="text-xs text-gray-500 mb-2">Add compatible objectives for this run.</p>
-            {isPersonalBrandPrimary(primaryCampaignType) ? (
-              <div className="space-y-4">
-                {PERSONAL_BRAND_SECONDARY_GROUPS.map((group) => (
-                  <div key={group.label}>
-                    <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{group.label}</span>
-                    <div className="flex flex-wrap gap-2 mt-1.5">
-                      {group.options.map((opt) => {
-                        const selected = secondaryCampaignTypes.includes(opt.id);
-                        return (
-                          <button
-                            key={opt.id}
-                            type="button"
-                            onClick={() => toggleSecondary(opt.id)}
-                            className={`px-3 py-1.5 text-sm font-medium rounded-lg border ${
-                              selected ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-                            }`}
-                          >
-                            {opt.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {getSecondaryOptionsForPrimary(primaryCampaignType).map((opt) => {
-                  const selected = secondaryCampaignTypes.includes(opt.id);
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => toggleSecondary(opt.id)}
-                      className={`px-3 py-1.5 text-sm font-medium rounded-lg border ${
-                        selected ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-        {primaryCampaignType === 'third_party' && (
-          <p className="text-sm text-gray-600 rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
-            Third-party campaign: no further options. Recommendations will be generic collaboration/distribution-focused.
-          </p>
-        )}
-        {dilutionSeverity !== 'none' && (
-          <div
-            className={`rounded-lg border px-3 py-2 text-sm ${
-              dilutionSeverity === 'caution' ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-indigo-200 bg-indigo-50 text-indigo-800'
-            }`}
-            role="status"
-          >
-            These goals may dilute campaign focus. Consider selecting a primary campaign focus.
-          </div>
-        )}
-      </div>
+      )}
+      {(!hasStrategicMixPrefill || showStrategicSetupEditor) && (
       <div className="rounded-lg border border-gray-200 p-4 space-y-3">
         <h3 className="text-sm font-semibold text-gray-800">Geographic Targeting (Optional)</h3>
         <div className="relative">
@@ -1941,6 +2227,8 @@ Generate strategic campaign pillars to capture this demand.`;
           {regionWarning && <p className="mt-1 text-xs text-red-600">{regionWarning}</p>}
         </div>
       </div>
+      )}
+      {(!hasStrategicMixPrefill || showStrategicSetupEditor) && (
       <div className="rounded-lg border border-gray-200 bg-gray-50/50 px-4 py-3">
         <h3 className="text-sm font-semibold text-gray-800 mb-2">Strategic Intent Summary</h3>
         {intentSummary.type === 'warning' ? (
@@ -1949,49 +2237,93 @@ Generate strategic campaign pillars to capture this demand.`;
           <div className="text-sm text-gray-700">{intentSummary.text}</div>
         )}
       </div>
+      )}
       <div className="space-y-3">
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Intelligence Source</label>
-          <select
-            value={insightSource}
-            onChange={(e) => setInsightSource(e.target.value as 'hybrid' | 'api' | 'llm')}
-            className="w-full max-w-xs border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
-          >
-            <option value="hybrid">Hybrid Intelligence</option>
-            <option value="api">API Intelligence</option>
-            <option value="llm">AI Strategic Engine</option>
-          </select>
-        </div>
+        {mixPreFilled ? (
+          <div className="rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 max-w-xs">
+            <div className="text-xs text-teal-700 mb-1">Intelligence Source</div>
+            <div className="text-sm font-semibold text-teal-900">Hybrid Intelligence</div>
+            <div className="text-[11px] text-teal-700 mt-1">Selected in Intelligent Mix</div>
+          </div>
+        ) : (
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Intelligence Source</label>
+            <select
+              value={insightSource}
+              onChange={(e) => setInsightSource(e.target.value as 'hybrid' | 'api' | 'llm')}
+              className="w-full max-w-xs border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+            >
+              <option value="hybrid">Hybrid Intelligence</option>
+              <option value="api">API Intelligence</option>
+              <option value="llm">AI Strategic Engine</option>
+            </select>
+          </div>
+        )}
+
+        {/* Always-visible missing fields list */}
+        {!isExecutionFormComplete && requiredExecutionFields.missing.length > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+            <p className="font-semibold mb-1">Complete these to generate themes:</p>
+            <ul className="space-y-0.5 text-xs">
+              {requiredExecutionFields.missing.map((label) => (
+                <li key={label} className="flex items-center gap-1.5">
+                  <span className="text-amber-500 font-bold">›</span> {label}
+                </li>
+              ))}
+            </ul>
+            {!mixPreFilled && (
+              <button
+                type="button"
+                onClick={focusFirstMissingExecutionField}
+                className="mt-1.5 text-xs font-medium text-amber-700 underline"
+              >
+                Jump to first missing field
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Generate button — prominent when ready, amber action when fields missing */}
         <button
           type="button"
           onClick={handleRunClick}
-          disabled={isSubmitting || !isExecutionFormComplete}
-          className={`px-6 py-3 text-base font-medium rounded-lg ${
-            isSubmitting || !isExecutionFormComplete
+          disabled={isSubmitting}
+          className={`w-full sm:w-auto px-8 py-3 text-base font-semibold rounded-xl transition-all shadow-sm ${
+            isSubmitting
               ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              : isExecutionFormComplete
+                ? 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-md'
+                : 'bg-amber-500 text-white hover:bg-amber-600'
           }`}
         >
-          {isSubmitting ? 'Generating…' : !isExecutionFormComplete ? 'Complete Required Fields' : 'Generate Strategic Themes'}
+          {isSubmitting ? 'Generating…' : isExecutionFormComplete ? '✦ Generate Strategic Themes' : 'Generate Strategic Themes'}
         </button>
-        {showMissingFieldsMessage && requiredExecutionFields.missing.length > 0 && (
-          <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-            <p className="font-medium">Missing Inputs:</p>
-            <ul className="mt-1 list-inside list-disc space-y-0.5">
-              {requiredExecutionFields.missing.map((label) => (
-                <li key={label}>• {label}</li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
       {validationError && <div className="text-sm text-red-600">{validationError}</div>}
       <div id="recommendation-cards" ref={cardsSectionRef}>
       {!hasRun && !isSubmitting && (
         <div className="flex justify-center py-12">
-          <div className="max-w-md rounded-lg border border-gray-200 bg-gray-50/80 p-6 text-center text-sm text-gray-700">
-            No strategic themes generated yet. Click &quot;Generate Strategic Themes&quot; to build campaign pillars aligned with your company direction.
-          </div>
+          {isExecutionFormComplete ? (
+            <div className="max-w-md rounded-2xl border-2 border-indigo-200 bg-indigo-50 p-8 text-center space-y-4">
+              <div className="text-4xl">✦</div>
+              <div>
+                <p className="text-base font-bold text-indigo-900">Ready to build your campaign themes</p>
+                <p className="text-sm text-indigo-700 mt-1">All fields complete. Click below to generate AI-powered strategic theme cards aligned to your company direction.</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleRunClick}
+                disabled={isSubmitting}
+                className="px-8 py-3 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 shadow-md hover:shadow-lg transition-all"
+              >
+                ✦ Generate Strategic Themes
+              </button>
+            </div>
+          ) : (
+            <div className="max-w-md rounded-lg border border-gray-200 bg-gray-50/80 p-6 text-center text-sm text-gray-500">
+              Complete the required fields above, then click <strong>Generate Strategic Themes</strong> to build campaign pillars aligned with your company direction.
+            </div>
+          )}
         </div>
       )}
       {(hasRun || visibleEngineCards.length > 0) && !isSubmitting && (
@@ -2196,6 +2528,18 @@ Generate strategic campaign pillars to capture this demand.`;
                 flowState={strategicFlowState}
                 cardsWithSignals={workspaceSummaryData.cardsWithSignals}
                 strategyStatusPayload={strategyStatusPayload ?? undefined}
+                longTermCount={recommendationSignals?.longTerm ?? Object.values(recommendationUserStateMap).filter((s) => s === 'LONG_TERM').length}
+                archivedCount={recommendationSignals?.archived ?? Object.values(recommendationUserStateMap).filter((s) => s === 'ARCHIVED').length}
+                onOpenLongTerm={() => {
+                  const next = new URLSearchParams(router.query as Record<string, string>);
+                  next.set('state', 'LONG_TERM');
+                  router.replace(`/recommendations?${next.toString()}`, undefined, { shallow: true });
+                }}
+                onOpenArchived={() => {
+                  const next = new URLSearchParams(router.query as Record<string, string>);
+                  next.set('state', 'ARCHIVED');
+                  router.replace(`/recommendations?${next.toString()}`, undefined, { shallow: true });
+                }}
                 onScrollToCard={(cardId) => {
                   const el = document.querySelector(`[data-card-id="${cardId}"]`);
                   el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -2251,78 +2595,33 @@ Generate strategic campaign pillars to capture this demand.`;
                       setValidationError(null);
                       setCardBuildError((prev) => ({ ...prev, [card.id]: '' }));
                       const recommendation = card.recommendation ?? {};
-
-                      // ── Campaign Assist Panel interception ──────────────
-                      const recTopic =
-                        (typeof recommendation.polished_title === 'string' ? recommendation.polished_title : null) ??
-                        (typeof recommendation.topic === 'string' ? recommendation.topic : '');
-                      const assistCtx = await openAssistPanel(recTopic);
-                      // ────────────────────────────────────────────────────
-                      const title =
-                        (typeof recommendation.polished_title === 'string'
-                          ? recommendation.polished_title
-                          : null) ??
-                        (typeof recommendation.topic === 'string'
-                          ? recommendation.topic
-                          : 'Campaign');
-                      const description =
-                        (typeof recommendation.summary === 'string' && recommendation.summary.trim()
-                          ? recommendation.summary
-                          : null) ??
-                        (typeof recommendation.narrative_direction === 'string' &&
-                        recommendation.narrative_direction.trim()
-                          ? recommendation.narrative_direction
-                          : null) ??
-                        undefined;
-
-                      const contextPayload: Record<string, unknown> = {};
-                      if (Array.isArray(recommendation.formats)) {
-                        contextPayload.formats = recommendation.formats;
-                      }
-                      if (typeof recommendation.estimated_reach === 'number') {
-                        contextPayload.reach_estimate = recommendation.estimated_reach;
-                      } else if (typeof recommendation.volume === 'number') {
-                        contextPayload.reach_estimate = recommendation.volume;
-                      }
-
-                      const regionsFromCard = Array.isArray(recommendation.regions)
-                        ? recommendation.regions
-                            .map((value) => String(value || '').trim().toUpperCase())
-                            .filter(Boolean)
-                        : [];
-                      const sourceOpportunityId =
-                        (typeof recommendation.id === 'string' && recommendation.id.trim()
-                          ? recommendation.id
-                          : null) ??
-                        (typeof recommendation.snapshot_hash === 'string' &&
-                        recommendation.snapshot_hash.trim()
-                          ? recommendation.snapshot_hash
-                          : null) ??
-                        `recommendation:${card.id}`;
                       const sourceStrategicTheme = buildSourceStrategicTheme(recommendation);
                       const recId = typeof recommendation.id === 'string' ? recommendation.id.trim() : '';
-                      try {
-                        let createdCampaignId: string;
-                        if (generatedCampaignId) {
-                          // Save this card to the campaign created at "Generate Strategic Themes".
-                          const executionConfigPayload =
-                            targetAudience &&
-                            contentDepth &&
-                            frequencyPerWeek &&
-                            tentativeStartDate &&
-                            campaignGoal &&
-                            communicationStyle.length > 0
-                              ? {
-                                  target_audience: targetAudience,
-                                professional_segment: professionalSegments[0] ?? null,
-                                professional_segments: professionalSegments,
-                                communication_style: communicationStyle,
-                                content_depth: contentDepth,
-                                frequency_per_week: frequencyPerWeek,
-                                tentative_start: tentativeStartDate.toISOString(),
-                                campaign_goal: campaignGoal,
-                              }
-                              : null;
+
+                      if (generatedCampaignId) {
+                        // ── Save this card to the campaign created at "Generate Strategic Themes" ──
+                        // Open Campaign Assist Panel to collect enrichment context before saving.
+                        const recTopic =
+                          (typeof recommendation.polished_title === 'string' ? recommendation.polished_title : null) ??
+                          (typeof recommendation.topic === 'string' ? recommendation.topic : '');
+                        const assistCtx = await openAssistPanel(recTopic);
+
+                        // contentDepth is not collected in Intelligent Mix flow — don't block the
+                        // payload on it; include it if set, otherwise omit.
+                        const executionConfigPayload = buildAiChatExecutionConfig({
+                          keyMessages:
+                            (typeof recommendation.summary === 'string' && recommendation.summary.trim()
+                              ? recommendation.summary
+                              : null) ??
+                            (typeof recommendation.narrative_direction === 'string' && recommendation.narrative_direction.trim()
+                              ? recommendation.narrative_direction
+                              : null) ??
+                            (typeof recommendation.polished_title === 'string' && recommendation.polished_title.trim()
+                              ? recommendation.polished_title
+                              : null) ??
+                            (typeof recommendation.topic === 'string' ? recommendation.topic : null),
+                        });
+                        try {
                           const putRes = await fetchWithAuth(
                             `/api/campaigns/${encodeURIComponent(generatedCampaignId)}/source-recommendation`,
                             {
@@ -2332,7 +2631,6 @@ Generate strategic campaign pillars to capture this demand.`;
                                 source_recommendation_id: recId || null,
                                 source_strategic_theme: sourceStrategicTheme,
                                 execution_config: executionConfigPayload,
-                                // Campaign Assist context (null when user skipped)
                                 blog_context:    assistCtx.blog_context    ?? null,
                                 insight_context: assistCtx.insight_context ?? null,
                                 topic_context:   assistCtx.topic_context   ?? null,
@@ -2345,36 +2643,100 @@ Generate strategic campaign pillars to capture this demand.`;
                             throw new Error(err?.error || 'Failed to save card to campaign');
                           }
                           setCardBuildError((prev) => ({ ...prev, [card.id]: '' }));
-                          createdCampaignId = generatedCampaignId;
+                          const createdCampaignId = generatedCampaignId;
                           setGeneratedCampaignId(null);
-                        } else {
-                          // No pre-created campaign; navigate to Campaign Planner (canonical creation entry)
-                          const recIdForPlanner = recId || (typeof card.id === 'string' ? card.id : '');
-                          const qs = new URLSearchParams({ companyId });
-                          if (recIdForPlanner) qs.set('recommendationId', recIdForPlanner);
-                          // Persist assist context for campaign-planner to consume
-                          try {
-                            if (assistCtx.blog_context || assistCtx.insight_context || assistCtx.topic_context) {
-                              sessionStorage.setItem('campaign_assist_context', JSON.stringify(assistCtx));
-                            } else {
-                              sessionStorage.removeItem('campaign_assist_context');
+                          if (recId) {
+                            setUsedRecommendationIds((prev) => new Set([...prev, recId]));
+                          }
+                          const qs = new URLSearchParams({ companyId, fromRecommendation: '1' });
+                          if (recId) qs.set('recommendationId', recId);
+                          router.push(`/campaign-details/${createdCampaignId}?${qs.toString()}`);
+                        } catch (error) {
+                          const msg = error instanceof Error ? error.message : 'Failed to save card to campaign';
+                          setCardBuildError((prev) => ({ ...prev, [card.id]: msg }));
+                        }
+                      } else {
+                        // ── No pre-created campaign: create a stub campaign and route to AI chat ──
+                        // Creates a minimal campaign, saves the recommendation context, then
+                        // navigates to campaign-details?fromRecommendation=1 which auto-opens
+                        // CampaignAIChat. The AI chat collects any missing info and generates
+                        // the week plan — staying within the Intelligent Mix flow (not campaign-planner).
+                        try {
+                          const newCampaignId = crypto.randomUUID();
+                          const recTitle =
+                            (typeof recommendation.polished_title === 'string' && recommendation.polished_title.trim()
+                              ? recommendation.polished_title
+                              : null) ??
+                            (typeof recommendation.topic === 'string' && recommendation.topic.trim()
+                              ? recommendation.topic
+                              : 'Exploration Campaign');
+                          const recDescription =
+                            (typeof recommendation.summary === 'string' && recommendation.summary.trim()
+                              ? recommendation.summary
+                              : null) ??
+                            (typeof recommendation.narrative_direction === 'string' && recommendation.narrative_direction.trim()
+                              ? recommendation.narrative_direction
+                              : null) ??
+                            undefined;
+
+                          const createRes = await fetchWithAuth('/api/campaigns', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              id: newCampaignId,
+                              companyId,
+                              name: recTitle,
+                              description: recDescription,
+                              status: 'planning',
+                              current_stage: 'planning',
+                              build_mode: 'no_context',
+                            }),
+                          });
+                          if (!createRes.ok) throw new Error('Failed to create campaign');
+                          const createData = await createRes.json().catch(() => ({}));
+                          const stubCampaignId = createData?.campaign?.id ?? newCampaignId;
+
+                          // Save recommendation context (execution config optional — AI chat collects what's missing)
+                          // When isExecutionFormComplete, also map to GATHER_ORDER-keyed fields so AI chat
+                          // can skip questions already answered and go straight to week plan generation.
+                          const executionConfigPayload = buildAiChatExecutionConfig({
+                            keyMessages:
+                              typeof recDescription === 'string' && recDescription.trim()
+                                ? recDescription
+                                : typeof recTitle === 'string'
+                                  ? recTitle
+                                  : null,
+                          });
+                          await fetchWithAuth(
+                            `/api/campaigns/${encodeURIComponent(stubCampaignId)}/source-recommendation`,
+                            {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                source_recommendation_id: recId || null,
+                                source_strategic_theme: sourceStrategicTheme,
+                                execution_config: executionConfigPayload,
+                                blog_context: null,
+                                insight_context: null,
+                                topic_context: null,
+                                ai_assist: true,
+                              }),
                             }
-                          } catch {}
-                          router.push(`/campaign-planner?${qs.toString()}`);
-                          return;
+                          ).catch(() => { /* non-fatal — AI chat will still open */ });
+
+                          if (recId) {
+                            setUsedRecommendationIds((prev) => new Set([...prev, recId]));
+                          }
+                          // fromRecommendation=1 triggers CampaignAIChat to auto-open on campaign-details.
+                          // allPlanningReady=1 tells AI chat to skip Q&A and go directly to week plan generation.
+                          const qs = new URLSearchParams({ companyId, fromRecommendation: '1' });
+                          if (recId) qs.set('recommendationId', recId);
+                          if (isExecutionFormComplete) qs.set('allPlanningReady', '1');
+                          router.push(`/campaign-details/${stubCampaignId}?${qs.toString()}`);
+                        } catch (error) {
+                          const msg = error instanceof Error ? error.message : 'Failed to start exploration';
+                          setCardBuildError((prev) => ({ ...prev, [card.id]: msg }));
                         }
-                        if (recId) {
-                          setUsedRecommendationIds((prev) => new Set([...prev, recId]));
-                        }
-                        const qs = new URLSearchParams({
-                          companyId,
-                          fromRecommendation: '1',
-                        });
-                        if (recId) qs.set('recommendationId', recId);
-                        router.push(`/campaign-details/${createdCampaignId}?${qs.toString()}`);
-                      } catch (error) {
-                        const msg = error instanceof Error ? error.message : 'Failed to save card to campaign';
-                        setCardBuildError((prev) => ({ ...prev, [card.id]: msg }));
                       }
                     }}
                     onBuildCampaignFast={async (options) => {
@@ -2595,6 +2957,7 @@ Generate strategic campaign pillars to capture this demand.`;
                         ? async () => {
                             const recId = (card.recommendation?.id as string).trim();
                             setRecommendationUserStateMap((prev) => ({ ...prev, [recId]: 'LONG_TERM' }));
+                            setRecommendationSignals((prev) => prev ? ({ ...prev, longTerm: prev.longTerm + 1 }) : prev);
                             try {
                               const res = await fetchWithAuth!(`/api/recommendations/${encodeURIComponent(recId)}/long-term`, { method: 'POST' });
                               if (!res.ok) throw new Error('Failed to mark long-term');
@@ -2604,6 +2967,7 @@ Generate strategic campaign pillars to capture this demand.`;
                                 delete next[recId];
                                 return next;
                               });
+                              setRecommendationSignals((prev) => prev ? ({ ...prev, longTerm: Math.max(0, prev.longTerm - 1) }) : prev);
                             }
                           }
                         : undefined
@@ -2616,6 +2980,7 @@ Generate strategic campaign pillars to capture this demand.`;
                         ? async () => {
                             const recId = (card.recommendation?.id as string).trim();
                             setRecommendationUserStateMap((prev) => ({ ...prev, [recId]: 'ARCHIVED' }));
+                            setRecommendationSignals((prev) => prev ? ({ ...prev, archived: prev.archived + 1 }) : prev);
                             try {
                               const res = await fetchWithAuth!(`/api/recommendations/${encodeURIComponent(recId)}/archive`, { method: 'POST' });
                               if (!res.ok) throw new Error('Failed to archive');
@@ -2625,10 +2990,12 @@ Generate strategic campaign pillars to capture this demand.`;
                                 delete next[recId];
                                 return next;
                               });
+                              setRecommendationSignals((prev) => prev ? ({ ...prev, archived: Math.max(0, prev.archived - 1) }) : prev);
                             }
                           }
                         : undefined
                     }
+                    durationWeeksOverride={intelligentMixContext?.duration ?? null}
                     boltTextPreset={boltTextPreset}
                   />
                   </div>
@@ -2636,7 +3003,77 @@ Generate strategic campaign pillars to capture this demand.`;
                 })
               : null}
           </div>
-          {visibleEngineCards.length === 0 && (
+          {highlightedState === 'LONG_TERM' && (
+            <div className="mt-8 rounded-xl border border-amber-200 bg-amber-50/50 p-5">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div>
+                  <h4 className="text-base font-semibold text-amber-900">Strategic Backlog</h4>
+                  <p className="text-sm text-amber-800">Ideas parked for later selection are kept here and removed from the active theme list.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = new URLSearchParams(router.query as Record<string, string>);
+                    next.delete('state');
+                    router.replace(`/recommendations?${next.toString()}`, undefined, { shallow: true });
+                  }}
+                  className="text-sm font-medium text-amber-700 hover:text-amber-900 underline"
+                >
+                  Back to active themes
+                </button>
+              </div>
+              {longTermEngineCards.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {longTermEngineCards.map(({ id, recommendation }) => (
+                    <RecommendationBlueprintCard
+                      key={`long-term-${id}`}
+                      recommendation={recommendation}
+                      viewMode={viewMode}
+                      durationWeeksOverride={intelligentMixContext?.duration ?? null}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-amber-800">No long-term ideas are parked right now.</div>
+              )}
+            </div>
+          )}
+          {highlightedState === 'ARCHIVED' && (
+            <div className="mt-8 rounded-xl border border-slate-200 bg-slate-50 p-5">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div>
+                  <h4 className="text-base font-semibold text-slate-900">Archived Ideas</h4>
+                  <p className="text-sm text-slate-700">Archived cards are hidden from the active recommendation list and stored here for reference.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = new URLSearchParams(router.query as Record<string, string>);
+                    next.delete('state');
+                    router.replace(`/recommendations?${next.toString()}`, undefined, { shallow: true });
+                  }}
+                  className="text-sm font-medium text-slate-700 hover:text-slate-900 underline"
+                >
+                  Back to active themes
+                </button>
+              </div>
+              {archivedEngineCards.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {archivedEngineCards.map(({ id, recommendation }) => (
+                    <RecommendationBlueprintCard
+                      key={`archived-${id}`}
+                      recommendation={recommendation}
+                      viewMode={viewMode}
+                      durationWeeksOverride={intelligentMixContext?.duration ?? null}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-600">No archived ideas found for this recommendation set yet.</div>
+              )}
+            </div>
+          )}
+          {visibleEngineCards.length === 0 && highlightedState == null && (
             <div className="text-sm text-gray-500 py-6 text-center">
               No enriched recommendation cards available yet. Run the engine to load blueprint-ready cards.
             </div>

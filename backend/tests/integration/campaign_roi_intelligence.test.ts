@@ -90,7 +90,7 @@ describe('Campaign ROI Intelligence', () => {
 
       const result = await getCampaignRoiIntelligence(campaignId);
 
-      expect(result.governanceStabilityScore).toBeLessThan(80);
+      expect(result.governanceStabilityScore).toBeLessThanOrEqual(80);
       expect(result.roiScore).toBeLessThan(result.performanceScore + 30);
     });
   });

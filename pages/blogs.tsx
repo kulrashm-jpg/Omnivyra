@@ -318,12 +318,6 @@ export default function BlogsPage() {
   const [addPostId, setAddPostId] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
-  // Creator content generation from blog cards
-  const [isCreatorModalOpen, setIsCreatorModalOpen] = useState(false);
-  const [selectedCreatorType, setSelectedCreatorType] = useState<'video_script' | 'carousel' | 'story' | null>(null);
-  const [selectedGapForCreator, setSelectedGapForCreator] = useState<typeof gaps[0] | null>(null);
-  const [creatorContentGenerating, setCreatorContentGenerating] = useState(false);
-
   // Relationships
   const [relSource, setRelSource] = useState('');
   const [relTarget, setRelTarget] = useState('');
@@ -614,7 +608,7 @@ export default function BlogsPage() {
       // Continue without storage token if browser blocks it
     }
     void router.push({
-      pathname: '/blogs/generate',
+      pathname: '/blogs/create',
       query: {
         prefill_source: 'company_admin_ai_card_creation',
         prefill_topic: card.topic,
@@ -1148,17 +1142,6 @@ export default function BlogsPage() {
                             <Globe className="h-3.5 w-3.5" /> Publish
                           </button>
                         )}
-                        {blog.status === 'published' && (
-                          <a
-                            href={`/company-blog/${blog.slug ?? blog.id}?company_id=${selectedCompanyId}#repurpose`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
-                            title="Repurpose into LinkedIn, Twitter & Email"
-                          >
-                            <Zap className="h-3.5 w-3.5" /> Campaign
-                          </a>
-                        )}
                         <button onClick={() => setDeleteConfirm({ id: blog.id, title: blog.title })} className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -1275,7 +1258,7 @@ export default function BlogsPage() {
                               // ignore storage error
                             }
                             router.push({
-                              pathname: '/blogs/generate',
+                              pathname: '/blogs/create',
                               query: {
                                 prefill_topic: gap.topic,
                                 prefill_reason: gap.reason,
@@ -1285,35 +1268,6 @@ export default function BlogsPage() {
                           }} className="inline-flex items-center gap-1 text-xs font-semibold text-[#0B5ED7] hover:underline">
                             Write this <ArrowRight className="h-3 w-3" />
                           </Link>
-                          <button
-                            onClick={() => {
-                              setSelectedGapForCreator(gap as any);
-                              setIsCreatorModalOpen(true);
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-semibold text-purple-600 hover:underline"
-                          >
-                            <Sparkles className="h-3 w-3" /> Launch Creator Content
-                          </button>
-                          <button
-                            onClick={() => {
-                              const campaignContext = {
-                                topic: gap.topic,
-                                reason: gap.reason,
-                                relatedTopics: gap.relatedTo || [],
-                                contentFormats: ['article', 'blog', 'post'],
-                                goals: ['Thought Leadership', 'Authority Building'],
-                                brief: (gap as any).brief,
-                                timestamp: new Date().toISOString(),
-                              };
-                              try {
-                                sessionStorage.setItem('campaign-launch-context', JSON.stringify(campaignContext));
-                              } catch {}
-                              void router.push('/campaigns/create?source=blog-intelligence');
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-semibold text-amber-600 hover:underline"
-                          >
-                            <Zap className="h-3 w-3" /> Create Campaign
-                          </button>
                         </div>
                       </div>
                     ))}
@@ -2125,112 +2079,6 @@ export default function BlogsPage() {
             companyName={companyProfile?.name || ''}
             companyContext={companyProfile?.brand_voice || ''}
           />
-        )}
-
-        {/* ── CREATOR CONTENT TYPE SELECTOR MODAL ───────────────────────────────── */}
-        {isCreatorModalOpen && selectedGapForCreator && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
-              <h2 className="text-lg font-bold text-gray-900 mb-2">Create Creator Content</h2>
-              <p className="text-sm text-gray-600 mb-5">
-                Choose content type for: <strong>{selectedGapForCreator.topic}</strong>
-              </p>
-
-              <div className="space-y-3 mb-6">
-                {(['video_script', 'carousel', 'story'] as const).map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setSelectedCreatorType(type)}
-                    className={`w-full text-left px-4 py-3 rounded-lg border-2 transition-colors ${
-                      selectedCreatorType === type
-                        ? 'border-purple-500 bg-purple-50'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <p className="font-semibold text-gray-900">
-                      {type === 'video_script'
-                        ? '🎥 Video Script'
-                        : type === 'carousel'
-                          ? '📸 Carousel'
-                          : '📱 Story'}
-                    </p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {type === 'video_script'
-                        ? 'TikTok, Reels, YouTube Shorts'
-                        : type === 'carousel'
-                          ? 'Instagram, Pinterest, LinkedIn'
-                          : 'Instagram Stories, TikTok'}
-                    </p>
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex flex-col-reverse sm:flex-row justify-end gap-2">
-                <button
-                  onClick={() => {
-                    setIsCreatorModalOpen(false);
-                    setSelectedCreatorType(null);
-                    setSelectedGapForCreator(null);
-                  }}
-                  className="px-4 py-2 text-sm font-semibold text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={async () => {
-                    if (!selectedCreatorType || !selectedGapForCreator) return;
-
-                    setCreatorContentGenerating(true);
-                    try {
-                      const res = await fetch('/api/content/creator/generate', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          company_id: selectedCompanyId,
-                          content_type: selectedCreatorType,
-                          topic: selectedGapForCreator.topic,
-                          gap_reason: selectedGapForCreator.reason,
-                          content_theme: 'educational',
-                        }),
-                      });
-
-                      if (!res.ok) {
-                        const error = await res.json();
-                        alert(`Error: ${error.error}`);
-                        return;
-                      }
-
-                      const result = await res.json();
-                      // Store context for refinement page
-                      try {
-                        sessionStorage.setItem('creator-content-poll', JSON.stringify({
-                          jobId: result.jobId,
-                          contentType: selectedCreatorType,
-                          topic: selectedGapForCreator.topic,
-                          targetPlatforms: result.targetPlatforms,
-                        }));
-                      } catch {}
-
-                      // Redirect to polling/refinement page
-                      void router.push(`/api/content/generation-status/${result.jobId}`);
-                    } catch (err) {
-                      console.error('Creator content generation error:', err);
-                      alert('Failed to generate creator content');
-                    } finally {
-                      setCreatorContentGenerating(false);
-                      setIsCreatorModalOpen(false);
-                      setSelectedCreatorType(null);
-                      setSelectedGapForCreator(null);
-                    }
-                  }}
-                  disabled={!selectedCreatorType || creatorContentGenerating}
-                  className="px-4 py-2 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
-                >
-                  {creatorContentGenerating ? 'Generating...' : 'Generate'}
-                </button>
-              </div>
-            </div>
-          </div>
         )}
       </div>
 

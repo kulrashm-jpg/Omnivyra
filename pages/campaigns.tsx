@@ -35,7 +35,11 @@ export default function CampaignsList() {
   const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
   const filteredCampaigns = stageFilter === 'all'
     ? campaigns
-    : campaigns.filter((c) => (c.current_stage || c.status) === stageFilter);
+    : campaigns.filter((c) => {
+        const stage = c.current_stage || c.status;
+        if (stageFilter === 'week_plan') return stage === 'week_plan' || stage === 'twelve_week_plan';
+        return stage === stageFilter;
+      });
 
   const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
 
@@ -154,7 +158,8 @@ export default function CampaignsList() {
 
   const stageColors: Record<string, string> = {
     planning: 'bg-blue-50 text-blue-700 border border-blue-200',
-    twelve_week_plan: 'bg-indigo-50 text-indigo-700 border border-indigo-200',
+    week_plan: 'bg-indigo-50 text-indigo-700 border border-indigo-200',
+    twelve_week_plan: 'bg-indigo-50 text-indigo-700 border border-indigo-200', // legacy
     daily_plan: 'bg-amber-50 text-amber-700 border border-amber-200',
     charting: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
     schedule: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
@@ -230,7 +235,7 @@ export default function CampaignsList() {
           {[
             { id: 'all', label: 'All' },
             { id: 'planning', label: 'Planning' },
-            { id: 'twelve_week_plan', label: 'Week Plan' },
+            { id: 'week_plan', label: 'Week Plan' },
             { id: 'daily_plan', label: 'Daily Plan' },
             { id: 'schedule', label: 'Schedule' },
           ].map((s) => (

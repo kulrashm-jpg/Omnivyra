@@ -2,7 +2,10 @@
  * Command Center → Create Content Sub-page
  *
  * Shown when user clicks the "Create Content" card on the Command Center.
- * Presents 4 content format cards: Blog, Story, Whitepaper, Post.
+ * Presents 6 content format cards in a 2×3 grid:
+ *   Row 1: Post, Blog, Story
+ *   Row 2: Article, Whitepaper, Case Study
+ *   Row 3: Thread, Guide, Newsletter
  */
 
 import React from 'react';
@@ -26,6 +29,26 @@ interface ContentCard {
 }
 
 const CONTENT_CARDS: ContentCard[] = [
+  // ── Row 1: Post, Blog, Story ──────────────────────────────────────────────
+  {
+    id: 'post',
+    icon: '📱',
+    badge: '1–5 Credits',
+    badgeColor: 'bg-green-100 text-green-800',
+    title: 'Post',
+    description: 'Compose high-impact social media posts and multi-post threads for LinkedIn, Twitter/X, and more.',
+    bullets: [
+      'Platform-specific tone and formatting',
+      'Thread / series creation support',
+      'Hashtag and engagement optimization',
+    ],
+    cta: 'Create Post',
+    route: '/content-studio/post',
+    accentFrom: 'from-green-50',
+    accentTo: 'to-teal-50',
+    borderColor: 'border-green-200',
+    ctaColor: 'bg-green-600 hover:bg-green-700',
+  },
   {
     id: 'blog',
     icon: '✍️',
@@ -39,7 +62,7 @@ const CONTENT_CARDS: ContentCard[] = [
       'Publish directly to your company blog',
     ],
     cta: 'Create Blog',
-    route: '/blogs',
+    route: '/blogs/create',
     accentFrom: 'from-purple-50',
     accentTo: 'to-indigo-50',
     borderColor: 'border-purple-200',
@@ -58,11 +81,31 @@ const CONTENT_CARDS: ContentCard[] = [
       'Multi-platform story adaptation',
     ],
     cta: 'Create Story',
-    route: '/content-studio/story',
+    route: '/stories/create',
     accentFrom: 'from-pink-50',
     accentTo: 'to-rose-50',
     borderColor: 'border-pink-200',
     ctaColor: 'bg-pink-600 hover:bg-pink-700',
+  },
+  // ── Row 2: Article, Whitepaper, Case Study ────────────────────────────────
+  {
+    id: 'article',
+    icon: '📰',
+    badge: '5–15 Credits',
+    badgeColor: 'bg-orange-100 text-orange-800',
+    title: 'Article',
+    description: 'Create in-depth journalistic articles with balanced perspectives, research, and citations.',
+    bullets: [
+      'Journalistic quality and balanced viewpoints',
+      'Research-depth with real citations',
+      'Publish or syndicate across channels',
+    ],
+    cta: 'Create Article',
+    route: '/articles/create',
+    accentFrom: 'from-orange-50',
+    accentTo: 'to-amber-50',
+    borderColor: 'border-orange-200',
+    ctaColor: 'bg-orange-600 hover:bg-orange-700',
   },
   {
     id: 'whitepaper',
@@ -77,30 +120,88 @@ const CONTENT_CARDS: ContentCard[] = [
       'Gated download lead generation ready',
     ],
     cta: 'Create Whitepaper',
-    route: '/content-studio/whitepaper',
+    route: '/whitepapers/create',
     accentFrom: 'from-blue-50',
     accentTo: 'to-cyan-50',
     borderColor: 'border-blue-200',
     ctaColor: 'bg-blue-600 hover:bg-blue-700',
   },
   {
-    id: 'post',
-    icon: '📱',
-    badge: '1–5 Credits',
-    badgeColor: 'bg-green-100 text-green-800',
-    title: 'Post',
-    description: 'Compose high-impact social media posts for LinkedIn, Instagram, Twitter, and more — instantly.',
+    id: 'case-study',
+    icon: '🏆',
+    badge: '10–25 Credits',
+    badgeColor: 'bg-teal-100 text-teal-800',
+    title: 'Case Study',
+    description: 'Tell your success stories. AI guides you through structured data collection via voice or text chat.',
     bullets: [
-      'Platform-specific tone and formatting',
-      'Hashtag and engagement optimization',
-      'Schedule and publish in one click',
+      'Voice + text AI chat collects your data',
+      'Structured: challenge, solution, results',
+      'Ready-to-publish customer success story',
     ],
-    cta: 'Create Post',
-    route: '/content-studio/post',
-    accentFrom: 'from-green-50',
-    accentTo: 'to-teal-50',
-    borderColor: 'border-green-200',
-    ctaColor: 'bg-green-600 hover:bg-green-700',
+    cta: 'Create Case Study',
+    route: '/case-studies/new',
+    accentFrom: 'from-teal-50',
+    accentTo: 'to-emerald-50',
+    borderColor: 'border-teal-200',
+    ctaColor: 'bg-teal-600 hover:bg-teal-700',
+  },
+  // ── Row 3: Thread, Guide, Newsletter ──────────────────────────────────────
+  {
+    id: 'thread',
+    icon: '🧵',
+    badge: '2–5 Credits',
+    badgeColor: 'bg-emerald-100 text-emerald-800',
+    title: 'Thread',
+    description: 'Create structured multi-post threads for LinkedIn and Twitter/X — hook, build, and close.',
+    bullets: [
+      '5–10 connected posts per thread',
+      'Hook → Build → CTA structure',
+      'Copy as numbered thread for any platform',
+    ],
+    cta: 'Create Thread',
+    route: '/content-studio/post?postFormat=thread',
+    accentFrom: 'from-emerald-50',
+    accentTo: 'to-green-50',
+    borderColor: 'border-emerald-200',
+    ctaColor: 'bg-emerald-600 hover:bg-emerald-700',
+  },
+  {
+    id: 'guide',
+    icon: '📚',
+    badge: '15–30 Credits',
+    badgeColor: 'bg-violet-100 text-violet-800',
+    title: 'Guide',
+    description: 'Build comprehensive, evergreen pillar content — 3000+ words of deep, authoritative expertise.',
+    bullets: [
+      'Pillar content for SEO authority',
+      '5–10 deep sections with sub-headings',
+      'Evergreen resource that compounds over time',
+    ],
+    cta: 'Create Guide',
+    route: '/guides/create',
+    accentFrom: 'from-violet-50',
+    accentTo: 'to-purple-50',
+    borderColor: 'border-violet-200',
+    ctaColor: 'bg-violet-600 hover:bg-violet-700',
+  },
+  {
+    id: 'newsletter',
+    icon: '📧',
+    badge: '3–10 Credits',
+    badgeColor: 'bg-amber-100 text-amber-800',
+    title: 'Newsletter',
+    description: 'Draft engaging newsletters that nurture your audience and drive consistent readership.',
+    bullets: [
+      'Audience-tuned tone and structure',
+      'Curated insights with original commentary',
+      'Ready for email platform or CMS',
+    ],
+    cta: 'Create Newsletter',
+    route: '/newsletters/create',
+    accentFrom: 'from-amber-50',
+    accentTo: 'to-yellow-50',
+    borderColor: 'border-amber-200',
+    ctaColor: 'bg-amber-600 hover:bg-amber-700',
   },
 ];
 
@@ -149,8 +250,8 @@ export default function CreateContentSubPage() {
           </p>
         </div>
 
-        {/* Cards — 2×2 responsive grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+        {/* Cards — 2×3 responsive grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {CONTENT_CARDS.map((card) => (
             <div
               key={card.id}

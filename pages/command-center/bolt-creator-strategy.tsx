@@ -12,6 +12,7 @@ import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';
+import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
 
 type CreatorContentFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
@@ -357,6 +358,8 @@ export default function BoltCreatorStrategyPage() {
   const [confirmingCard, setConfirmingCard] = useState<BoltStrategyCard | null>(null);
 
   const cardsRef = useRef<HTMLDivElement>(null);
+  const sourceContentToken = typeof router.query.sourceContentToken === 'string' ? router.query.sourceContentToken : null;
+  const sourcePayload = readCampaignSourcePayload(sourceContentToken);
 
   // Restore from sessionStorage
   useEffect(() => {
@@ -381,6 +384,12 @@ export default function BoltCreatorStrategyPage() {
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!sourcePayload) return;
+    setTopic((prev) => prev.trim() ? prev : sourcePayload.suggestedTopic);
+    setGoals((prev) => (prev.length > 0 ? prev : ['Brand Awareness']));
+  }, [sourcePayload]);
 
   // Persist to sessionStorage
   useEffect(() => {
@@ -661,6 +670,15 @@ export default function BoltCreatorStrategyPage() {
         </div>
 
         {/* ── Top two-column: Form | Suggestions + Chat ── */}
+        {sourcePayload && (
+          <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">Source Content Loaded</p>
+            <p className="mt-1 text-sm font-semibold text-gray-900">{sourcePayload.title}</p>
+            <p className="mt-1 text-xs text-gray-600">
+              We prefilled the campaign topic from this {sourcePayload.contentType}. You can now adapt it for creator-led execution.
+            </p>
+          </div>
+        )}
         <div className="flex gap-5 items-start">
 
           {/* LEFT: Form */}

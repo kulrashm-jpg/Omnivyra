@@ -3,7 +3,7 @@ import type { AppProps } from 'next/app';
 import Head from 'next/head';
 import { CompanyProvider } from '../components/CompanyContext';
 import { useRouter } from 'next/router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
 import { TourProvider } from '../components/tour/TourContext';
@@ -15,6 +15,72 @@ import { TourProvider } from '../components/tour/TourContext';
 // long complete.
 
 const LANDING_PUBLIC_ROUTES = ['/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
+
+const RouteProgressBar: React.FC = () => {
+  const router = useRouter();
+  const [visible, setVisible] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let progressTimer: ReturnType<typeof setInterval> | null = null;
+    let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearTimers = () => {
+      if (progressTimer) clearInterval(progressTimer);
+      if (hideTimer) clearTimeout(hideTimer);
+      progressTimer = null;
+      hideTimer = null;
+    };
+
+    const start = () => {
+      clearTimers();
+      setVisible(true);
+      setProgress(16);
+
+      progressTimer = setInterval(() => {
+        setProgress((prev) => {
+          if (prev >= 88) return prev;
+          const step = prev < 40 ? 10 : prev < 70 ? 6 : 3;
+          return Math.min(88, prev + step);
+        });
+      }, 180);
+    };
+
+    const finish = () => {
+      clearTimers();
+      setProgress(100);
+      hideTimer = setTimeout(() => {
+        setVisible(false);
+        setProgress(0);
+      }, 220);
+    };
+
+    router.events.on('routeChangeStart', start);
+    router.events.on('routeChangeComplete', finish);
+    router.events.on('routeChangeError', finish);
+
+    return () => {
+      clearTimers();
+      router.events.off('routeChangeStart', start);
+      router.events.off('routeChangeComplete', finish);
+      router.events.off('routeChangeError', finish);
+    };
+  }, [router.events]);
+
+  return (
+    <div
+      aria-hidden="true"
+      className={`pointer-events-none fixed left-0 right-0 top-0 z-[100] transition-opacity duration-200 ${
+        visible ? 'opacity-100' : 'opacity-0'
+      }`}
+    >
+      <div
+        className="h-1 bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-400 shadow-[0_0_18px_rgba(14,165,233,0.35)] transition-[width] duration-200 ease-out"
+        style={{ width: `${progress}%` }}
+      />
+    </div>
+  );
+};
 
 const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
@@ -83,6 +149,7 @@ function MyApp({ Component, pageProps }: AppProps) {
         <Head>
           <link rel="icon" href="/favicon.jpg" />
         </Head>
+        <RouteProgressBar />
         <AuthGate>
           <Component {...pageProps} />
         </AuthGate>

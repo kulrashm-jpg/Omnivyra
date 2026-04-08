@@ -26,6 +26,8 @@ export type OpportunityTabProps = {
   campaignId?: string | null;
   /** When set, the Assist Panel opens automatically with this blog pre-selected (from blog → campaign flow). */
   initialBlogId?: string | null;
+  /** When arriving from Intelligent Mix setup page: pre-fills execution config fields so they are not shown as duplicates. */
+  intelligentMixContext?: import('@/pages/command-center/intelligent-mix-strategy').IntelligentMixState | null;
 };
 
 /**

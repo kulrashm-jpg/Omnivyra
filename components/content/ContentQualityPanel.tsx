@@ -1,0 +1,236 @@
+'use client';
+
+import React, { useMemo } from 'react';
+import { Loader2, TrendingUp, Zap } from 'lucide-react';
+import type { ContentBlock } from '../../lib/content/blockTypes';
+import {
+  calculateContentQualityScore,
+  getContentPublishBlockers,
+  type ContentFormMeta,
+} from '../../lib/content/qualityScoringCore';
+import {
+  calculateNewsletterQualityScore,
+  getNewsletterPublishBlockers,
+} from '../../lib/newsletter/newsletterValidation';
+
+export type ImproveArea = 'structure' | 'depth' | 'geo' | 'linking' | 'seo';
+
+interface ContentQualityPanelProps {
+  blocks: ContentBlock[];
+  formState: ContentFormMeta;
+  onImprove: (area: ImproveArea) => void;
+  onAutoImprove: (area: ImproveArea) => Promise<void>;
+  improvingArea: ImproveArea | null;
+  onCreateCampaign?: () => void;
+}
+
+type ScoreConfig = {
+  total: number;
+  structure: number;
+  depth: number;
+  seo: number;
+  geo: number;
+  linking: number;
+};
+
+const DEFAULT_SCORE_CONFIG: ScoreConfig = {
+  total: 100,
+  structure: 25,
+  depth: 25,
+  seo: 25,
+  geo: 15,
+  linking: 10,
+};
+
+const NEWSLETTER_SCORE_CONFIG: ScoreConfig = {
+  total: 90,
+  structure: 25,
+  depth: 20,
+  seo: 15,
+  geo: 20,
+  linking: 10,
+};
+
+const AREA_LABELS: Record<ImproveArea, string> = {
+  structure: 'Structure',
+  depth: 'Depth',
+  seo: 'SEO',
+  geo: 'GEO',
+  linking: 'Linking',
+};
+
+function getScoreConfig(contentType?: string): ScoreConfig {
+  return contentType === 'newsletter' ? NEWSLETTER_SCORE_CONFIG : DEFAULT_SCORE_CONFIG;
+}
+
+function scoreColor(pct: number): string {
+  if (pct >= 80) return 'text-emerald-600';
+  if (pct >= 50) return 'text-amber-600';
+  return 'text-red-500';
+}
+
+function barColor(pct: number): string {
+  if (pct >= 80) return 'bg-emerald-500';
+  if (pct >= 50) return 'bg-amber-400';
+  return 'bg-red-400';
+}
+
+function scoreLabel(totalPct: number): string {
+  if (totalPct >= 85) return 'Excellent';
+  if (totalPct >= 70) return 'Good';
+  if (totalPct >= 50) return 'Needs Work';
+  return 'Incomplete';
+}
+
+export function ContentQualityPanel({
+  blocks,
+  formState,
+  onImprove,
+  onAutoImprove,
+  improvingArea,
+  onCreateCampaign,
+}: ContentQualityPanelProps) {
+  const scoreConfig = getScoreConfig(formState.content_type);
+
+  const score = useMemo(() => {
+    if (formState.content_type === 'newsletter') {
+      return calculateNewsletterQualityScore(blocks, formState);
+    }
+    return calculateContentQualityScore(blocks, formState);
+  }, [
+    blocks,
+    formState,
+  ]);
+
+  const totalPct = Math.round((score.total / scoreConfig.total) * 100);
+  const areas: ImproveArea[] = ['structure', 'depth', 'seo', 'geo', 'linking'];
+
+  const publishBlockers = formState.content_type === 'newsletter'
+    ? getNewsletterPublishBlockers(score)
+    : getContentPublishBlockers(score);
+
+  const errorIssues = score.issues.filter((issue) => issue.severity === 'error');
+  const warnIssues = score.issues.filter((issue) => issue.severity === 'warning');
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white text-sm shadow-sm">
+      <div className="border-b border-gray-100 px-4 pb-3 pt-4">
+        <div className="mb-1 flex items-center justify-between">
+          <span className="font-semibold text-gray-800">Quality Score</span>
+          <span className={`text-xl font-bold tabular-nums ${scoreColor(totalPct)}`}>
+            {score.total}/{scoreConfig.total}
+          </span>
+        </div>
+        <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${barColor(totalPct)}`}
+            style={{ width: `${totalPct}%` }}
+          />
+        </div>
+        <p className={`mt-1 text-xs font-medium ${scoreColor(totalPct)}`}>{scoreLabel(totalPct)}</p>
+      </div>
+
+      <div className="space-y-2.5 px-4 py-3">
+        {areas.map((area) => {
+          const raw = score.breakdown[area];
+          const max = scoreConfig[area];
+          const pct = max > 0 ? Math.round((raw / max) * 100) : 0;
+          const isImproving = improvingArea === area;
+
+          return (
+            <div key={area}>
+              <div className="mb-0.5 flex items-center justify-between">
+                <span className="capitalize text-gray-600">{AREA_LABELS[area]}</span>
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-xs font-semibold tabular-nums ${scoreColor(pct)}`}>
+                    {raw}/{max}
+                  </span>
+                  <button
+                    type="button"
+                    title={`Auto-improve ${AREA_LABELS[area]}`}
+                    disabled={!!improvingArea}
+                    onClick={() => onAutoImprove(area)}
+                    className="flex h-5 w-5 items-center justify-center rounded text-gray-400 transition-colors hover:bg-amber-50 hover:text-amber-600 disabled:opacity-40"
+                  >
+                    {isImproving ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Zap className="h-3 w-3" />
+                    )}
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onImprove(area)}
+                className="block w-full text-left"
+                title={`Jump to ${AREA_LABELS[area]}`}
+              >
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 ${barColor(pct)}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {score.issues.length > 0 && (
+        <div className="space-y-1 border-t border-gray-100 px-4 pb-3 pt-3">
+          {errorIssues.map((issue, index) => (
+            <div key={`error-${index}`} className="flex gap-1.5 text-xs text-red-700">
+              <span className="mt-px shrink-0">x</span>
+              <span>{issue.message}</span>
+            </div>
+          ))}
+          {warnIssues.slice(0, 3).map((issue, index) => (
+            <div key={`warn-${index}`} className="flex gap-1.5 text-xs text-amber-700">
+              <span className="mt-px shrink-0">!</span>
+              <span>{issue.message}</span>
+            </div>
+          ))}
+          {warnIssues.length > 3 && (
+            <p className="text-xs text-gray-400">+{warnIssues.length - 3} more suggestions</p>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-gray-100 px-4 pb-3 pt-3 text-xs text-gray-500">
+        <span>Words: <strong className="text-gray-700">{score.meta.wordCount}</strong></span>
+        <span>Target: <strong className="text-gray-700">{score.meta.targetWordCount}</strong></span>
+        <span>H2s: <strong className="text-gray-700">{score.meta.h2Count}</strong></span>
+        <span>Refs: <strong className="text-gray-700">{score.meta.refsCount}</strong></span>
+      </div>
+
+      {publishBlockers.length > 0 && (
+        <div className="border-t border-gray-100 px-4 pb-3 pt-3">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Publish blockers</p>
+          <div className="space-y-1">
+            {publishBlockers.slice(0, 3).map((issue, index) => (
+              <div key={`blocker-${index}`} className="flex gap-1.5 text-xs text-red-700">
+                <span className="mt-px shrink-0">x</span>
+                <span>{issue.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {onCreateCampaign && (
+        <div className="border-t border-gray-100 px-4 pb-4 pt-3">
+          <button
+            type="button"
+            onClick={onCreateCampaign}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+          >
+            <TrendingUp className="h-3.5 w-3.5" />
+            Create Campaign
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

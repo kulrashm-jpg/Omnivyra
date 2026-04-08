@@ -46,6 +46,9 @@ interface Props {
   existingTopics?: string[];
   writingStyleGuide?: string;
   onCardCreated?: (card: BlogCardPreview) => void;
+  contentLabel?: string;
+  contentType?: 'blog' | 'newsletter';
+  contentModeLabel?: string;
 }
 
 const INTENT_OPTIONS = [
@@ -66,12 +69,15 @@ export default function AIBlogCardModal({
   existingTopics = [],
   writingStyleGuide = '',
   onCardCreated,
+  contentLabel = 'blog',
+  contentType = 'blog',
+  contentModeLabel,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 1,
       type: 'ai',
-      message: `Hi! I'm here to help you create an amazing blog card for ${companyName}. What topic or problem would you like to write about?`,
+      message: `Hi! I'm here to help you create an amazing ${contentLabel} card for ${companyName}. What topic or problem would you like to write about?`,
       timestamp: new Date().toLocaleTimeString(),
     },
   ]);
@@ -126,12 +132,15 @@ export default function AIBlogCardModal({
         body: JSON.stringify({
           message: input,
           companyId,
+          contentType,
           conversation: conversationHistory,
           metadata: {
             companyName,
             companyContext,
             existingTopics,
             currentPhase: conversationPhase,
+            contentLabel,
+            contentModeLabel,
           },
         }),
       });
@@ -168,13 +177,13 @@ export default function AIBlogCardModal({
         const previewMessage: ChatMessage = {
           id: Date.now() + 1,
           type: 'ai',
-          message: `Perfect! I've created a strategic blog card based on our conversation. Here's the recommendation:\n\n**Topic:** ${cardPreview.topic}\n**Intent:** ${cardPreview.intent}\n**Audience:** ${cardPreview.audience}\n**Reason:** ${cardPreview.reason}\n\nWould you like to save this card?`,
+          message: `Perfect! I've created a strategic ${contentLabel} card based on our conversation. Here's the recommendation:\n\n**Topic:** ${cardPreview.topic}\n**Intent:** ${cardPreview.intent}\n**Audience:** ${cardPreview.audience}\n**Reason:** ${cardPreview.reason}\n\nWould you like to save this card?`,
           timestamp: new Date().toLocaleTimeString(),
         };
         setMessages((prev) => [...prev, previewMessage]);
       } else {
         // AI is asking the next question - add to conversation
-        const aiText = data.nextQuestion || 'What else would you like to tell me about this blog topic?';
+        const aiText = data.nextQuestion || `What else would you like to tell me about this ${contentLabel} topic?`;
         const aiMessage: ChatMessage = {
           id: Date.now() + 1,
           type: 'ai',
@@ -390,7 +399,7 @@ export default function AIBlogCardModal({
               <Sparkles className="h-5 w-5 text-blue-600" />
             </div>
             <div>
-              <h2 className="font-bold text-gray-900">Create Custom Blog Card</h2>
+              <h2 className="font-bold text-gray-900">Create Custom {contentLabel.charAt(0).toUpperCase() + contentLabel.slice(1)} Card</h2>
               <p className="text-xs text-gray-500 mt-0.5">AI-assisted topic refinement for {companyName}</p>
             </div>
           </div>
@@ -545,7 +554,7 @@ export default function AIBlogCardModal({
                       sendMessage();
                     }
                   }}
-                  placeholder="Describe your blog idea or ask for suggestions..."
+                  placeholder={`Describe your ${contentLabel} idea or ask for suggestions...`}
                   disabled={isLoading}
                   className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 />

@@ -23,7 +23,20 @@ export const getSupabaseUserFromRequest = async (
 
   if (token) {
     // Bearer token provided - verify it
-    const { data: { user }, error } = await db.auth.getUser(token);
+    let authResult: Awaited<ReturnType<typeof db.auth.getUser>>;
+    try {
+      authResult = await Promise.race([
+        db.auth.getUser(token),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Supabase auth timeout')), 5000),
+        ),
+      ]);
+    } catch (timeoutOrNetworkErr) {
+      const msg = timeoutOrNetworkErr instanceof Error ? timeoutOrNetworkErr.message : String(timeoutOrNetworkErr);
+      console.error('❌ Bearer token auth failed (connection error):', msg);
+      return { user: null, error: 'INVALID_AUTH' };
+    }
+    const { data: { user }, error } = authResult;
     if (error || !user) {
       console.error('❌ Bearer token invalid:', error?.message);
       return { user: null, error: 'INVALID_AUTH' };
@@ -85,7 +98,20 @@ export const getSupabaseUserFromRequest = async (
       }
       
       if (token) {
-        const { data: { user }, error } = await db.auth.getUser(token);
+        let cookieAuthResult: Awaited<ReturnType<typeof db.auth.getUser>>;
+        try {
+          cookieAuthResult = await Promise.race([
+            db.auth.getUser(token),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Supabase auth timeout')), 5000),
+            ),
+          ]);
+        } catch (timeoutOrNetworkErr) {
+          const msg = timeoutOrNetworkErr instanceof Error ? timeoutOrNetworkErr.message : String(timeoutOrNetworkErr);
+          console.error('❌ Cookie token auth failed (connection error):', msg);
+          return { user: null, error: 'INVALID_AUTH' };
+        }
+        const { data: { user }, error } = cookieAuthResult;
         if (error || !user) {
           console.error('❌ Cookie token invalid:', error?.message);
           return { user: null, error: 'INVALID_AUTH' };

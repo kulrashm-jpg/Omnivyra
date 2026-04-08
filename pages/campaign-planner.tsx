@@ -51,8 +51,21 @@ function CampaignPlannerLayout({
 }: CampaignPlannerLayoutProps) {
   const { state, setAccountContext } = usePlannerSession();
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'build'>('skeleton');
-  const [leftPanelTab, setLeftPanelTab] = useState<'plan' | 'chat'>('plan');
+  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'build'>(() => {
+    if (typeof window !== 'undefined') {
+      const tab = new URLSearchParams(window.location.search).get('tab');
+      if (tab === 'strategy') return 'strategy';
+      if (tab === 'build') return 'build';
+    }
+    return 'skeleton';
+  });
+  const [leftPanelTab, setLeftPanelTab] = useState<'plan' | 'chat'>(() => {
+    if (typeof window !== 'undefined') {
+      const panel = new URLSearchParams(window.location.search).get('leftPanel');
+      if (panel === 'chat') return 'chat';
+    }
+    return 'plan';
+  });
   const [selectedThemeWeek, setSelectedThemeWeek] = useState<number | null>(null);
   const [canvasTab, setCanvasTab] = useState<'calendar' | 'content'>('calendar');
   const hasAdvancedRef = useRef(false);

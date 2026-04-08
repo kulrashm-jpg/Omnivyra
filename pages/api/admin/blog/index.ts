@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!title) {
         return res.status(400).json({ error: 'title is required' });
       }
-      const slug = body.slug?.trim() || title.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      const slug = body.slug?.trim() || title.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
       const excerpt = body.excerpt?.trim() || null;
       const content_markdown = body.content_markdown ?? '';
       const content_html = body.content_html ?? null;
@@ -60,6 +60,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const status = ['draft', 'scheduled', 'published'].includes(body.status) ? body.status : 'draft';
       const is_featured = !!body.is_featured;
       const published_at = status === 'published' ? (body.published_at || new Date().toISOString()) : null;
+      const primary_keyword = typeof body.primary_keyword === 'string' ? body.primary_keyword.trim() || null : null;
+      const secondary_keywords = Array.isArray(body.secondary_keywords)
+        ? body.secondary_keywords.filter((k: unknown) => typeof k === 'string').slice(0, 5)
+        : null;
 
       const { data: inserted, error } = await supabase
         .from('public_blogs')
@@ -79,6 +83,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           status,
           is_featured,
           published_at,
+          primary_keyword,
+          secondary_keywords,
           created_by: auth.userId,
         })
         .select('id, slug, status')

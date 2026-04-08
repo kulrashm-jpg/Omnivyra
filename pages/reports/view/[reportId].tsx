@@ -61,6 +61,20 @@ function getScoreStory(score: number, weakestDimensions: Array<{ label: string; 
   return `The score is early-stage because weak spots in ${weakest || 'multiple core dimensions'} are reducing the total more than stronger areas can compensate for.`;
 }
 
+function getFilenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const utf8Match = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]).replace(/^["']|["']$/g, '').trim();
+    } catch {
+      return utf8Match[1].replace(/^["']|["']$/g, '').trim();
+    }
+  }
+  const simpleMatch = header.match(/filename\s*=\s*"([^"]+)"/i) ?? header.match(/filename\s*=\s*([^;]+)/i);
+  return simpleMatch?.[1] ? simpleMatch[1].replace(/^["']|["']$/g, '').trim() : null;
+}
+
 function SectionPlaceholder({
   title,
   description,
@@ -72,9 +86,7 @@ function SectionPlaceholder({
     <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8">
       <p className="text-sm font-semibold text-slate-800">{title}</p>
       <p className="mt-2 text-sm text-slate-600">{description}</p>
-      <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-        Available signals indicate limited data coverage, but early patterns suggest gaps in coverage and structure.
-      </p>
+      <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500" />
     </div>
   );
 }
@@ -560,6 +572,9 @@ export default function ReportViewPage() {
   const { reportId, type } = router.query;
 
   const [reportData, setReportData] = useState<ReportData | null>(null);
+  const [snapshotHtml, setSnapshotHtml] = useState<string | null>(null);
+  const [snapshotHtmlLoading, setSnapshotHtmlLoading] = useState(false);
+  const [snapshotFrameHeight, setSnapshotFrameHeight] = useState(1600);
   const [isGenerating, setIsGenerating] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [generationMessage, setGenerationMessage] = useState<string | null>(null);
@@ -621,6 +636,33 @@ export default function ReportViewPage() {
 
         setGenerationMessage(null);
         setReportData(data);
+        if (data.reportType === 'snapshot') {
+          setSnapshotHtmlLoading(true);
+          setSnapshotHtml(null);
+          try {
+            const htmlRes = await fetch(
+              `/api/reports/${reportId}?type=${data.reportType}&format=html`,
+              {
+                credentials: 'include',
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+              },
+            );
+            if (!cancelled && htmlRes.ok) {
+              setSnapshotHtml(await htmlRes.text());
+            }
+          } catch {
+            if (!cancelled) {
+              setSnapshotHtml(null);
+            }
+          } finally {
+            if (!cancelled) {
+              setSnapshotHtmlLoading(false);
+            }
+          }
+        } else {
+          setSnapshotHtml(null);
+          setSnapshotHtmlLoading(false);
+        }
         setIsGenerating(false);
       } catch {
         if (!cancelled) {
@@ -733,9 +775,16 @@ export default function ReportViewPage() {
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
+      const serverFilename = getFilenameFromContentDisposition(res.headers.get('Content-Disposition'));
       const safeDomain = reportData.domain.replace(/[^a-z0-9.-]+/gi, '-');
+      const fallbackFilename =
+        reportData.reportType === 'snapshot'
+          ? `Digital Snapshot - ${safeDomain}.pdf`
+          : reportData.reportType === 'performance'
+            ? `Performance Report - ${safeDomain}.pdf`
+            : `Growth Report - ${safeDomain}.pdf`;
       link.href = url;
-      link.download = `${reportData.reportType}-${safeDomain}-${reportData.reportId}.pdf`;
+      link.download = serverFilename || fallbackFilename;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -829,6 +878,96 @@ export default function ReportViewPage() {
     if (standing === 'At Par') return 'Competitive';
     return 'Behind (needs improvement)';
   };
+
+  if (reportData.reportType === 'snapshot') {
+    return (
+      <>
+        <Head>
+          <title>
+            {(reportData.companyContext?.companyName || reportData.domain)} - {reportData.title}
+          </title>
+          <meta name="robots" content="noindex" />
+        </Head>
+
+        <div className="min-h-screen bg-slate-100">
+          <div className="border-b border-slate-200 bg-white shadow-sm">
+            <div className="mx-auto flex max-w-6xl flex-col gap-5 px-6 py-6 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Digital Authority Snapshot</p>
+                <h1 className="mt-2 text-3xl font-bold text-slate-900">
+                  {reportData.companyContext?.companyName || reportData.domain}
+                </h1>
+                <p className="mt-1 text-sm text-slate-600">{reportData.domain}</p>
+                <p className="mt-3 max-w-2xl text-sm text-slate-700">
+                  HTML now mirrors the shared report renderer. Completed sections are grouped first, partial and pending sections stay visible below for internal review, and PDF export includes only the completed group.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  onClick={handleDownloadPDF}
+                  disabled={isDownloading}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-medium text-slate-700 transition-all hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <Download size={18} />
+                  <span>{isDownloading ? 'Downloading...' : 'Download PDF'}</span>
+                </button>
+                <button
+                  onClick={handleRegenerate}
+                  disabled={isRegenerating}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 font-medium text-white transition-all hover:bg-blue-700 disabled:opacity-50"
+                >
+                  <RefreshCw size={18} />
+                  <span>{isRegenerating ? 'Regenerating...' : 'Regenerate'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+            {fetchError ? (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {fetchError}
+              </div>
+            ) : null}
+
+            {snapshotHtmlLoading ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+                <div className="mb-4 h-6 w-48 animate-pulse rounded bg-slate-200" />
+                <div className="space-y-3">
+                  <div className="h-20 animate-pulse rounded-xl bg-slate-100" />
+                  <div className="h-20 animate-pulse rounded-xl bg-slate-100" />
+                  <div className="h-20 animate-pulse rounded-xl bg-slate-100" />
+                </div>
+              </div>
+            ) : snapshotHtml ? (
+              <iframe
+                key={reportData.reportId}
+                title="Snapshot HTML View"
+                srcDoc={snapshotHtml}
+                className="w-full rounded-2xl border border-slate-200 bg-white shadow-sm"
+                style={{ height: `${snapshotFrameHeight}px` }}
+                onLoad={(event) => {
+                  try {
+                    const frame = event.currentTarget;
+                    const doc = frame.contentDocument;
+                    const nextHeight = doc?.documentElement?.scrollHeight || doc?.body?.scrollHeight || 1600;
+                    setSnapshotFrameHeight(Math.max(nextHeight + 24, 1200));
+                  } catch {
+                    setSnapshotFrameHeight(1600);
+                  }
+                }}
+              />
+            ) : (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800">
+                Shared snapshot HTML could not be loaded for this report. The JSON report is still available, but the HTML sync needs attention.
+              </div>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
 
   const getStandingStyles = (standing: 'Behind' | 'At Par' | 'Ahead') => {
     if (standing === 'Ahead') return 'bg-emerald-100 text-emerald-700';
@@ -1568,7 +1707,7 @@ export default function ReportViewPage() {
                     <div className="mt-3">
                       <MarketPulseSignalBox
                         title="Key Insight"
-                        text={reportData.seoVisuals?.seoCapabilityRadar.insightSentence ?? 'Available signals indicate limited data coverage, but early patterns suggest gaps in coverage and structure.'}
+                        text={reportData.seoVisuals?.seoCapabilityRadar.insightSentence ?? ''}
                         tone="blue"
                       />
                     </div>
@@ -1612,7 +1751,7 @@ export default function ReportViewPage() {
                     <div className="mt-3">
                       <MarketPulseSignalBox
                         title="Key Insight"
-                        text={reportData.geoAeoExecutiveSummary?.primaryGap.reasoning ?? 'Available signals indicate limited data coverage, but early patterns suggest gaps in coverage and structure.'}
+                        text={reportData.geoAeoExecutiveSummary?.primaryGap.reasoning ?? ''}
                         tone="teal"
                       />
                     </div>

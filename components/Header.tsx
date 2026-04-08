@@ -87,10 +87,10 @@ const Header: React.FC = () => {
             <button onClick={() => router.push('/dashboard')} className={navBtnClass}>Home</button>
             <button onClick={() => router.push('/command-center')} className={navBtnClass} title="Setup wizard for your account">Command Center</button>
             <button onClick={() => router.push('/campaign-proposals')} className={navBtnClass}>Campaign Proposals</button>
-            <button onClick={() => router.push('/community-ai')} className={navBtnClass}>Engagement Center</button>
+            <button onClick={() => router.push('/engagement')} className={navBtnClass}>Engagement Center</button>
             <button onClick={() => router.push('/blogs')} className={navBtnClass}>Blog</button>
             {isCompanyAdmin && (
-              <button onClick={() => router.push('/marketing-intelligence')} className={navBtnClass}>Intelligence</button>
+              <button onClick={() => router.push('/dashboard?tab=intelligence&intelTab=intelligence')} className={navBtnClass}>Intelligence</button>
             )}
             {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={navBtnClass}>Usage</button>
@@ -170,10 +170,10 @@ const Header: React.FC = () => {
             <button onClick={() => router.push('/dashboard')} className={mobileNavBtnClass}>Home</button>
             <button onClick={() => router.push('/command-center')} className={mobileNavBtnClass}>Command Center</button>
             <button onClick={() => router.push('/campaign-proposals')} className={mobileNavBtnClass}>Campaign Proposals</button>
-            <button onClick={() => router.push('/community-ai')} className={mobileNavBtnClass}>Engagement Center</button>
+            <button onClick={() => router.push('/engagement')} className={mobileNavBtnClass}>Engagement Center</button>
             <button onClick={() => router.push('/blogs')} className={mobileNavBtnClass}>Blog</button>
             {isCompanyAdmin && (
-              <button onClick={() => router.push('/marketing-intelligence')} className={mobileNavBtnClass}>Intelligence</button>
+              <button onClick={() => router.push('/dashboard?tab=intelligence&intelTab=intelligence')} className={mobileNavBtnClass}>Intelligence</button>
             )}
             {isCompanyAdmin && (
               <button onClick={() => router.push('/super-admin/consumption')} className={mobileNavBtnClass}>Usage</button>

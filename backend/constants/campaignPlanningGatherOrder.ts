@@ -24,10 +24,6 @@ export const GATHER_ORDER: GatherItem[] = [
     question: 'Anything only for one platform? (e.g. a LinkedIn-only series, or no)',
   },
   {
-    key: 'action_expectation',
-    question: 'What do you want people to do after reading?',
-  },
-  {
     key: 'platforms',
     question: 'Where will you post? (e.g. LinkedIn, Instagram, YouTube, X) — show only configured platforms.',
   },
@@ -35,11 +31,6 @@ export const GATHER_ORDER: GatherItem[] = [
     key: 'platform_content_requests',
     question: "Set how often you'll share each content type per platform (match or adjust to your capacity). Show all content types.",
     contingentOn: 'platforms',
-  },
-  { key: 'key_messages', question: 'What is the core message you want your audience to remember?' },
-  {
-    key: 'campaign_duration',
-    question: 'Duration of the campaign (2, 4, 6, 8, or 12 weeks — 12 weeks maximum)',
   },
 ];
 
@@ -53,11 +44,8 @@ export const REQUIRED_EXECUTION_FIELDS = [
   'available_content',
   'content_capacity',
   'exclusive_campaigns',
-  'action_expectation',
   'platforms',
   'platform_content_requests',
-  'key_messages',
-  'campaign_duration',
 ] as const;
 
 /** First question text — use for welcome/first message. */

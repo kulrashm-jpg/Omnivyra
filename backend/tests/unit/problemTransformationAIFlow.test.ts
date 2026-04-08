@@ -3,25 +3,17 @@
  * Verifies strategic prompt modes, anti-stuck fallback, JSON retry, and refinement behavior.
  */
 
+jest.mock('../../services/aiGateway', () => ({
+  runCompletionWithOperation: jest.fn(),
+}));
+
 import {
   buildProblemTransformationStrategicPrompt,
   refineProblemTransformationAnswers,
   type CompanyProfile,
   type ProblemTransformationExistingFields,
 } from '../../services/companyProfileService';
-
-jest.mock('openai', () => ({
-  __esModule: true,
-  default: jest.fn().mockImplementation(() => ({
-    chat: {
-      completions: {
-        create: jest.fn(),
-      },
-    },
-  })),
-}));
-
-const OpenAI = jest.requireMock('openai').default;
+import { runCompletionWithOperation } from '../../services/aiGateway';
 
 const mkProfile = (overrides: Partial<CompanyProfile> & { company_id: string }): CompanyProfile => ({
   company_id: 'c1',
@@ -31,6 +23,19 @@ const mkProfile = (overrides: Partial<CompanyProfile> & { company_id: string }):
 describe('problemTransformationAIFlow', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (runCompletionWithOperation as jest.Mock).mockResolvedValue({
+      output: JSON.stringify({
+        core_problem_statement: 'Teams struggle with prioritization chaos',
+        pain_symptoms: ['scope creep', 'delayed delivery'],
+        awareness_gap: 'Hidden cost of context switching',
+        problem_impact: 'Missed deadlines and burnout',
+        life_with_problem: 'Reactive firefighting',
+        life_after_solution: 'Predictable delivery',
+        desired_transformation: 'From chaos to clarity',
+        transformation_mechanism: 'Structured prioritization framework',
+        authority_domains: ['project management', 'agile'],
+      }),
+    });
   });
 
   describe('1. fill mode returns all fields', () => {
@@ -66,12 +71,9 @@ describe('problemTransformationAIFlow', () => {
         transformation_mechanism: 'Structured prioritization framework',
         authority_domains: ['project management', 'agile'],
       });
-      const mockCreate = jest.fn().mockResolvedValue({
-        choices: [{ message: { content: fullOutput } }],
+      (runCompletionWithOperation as jest.Mock).mockResolvedValue({
+        output: fullOutput,
       });
-      (OpenAI as jest.Mock).mockImplementation(() => ({
-        chat: { completions: { create: mockCreate } },
-      }));
 
       const profile = mkProfile({ company_id: 'c1', industry: 'SaaS' });
       const result = await refineProblemTransformationAnswers(
@@ -117,12 +119,9 @@ describe('problemTransformationAIFlow', () => {
         transformation_mechanism: null,
         authority_domains: [],
       });
-      const mockCreate = jest.fn().mockResolvedValue({
-        choices: [{ message: { content: emptyOutput } }],
+      (runCompletionWithOperation as jest.Mock).mockResolvedValue({
+        output: emptyOutput,
       });
-      (OpenAI as jest.Mock).mockImplementation(() => ({
-        chat: { completions: { create: mockCreate } },
-      }));
 
       const existingFields: ProblemTransformationExistingFields = {
         core_problem_statement: 'Original problem',
@@ -143,16 +142,14 @@ describe('problemTransformationAIFlow', () => {
   describe('4. JSON parsing retry works', () => {
     it('retries with strict JSON instruction when first parse fails', async () => {
       const invalidThenValid = [
-        { choices: [{ message: { content: 'Not valid JSON {{' } }] },
-        { choices: [{ message: { content: '{"core_problem_statement":"x","pain_symptoms":[],"awareness_gap":null,"problem_impact":null,"life_with_problem":null,"life_after_solution":null,"desired_transformation":null,"transformation_mechanism":null,"authority_domains":[]}' } }] },
+        { output: 'Not valid JSON {{' },
+        { output: '{"core_problem_statement":"x","pain_symptoms":[],"awareness_gap":null,"problem_impact":null,"life_with_problem":null,"life_after_solution":null,"desired_transformation":null,"transformation_mechanism":null,"authority_domains":[]}' },
       ];
       const mockCreate = jest
         .fn()
         .mockResolvedValueOnce(invalidThenValid[0])
         .mockResolvedValueOnce(invalidThenValid[1]);
-      (OpenAI as jest.Mock).mockImplementation(() => ({
-        chat: { completions: { create: mockCreate } },
-      }));
+      (runCompletionWithOperation as jest.Mock).mockImplementation(mockCreate);
 
       const result = await refineProblemTransformationAnswers(['x'], { existingFields: {} });
 

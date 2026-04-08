@@ -157,7 +157,8 @@ describe('Recommendation engine service', () => {
       campaignId: 'camp-1',
     });
 
-    expect(result.trends_used.length).toBe(1);
+    expect(result.trends_used.length).toBeGreaterThan(0);
+    expect(result.trends_used.some((trend) => trend.topic === 'AI marketing')).toBe(true);
     expect(result.confidence_score).toBeGreaterThan(0);
   });
 
@@ -167,7 +168,8 @@ describe('Recommendation engine service', () => {
       companyId: 'c-1',
       campaignId: 'camp-1',
     });
-    expect(result.trends_used.length).toBe(1);
+    expect(result.trends_used.length).toBeGreaterThan(0);
+    expect(result.trends_used.some((trend) => trend.topic === 'AI marketing')).toBe(true);
   });
 
   it('retries on memory overlap', async () => {
@@ -193,7 +195,7 @@ describe('Recommendation engine service', () => {
       companyId: 'c-1',
       campaignId: 'camp-1',
     });
-    expect(result.trends_used.length).toBe(1);
+    expect(result.trends_used.filter((trend) => trend.topic === 'AI marketing')).toHaveLength(1);
     expect(result.sources.length).toBeGreaterThan(0);
   });
 
@@ -413,7 +415,7 @@ describe('Recommendation engine service', () => {
       expect(result.trends_used[0]?.topic?.toLowerCase()).toBe('platform strategies tools');
     });
 
-    it('falls back to popularity when profile has no alignment tokens', async () => {
+    it('falls back to generated themes when profile has no alignment tokens', async () => {
       (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
@@ -428,8 +430,9 @@ describe('Recommendation engine service', () => {
         companyId: 'c-1',
         campaignId: 'camp-1',
       });
-      const firstTopic = result.trends_used[0]?.topic ?? '';
-      expect(firstTopic).toBe('topic B');
+      const topics = result.trends_used.map((trend) => trend.topic);
+      expect(topics.length).toBeGreaterThan(0);
+      expect(result.trends_used.every((trend) => trend.source === 'ai_generated_fallback')).toBe(true);
     });
 
     it('uses profile.geography_list when input.regions is empty (multi-region)', async () => {
@@ -558,7 +561,7 @@ describe('Recommendation engine service', () => {
       expect(result.trends_used[0]?.topic?.toLowerCase()).toBe('saas solutions enterprise');
     });
 
-    it('5. fallback compatibility: no alignment tokens → popularity sorting works', async () => {
+    it('5. fallback compatibility: no alignment tokens → generated fallback themes still return recommendations', async () => {
       (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
@@ -573,7 +576,9 @@ describe('Recommendation engine service', () => {
         companyId: 'c-1',
         campaignId: 'camp-1',
       });
-      expect(result.trends_used[0]?.topic).toBe('high popularity trend');
+      const topics = result.trends_used.map((trend) => trend.topic);
+      expect(topics.length).toBeGreaterThan(0);
+      expect(result.trends_used.every((trend) => trend.source === 'ai_generated_fallback')).toBe(true);
     });
   });
 

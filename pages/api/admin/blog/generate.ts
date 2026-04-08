@@ -40,6 +40,7 @@ import {
 import type { BlogAngle } from '../../../../lib/blog/blogGenerationEngine';
 import { getProfile } from '../../../../backend/services/companyProfileService';
 import { buildFormattedStyleInstructions } from '../../../../lib/content/writingStyleEngine';
+import { isValidBlogFormat } from '../../../../lib/blog/blogStructureTemplates';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -57,6 +58,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     selected_angle,
     tone,
     goal_type,
+    format_type,
   } = req.body ?? {};
 
   if (!company_id || typeof company_id !== 'string')
@@ -93,27 +95,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     tone:             typeof tone      === 'string' ? tone.trim()      : undefined,
     goal_type:        typeof goal_type === 'string' ? goal_type.trim() : undefined,
     blogTable:        'public_blogs',  // Super Admin always uses public_blogs
+    formatType:       isValidBlogFormat(format_type) ? format_type : 'standard',
   };
 
   try {
     const profile = await getProfile(company_id, { autoRefine: false, languageRefine: true });
     const profileAny = (profile || {}) as Record<string, unknown>;
-    const audience = typeof profileAny.target_audience === 'string'
-      ? profileAny.target_audience
-      : (typeof profileAny.audience === 'string' ? profileAny.audience : undefined);
-    const brandVoice = typeof profileAny.brand_voice === 'string'
-      ? profileAny.brand_voice
-      : (typeof profileAny.writing_style === 'string' ? profileAny.writing_style : undefined);
-    const industry = typeof profileAny.industry === 'string' ? profileAny.industry : undefined;
+    const str = (key: string): string | undefined => {
+      const v = profileAny[key];
+      return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+    };
+    const strArr = (key: string): string[] | undefined => {
+      const v = profileAny[key];
+      return Array.isArray(v) && v.length > 0 ? v.filter((s: unknown) => typeof s === 'string') as string[] : undefined;
+    };
 
     // Build writing style instructions from the full company profile
     const writingStyleInstructions = profile ? buildFormattedStyleInstructions(profile) : undefined;
 
     generationRequest.companyContext = {
-      audience,
-      brand_voice: brandVoice,
-      industry,
+      audience:                 str('target_audience') || str('audience'),
+      brand_voice:              str('brand_voice') || str('writing_style'),
+      industry:                 str('industry'),
       writingStyleInstructions,
+      companyName:              str('name'),
+      uniqueValue:              str('unique_value'),
+      competitiveAdvantages:    str('competitive_advantages'),
+      productsServices:         str('products_services'),
+      contentThemes:            str('content_themes'),
+      campaignFocus:            str('campaign_focus'),
+      growthPriorities:         str('growth_priorities'),
+      coreProblemStatement:     str('core_problem_statement'),
+      painSymptoms:             strArr('pain_symptoms'),
+      authorityDomains:         strArr('authority_domains'),
+      desiredTransformation:    str('desired_transformation'),
+      keyMessages:              str('key_messages'),
+      goals:                    str('goals'),
+      geography:                str('geography'),
     };
   } catch {
     // Profile context enrichment is best-effort and must not block generation.

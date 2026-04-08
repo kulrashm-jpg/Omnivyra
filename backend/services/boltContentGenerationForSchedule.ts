@@ -26,6 +26,16 @@ type DailyPlanRow = {
   content?: string | null;
 };
 
+type ParsedPlanContent = Record<string, unknown> & {
+  execution_id?: string;
+  source_execution_id?: string;
+  master_content_id?: string;
+  sequence_index?: number;
+  total_distributions?: number;
+  distribution_mode?: string;
+  platforms?: string[];
+};
+
 function tryParseJson<T>(val: unknown): T | null {
   if (val == null) return null;
   if (typeof val === 'string') {
@@ -38,18 +48,67 @@ function tryParseJson<T>(val: unknown): T | null {
   return typeof val === 'object' ? (val as T) : null;
 }
 
+function isPlaceholderLikeGeneratedText(content: string): boolean {
+  const text = String(content || '').trim();
+  if (!text) return true;
+
+  if (
+    text.startsWith('[PLATFORM ADAPTATION FAILED]') ||
+    text.startsWith('[MASTER GENERATION FAILED') ||
+    text.startsWith('[MEDIA BLUEPRINT]') ||
+    text.startsWith('[MASTER CONTENT PLACEHOLDER]') ||
+    text.startsWith('[PLATFORM MEDIA BLUEPRINT]')
+  ) {
+    return true;
+  }
+
+  return (
+    /^content for\b/i.test(text) ||
+    /^content placeholder\b/i.test(text) ||
+    /^post placeholder\b/i.test(text) ||
+    /^execution job content placeholder\b/i.test(text)
+  );
+}
+
+function isReusableGeneratedText(content: string): boolean {
+  return !isPlaceholderLikeGeneratedText(content);
+}
+
 /**
  * Group daily plans by (topic, week_number). Slots with same topic+week share one master.
  */
-function groupPlansByTopicAndWeek(plans: DailyPlanRow[]): Map<string, DailyPlanRow[]> {
+function sortRowsForDistribution(rows: DailyPlanRow[]): DailyPlanRow[] {
+  return [...rows].sort((a, b) => {
+    const parsedA = tryParseJson<ParsedPlanContent>(a.content) ?? {};
+    const parsedB = tryParseJson<ParsedPlanContent>(b.content) ?? {};
+    const seqA = Number(parsedA.sequence_index ?? Number.POSITIVE_INFINITY);
+    const seqB = Number(parsedB.sequence_index ?? Number.POSITIVE_INFINITY);
+    if (seqA !== seqB) return seqA - seqB;
+    return String(a.platform || '').localeCompare(String(b.platform || ''));
+  });
+}
+
+function buildDistributionGroupKey(row: DailyPlanRow): string {
+  const parsed = tryParseJson<ParsedPlanContent>(row.content) ?? {};
+  const sourceExecutionId = String(parsed.source_execution_id ?? '').trim();
+  const masterContentId = String(parsed.master_content_id ?? '').trim();
+  const executionId = String(parsed.execution_id ?? '').trim();
+  const topic = String(row.topic || row.title || parsed.topicTitle || '').trim() || 'untitled';
+  const week = Number(row.week_number) || 1;
+
+  if (sourceExecutionId) return `shared::${sourceExecutionId}::${week}`;
+  if (masterContentId) return `master::${masterContentId}::${week}`;
+  if (executionId) return `unique::${executionId}::${week}`;
+  return `topic::${topic}::${week}`;
+}
+
+function groupPlansByDistribution(plans: DailyPlanRow[]): Map<string, DailyPlanRow[]> {
   const groups = new Map<string, DailyPlanRow[]>();
   for (const row of plans) {
-    const topic = String(row.topic || row.title || '').trim() || 'untitled';
-    const week = Number(row.week_number) || 1;
-    const key = `${topic}|${week}`;
+    const key = buildDistributionGroupKey(row);
     const arr = groups.get(key) ?? [];
     arr.push(row);
-    groups.set(key, arr);
+    groups.set(key, sortRowsForDistribution(arr));
   }
   return groups;
 }
@@ -115,7 +174,7 @@ function buildBlogSlug(topic: string): string {
 }
 
 /** Process up to N topic groups in parallel to speed up BOLT content generation. */
-const CONTENT_GEN_CONCURRENCY = 2;
+const CONTENT_GEN_CONCURRENCY = 1;
 
 /**
  * Generate master content and platform variants for all daily plan activities.
@@ -139,7 +198,7 @@ export async function generateContentForDailyPlans(
     campaignUserId = (campaign as any)?.user_id ?? null;
   } catch { /* non-fatal; generation continues without company_id */ }
 
-  const groups = groupPlansByTopicAndWeek(dailyPlans);
+  const groups = groupPlansByDistribution(dailyPlans);
   const groupEntries = Array.from(groups.entries());
   let phaseCreatingFired = false;
   let phaseRepurposingFired = false;
@@ -149,7 +208,7 @@ export async function generateContentForDailyPlans(
     const first = rows[0]!;
     // content may be a JSON object (enriched from BOLT planning) or a plain string/null —
     // fall back to an empty object so we can still generate from row-level data (topic, title).
-    const parsed = tryParseJson<Record<string, unknown>>(first.content) ?? {};
+    const parsed = tryParseJson<ParsedPlanContent>(first.content) ?? {};
 
     const platformTargets = rows.map((r) => ({
       platform: String(r.platform || '').trim().toLowerCase(),
@@ -171,10 +230,7 @@ export async function generateContentForDailyPlans(
     const existingContent = String(enriched.generated_content ?? '').trim();
     const isValidExisting =
       existingContent.length > 0 &&
-      !existingContent.startsWith('[PLATFORM ADAPTATION FAILED]') &&
-      !existingContent.startsWith('[MASTER GENERATION FAILED') &&
-      !existingContent.startsWith('[MEDIA BLUEPRINT]') &&
-      !existingContent.startsWith('[MASTER CONTENT PLACEHOLDER]');
+      isReusableGeneratedText(existingContent);
 
     let master: { id: string; generated_at: string; content: string; generation_status: string; generation_source: 'ai' };
     if (isValidExisting) {
@@ -208,10 +264,8 @@ export async function generateContentForDailyPlans(
     // Save blog entry if any row in this topic group has a long-form content type.
     // This creates the canonical article in the blogs workspace so users can edit/review it.
     const masterIsValid =
-      master.content &&
-      !master.content.startsWith('[MASTER GENERATION FAILED') &&
-      !master.content.startsWith('[MEDIA BLUEPRINT]') &&
-      !master.content.startsWith('[MASTER CONTENT PLACEHOLDER]');
+      Boolean(master.content) &&
+      isReusableGeneratedText(master.content);
 
     const hasBlogRow = rows.some((r) => isBlogContentType(r.content_type));
     if (hasBlogRow && masterIsValid && campaignCompanyId && campaignUserId) {
@@ -251,11 +305,27 @@ export async function generateContentForDailyPlans(
       const key = `${platform}::${contentType}`;
       // Prefer the platform-adapted variant; fall back to master content so calendar always shows real text
       const content = variantByKey.get(key) ?? (masterIsValid ? master.content : undefined) ?? (isValidExisting ? existingContent : undefined);
-      if (content) {
+      if (content && isReusableGeneratedText(content)) {
         contentMap.set(row.id, content);
         // Preserve existing JSON envelope if present; otherwise create a minimal one
         const p = tryParseJson<Record<string, unknown>>(row.content) ?? { topic: row.topic || row.title || '' };
-        const updated = { ...p, generated_content: content };
+        const rowParsed = tryParseJson<ParsedPlanContent>(row.content) ?? {};
+        const updated = {
+          ...p,
+          generated_content: content,
+          master_content: master,
+          platform_variants: variants,
+          content_status: 'finalized',
+          finalized_at: new Date().toISOString(),
+          refinement_status: 'finalized',
+          refinement_finalized: true,
+          sequence_index: Number.isFinite(Number(rowParsed.sequence_index)) ? Number(rowParsed.sequence_index) : undefined,
+          total_distributions: Number.isFinite(Number(rowParsed.total_distributions)) ? Number(rowParsed.total_distributions) : rows.length,
+          source_execution_id:
+            String(rowParsed.source_execution_id || rowParsed.execution_id || '').trim() || undefined,
+          distribution_mode:
+            (Number(rowParsed.total_distributions) || rows.length) > 1 ? 'shared' : 'unique',
+        };
         updates.push({ id: row.id, content: JSON.stringify(updated) });
       }
     }

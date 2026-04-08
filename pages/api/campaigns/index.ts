@@ -441,6 +441,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!pre.available_content && ec.available_content != null && (typeof ec.available_content === 'string' ? String(ec.available_content).trim() : true)) {
             pre.available_content = ec.available_content;
           }
+          // Promote additional GATHER_ORDER-keyed fields from execution_config
+          if (!pre.action_expectation && ec.action_expectation != null && String(ec.action_expectation).trim()) {
+            pre.action_expectation = ec.action_expectation;
+          }
+          if (!pre.key_messages && ec.key_messages != null && String(ec.key_messages).trim()) {
+            pre.key_messages = ec.key_messages;
+          }
+          if (!pre.exclusive_campaigns && ec.exclusive_campaigns != null && String(ec.exclusive_campaigns).trim()) {
+            pre.exclusive_campaigns = ec.exclusive_campaigns;
+          }
+          if (!pre.campaign_duration && ec.campaign_duration != null && Number(ec.campaign_duration) > 0) {
+            pre.campaign_duration = ec.campaign_duration;
+          }
+          if (!pre.platforms && ec.platforms != null && String(ec.platforms).trim()) {
+            pre.platforms = ec.platforms;
+          }
         }
         const snapAny = snap as Record<string, unknown>;
         const wizardWs = snapAny.wizard_state as { cross_platform_sharing_enabled?: boolean } | undefined;

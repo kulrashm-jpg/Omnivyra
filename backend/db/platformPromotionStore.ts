@@ -1,15 +1,43 @@
 import { supabase } from './supabaseClient';
 
 export async function upsertPlatformRule(input: any): Promise<any> {
-  const { data, error } = await supabase
-    .from('platform_rules')
-    .upsert(input, { onConflict: 'platform,content_type' })
-    .select('*')
-    .single();
-  if (error) {
-    throw new Error(`Failed to upsert platform rule: ${error.message}`);
+  try {
+    // Check-then-insert/update — avoids dependency on unique constraint for seeding
+    const { data: existing } = await supabase
+      .from('platform_rules')
+      .select('id')
+      .eq('platform', input.platform)
+      .eq('content_type', input.content_type)
+      .maybeSingle();
+
+    if (existing?.id) {
+      const { data, error } = await supabase
+        .from('platform_rules')
+        .update({ ...input, updated_at: new Date().toISOString() })
+        .eq('id', existing.id)
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        console.warn('[platformPromotionStore] upsertPlatformRule update failed:', error.message, { platform: input?.platform });
+        return null;
+      }
+      return data;
+    } else {
+      const { data, error } = await supabase
+        .from('platform_rules')
+        .insert(input)
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        console.warn('[platformPromotionStore] upsertPlatformRule insert failed:', error.message, { platform: input?.platform });
+        return null;
+      }
+      return data;
+    }
+  } catch (err: any) {
+    console.warn('[platformPromotionStore] upsertPlatformRule exception:', err?.message, { platform: input?.platform });
+    return null;
   }
-  return data;
 }
 
 export async function listPlatformRules(): Promise<any[]> {

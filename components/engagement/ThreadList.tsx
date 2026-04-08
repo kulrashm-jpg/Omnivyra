@@ -68,6 +68,7 @@ export interface ThreadListProps {
   selectedThreadId?: string | null;
   onSelectThread: (thread: InboxThread) => void;
   emptyMessage?: string;
+  emptyState?: React.ReactNode;
   authorFilter?: { authorName: string; platform: string } | null;
   onClearAuthorFilter?: () => void;
   className?: string;
@@ -79,6 +80,7 @@ export const ThreadList = React.memo(function ThreadList({
   selectedThreadId,
   onSelectThread,
   emptyMessage = 'No threads in inbox.',
+  emptyState,
   authorFilter,
   onClearAuthorFilter,
   className = '',
@@ -134,7 +136,7 @@ export const ThreadList = React.memo(function ThreadList({
       <div className={`flex flex-col h-full ${className}`}>
         <div className="p-3 border-b border-slate-200 font-medium text-slate-800">Threads</div>
         <div className="flex-1 flex items-center justify-center p-4 text-sm text-slate-500">
-          {emptyMessage}
+          {emptyState ?? emptyMessage}
         </div>
       </div>
     );

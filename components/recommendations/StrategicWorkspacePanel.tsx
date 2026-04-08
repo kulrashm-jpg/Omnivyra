@@ -21,6 +21,10 @@ export type StrategicWorkspacePanelProps = {
   cardsWithSignals: WorkspaceCardSignal[];
   strategyStatusPayload?: StrategyStatusPayload | null;
   onScrollToCard?: (cardId: string) => void;
+  longTermCount?: number;
+  archivedCount?: number;
+  onOpenLongTerm?: () => void;
+  onOpenArchived?: () => void;
 };
 
 const POSITION_LABELS: Record<StrategicFlowState, string> = {
@@ -82,7 +86,7 @@ function StrategyMemorySnapshot(props: {
 }
 
 function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
-  const { flowState, cardsWithSignals, strategyStatusPayload, onScrollToCard } = props;
+  const { flowState, cardsWithSignals, strategyStatusPayload, onScrollToCard, longTermCount = 0, archivedCount = 0, onOpenLongTerm, onOpenArchived } = props;
   const [expandedSection, setExpandedSection] = React.useState<'execute' | 'upcoming' | null>(null);
 
   const executeCards = cardsWithSignals.filter((c) => c.momentumState === 'execute');
@@ -203,6 +207,42 @@ function StrategicWorkspacePanel(props: StrategicWorkspacePanelProps) {
           </p>
         </div>
       </div>
+      {(longTermCount > 0 || archivedCount > 0) && (
+        <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <p className="text-sm text-slate-700">
+              <span className="font-medium text-slate-800">Strategic Backlog:</span>{' '}
+              {onOpenLongTerm ? (
+                <button
+                  type="button"
+                  onClick={onOpenLongTerm}
+                  className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
+                >
+                  {longTermCount} idea{longTermCount === 1 ? '' : 's'} parked for later
+                </button>
+              ) : (
+                `${longTermCount} idea${longTermCount === 1 ? '' : 's'} parked for later`
+              )}
+            </p>
+          </div>
+          <div>
+            <p className="text-sm text-slate-700">
+              <span className="font-medium text-slate-800">Ideas Archived:</span>{' '}
+              {onOpenArchived ? (
+                <button
+                  type="button"
+                  onClick={onOpenArchived}
+                  className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
+                >
+                  {archivedCount} archived card{archivedCount === 1 ? '' : 's'}
+                </button>
+              ) : (
+                `${archivedCount} archived card${archivedCount === 1 ? '' : 's'}`
+              )}
+            </p>
+          </div>
+        </div>
+      )}
       <StrategyMemorySnapshot flowState={flowState} cardsWithSignals={cardsWithSignals} />
       <StrategyIntelligencePanel data={strategyStatusPayload} />
     </div>

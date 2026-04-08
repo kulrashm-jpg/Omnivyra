@@ -17,9 +17,14 @@ import type {
   ReferencesBlock,
   InternalLinkBlock,
   SummaryBlock,
+  ColumnsBlock,
 } from '../../lib/blog/blockTypes';
 import { BlogMediaBlock } from './BlogMediaBlock';
 import type { MediaBlockItem } from './BlogMediaBlock';
+import {
+  getFormattedBlockClass,
+  getFormattedListClass,
+} from '../../lib/content/blockFormatting';
 
 // ── Prose class (matches existing [slug].tsx proseClass) ─────────────────────
 
@@ -44,7 +49,7 @@ const proseClass = `prose prose-lg prose-slate max-w-none
 function RenderParagraph({ block }: { block: ParagraphBlock }) {
   return (
     <div
-      className={proseClass}
+      className={getFormattedBlockClass(block, proseClass)}
       dangerouslySetInnerHTML={{ __html: block.html }}
     />
   );
@@ -56,7 +61,7 @@ function RenderHeading({ block }: { block: HeadingBlock }) {
     ? 'mt-14 mb-6 border-b border-gray-100 pb-3 text-2xl font-bold tracking-tight text-[#0B1F33]'
     : 'mt-10 mb-4 text-xl font-semibold text-[#0B1F33]';
   return (
-    <Tag id={block.anchor || undefined} className={classes}>
+    <Tag id={block.anchor || undefined} className={getFormattedBlockClass(block, classes)}>
       {block.text}
     </Tag>
   );
@@ -64,7 +69,7 @@ function RenderHeading({ block }: { block: HeadingBlock }) {
 
 function RenderKeyInsights({ block }: { block: KeyInsightsBlock }) {
   return (
-    <div className="my-10 overflow-hidden rounded-2xl border border-[#0A66C2]/20 bg-[#F5F9FF]">
+    <div className={getFormattedBlockClass(block, 'my-10 overflow-hidden rounded-2xl border border-[#0A66C2]/20 bg-[#F5F9FF]')}>
       <div className="flex items-center gap-2 border-b border-[#0A66C2]/10 bg-[#0A66C2]/5 px-5 py-3">
         <span className="text-base">💡</span>
         <span className="text-xs font-bold uppercase tracking-widest text-[#0A66C2]">
@@ -106,7 +111,7 @@ const CALLOUT_STYLES: Record<string, { wrapper: string; accent: string; icon: st
 function RenderCallout({ block }: { block: CalloutBlock }) {
   const s = CALLOUT_STYLES[block.variant] ?? CALLOUT_STYLES.insight;
   return (
-    <div className={`my-8 overflow-hidden rounded-2xl border ${s.wrapper}`}>
+    <div className={getFormattedBlockClass(block, `my-8 overflow-hidden rounded-2xl border ${s.wrapper}`)}>
       {block.title && (
         <div className={`flex items-center gap-2 border-b px-5 py-3 ${s.accent}`}>
           <span className="text-base">{s.icon}</span>
@@ -121,7 +126,7 @@ function RenderCallout({ block }: { block: CalloutBlock }) {
 function RenderQuote({ block }: { block: QuoteBlock }) {
   const isUrl = block.source?.startsWith('http');
   return (
-    <blockquote className="my-8 border-l-4 border-[#0A66C2] bg-[#F5F9FF]/80 py-4 pl-6 pr-4 rounded-r-xl">
+    <blockquote className={getFormattedBlockClass(block, 'my-8 border-l-4 border-[#0A66C2] bg-[#F5F9FF]/80 py-4 pl-6 pr-4 rounded-r-xl')}>
       <p className="text-lg leading-relaxed text-[#3D4F61] italic">{block.text}</p>
       {(block.author || block.source) && (
         <footer className="mt-3 text-sm text-[#6B7C93] not-italic">
@@ -140,7 +145,7 @@ function RenderQuote({ block }: { block: QuoteBlock }) {
 
 function RenderImage({ block }: { block: ImageBlock }) {
   return (
-    <figure className="my-8">
+    <figure className={getFormattedBlockClass(block, 'my-8')}>
       <img
         src={block.url}
         alt={block.alt}
@@ -152,6 +157,17 @@ function RenderImage({ block }: { block: ImageBlock }) {
           {block.caption}
         </figcaption>
       )}
+      {block.attribution && (
+        <p className="mt-1 text-center text-[10px] text-gray-400 italic">
+          {block.attributionUrl ? (
+            <a href={block.attributionUrl} target="_blank" rel="noopener noreferrer" className="hover:text-gray-600 underline">
+              {block.attribution}
+            </a>
+          ) : (
+            block.attribution
+          )}
+        </p>
+      )}
     </figure>
   );
 }
@@ -159,7 +175,7 @@ function RenderImage({ block }: { block: ImageBlock }) {
 function RenderMedia({ block }: { block: MediaBlock }) {
   const legacyItem: MediaBlockItem = { type: block.mediaType, url: block.url };
   return (
-    <div className="my-8">
+    <div className={getFormattedBlockClass(block, 'my-8')}>
       {block.title && (
         <p className="mb-2 text-sm font-semibold text-[#0B1F33]">{block.title}</p>
       )}
@@ -173,10 +189,10 @@ function RenderMedia({ block }: { block: MediaBlock }) {
 
 function RenderDivider({ block }: { block: DividerBlock }) {
   if (block.variant === 'subtle') {
-    return <hr className="my-8 border-t border-gray-200" />;
+    return <hr className={getFormattedBlockClass(block, 'my-8 border-t border-gray-200')} />;
   }
   return (
-    <div className="my-12 flex items-center gap-4">
+    <div className={getFormattedBlockClass(block, 'my-12 flex items-center gap-4')}>
       <div className="flex-1 border-t border-gray-300" />
       <div className="flex gap-1.5">
         <span className="h-1.5 w-1.5 rounded-full bg-[#0A66C2]/40" />
@@ -209,8 +225,10 @@ function RenderListItems({ items, type, depth = 0 }: { items: ListItem[]; type: 
 
 function RenderList({ block }: { block: ListBlock }) {
   return (
-    <div className="my-6">
-      <RenderListItems items={block.items} type={block.listType} />
+    <div className={getFormattedListClass(block, 'my-6')}>
+      <RenderListItems items={block.items} type={block.format?.listStyle && block.format.listStyle !== 'default'
+        ? (block.format.listStyle === 'decimal' || block.format.listStyle === 'upper-roman' ? 'numbered' : 'bullet')
+        : block.listType} />
     </div>
   );
 }
@@ -219,7 +237,7 @@ function RenderReferences({ block }: { block: ReferencesBlock }) {
   const validItems = block.items.filter((r) => r.title || r.url);
   if (validItems.length === 0) return null;
   return (
-    <section className="my-10 rounded-xl border border-gray-200 bg-gray-50 px-6 py-5">
+    <section className={getFormattedBlockClass(block, 'my-10 rounded-xl border border-gray-200 bg-gray-50 px-6 py-5')}>
       <h4 className="mb-4 text-xs font-bold uppercase tracking-widest text-gray-500">References</h4>
       <ol className="space-y-2 list-none m-0 p-0">
         {validItems.map((ref, i) => (
@@ -249,7 +267,7 @@ function RenderInternalLink({ block }: { block: InternalLinkBlock }) {
   return (
     <Link
       href={`/blog/${block.slug}`}
-      className="my-8 flex items-start gap-4 rounded-2xl border border-[#0A66C2]/15 bg-gradient-to-br from-[#F5F9FF] to-white p-5 no-underline transition-shadow hover:shadow-md group"
+      className={getFormattedBlockClass(block, 'my-8 flex items-start gap-4 rounded-2xl border border-[#0A66C2]/15 bg-gradient-to-br from-[#F5F9FF] to-white p-5 no-underline transition-shadow hover:shadow-md group')}
     >
       <div className="flex-1 min-w-0">
         <p className="text-xs font-bold uppercase tracking-widest text-[#0A66C2] mb-1">Read also</p>
@@ -268,7 +286,7 @@ function RenderInternalLink({ block }: { block: InternalLinkBlock }) {
 function RenderSummary({ block }: { block: SummaryBlock }) {
   if (!block.body) return null;
   return (
-    <div className="my-12 overflow-hidden rounded-2xl border border-[#0A66C2]/15 bg-gradient-to-br from-[#F5F9FF] to-white">
+    <div className={getFormattedBlockClass(block, 'my-12 overflow-hidden rounded-2xl border border-[#0A66C2]/15 bg-gradient-to-br from-[#F5F9FF] to-white')}>
       <div className="flex items-center gap-2 border-b border-[#0A66C2]/10 bg-[#0A66C2]/5 px-6 py-3">
         <span className="text-xs font-bold uppercase tracking-widest text-[#0A66C2]">✦ Summary</span>
       </div>
@@ -295,6 +313,19 @@ function renderBlock(block: ContentBlock): React.ReactNode {
     case 'references':    return <RenderReferences    key={block.id} block={block} />;
     case 'internal_link': return <RenderInternalLink  key={block.id} block={block} />;
     case 'summary':       return <RenderSummary       key={block.id} block={block} />;
+    case 'columns': {
+      const gridClass = block.columnCount === 3 ? 'grid-cols-1 md:grid-cols-3'
+        : block.columnCount === 2 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1';
+      return (
+        <div key={block.id} className={getFormattedBlockClass(block, `grid ${gridClass} gap-8 my-8`)}>
+          {block.columns.map((col) => (
+            <div key={col.id} className="min-w-0">
+              {col.blocks.map((inner) => renderBlock(inner))}
+            </div>
+          ))}
+        </div>
+      );
+    }
   }
 }
 

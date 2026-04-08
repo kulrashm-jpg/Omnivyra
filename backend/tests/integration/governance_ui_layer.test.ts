@@ -85,6 +85,7 @@ describe('Governance UI Layer', () => {
     });
 
     it('returns 404 when campaign not found', async () => {
+      (getLatestCampaignVersionByCampaignId as jest.Mock).mockResolvedValue(null);
       (supabase.from as jest.Mock).mockReturnValue(
         chain({ data: null, error: null })
       );

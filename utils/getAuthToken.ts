@@ -12,15 +12,17 @@ export async function getAuthToken(): Promise<string | null> {
     const sb = getSupabaseBrowser();
     const { data } = await sb.auth.getSession();
     if (data.session?.access_token) {
-      console.log('✅ Got cached auth token');
       return data.session.access_token;
     }
-    
-    // No cached session and can't refresh (e.g., super-admin with cookie auth)
-    console.log('⚠️ No cached session - likely super-admin or cookie-based auth');
     return null;
   } catch (err) {
-    console.error('❌ getAuthToken error:', err);
+    // Suppress WebSocket closed errors that fire during page navigation —
+    // the client tears down its realtime connection on unmount and any
+    // in-flight auth calls hit an already-closed socket. Not actionable.
+    const msg = String((err as Error)?.message ?? err);
+    if (!msg.includes('CLOSING') && !msg.includes('CLOSED')) {
+      console.error('❌ getAuthToken error:', err);
+    }
     return null;
   }
 }

@@ -5,7 +5,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../../components/blog/BlogEditorForm';
-import { BlogQualityPanel, type ImproveArea } from '../../../components/blog/BlogQualityPanel';
+import { ContentQualityPanel, type ImproveArea } from '../../../components/content/ContentQualityPanel';
 import { createDefaultBlogTemplate } from '../../../lib/blog/blogTemplate';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../../lib/blog/topicDetection';
 import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
@@ -26,6 +26,7 @@ const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
 type PrefillPayload = {
   output?: (BlogGenerationOutput & { content_blocks?: unknown[] }) | null;
   source?: string;
+  target_word_count?: number;
 };
 
 export default function AdminBlogNewPage() {
@@ -39,6 +40,9 @@ export default function AdminBlogNewPage() {
   const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
   const [editorPatch, setEditorPatch] = useState<Partial<BlogFormState> | null>(null);
   const [improvingArea, setImprovingArea] = useState<ImproveArea | null>(null);
+  const [targetWordCount, setTargetWordCount] = useState<number>(800);
+  const [primaryKeyword, setPrimaryKeyword] = useState<string | null>(null);
+  const [secondaryKeywords, setSecondaryKeywords] = useState<string[] | null>(null);
 
   // Duplication detection
   const [existingPosts, setExistingPosts] = useState<ExistingPostMeta[]>([]);
@@ -170,6 +174,9 @@ export default function AdminBlogNewPage() {
 
       const parsed = JSON.parse(raw) as PrefillPayload;
       const output = parsed?.output;
+      if (parsed?.target_word_count && parsed.target_word_count >= 300) {
+        setTargetWordCount(parsed.target_word_count);
+      }
       if (output) {
         setPrefillInitial({
           title: output.title || '',
@@ -183,6 +190,10 @@ export default function AdminBlogNewPage() {
             : DEFAULT_TEMPLATE,
           content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
         });
+        // Extract SEO keywords from generated output (attached by BlogGenerateModal)
+        const outputAny = output as unknown as Record<string, unknown>;
+        if (typeof outputAny.primary_keyword === 'string') setPrimaryKeyword(outputAny.primary_keyword);
+        if (Array.isArray(outputAny.secondary_keywords)) setSecondaryKeywords(outputAny.secondary_keywords as string[]);
         if (parsed.source === 'superadmin_blog_intelligence') {
           setPrefillNotice('Draft prefilled from Superadmin recommendation. Review and publish when ready.');
         } else if (parsed.source === 'content_editor') {
@@ -244,6 +255,8 @@ export default function AdminBlogNewPage() {
           status:               state.status,
           is_featured:          state.is_featured,
           published_at:         state.status === 'published' ? new Date().toISOString() : state.published_at || undefined,
+          primary_keyword:      primaryKeyword || undefined,
+          secondary_keywords:   secondaryKeywords?.length ? secondaryKeywords : undefined,
         }),
       });
       const data = await res.json();
@@ -365,7 +378,7 @@ export default function AdminBlogNewPage() {
             {/* ── Quality panel (sticky right sidebar) ────────────────────── */}
             <div className="hidden xl:block w-[280px] shrink-0 sticky top-6 self-start">
               {liveState && (
-                <BlogQualityPanel
+                <ContentQualityPanel
                   blocks={liveState.content_blocks}
                   formState={{
                     title:                liveState.title,
@@ -373,6 +386,7 @@ export default function AdminBlogNewPage() {
                     seo_meta_title:       liveState.seo_meta_title,
                     seo_meta_description: liveState.seo_meta_description,
                     tags:                 liveState.tags,
+                    target_word_count:    targetWordCount,
                   }}
                   onImprove={jumpToImproveArea}
                   onAutoImprove={autoImproveArea}

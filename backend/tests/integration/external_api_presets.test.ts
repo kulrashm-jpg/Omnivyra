@@ -26,7 +26,7 @@ const { getUserRole, hasPermission, isPlatformSuperAdmin, isSuperAdmin } = jest.
 const sourcesStore = new Map<string, any>();
 
 const buildQuery = (table: string) => {
-  const state: { filters: Record<string, any>; payload?: any; op?: 'insert' } = { filters: {} };
+  const state: { filters: Record<string, any>; payload?: any; op?: 'insert' | 'upsert' } = { filters: {} };
   const query: any = {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn((field: string, value: any) => {
@@ -41,11 +41,19 @@ const buildQuery = (table: string) => {
       state.payload = payload;
       return query;
     }),
+    upsert: jest.fn((payload: any) => {
+      state.op = 'upsert';
+      state.payload = payload;
+      return query;
+    }),
     then: (resolve: any, reject: any) => {
       if (table === 'external_api_sources' && state.op === 'insert') {
         const payload = { id: 'preset-1', ...state.payload };
         sourcesStore.set(payload.id, payload);
         return Promise.resolve({ data: payload, error: null }).then(resolve, reject);
+      }
+      if (table === 'company_setup_progress' && state.op === 'upsert') {
+        return Promise.resolve({ data: state.payload, error: null }).then(resolve, reject);
       }
       return Promise.resolve({ data: [], error: null }).then(resolve, reject);
     },

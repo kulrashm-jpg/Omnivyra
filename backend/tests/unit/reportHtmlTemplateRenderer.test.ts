@@ -151,13 +151,228 @@ describe('reportHtmlTemplateRenderer', () => {
     });
 
     expect(templateName).toBe('omnivyra_snapshot_master_report.html');
-    expect(html).toContain('Omnivyra');
-    expect(html).toContain('AI marketing operating system');
-    expect(html).toContain('understand, plan, execute, and improve marketing from one place');
-    expect(html).toContain('Decision Snapshot');
-    expect(html).toContain('Competitor Signals');
-    expect(html).not.toContain('<span class="tab active">Summary</span>');
-    expect(html).toContain('Ready to execute?');
+    expect(html).toContain('id="section-1"');
+    expect(html).toContain('id="section-8"');
+    expect(html).toContain('Digital Authority Snapshot');
+    expect(html).toContain('page-hero-header');
+    expect(html).toContain('Strategic Position');
+    expect(html).toContain('Performance Scores');
+    expect(html).toContain('Competitor Intelligence');
+    expect(html).toContain('SEO Deep Dive');
+    expect(html).toContain('AI Visibility');
+    expect(html).toContain('Backlink & Authority');
+    expect(html).toContain('Action Plan');
+  });
+
+  it('deduplicates timeline prefixes on the cover action card', () => {
+    const { html } = renderReportHtmlTemplate({
+      ...basePayload,
+      domain: 'www.omnivyra.com',
+      companyContext: {
+        companyName: 'Omnivyra',
+        domain: 'www.omnivyra.com',
+        homepageHeadline: 'AI marketing operating system',
+        tagline: 'Understand, plan, create, publish, optimize',
+        primaryOffering: null,
+        positioning: null,
+        marketContext: null,
+      },
+      seoExecutiveSummary: {
+        overallHealthScore: 42,
+        primaryProblem: {
+          title: 'Authority needs work',
+          impactedArea: 'authority',
+          severity: 'moderate',
+          reasoning: 'Authority is still lagging.',
+        },
+        top3Actions: [
+          {
+            actionTitle: 'Build comparison pages',
+            priority: 'high',
+            expectedImpact: 'high',
+            effort: 'medium',
+            linkedVisual: 'matrix',
+            reasoning: 'Needed to improve decision-stage capture.',
+            timeline: {
+              short: '2-4 weeks: directional movement should appear on the target pages first.',
+              mid: '1-3 months: stronger click quality and page-level engagement should become visible.',
+              long: '3-6 months: the change should compound into better qualified discovery and conversion readiness.',
+            },
+          },
+        ],
+        growthOpportunity: null,
+        confidence: 'medium',
+      },
+      topPriorities: [],
+      insights: [],
+      nextSteps: [],
+    });
+
+    expect(html).toContain('<strong>2-4 weeks:</strong> directional movement should appear on the target pages first.');
+    expect(html).toContain('<strong>1-3 months:</strong> stronger click quality and page-level engagement should become visible.');
+    expect(html).toContain('<strong>3-6 months:</strong> the change should compound into better qualified discovery and conversion readiness.');
+    expect(html).not.toContain('2-4 weeks: 2-4 weeks');
+    expect(html).not.toContain('1-3 months: 1-3 months');
+    expect(html).not.toContain('3-6 months: 3-6 months');
+  });
+
+  it('renders pending-state cards for crawl-only Omnivyra inputs', () => {
+    const { html, templateName } = renderReportHtmlTemplate({
+      ...basePayload,
+      domain: 'www.omnivyra.com',
+      companyContext: {
+        companyName: 'Omnivyra',
+        domain: 'www.omnivyra.com',
+        homepageHeadline: 'AI marketing operating system',
+        tagline: 'Understand, plan, create, publish, optimize',
+        primaryOffering: null,
+        positioning: null,
+        marketContext: null,
+      },
+      seoExecutiveSummary: {
+        overallHealthScore: 29,
+        primaryProblem: {
+          title: 'Thin market coverage',
+          impactedArea: 'content',
+          severity: 'critical',
+          reasoning: 'Core pages are still too thin for high-intent discovery.',
+        },
+        top3Actions: [
+          {
+            actionTitle: 'Build comparison pages',
+            priority: 'high',
+            expectedImpact: 'high',
+            effort: 'medium',
+            linkedVisual: 'matrix',
+            reasoning: 'Comparison pages are needed to close decision-stage discovery gaps.',
+            tactics: ['Create /vs/ pages', 'Add proof blocks', 'Answer pricing objections'],
+            focusPage: 'comparison',
+            timeline: {
+              short: 'First pages can ship in 2-4 weeks.',
+              mid: 'Visibility should improve in 1-3 months.',
+              long: 'Decision-stage capture should improve in 3-6 months.',
+            },
+          },
+        ],
+        growthOpportunity: null,
+        confidence: 'medium',
+      },
+      seoVisuals: {
+        seoCapabilityRadar: {
+          technical_seo_score: 41,
+          keyword_research_score: null,
+          rank_tracking_score: null,
+          backlinks_score: 0,
+          competitor_intelligence_score: null,
+          content_quality_score: 24,
+          confidence: 'low',
+          data_source_strength: {
+            technical_seo_score: 'strong',
+            keyword_research_score: 'missing',
+            rank_tracking_score: 'missing',
+            backlinks_score: 'missing',
+            competitor_intelligence_score: 'missing',
+            content_quality_score: 'strong',
+          },
+          source_tags: {
+            backlinks_score: null,
+          },
+          tooltips: {},
+          insightSentence: 'Technical crawl signals exist, but richer SEO systems are still missing.',
+        },
+        opportunityCoverageMatrix: {
+          opportunities: [],
+          confidence: 'low',
+          insightSentence: '',
+        },
+        searchVisibilityFunnel: {
+          impressions: 0,
+          clicks: 0,
+          ctr: null,
+          estimated_lost_clicks: null,
+          confidence: 'low',
+          tooltips: {},
+          insightSentence: '',
+        },
+        crawlHealthBreakdown: {
+          metadata_issues: 1,
+          structure_issues: 2,
+          internal_link_issues: 1,
+          crawl_depth_issues: 0,
+          confidence: 'medium',
+          tooltips: {},
+          insightSentence: 'Crawl diagnostics are available from the site scan.',
+        },
+      },
+      geoAeoExecutiveSummary: {
+        overallAiVisibilityScore: 0,
+        primaryGap: {
+          title: 'No reusable answers',
+          type: 'answer_gap',
+          severity: 'critical',
+          reasoning: 'Structured answer content is still missing.',
+        },
+        top3Actions: [
+          {
+            actionTitle: 'Add FAQ schema',
+            priority: 'high',
+            expectedImpact: 'medium',
+            effort: 'low',
+            linkedVisual: 'radar',
+            reasoning: 'Add FAQ schema and direct-answer blocks to key pages.',
+          },
+        ],
+        visibilityOpportunity: null,
+        confidence: 'low',
+      },
+      geoAeoVisuals: {
+        aiAnswerPresenceRadar: {
+          answer_coverage_score: 0,
+          entity_clarity_score: 0,
+          topical_authority_score: 0,
+          citation_readiness_score: 0,
+          content_structure_score: 0,
+          freshness_score: 0,
+          confidence: 'low',
+          data_source_strength: 'missing',
+          source_tags: null,
+        },
+        queryAnswerCoverageMap: {
+          queries: [],
+          confidence: 'low',
+        },
+        answerExtractionFunnel: {
+          total_queries: 0,
+          answerable_content_pct: 0,
+          structured_content_pct: 0,
+          citation_ready_pct: 0,
+          confidence: 'low',
+          drop_off_reason_distribution: {
+            answer_gap_pct: 0,
+            structure_gap_pct: 0,
+            citation_gap_pct: 0,
+          },
+        },
+        entityAuthorityMap: {
+          entities: [],
+          confidence: 'low',
+        },
+      },
+      competitorIntelligenceSummary: null,
+      competitorVisuals: undefined,
+      nextSteps: [],
+    });
+
+    expect(templateName).toBe('omnivyra_snapshot_master_report.html');
+    expect((html.match(/id="section-/g) || []).length).toBe(8);
+    expect(html).toContain('No competitor data available yet.');
+    expect(html).toContain('AI visibility cannot be measured yet');
+    expect(html).toContain('Add FAQ schema');
+    expect(html).toContain('Backlink data pending');
+    expect(html).toContain('Pending');
+    expect(html).toContain('connect GSC');
+    expect(html).toContain('#incomplete-report { display: none !important; }');
+    expect(html).toContain('page-break-before: auto;');
   });
 
   it('selects the visual intelligence template for Omnivyra performance reports', () => {
@@ -275,7 +490,23 @@ describe('reportHtmlTemplateRenderer', () => {
         {
           action: 'Execute the highest-impact action first.',
           description: 'Prioritize the strongest near-term growth lever.',
+          reasoning: 'This matters because buyers need clearer proof before they commit to a workflow change.',
           steps: ['Define main promise', 'Add proof blocks'],
+          tactics: [
+            'Update the homepage proof band with customer outcomes.',
+            'Add FAQ schema to the pricing page.',
+            'Publish a comparison page for the strongest alternative query.',
+          ],
+          focusPage: 'homepage',
+          timeline: {
+            short: '2-4 weeks: homepage engagement should improve.',
+            mid: '1-3 months: conversion readiness should rise.',
+            long: '3-6 months: the brand should capture more qualified demand.',
+          },
+          priority: 'high',
+          impact: 'high',
+          effort: 'medium',
+          confidence: 78,
           expectedOutcome: 'Commercial trust should improve.',
           expectedUpside: 'better conversion readiness',
           effortLevel: 'medium',
@@ -288,5 +519,10 @@ describe('reportHtmlTemplateRenderer', () => {
     expect(templateName).toBe('omnivyra_execution_endgame_report_template.html');
     expect(html).toContain('Omnivyra Execution Endgame');
     expect(html).toContain('Your Next Steps');
+    expect(html).toContain('Start here:');
+    expect(html).toContain('homepage');
+    expect(html).toContain('Add FAQ schema to the pricing page.');
   });
 });
+
+

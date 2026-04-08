@@ -7,6 +7,7 @@ import { BLOCK_GROUPS, BLOCK_LABELS, BLOCK_DESCRIPTIONS } from '../../../lib/blo
 
 type Props = {
   onSelect: (type: BlockType) => void;
+  excludeTypes?: BlockType[];
 };
 
 const BLOCK_ICONS: Record<BlockType, string> = {
@@ -22,6 +23,7 @@ const BLOCK_ICONS: Record<BlockType, string> = {
   references:    '📚',
   internal_link: '🔗',
   summary:       '✦',
+  columns:       '▥',
 };
 
 // ── AI keyword → block type map ───────────────────────────────────────────────
@@ -89,6 +91,11 @@ const AI_KEYWORD_MAP: { keywords: string[]; type: BlockType; hint: string }[] = 
     type: 'paragraph',
     hint: 'Rich text with bold, italic, links, lists',
   },
+  {
+    keywords: ['column', 'columns', 'side by side', 'two column', 'three column', 'layout', 'grid', 'split'],
+    type: 'columns',
+    hint: 'Side-by-side column layout (1-3 columns)',
+  },
 ];
 
 const AI_EXAMPLES = [
@@ -117,7 +124,7 @@ function getAISuggestions(query: string): AISuggestion[] {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function BlockPicker({ onSelect }: Props) {
+export function BlockPicker({ onSelect, excludeTypes }: Props) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'browse' | 'ai'>('browse');
   const [aiQuery, setAiQuery] = useState('');
@@ -146,7 +153,9 @@ export function BlockPicker({ onSelect }: Props) {
     setTab('browse');
   };
 
-  const aiSuggestions = getAISuggestions(aiQuery);
+  const aiSuggestions = getAISuggestions(aiQuery).filter(
+    (s) => !excludeTypes?.includes(s.type),
+  );
 
   return (
     <div ref={ref} className="relative flex justify-center">
@@ -193,13 +202,18 @@ export function BlockPicker({ onSelect }: Props) {
           {/* Browse tab */}
           {tab === 'browse' && (
             <div className="p-3 space-y-3 max-h-80 overflow-y-auto">
-              {BLOCK_GROUPS.map((group) => (
+              {BLOCK_GROUPS.map((group) => {
+                const types = excludeTypes
+                  ? group.types.filter((t) => !excludeTypes.includes(t))
+                  : group.types;
+                if (types.length === 0) return null;
+                return (
                 <div key={group.label}>
                   <p className="px-2 text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">
                     {group.label}
                   </p>
                   <div className="grid grid-cols-2 gap-1">
-                    {group.types.map((type) => (
+                    {types.map((type) => (
                       <button
                         key={type}
                         type="button"
@@ -219,7 +233,8 @@ export function BlockPicker({ onSelect }: Props) {
                     ))}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 

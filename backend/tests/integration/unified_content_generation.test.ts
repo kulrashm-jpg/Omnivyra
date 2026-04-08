@@ -30,10 +30,7 @@ describe('Unified Content Generation System', () => {
   });
 
   afterAll(async () => {
-    // Cleanup
-    if (contentQueue) {
-      await contentQueue.close();
-    }
+    // Keep shared queue handles alive for the later top-level full-system tests.
   });
 
   describe('Unit Tests', () => {
@@ -438,7 +435,7 @@ describe('Integration Tests - Full System', () => {
     const job = await queue.getJob(createResult.jobId);
     expect(job).toBeDefined();
     const state = await job?.getState();
-    expect(['waiting', 'delayed', 'active', 'completed']).toContain(state);
+    expect(['waiting', 'delayed', 'active', 'completed', 'prioritized']).toContain(state);
     console.log('✓ Job queued with state:', state);
 
     // 3. Simulate polling

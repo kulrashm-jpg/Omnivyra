@@ -7,6 +7,7 @@
 
 import { getProfile } from './companyProfileService';
 import { listPlatformRules } from '../db/platformPromotionStore';
+import { ensureFallbackPlatformRules } from './platformRulesService';
 import type { PlanningGenerationInput } from '../types/campaignPlanning';
 
 export type PromptMessage = { role: 'system' | 'user' | 'assistant'; content: string };
@@ -15,20 +16,43 @@ export type PromptMessage = { role: 'system' | 'user' | 'assistant'; content: st
  * Build platform→content-types compatibility map from the DB.
  * DB is the mandatory single source of truth — throws if no rules found.
  */
+const HARDCODED_PLATFORM_GUIDE: Record<string, string[]> = {
+  linkedin:  ['text', 'post', 'article', 'video'],
+  instagram: ['image', 'carousel', 'video', 'story'],
+  x:         ['text', 'post'],
+  twitter:   ['text', 'post'],
+  youtube:   ['video'],
+  tiktok:    ['video'],
+  facebook:  ['text', 'post', 'image', 'video'],
+  blog:      ['blog', 'article'],
+  podcast:   ['audio'],
+  pinterest: ['image', 'carousel'],
+};
+
 async function loadPlatformContentGuide(_platforms: string[]): Promise<Record<string, string[]>> {
-  const allRules = await listPlatformRules();
-  if (!allRules || allRules.length === 0) {
-    throw new Error('No platform_content_rules found in DB — cannot build platform content guide');
+  try {
+    let allRules = await listPlatformRules();
+    if (!allRules || allRules.length === 0) {
+      // Attempt to seed — non-blocking; if table is missing this logs a warn and returns null rows
+      await ensureFallbackPlatformRules();
+      allRules = await listPlatformRules();
+    }
+    if (allRules && allRules.length > 0) {
+      const guide: Record<string, string[]> = {};
+      for (const rule of allRules) {
+        const p = String(rule.platform || '').toLowerCase();
+        const ct = String(rule.content_type || '').toLowerCase();
+        if (!p || !ct) continue;
+        if (!guide[p]) guide[p] = [];
+        if (!guide[p].includes(ct)) guide[p].push(ct);
+      }
+      return guide;
+    }
+  } catch (err) {
+    console.warn('[campaignPromptBuilder] loadPlatformContentGuide DB failed, using hardcoded guide:', (err as Error)?.message);
   }
-  const guide: Record<string, string[]> = {};
-  for (const rule of allRules) {
-    const p = String(rule.platform || '').toLowerCase();
-    const ct = String(rule.content_type || '').toLowerCase();
-    if (!p || !ct) continue;
-    if (!guide[p]) guide[p] = [];
-    if (!guide[p].includes(ct)) guide[p].push(ct);
-  }
-  return guide;
+  // Last resort: hardcoded guide so the bolt pipeline never crashes on missing DB data
+  return HARDCODED_PLATFORM_GUIDE;
 }
 
 /** Platforms that are video-first — topics going here must use video content type. */

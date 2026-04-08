@@ -151,10 +151,15 @@ export async function saveWeekPlans(
     generation_source: sourceVal,
   }));
 
-  const { error } = await supabase.from('daily_content_plans').insert(rowsWithSource);
-  if (error) {
-    console.error('[EXECUTION_ENGINE] saveWeekPlans insert failed:', error);
-    throw new Error(`Failed to save daily plans: ${error.message}`);
+  // Chunk inserts to avoid Supabase request size limits when weekly card count is high (20+).
+  const CHUNK_SIZE = 20;
+  for (let i = 0; i < rowsWithSource.length; i += CHUNK_SIZE) {
+    const chunk = rowsWithSource.slice(i, i + CHUNK_SIZE);
+    const { error } = await supabase.from('daily_content_plans').insert(chunk);
+    if (error) {
+      console.error('[EXECUTION_ENGINE] saveWeekPlans insert failed:', error);
+      throw new Error(`Failed to save daily plans: ${error.message}`);
+    }
   }
 
   validateWeekConsistency(campaignId, weekNumber);

@@ -14,8 +14,9 @@ import { processEngagementPollingJob } from './jobProcessors/engagementPollingPr
 import { processBoltJob } from './jobProcessors/boltProcessor';
 import { processContentGenerationJob } from './jobProcessors/contentGenerationProcessor';
 import { processCreatorContentJob } from './jobProcessors/creatorContentProcessor';
+import { processBoltContentJob } from './jobProcessors/boltContentJobProcessor';
 import { getIntelligencePollingWorker } from '../workers/intelligencePollingWorker';
-import { initializeContentQueues, startContentWorkers, startCreatorContentWorkers } from './contentGenerationQueues';
+import { initializeContentQueues, startContentWorkers, startCreatorContentWorkers, startBoltContentWorkers } from './contentGenerationQueues';
 
 let publishWorker: ReturnType<typeof getWorker>;
 let boltWorker: ReturnType<typeof getWorker>;
@@ -48,6 +49,9 @@ export async function startWorkers(): Promise<void> {
 
   // Start creator content workers (video, carousel, story)
   await startCreatorContentWorkers(processCreatorContentJob);
+
+  // Start BOLT content job workers (async per-topic master+variant+schedule)
+  await startBoltContentWorkers(processBoltContentJob);
 
   publishWorker = getWorker('publish', processPublishJob);
   boltWorker = getWorker('bolt-execution', processBoltJob, { concurrency: boltConcurrency });

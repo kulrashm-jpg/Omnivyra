@@ -1,9 +1,14 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { runCampaignAiPlan } from '../../../../backend/services/campaignAiOrchestrator';
-import { Role } from '../../../../backend/services/rbacService';
-import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import {
+  getUserRole,
+  hasPermission,
+  isPlatformSuperAdmin,
+  isSuperAdmin,
+} from '../../../../backend/services/rbacService';
 import { getCampaignPlanningInputs } from '../../../../backend/services/campaignPlanningInputsService';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import {
   DEFAULT_BUILD_MODE_RECOMMENDATION,
   normalizeCampaignTypes,
@@ -72,6 +77,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (recError || !recommendation) {
       return res.status(404).json({ error: 'Recommendation not found' });
+    }
+
+    const auth = await getSupabaseUserFromRequest(req);
+    if (auth.error || !auth.user) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
+    const userId = auth.user.id;
+    const companyId = String(recommendation.company_id);
+    const privileged =
+      (await isPlatformSuperAdmin(userId)) ||
+      (await isSuperAdmin(userId));
+    if (!privileged) {
+      const { role } = await getUserRole(userId, companyId);
+      if (!(await hasPermission(role, 'CREATE_CAMPAIGN'))) {
+        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      }
     }
 
     const { data: decisionRow } = await supabase
@@ -158,6 +179,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .insert({
         name: `Trend: ${recommendation.trend_topic}`,
         description: `Auto-generated from recommendation ${recommendation.id}`,
+        user_id: userId,
         status: 'draft',
         current_stage: 'planning',
         ...(source_blog_type ? { source_blog_type: resolvedBlogType } : {}),
@@ -171,7 +193,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(500).json({ error: 'Failed to create campaign' });
     }
 
-    const companyId = String(recommendation.company_id);
     const campaign_types = normalizeCampaignTypes(req.body?.campaign_types ?? req.body?.campaignTypes);
     const campaign_weights = normalizeCampaignWeights(
       campaign_types,
@@ -258,7 +279,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     try {
-      const actorUserId = (req as any)?.rbac?.userId ?? null;
+      const actorUserId = userId;
       await supabase.from('audit_logs').insert({
         action: 'RECOMMENDATION_CONVERTED_TO_CAMPAIGN',
         actor_user_id: actorUserId,
@@ -285,4 +306,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN]);
+export default handler;
