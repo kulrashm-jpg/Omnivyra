@@ -29,6 +29,7 @@ import {
   getActiveProviders,
 } from '../../../backend/services/llmProviderService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 async function requireCompanyLlmAccess(
   req: NextApiRequest,
@@ -73,6 +74,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const companyId = (req.query.companyId as string)?.trim();
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
 
+    const companyAccess = await enforceCompanyAccess({ req, res, companyId });
+    if (!companyAccess) return;
+
     const access = await requireCompanyLlmAccess(req, res, companyId);
     if (!access) return;
 
@@ -112,6 +116,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     if (!provider_id) return res.status(400).json({ error: 'provider_id is required' });
     if (!model_id) return res.status(400).json({ error: 'model_id is required' });
+
+    const companyAccess = await enforceCompanyAccess({ req, res, companyId });
+    if (!companyAccess) return;
 
     const access = await requireCompanyLlmAccess(req, res, companyId);
     if (!access) return;

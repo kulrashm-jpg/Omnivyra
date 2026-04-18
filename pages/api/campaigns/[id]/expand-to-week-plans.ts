@@ -30,9 +30,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Get twelve_week_plan id for FK link (when stored in twelve_week_plan table)
+    // Get campaign_week_plan id for FK link (when stored in campaign_week_plan table)
     const { data: twelveWeekRow } = await supabase
-      .from('twelve_week_plan')
+      .from('campaign_week_plan')
       .select('id')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })
@@ -64,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         refinement_status: row.refinement_status ?? 'ai_enhanced',
         updated_at: new Date().toISOString(),
       };
-      if (twelveWeekPlanId) payload.twelve_week_plan_id = twelveWeekPlanId;
+      if (twelveWeekPlanId) payload.campaign_week_plan_id = twelveWeekPlanId;
 
       if (existing) {
         const { error } = await supabase
@@ -83,9 +83,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Sync campaign_versions stage - detailed week plans is between twelve_week_plan and daily_plan
-    // We use twelve_week_plan still as stage; the "detailed" is just the data
-    void syncCampaignVersionStage(campaignId, 'twelve_week_plan').catch(() => {});
+    // Sync campaign_versions stage - detailed week plans is between campaign_week_plan and daily_plan
+    // We use campaign_week_plan still as stage; the "detailed" is just the data
+    void syncCampaignVersionStage(campaignId, 'campaign_week_plan').catch(() => {});
 
     return res.status(200).json({
       success: true,

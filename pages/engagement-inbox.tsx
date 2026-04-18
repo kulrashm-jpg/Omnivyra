@@ -52,6 +52,39 @@ export default function EngagementInboxPage() {
   const [platform, setPlatform] = useState('');
   const [signalType, setSignalType] = useState('');
   const [timeRange, setTimeRange] = useState('7d');
+  const [replyText, setReplyText] = useState('');
+  const [replying, setReplying] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [replySuccess, setReplySuccess] = useState(false);
+
+  const sendReply = async () => {
+    if (!selectedSignal || !replyText.trim() || !companyId) return;
+    setReplying(true);
+    setReplyError(null);
+    setReplySuccess(false);
+    try {
+      const res = await fetch('/api/engagement/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          organization_id: companyId,
+          message_id: selectedSignal.activity_id,
+          reply_text: replyText.trim(),
+          platform: selectedSignal.platform,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Reply failed');
+      setReplyText('');
+      setReplySuccess(true);
+      await updateSignalStatus(selectedSignal.id, 'actioned');
+    } catch (err: any) {
+      setReplyError(err.message);
+    } finally {
+      setReplying(false);
+    }
+  };
 
   const updateSignalStatus = async (signalId: string, status: string) => {
     try {
@@ -92,6 +125,9 @@ export default function EngagementInboxPage() {
       setSignals(data.signals ?? []);
       if (selectedSignal && !(data.signals ?? []).some((s: CampaignSignal) => s.id === selectedSignal.id)) {
         setSelectedSignal(null);
+        setReplyText('');
+        setReplyError(null);
+        setReplySuccess(false);
       }
     } catch (err) {
       setSignals([]);
@@ -201,7 +237,7 @@ export default function EngagementInboxPage() {
                   {signals.map((sig) => (
                     <li
                       key={sig.id}
-                      onClick={() => setSelectedSignal(sig)}
+                      onClick={() => { setSelectedSignal(sig); setReplyText(''); setReplyError(null); setReplySuccess(false); }}
                       className={`p-3 cursor-pointer hover:bg-gray-50 ${
                         selectedSignal?.id === sig.id ? 'bg-indigo-50' : ''
                       }`}
@@ -289,7 +325,34 @@ export default function EngagementInboxPage() {
                   <div className="text-xs text-gray-500 pt-2">
                     Linked activity: {selectedSignal.activity_id}
                   </div>
-                  <div className="flex flex-wrap gap-2 pt-4">
+                  {/* Reply input */}
+                  <div className="pt-4 space-y-2">
+                    <label className="block text-xs font-medium text-gray-700">Reply</label>
+                    <textarea
+                      rows={3}
+                      value={replyText}
+                      onChange={(e) => { setReplyText(e.target.value); setReplyError(null); setReplySuccess(false); }}
+                      placeholder="Type your reply..."
+                      className="w-full rounded border border-gray-300 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    {replyError && (
+                      <p className="text-xs text-red-600">{replyError}</p>
+                    )}
+                    {replySuccess && (
+                      <p className="text-xs text-green-600">Reply sent successfully.</p>
+                    )}
+                    <button
+                      type="button"
+                      disabled={!replyText.trim() || replying}
+                      onClick={sendReply}
+                      className="w-full px-3 py-2 rounded bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                    >
+                      <Send className="h-4 w-4" />
+                      {replying ? 'Sending...' : 'Send Reply'}
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 pt-2">
                     <button
                       type="button"
                       className="px-3 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50 flex items-center gap-1.5"

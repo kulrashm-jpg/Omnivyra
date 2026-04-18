@@ -11,15 +11,16 @@ export enum FeatureKey {
   // Core Setup
   COMPANY_PROFILE_COMPLETED = 'company_profile_completed',
   WEBSITE_CONNECTED = 'website_connected',
-  
+
   // Content Creation
   BLOG_CREATED = 'blog_created',
   REPORT_GENERATED = 'report_generated',
-  
+
   // Distribution & Engagement
   SOCIAL_ACCOUNTS_CONNECTED = 'social_accounts_connected',
   CAMPAIGN_CREATED = 'campaign_created',
-  
+  CAMPAIGN_PUBLISHED = 'campaign_published',
+
   // Tools & Integration
   CHROME_EXTENSION_INSTALLED = 'chrome_extension_installed',
   API_CONFIGURED = 'api_configured',
@@ -51,8 +52,9 @@ export interface FeatureCompletionRecord {
 export interface ComputedFeature {
   key: FeatureKey;
   status: FeatureStatus;
+  score: number;        // 0.0–1.0 partial progress
   completedAt?: Date;
-  reason?: string; // Why this status
+  reason?: string;
 }
 
 /**
@@ -62,6 +64,7 @@ export interface FeatureCompletionResponse {
   features: Array<{
     key: FeatureKey;
     status: FeatureStatus;
+    score: number;         // 0.0–1.0
     completedAt?: string;
   }>;
   summary?: {
@@ -76,6 +79,7 @@ export interface FeatureCompletionResponse {
  */
 export interface FeatureDetectionResult {
   isCompleted: boolean;
+  score: number;         // 0.0–1.0 partial progress
   reason: string;
   completedAt?: Date;
   metadata?: Record<string, any>;

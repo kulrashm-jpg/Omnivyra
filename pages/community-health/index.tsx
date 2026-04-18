@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
-import Header from '../../components/Header';
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 
 export interface CommunityHealthSummary {
@@ -115,7 +114,6 @@ export default function CommunityHealthPage() {
 
   return (
     <>
-      <Header />
       <div className="max-w-4xl mx-auto px-4 py-6">
         <h1 className="text-xl font-semibold text-gray-900 mb-4">
           Community Health Dashboard

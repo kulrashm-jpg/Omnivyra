@@ -1,6 +1,6 @@
 import {
-  getDefaultTemplates,
-  instantiateTemplate,
+  getDefaultBlogTemplatesRegistry,
+  instantiateBlogDefaultTemplate,
   type DefaultTemplate,
 } from './defaultBlockTemplates';
 import type { ContentBlock } from './blockTypes';
@@ -8,12 +8,12 @@ import type { ContentBlock } from './blockTypes';
 export type BlogTemplate = DefaultTemplate;
 
 export function getDefaultBlogTemplates(): BlogTemplate[] {
-  return getDefaultTemplates('blog').filter((template) => template.content_type === 'blog');
+  return getDefaultBlogTemplatesRegistry();
 }
 
 export function instantiateBlogTemplate(
   template: BlogTemplate,
   targetWords?: number,
 ): ContentBlock[] {
-  return instantiateTemplate(template, targetWords);
+  return instantiateBlogDefaultTemplate(template, targetWords);
 }

@@ -17,7 +17,6 @@ import {
 } from 'lucide-react';
 import { useCompanyContext } from '../../../components/CompanyContext';
 import { fetchWithAuth } from '../../../components/community-ai/fetchWithAuth';
-import Header from '../../../components/Header';
 
 interface RecWeek {
   id: string;
@@ -207,7 +206,6 @@ export default function CampaignRecommendationsPage() {
       <Head>
         <title>Expert Recommendations – {campaign?.name || 'Campaign'}</title>
       </Head>
-      <Header />
       <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-teal-50">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex justify-between items-center mb-8">

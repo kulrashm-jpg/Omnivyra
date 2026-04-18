@@ -3,6 +3,7 @@
  */
 
 import React, { useCallback, useMemo } from 'react';
+import { useRouter } from 'next/router';
 import PlatformIcon from '@/components/ui/PlatformIcon';
 import { ReplyComposer } from './ReplyComposer';
 import { AISuggestionPanel } from './AISuggestionPanel';
@@ -54,11 +55,13 @@ export const ConversationView = React.memo(function ConversationView({
   onMarkResolved,
   className = '',
 }: ConversationViewProps) {
+  const router = useRouter();
   const [replyingTo, setReplyingTo] = React.useState<EngagementMessage | null>(null);
   const [replyText, setReplyText] = React.useState('');
   const [showSuggestions, setShowSuggestions] = React.useState(false);
   const [savingPattern, setSavingPattern] = React.useState(false);
   const [patternError, setPatternError] = React.useState<string | null>(null);
+  const [hydratedReplyToken, setHydratedReplyToken] = React.useState<string | null>(null);
 
   const threadAuthor = thread?.author_name ?? thread?.author_username ?? null;
 
@@ -72,6 +75,32 @@ export const ConversationView = React.memo(function ConversationView({
   }, [messages]);
 
   const replyTarget = replyingTo ?? latestMessage;
+  const prefillReplyToken = typeof router.query.prefill_reply === 'string' ? router.query.prefill_reply : '';
+
+  React.useEffect(() => {
+    if (!thread?.thread_id || !prefillReplyToken || hydratedReplyToken === prefillReplyToken || typeof window === 'undefined') {
+      return;
+    }
+    const raw = sessionStorage.getItem(prefillReplyToken);
+    if (!raw) {
+      setHydratedReplyToken(prefillReplyToken);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as { threadId?: string; text?: string };
+      if (parsed.threadId === thread.thread_id && typeof parsed.text === 'string' && parsed.text.trim()) {
+        setReplyText(parsed.text.trim());
+        setReplyingTo(latestMessage);
+        setShowSuggestions(false);
+        window.setTimeout(() => window.dispatchEvent(new CustomEvent('engagement:focus-reply')), 0);
+      }
+    } catch {
+      // ignore malformed reply drafts
+    } finally {
+      sessionStorage.removeItem(prefillReplyToken);
+      setHydratedReplyToken(prefillReplyToken);
+    }
+  }, [hydratedReplyToken, latestMessage, prefillReplyToken, thread?.thread_id]);
 
   const messageTree = useMemo(() => {
     const byId = new Map<string, EngagementMessage>();

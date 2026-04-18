@@ -6,7 +6,8 @@ export type CampaignSourceContentType =
   | 'article'
   | 'guide'
   | 'story'
-  | 'whitepaper';
+  | 'whitepaper'
+  | 'case-study';
 
 export type CampaignSourcePayload = {
   origin: 'content_editor';

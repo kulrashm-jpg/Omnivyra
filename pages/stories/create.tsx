@@ -5,10 +5,10 @@ export default function StoryCreatePage() {
   return (
     <FormatSelectionPage
       title="Create a Story"
-      subtitle="Choose your narrative format"
+      subtitle="Choose the narrative structure that best matches the emotional arc, message depth, and audience resonance you want the story to carry."
       icon="📖"
       formats={STORY_FORMAT_OPTIONS}
-      generatePath="/stories/generate"
+      generatePath="/stories/intelligence"
       accentColor="pink"
       pageTitle="Create Story"
     />

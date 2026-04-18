@@ -86,6 +86,12 @@ type RecommendationBlueprintCardProps = {
   upcomingBadge?: { index: number; total: number };
   /** Error message when "Start this campaign" / "Build Campaign Blueprint" failed (shown on card). */
   buildError?: string;
+  /** When true, BOLT fast-build is in progress for this specific card. */
+  fastLoading?: boolean;
+  /** Trigger fast (BOLT) campaign build with options. */
+  onBuildCampaignFast?: (options?: { outcomeView?: BoltOutcomeView; campaignMode?: BoltCampaignMode; contentFormats?: BoltContentFormat[]; durationWeeks?: number }) => Promise<void> | void;
+  /** When set, card was initiated from the BOLT (Text) setup page with preset options. */
+  boltTextPreset?: { outcomeView: BoltOutcomeView; durationWeeks: number; contentFormat: BoltContentFormat } | undefined;
   /**
    * When set, this card was initiated from the BOLT (Text) setup page.
    * Hides the Campaign Mode / dropdown UI and shows a single "⚡ BOLT (Text)" button

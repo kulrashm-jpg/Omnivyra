@@ -4,6 +4,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Global overflow guard — prevents any child from causing horizontal scroll ── */
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 /* ── Float animation for hero cards ─────────────────────────────────────── */
 @keyframes float-slow {
   0%, 100% { transform: translateY(0px); }

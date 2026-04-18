@@ -25,38 +25,53 @@ const supabase = createClient(
  */
 async function detectCompanyProfileCompleted(companyId: string): Promise<FeatureDetectionResult> {
   try {
-    const { data: company, error } = await supabase
-      .from('companies')
-      .select('name, industry, company_size')
-      .eq('id', companyId)
-      .single();
+    const [{ data: profile }, { data: company }] = await Promise.all([
+      supabase
+        .from('company_profiles')
+        .select('name, industry, report_settings')
+        .eq('company_id', companyId)
+        .maybeSingle(),
+      supabase
+        .from('companies')
+        .select('name, industry, size')
+        .eq('id', companyId)
+        .maybeSingle(),
+    ]);
 
-    if (error || !company) {
-      return {
-        isCompleted: false,
-        reason: 'Company profile not found',
-      };
+    if (!profile && !company) {
+      return { isCompleted: false, score: 0, reason: 'Company profile not found' };
     }
 
-    const isCompleted = Boolean(company.name && company.industry && company.company_size);
-    
+    const teamSize =
+      profile?.report_settings &&
+      typeof profile.report_settings === 'object' &&
+      'company_facts' in profile.report_settings &&
+      profile.report_settings.company_facts &&
+      typeof profile.report_settings.company_facts === 'object' &&
+      'team_size' in profile.report_settings.company_facts
+        ? profile.report_settings.company_facts.team_size
+        : null;
+
+    const fields = [
+      Boolean(profile?.name || company?.name),
+      Boolean(profile?.industry || company?.industry),
+      Boolean(teamSize || company?.size),
+    ];
+    const filled = fields.filter(Boolean).length;
+    const score  = filled / 3;
+    const isCompleted = filled === 3;
+
     return {
       isCompleted,
-      reason: isCompleted 
-        ? 'Company profile has name, industry, and size'
-        : 'Missing one or more required fields: name, industry, company_size',
+      score,
+      reason: isCompleted
+        ? 'Company profile complete (name, industry, size)'
+        : `${filled}/3 profile fields filled`,
       completedAt: isCompleted ? new Date() : undefined,
-      metadata: {
-        hasName: Boolean(company.name),
-        hasIndustry: Boolean(company.industry),
-        hasSize: Boolean(company.company_size),
-      },
+      metadata: { hasName: fields[0], hasIndustry: fields[1], hasSize: fields[2] },
     };
   } catch (err) {
-    return {
-      isCompleted: false,
-      reason: `Error checking company profile: ${(err as Error).message}`,
-    };
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
   }
 }
 
@@ -66,36 +81,34 @@ async function detectCompanyProfileCompleted(companyId: string): Promise<Feature
  */
 async function detectWebsiteConnected(companyId: string): Promise<FeatureDetectionResult> {
   try {
-    const { data: company, error } = await supabase
-      .from('companies')
-      .select('website_url')
-      .eq('id', companyId)
-      .single();
+    const [{ data: profile }, { data: company }] = await Promise.all([
+      supabase
+        .from('company_profiles')
+        .select('website_url')
+        .eq('company_id', companyId)
+        .maybeSingle(),
+      supabase
+        .from('companies')
+        .select('website')
+        .eq('id', companyId)
+        .maybeSingle(),
+    ]);
 
-    if (error || !company) {
-      return {
-        isCompleted: false,
-        reason: 'Company not found',
-      };
+    if (!profile && !company) {
+      return { isCompleted: false, score: 0, reason: 'Company not found' };
     }
 
-    const isCompleted = Boolean(company.website_url);
-    
+    const websiteUrl = profile?.website_url || company?.website || null;
+    const isCompleted = Boolean(websiteUrl);
     return {
       isCompleted,
-      reason: isCompleted 
-        ? `Website connected: ${company.website_url}`
-        : 'No website URL configured',
+      score: isCompleted ? 1 : 0,
+      reason: isCompleted ? `Website connected: ${websiteUrl}` : 'No website URL configured',
       completedAt: isCompleted ? new Date() : undefined,
-      metadata: {
-        websiteUrl: company.website_url,
-      },
+      metadata: { websiteUrl },
     };
   } catch (err) {
-    return {
-      isCompleted: false,
-      reason: `Error checking website: ${(err as Error).message}`,
-    };
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
   }
 }
 
@@ -107,35 +120,28 @@ async function detectBlogCreated(companyId: string): Promise<FeatureDetectionRes
   try {
     const { data: blogs, error } = await supabase
       .from('blogs')
-      .select('id', { count: 'exact' })
+      .select('id')
       .eq('company_id', companyId)
-      .limit(1);
+      .limit(10);
 
     if (error) {
-      return {
-        isCompleted: false,
-        reason: `Error checking blogs: ${error.message}`,
-      };
+      return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
     }
 
-    const blogCount = blogs?.length ?? 0;
-    const isCompleted = blogCount > 0;
-    
+    const count = blogs?.length ?? 0;
+    // 1 = 33%, 3 = 66%, 5+ = 100%
+    const score = count === 0 ? 0 : count < 3 ? 0.33 : count < 5 ? 0.66 : 1;
+    const isCompleted = score >= 1;
+
     return {
       isCompleted,
-      reason: isCompleted 
-        ? `${blogCount} blog post(s) created`
-        : 'No blog posts created yet',
+      score,
+      reason: `${count} piece(s) of content created`,
       completedAt: isCompleted ? new Date() : undefined,
-      metadata: {
-        blogCount,
-      },
+      metadata: { count },
     };
   } catch (err) {
-    return {
-      isCompleted: false,
-      reason: `Error checking blogs: ${(err as Error).message}`,
-    };
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
   }
 }
 
@@ -145,50 +151,48 @@ async function detectBlogCreated(companyId: string): Promise<FeatureDetectionRes
  */
 async function detectReportGenerated(companyId: string): Promise<FeatureDetectionResult> {
   try {
-    // Check for generated reports (adjust table name as needed)
-    const { data: reports, error } = await supabase
+    const { data: analyticsRows, error: analyticsError } = await supabase
       .from('analytics_reports')
-      .select('id', { count: 'exact' })
+      .select('id')
       .eq('company_id', companyId)
-      .limit(1);
+      .limit(5);
 
-    if (error) {
-      // Try alternative table name
-      const { data: reports2 } = await supabase
-        .from('reports')
-        .select('id', { count: 'exact' })
-        .eq('company_id', companyId)
-        .limit(1);
+    const { data: reportRows, error: reportsError } = await supabase
+      .from('reports')
+      .select('id')
+      .eq('company_id', companyId)
+      .limit(5);
 
-      const reportCount = reports2?.length ?? 0;
-      const isCompleted = reportCount > 0;
-      
+    if (analyticsError && reportsError) {
       return {
-        isCompleted,
-        reason: isCompleted 
-          ? `${reportCount} report(s) generated`
-          : 'No reports generated yet',
-        completedAt: isCompleted ? new Date() : undefined,
-        metadata: { reportCount },
+        isCompleted: false,
+        score: 0,
+        reason: `Error: ${analyticsError.message || reportsError.message}`,
       };
     }
 
-    const reportCount = reports?.length ?? 0;
-    const isCompleted = reportCount > 0;
-    
+    const ids = new Set<string>();
+    (analyticsRows || []).forEach((row: { id?: string | null }) => {
+      if (row?.id) ids.add(row.id);
+    });
+    (reportRows || []).forEach((row: { id?: string | null }) => {
+      if (row?.id) ids.add(row.id);
+    });
+    const count = ids.size;
+
+    // 1 = 50%, 2 = 75%, 3+ = 100%
+    const score = count === 0 ? 0 : count === 1 ? 0.5 : count === 2 ? 0.75 : 1;
+    const isCompleted = score >= 1;
+
     return {
       isCompleted,
-      reason: isCompleted 
-        ? `${reportCount} report(s) generated`
-        : 'No reports generated yet',
+      score,
+      reason: `${count} report(s) generated`,
       completedAt: isCompleted ? new Date() : undefined,
-      metadata: { reportCount },
+      metadata: { count },
     };
   } catch (err) {
-    return {
-      isCompleted: false,
-      reason: `Error checking reports: ${(err as Error).message}`,
-    };
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
   }
 }
 
@@ -200,34 +204,29 @@ async function detectSocialAccountsConnected(companyId: string): Promise<Feature
   try {
     const { data: accounts, error } = await supabase
       .from('social_accounts')
-      .select('id', { count: 'exact' })
+      .select('id')
       .eq('company_id', companyId)
       .eq('is_active', true)
-      .limit(1);
+      .limit(5);
 
     if (error) {
-      return {
-        isCompleted: false,
-        reason: `Error checking social accounts: ${error.message}`,
-      };
+      return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
     }
 
-    const accountCount = accounts?.length ?? 0;
-    const isCompleted = accountCount > 0;
-    
+    const count = accounts?.length ?? 0;
+    // 1 = 40%, 2 = 70%, 3+ = 100%
+    const score = count === 0 ? 0 : count === 1 ? 0.4 : count === 2 ? 0.7 : 1;
+    const isCompleted = score >= 1;
+
     return {
       isCompleted,
-      reason: isCompleted 
-        ? `${accountCount} social account(s) connected`
-        : 'No social accounts connected',
+      score,
+      reason: `${count} social account(s) connected`,
       completedAt: isCompleted ? new Date() : undefined,
-      metadata: { accountCount },
+      metadata: { count },
     };
   } catch (err) {
-    return {
-      isCompleted: false,
-      reason: `Error checking social accounts: ${(err as Error).message}`,
-    };
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
   }
 }
 
@@ -239,33 +238,54 @@ async function detectCampaignCreated(companyId: string): Promise<FeatureDetectio
   try {
     const { data: campaigns, error } = await supabase
       .from('campaigns')
-      .select('id', { count: 'exact' })
+      .select('id')
       .eq('company_id', companyId)
       .limit(1);
 
     if (error) {
-      return {
-        isCompleted: false,
-        reason: `Error checking campaigns: ${error.message}`,
-      };
+      return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
     }
 
-    const campaignCount = campaigns?.length ?? 0;
-    const isCompleted = campaignCount > 0;
-    
+    const isCompleted = (campaigns?.length ?? 0) > 0;
     return {
       isCompleted,
-      reason: isCompleted 
-        ? `${campaignCount} campaign(s) created`
-        : 'No campaigns created yet',
+      score: isCompleted ? 1 : 0,
+      reason: isCompleted ? 'Campaign created / staged' : 'No campaigns created yet',
       completedAt: isCompleted ? new Date() : undefined,
-      metadata: { campaignCount },
+      metadata: { count: campaigns?.length ?? 0 },
     };
   } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * CAMPAIGN_PUBLISHED
+ * Detects if company has at least one published / sent campaign
+ */
+async function detectCampaignPublished(companyId: string): Promise<FeatureDetectionResult> {
+  try {
+    const { data: campaigns, error } = await supabase
+      .from('campaigns')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('status', ['published', 'sent', 'active', 'completed'])
+      .limit(1);
+
+    if (error) {
+      return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
+    }
+
+    const isCompleted = (campaigns?.length ?? 0) > 0;
     return {
-      isCompleted: false,
-      reason: `Error checking campaigns: ${(err as Error).message}`,
+      isCompleted,
+      score: isCompleted ? 1 : 0,
+      reason: isCompleted ? 'Campaign published / sent' : 'No campaigns published yet',
+      completedAt: isCompleted ? new Date() : undefined,
+      metadata: { count: campaigns?.length ?? 0 },
     };
+  } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
   }
 }
 
@@ -274,49 +294,26 @@ async function detectCampaignCreated(companyId: string): Promise<FeatureDetectio
  * Detects if company has the Chrome extension flag or status
  */
 async function detectChromeExtensionInstalled(companyId: string): Promise<FeatureDetectionResult> {
+  // Check feature_completion table for a manually-set chrome extension flag
+  // (no extension_installations table exists yet)
   try {
-    // Check if company has extension metadata or flag
-    const { data: company, error } = await supabase
-      .from('companies')
-      .select('metadata')
-      .eq('id', companyId)
+    const { data } = await supabase
+      .from('feature_completion')
+      .select('status')
+      .eq('company_id', companyId)
+      .eq('feature_key', 'chrome_extension_installed')
       .single();
 
-    if (error || !company) {
-      return {
-        isCompleted: false,
-        reason: 'Company not found',
-      };
-    }
-
-    const extensionFlag = company.metadata?.chrome_extension_installed ?? false;
-    
-    // Also check for extension records (adjust table as needed)
-    const { data: extensions } = await supabase
-      .from('extension_installations')
-      .select('id', { count: 'exact' })
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .limit(1);
-
-    const hasExtension = extensionFlag || (extensions?.length ?? 0) > 0;
-    
+    // Only trust an existing DB record if it was manually set to completed
+    const isCompleted = data?.status === 'completed';
     return {
-      isCompleted: hasExtension,
-      reason: hasExtension 
-        ? 'Chrome extension installed'
-        : 'Chrome extension not installed',
-      completedAt: hasExtension ? new Date() : undefined,
-      metadata: {
-        viaMetadata: extensionFlag,
-        viaTable: (extensions?.length ?? 0) > 0,
-      },
+      isCompleted,
+      score: isCompleted ? 1 : 0,
+      reason: isCompleted ? 'Chrome extension installed' : 'Chrome extension not yet installed',
+      completedAt: isCompleted ? new Date() : undefined,
     };
-  } catch (err) {
-    return {
-      isCompleted: false,
-      reason: `Error checking extension: ${(err as Error).message}`,
-    };
+  } catch {
+    return { isCompleted: false, score: 0, reason: 'Chrome extension not yet installed' };
   }
 }
 
@@ -326,36 +323,25 @@ async function detectChromeExtensionInstalled(companyId: string): Promise<Featur
  */
 async function detectApiConfigured(companyId: string): Promise<FeatureDetectionResult> {
   try {
-    const { data: config, error } = await supabase
+    const { data: cfg, error } = await supabase
       .from('company_api_configs')
       .select('id')
       .eq('company_id', companyId)
       .limit(1);
 
     if (error) {
-      return {
-        isCompleted: false,
-        reason: `Error checking API config: ${error.message}`,
-      };
+      return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
     }
 
-    const hasConfig = (config?.length ?? 0) > 0;
-    
+    const isCompleted = (cfg?.length ?? 0) > 0;
     return {
-      isCompleted: hasConfig,
-      reason: hasConfig 
-        ? 'API keys configured'
-        : 'No API keys configured',
-      completedAt: hasConfig ? new Date() : undefined,
-      metadata: {
-        configCount: config?.length ?? 0,
-      },
+      isCompleted,
+      score: isCompleted ? 1 : 0,
+      reason: isCompleted ? 'API keys configured' : 'No API keys configured',
+      completedAt: isCompleted ? new Date() : undefined,
     };
   } catch (err) {
-    return {
-      isCompleted: false,
-      reason: `Error checking API config: ${(err as Error).message}`,
-    };
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
   }
 }
 
@@ -371,9 +357,6 @@ export async function computeFeatureCompletion(
   companyId: string,
   userId?: string
 ): Promise<ComputedFeature[]> {
-  const features: ComputedFeature[] = [];
-
-  // Map feature keys to detection functions
   const detectors: Record<FeatureKey, (cid: string) => Promise<FeatureDetectionResult>> = {
     [FeatureKey.COMPANY_PROFILE_COMPLETED]: detectCompanyProfileCompleted,
     [FeatureKey.WEBSITE_CONNECTED]: detectWebsiteConnected,
@@ -381,24 +364,26 @@ export async function computeFeatureCompletion(
     [FeatureKey.REPORT_GENERATED]: detectReportGenerated,
     [FeatureKey.SOCIAL_ACCOUNTS_CONNECTED]: detectSocialAccountsConnected,
     [FeatureKey.CAMPAIGN_CREATED]: detectCampaignCreated,
+    [FeatureKey.CAMPAIGN_PUBLISHED]: detectCampaignPublished,
     [FeatureKey.CHROME_EXTENSION_INSTALLED]: detectChromeExtensionInstalled,
     [FeatureKey.API_CONFIGURED]: detectApiConfigured,
   };
 
-  // Run all detectors in parallel
-  const detectionPromises = Object.entries(detectors).map(async ([featureKey, detector]) => {
-    const result = await detector(companyId);
-    return {
-      key: featureKey as FeatureKey,
-      status: result.isCompleted ? ('completed' as const) : ('not_started' as const),
-      completedAt: result.completedAt,
-      reason: result.reason,
-    };
-  });
+  const results = await Promise.all(
+    Object.entries(detectors).map(async ([featureKey, detector]) => {
+      const result = await detector(companyId);
+      // Derive status from score: 0 = not_started, 0<s<1 = in_progress, 1 = completed
+      const status: ComputedFeature['status'] =
+        result.score >= 1 ? 'completed' : result.score > 0 ? 'in_progress' : 'not_started';
+      return {
+        key: featureKey as FeatureKey,
+        status,
+        score: result.score,
+        completedAt: result.completedAt,
+        reason: result.reason,
+      };
+    })
+  );
 
-  await Promise.all(detectionPromises).then(results => {
-    features.push(...results);
-  });
-
-  return features;
+  return results;
 }

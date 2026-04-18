@@ -248,15 +248,15 @@ function buildVisualFeatureTemplate(targetWords = 1200): ContentBlock[] {
       ]),
       callout('insight', 'Add one sharp framing line that tells the reader what they should notice beneath the obvious visual story.'),
       h2('The key visual narrative'),
-      para('Write a substantial section exploring the first theme with vivid descriptive language, analysis, and concrete examples. Use multiple paragraphs if needed.'),
+      para('Write a substantial section exploring the first theme with vivid descriptive language, analysis, and concrete examples. Aim for roughly 140-180 words and use multiple paragraphs if needed.'),
       image('Illustrative image supporting the first section'),
       h2('Deeper interpretation'),
-      para('Write a substantial section with deeper analysis, visual references, and practical interpretation. Use multiple paragraphs if needed.'),
+      para('Write a substantial section with deeper analysis, visual references, and practical interpretation. Aim for roughly 140-180 words and use multiple paragraphs if needed.'),
       image('Illustrative image supporting the second section'),
       h2('Practical applications'),
-      para('Write a substantial section with real-world applications, examples, and next-step guidance. Use multiple paragraphs if needed.'),
+      para('Write a substantial section with real-world applications, examples, and next-step guidance. Aim for roughly 130-170 words and use multiple paragraphs if needed.'),
       h2('What to watch next'),
-      para('Write a substantial section on what these signals imply going forward and how readers should respond. Use multiple paragraphs if needed.'),
+      para('Write a substantial section on what these signals imply going forward and how readers should respond. Aim for roughly 130-170 words and use multiple paragraphs if needed.'),
       divider(),
       summary('Write a complete synthesis of the visual narrative that explains what the reader should take away and do next.'),
       refs(3),
@@ -271,12 +271,12 @@ function buildVisualFeatureTemplate(targetWords = 1200): ContentBlock[] {
     ]),
     callout('note', 'Add one short editorial note that sets up what the reader is about to notice.'),
     h2('The main visual signal'),
-    para('Write a substantial section exploring the first theme with descriptive detail, analysis, and practical interpretation. Use multiple paragraphs if needed.'),
+    para('Write a substantial section exploring the first theme with descriptive detail, analysis, and practical interpretation. Aim for roughly 140-180 words and use multiple paragraphs if needed.'),
     image('Illustrative image supporting the first section'),
     h2('What it means in practice'),
-    para('Write a substantial section with deeper interpretation, examples, and next-step guidance. Use multiple paragraphs if needed.'),
+    para('Write a substantial section with deeper interpretation, examples, and next-step guidance. Aim for roughly 140-180 words and use multiple paragraphs if needed.'),
     h2('The takeaway'),
-    para('Write a substantial closing body section with outcomes, forward-looking analysis, and practical action points. Use multiple paragraphs if needed.'),
+    para('Write a substantial closing body section with outcomes, forward-looking analysis, and practical action points. Aim for roughly 130-160 words and use multiple paragraphs if needed.'),
     divider(),
     summary('Write a concise but complete conclusion that explains the strongest takeaway from the visual narrative and what the reader should do with it.'),
     refs(3),
@@ -358,23 +358,23 @@ function buildComparisonTemplate(targetWords = 1200): ContentBlock[] {
       para('Write an introduction explaining what is being compared, why the comparison matters, and what decision the reader is trying to make. Use one or two rich paragraphs.'),
       callout('note', 'Add one framing line on the real decision the reader is trying to make before they compare features.'),
       h2('Overview of the two options/approaches'),
-      para('Provide context for both options with enough detail to frame the comparison clearly and fairly. Use multiple paragraphs if needed.'),
+      para('Provide context for both options with enough detail to frame the comparison clearly and fairly. Aim for roughly 140-180 words and use multiple paragraphs if needed.'),
       cols(2, [
         [
           h3('Option A'),
-          para('Write a substantial analysis of Option A covering features, strengths, tradeoffs, and best-fit use cases. Use multiple paragraphs if needed.'),
+          para('Write a substantial analysis of Option A covering features, strengths, tradeoffs, and best-fit use cases. Aim for roughly 120-160 words and use multiple paragraphs if needed.'),
           bulletList('Key advantages of Option A', 4),
         ],
         [
           h3('Option B'),
-          para('Write a substantial analysis of Option B covering features, strengths, tradeoffs, and best-fit use cases. Use multiple paragraphs if needed.'),
+          para('Write a substantial analysis of Option B covering features, strengths, tradeoffs, and best-fit use cases. Aim for roughly 120-160 words and use multiple paragraphs if needed.'),
           bulletList('Key advantages of Option B', 4),
         ],
       ]),
       h2('Critical differentiators'),
-      para('Write a substantial comparison of the options on the most important criteria, with clear reasoning and evidence. Use multiple paragraphs if needed.'),
+      para('Write a substantial comparison of the options on the most important criteria, with clear reasoning and evidence. Aim for roughly 140-180 words and use multiple paragraphs if needed.'),
       h2('Verdict and recommendation'),
-      para('Write a clear verdict and recommendation for different reader profiles, explaining when each option is the better choice. Use multiple paragraphs if needed.'),
+      para('Write a clear verdict and recommendation for different reader profiles, explaining when each option is the better choice. Aim for roughly 130-170 words and use multiple paragraphs if needed.'),
       divider(),
       summary('Summarize the comparison findings in a complete conclusion that gives the reader a confident next step.'),
       refs(4),
@@ -386,19 +386,21 @@ function buildComparisonTemplate(targetWords = 1200): ContentBlock[] {
     para('Write a concise but meaningful introduction explaining what is being compared, why it matters, and what decision the reader needs to make. Use one or two short rich paragraphs.'),
     callout('note', 'Add one line on the real evaluation lens the reader should use.'),
     h2('What each option offers'),
-    para('Provide enough context for both options to frame the comparison clearly and fairly. Use multiple paragraphs if needed.'),
+    para('Provide enough context for both options to frame the comparison clearly and fairly. Aim for roughly 130-170 words and use multiple paragraphs if needed.'),
     cols(2, [
       [
         h3('Option A'),
-        para('Write a substantial analysis of Option A covering its strengths, tradeoffs, and best-fit use cases. Use multiple paragraphs if needed.'),
+        para('Write a substantial analysis of Option A covering its strengths, tradeoffs, and best-fit use cases. Aim for roughly 110-150 words and use multiple paragraphs if needed.'),
       ],
       [
         h3('Option B'),
-        para('Write a substantial analysis of Option B covering its strengths, tradeoffs, and best-fit use cases. Use multiple paragraphs if needed.'),
+        para('Write a substantial analysis of Option B covering its strengths, tradeoffs, and best-fit use cases. Aim for roughly 110-150 words and use multiple paragraphs if needed.'),
       ],
     ]),
+    h2('Where the choice really gets made'),
+    para('Write a substantial section comparing the two options on the criteria that most strongly influence the real decision. Include tradeoffs, scenario fit, and practical implications. Aim for roughly 130-170 words and use multiple paragraphs if needed.'),
     h2('The verdict'),
-    para('Write a clear recommendation explaining who should choose what and why. Use multiple paragraphs if needed.'),
+    para('Write a clear recommendation explaining who should choose what and why. Aim for roughly 120-150 words and use multiple paragraphs if needed.'),
     divider(),
     summary('Write a concise but complete conclusion that helps the reader make the right choice with confidence.'),
     refs(3),
@@ -459,13 +461,13 @@ function buildTutorialTemplate(targetWords = 1200): ContentBlock[] {
       callout('note', 'Prerequisites: list what the reader needs before starting (tools, knowledge, accounts)'),
       numberedList('Add a quick outline of the major tutorial stages so the reader can scan the workflow upfront.', 4),
       h2('Step 1: Getting started'),
-      para('Write a substantial first step with clear instructions, context, and setup guidance. Use multiple paragraphs if needed.'),
+      para('Write a substantial first step with clear instructions, context, and setup guidance. Aim for roughly 140-180 words and use multiple paragraphs if needed.'),
       h2('Step 2: Core implementation'),
-      para('Write a substantial section for the core implementation step with detailed guidance, reasoning, and common pitfalls. Use multiple paragraphs if needed.'),
+      para('Write a substantial section for the core implementation step with detailed guidance, reasoning, and common pitfalls. Aim for roughly 150-190 words and use multiple paragraphs if needed.'),
       h2('Step 3: Finishing touches'),
-      para('Write a substantial section for the finishing step with refinement guidance and quality checks. Use multiple paragraphs if needed.'),
+      para('Write a substantial section for the finishing step with refinement guidance and quality checks. Aim for roughly 130-170 words and use multiple paragraphs if needed.'),
       h2('Step 4: Testing and verification'),
-      para('Write a substantial verification section explaining how to test, validate, and troubleshoot the outcome. Use multiple paragraphs if needed.'),
+      para('Write a substantial verification section explaining how to test, validate, and troubleshoot the outcome. Aim for roughly 130-170 words and use multiple paragraphs if needed.'),
       callout('warning', 'Common mistakes to avoid and troubleshooting tips'),
       divider(),
       summary('Summarize what was accomplished, the expected outcome, and the most useful next steps for the reader.'),
@@ -479,11 +481,11 @@ function buildTutorialTemplate(targetWords = 1200): ContentBlock[] {
     callout('note', 'Prerequisites: list what the reader needs before starting'),
     numberedList('Add a quick mini-roadmap of the 3 main tutorial stages.', 3),
     h2('Step 1: Start here'),
-    para('Write a substantial first step with clear instructions, context, and practical setup guidance. Use multiple paragraphs if needed.'),
+    para('Write a substantial first step with clear instructions, context, and practical setup guidance. Aim for roughly 140-180 words and use multiple paragraphs if needed.'),
     h2('Step 2: Do the core work'),
-    para('Write a substantial implementation step with detailed guidance, reasoning, and common pitfalls. Use multiple paragraphs if needed.'),
+    para('Write a substantial implementation step with detailed guidance, reasoning, and common pitfalls. Aim for roughly 150-190 words and use multiple paragraphs if needed.'),
     h2('Step 3: Check and refine'),
-    para('Write a substantial verification and refinement step explaining how to test the result and fix likely issues. Use multiple paragraphs if needed.'),
+    para('Write a substantial verification and refinement step explaining how to test the result and fix likely issues. Aim for roughly 140-180 words and use multiple paragraphs if needed.'),
     divider(),
     summary('Write a concise but complete conclusion that explains what was achieved and the strongest next step for the reader.'),
     refs(3),
@@ -561,6 +563,8 @@ function buildMagazineTemplate(targetWords = 1200): ContentBlock[] {
         [quote('A compelling expert quote that supports the narrative')],
         [para('Write a substantial analysis section that contextualizes the quote and explains why it matters. Use multiple paragraphs if needed.')],
       ]),
+      h2('What the deeper pattern means'),
+      para('Write a substantial interpretation section that surfaces the deeper pattern, structural implication, or hidden tension inside the story. Use multiple paragraphs if needed.'),
       h2('What this means going forward'),
       para('Write a substantial forward-looking analysis section with implications, consequences, and action-ready perspective. Use multiple paragraphs if needed.'),
       callout('insight', 'The key takeaway in one powerful sentence'),
@@ -798,22 +802,38 @@ export function getDefaultTemplates(contentType: string): DefaultTemplate[] {
   return TEMPLATES_BY_TYPE[contentType] ?? BLOG_DEFAULT_TEMPLATES;
 }
 
-/** Generate fresh ContentBlock[] from a default template (all new IDs). */
-export function instantiateTemplate(template: DefaultTemplate, targetWords?: number): ContentBlock[] {
-  if (template.content_type === 'blog' && template.name === 'Classic') {
+export function getDefaultBlogTemplatesRegistry(): DefaultTemplate[] {
+  return BLOG_DEFAULT_TEMPLATES;
+}
+
+export function instantiateBlogDefaultTemplate(
+  template: DefaultTemplate,
+  targetWords?: number,
+): ContentBlock[] {
+  if (template.content_type !== 'blog') {
+    return template.blocks(targetWords);
+  }
+
+  if (template.name === 'Classic') {
     return buildClassicTemplate(targetWords);
   }
-  if (template.content_type === 'blog' && template.name === 'Visual Feature') {
+  if (template.name === 'Visual Feature') {
     return buildVisualFeatureTemplate(targetWords);
   }
-  if (template.content_type === 'blog' && template.name === 'Comparison') {
+  if (template.name === 'Comparison') {
     return buildComparisonTemplate(targetWords);
   }
-  if (template.content_type === 'blog' && template.name === 'Tutorial') {
+  if (template.name === 'Tutorial') {
     return buildTutorialTemplate(targetWords);
   }
-  if (template.content_type === 'blog' && template.name === 'Magazine') {
+  if (template.name === 'Magazine') {
     return buildMagazineTemplate(targetWords);
   }
+
   return template.blocks(targetWords);
+}
+
+/** Generate fresh ContentBlock[] from a default template (all new IDs). */
+export function instantiateTemplate(template: DefaultTemplate, targetWords?: number): ContentBlock[] {
+  return instantiateBlogDefaultTemplate(template, targetWords);
 }

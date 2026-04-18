@@ -22,6 +22,7 @@ import {
   getAllActiveModels,
   getCompanyLlmConfig,
 } from '../../../backend/services/llmProviderService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -30,6 +31,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const companyId = (req.query.companyId as string)?.trim();
   if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+
+  const companyAccess = await enforceCompanyAccess({ req, res, companyId });
+  if (!companyAccess) return;
 
   // Auth: any authenticated company member can read
   const legacy = getLegacySuperAdminSession(req);

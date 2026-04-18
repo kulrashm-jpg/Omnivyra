@@ -4,17 +4,9 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { InsightEvidenceModal } from './InsightEvidenceModal';
+import { PLATFORM_EMOJI_ICONS as PLATFORM_ICONS, getPlatformEmoji as getPlatformIcon } from '../../utils/platformEmojis';
 
-const PLATFORM_ICONS: Record<string, string> = {
-  linkedin: '💼',
-  twitter: '🐦',
-  youtube: '▶️',
-  reddit: '🤖',
-  slack: '💬',
-  discord: '🎮',
-  github: '🐙',
-  stackoverflow: '📚',
-};
+
 
 export type Insight = {
   id: string;

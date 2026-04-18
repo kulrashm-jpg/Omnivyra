@@ -61,18 +61,35 @@ export default async function handler(
       });
     }
 
-    const userId = session.user.id;
+    const supabaseUid = session.user.id;
 
-    // Get user's company (from context or header)
-    // This depends on your company context implementation
-    // Example: get from user_company_roles table
-    const { data: userCompanyRole } = await supabase
+    // Resolve internal user ID (user_company_roles.user_id references public.users.id)
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('id')
+      .eq('supabase_uid', supabaseUid)
+      .maybeSingle();
+
+    if (!userRow) {
+      return res.status(401).json({ success: false, error: 'User not found' });
+    }
+
+    const userId = userRow.id;
+
+    const requestedCompanyId =
+      typeof req.query.company_id === 'string' ? req.query.company_id.trim() : '';
+
+    const { data: activeRoles } = await supabase
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', userId)
-      .single();
+      .eq('status', 'active')
+      .order('created_at', { ascending: false });
 
-    const companyId = userCompanyRole?.company_id;
+    const allowedCompanyIds = (activeRoles || []).map((role) => role.company_id).filter(Boolean);
+    const companyId = requestedCompanyId && allowedCompanyIds.includes(requestedCompanyId)
+      ? requestedCompanyId
+      : allowedCompanyIds[0];
 
     if (!companyId) {
       return res.status(400).json({
@@ -102,6 +119,7 @@ export default async function handler(
       features: features.map(f => ({
         key: f.feature_key as FeatureKey,
         status: f.status as any,
+        score: typeof f.metadata?.score === 'number' ? f.metadata.score : (f.status === 'completed' ? 1 : 0),
         completedAt: f.completed_at,
       })),
       summary: {

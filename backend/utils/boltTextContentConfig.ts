@@ -1,25 +1,24 @@
 /**
  * BOLT Text-Only Content Configuration
  *
- * BOLT is restricted to text-based content: posts, blogs, articles, short stories,
- * stories, threads, polls. It excludes:
- * - Video platforms: YouTube, TikTok
- * - Non-text content: video, carousel, sliders, reels, images, banners
+ * BOLT is restricted to text-based content that can be closed within ~800 words.
+ * Designed for busy users who need to stay connected without heavy effort.
+ *
+ * Allowed: post, tweet, short_story, article, poll
+ * Excluded formats: blog (800-1500 words, too long), white_paper (too formal/heavy),
+ *   story (visual-first), and all media/visual content types.
+ * Excluded platforms: YouTube, TikTok (video-first)
  */
 
 /** Platforms excluded from BOLT (video-first social platforms). */
 export const BOLT_EXCLUDED_PLATFORMS = new Set(['youtube', 'tiktok']);
 
-/** Content types allowed for BOLT (text-based only). */
+/** Content types allowed for BOLT (text-based, ≤800 words). */
 export const BOLT_TEXT_CONTENT_TYPES = new Set([
   'post',
-  'blog',
-  'article',
-  'newsletter',
+  'tweet',
   'short_story',
-  'story',
-  'white_paper',
-  'thread',
+  'article',
   'poll',
 ]);
 
@@ -49,7 +48,7 @@ function normalizeForComparison(s: string): string {
   return String(s ?? '').trim().toLowerCase().replace(/[-_\s]+/g, '_');
 }
 
-/** Returns true if the content type is allowed for BOLT (text-based). */
+/** Returns true if the content type is allowed for BOLT (text-based, ≤800 words). */
 export function isBoltTextContentType(contentType: string): boolean {
   const norm = normalizeForComparison(contentType);
   if (!norm) return false;
@@ -57,9 +56,9 @@ export function isBoltTextContentType(contentType: string): boolean {
   if (BOLT_TEXT_CONTENT_TYPES.has(norm)) return true;
   // Also allow variants like "linkedin_post", "educational post" -> post
   if (norm.includes('post') && !norm.includes('video')) return true;
-  if (norm.includes('article') || norm.includes('blog') || norm.includes('newsletter')) return true;
-  if (norm.includes('thread') || norm.includes('story')) return true;
-  if (norm.includes('white_paper') || norm.includes('whitepaper')) return true;
+  if (norm.includes('tweet')) return true;
+  if (norm.includes('article')) return true;
+  if (norm.includes('short_story')) return true;
   if (norm.includes('poll')) return true;
   return false;
 }

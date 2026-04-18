@@ -7,31 +7,37 @@ import { useRouter } from 'next/router';
 import { Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import BlogGenerateModal from '../../components/blog/BlogGenerateModal';
 import { useCompanyContext } from '../../components/CompanyContext';
+import SuggestionOptionPicker from '../../components/content/SuggestionOptionPicker';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import { WHITEPAPER_FORMAT_OPTIONS, isValidWhitepaperFormat, type WhitepaperFormatType } from '../../lib/blog/blogStructureTemplates';
+import type { ContentBlock } from '../../lib/blog/blockTypes';
+import type { BriefInsight, DraftFieldSuggestions, TemplateSessionPayload, EnrichedGap } from '../blogs.types';
 
-type BriefInsight = {
-  company_id: string;
-  company_context: string;
-  current_content: string;
-  writing_style: string;
-  related_titles: string[];
-  intent: 'awareness' | 'authority' | 'conversion' | 'retention';
-  tone: string;
-};
 
-type DraftFieldSuggestions = {
-  uniqueness_directive_options: string[];
-  must_include_points_options: string[];
-  campaign_objective_options: string[];
-  trend_context_options: string[];
-};
 
 type BlogPost = {
   id: string;
   title: string;
   slug: string | null;
   angle_type?: string | null;
+};
+
+
+type SelectionBundle = {
+  targetWords?: number;
+  suggestions?: DraftFieldSuggestions;
+  brief?: BriefInsight;
+};
+
+type SuggestionSessionPayload = {
+  uniqueness_directive?: string;
+  must_include_points?: string;
+  campaign_objective?: string;
+  trend_context?: string;
+  target_word_count?: number;
+  format_type?: string | null;
+  template_name?: string | null;
+  template_blocks?: ContentBlock[];
 };
 
 function appendPointer(existing: string, nextPointer: string, separator: string): string {
@@ -50,6 +56,10 @@ function appendPointer(existing: string, nextPointer: string, separator: string)
   return `${current}${separator}${next}`;
 }
 
+function appendAllPointers(options: string[], separator: string): string {
+  return options.reduce((accumulator, option) => appendPointer(accumulator, option, separator), '');
+}
+
 export default function WhitepaperGeneratePage() {
   const router = useRouter();
   const { selectedCompanyId } = useCompanyContext();
@@ -58,6 +68,9 @@ export default function WhitepaperGeneratePage() {
   const prefillReason = typeof router.query.prefill_reason === 'string' ? router.query.prefill_reason.trim() : '';
   const prefillBriefToken = typeof router.query.prefill_brief === 'string' ? router.query.prefill_brief.trim() : '';
   const prefillCardToken = typeof router.query.prefill_card === 'string' ? router.query.prefill_card.trim() : '';
+  const prefillBundleToken = typeof router.query.prefill_bundle === 'string' ? router.query.prefill_bundle.trim() : '';
+  const templateToken = typeof router.query.tpl === 'string' ? router.query.tpl.trim() : '';
+  const suggestionToken = typeof router.query.suggestion_token === 'string' ? router.query.suggestion_token.trim() : '';
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +87,8 @@ export default function WhitepaperGeneratePage() {
   const [suggestions, setSuggestions] = useState<DraftFieldSuggestions | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [templateBlocks, setTemplateBlocks] = useState<ContentBlock[] | undefined>(undefined);
+  const [templateName, setTemplateName] = useState<string | undefined>(undefined);
   const [whitepaperFormat, setWhitepaperFormat] = useState<WhitepaperFormatType>(() => {
     const qf = router.query.format;
     return typeof qf === 'string' && isValidWhitepaperFormat(qf) ? qf : 'research';
@@ -137,6 +152,67 @@ export default function WhitepaperGeneratePage() {
             sessionStorage.removeItem(prefillCardToken);
           }
         }
+
+        if (prefillBundleToken && typeof window !== 'undefined') {
+          const rawBundle = sessionStorage.getItem(prefillBundleToken);
+          if (rawBundle) {
+            try {
+              const bundle = JSON.parse(rawBundle) as SelectionBundle;
+              if (bundle.brief) setBrief((prev) => prev ?? bundle.brief);
+              if (bundle.suggestions) setSuggestions(bundle.suggestions);
+              if (bundle.targetWords) setTargetWords(String(bundle.targetWords));
+            } catch {
+              // ignore malformed bundle
+            }
+          }
+        }
+
+        if (templateToken && typeof window !== 'undefined') {
+          const rawTemplate = sessionStorage.getItem(templateToken);
+          if (rawTemplate) {
+            try {
+              const parsed = JSON.parse(rawTemplate) as TemplateSessionPayload;
+              if (Array.isArray(parsed.blocks)) setTemplateBlocks(parsed.blocks);
+              if (typeof parsed.template_name === 'string' && parsed.template_name.trim()) {
+                setTemplateName(parsed.template_name.trim());
+              }
+              if (typeof parsed.format_type === 'string' && isValidWhitepaperFormat(parsed.format_type)) {
+                setWhitepaperFormat(parsed.format_type);
+              }
+            } catch {
+              // ignore malformed template payload
+            }
+            sessionStorage.removeItem(templateToken);
+          }
+        }
+
+        if (suggestionToken && typeof window !== 'undefined') {
+          const rawSuggestions = sessionStorage.getItem(suggestionToken);
+          if (rawSuggestions) {
+            try {
+              const parsed = JSON.parse(rawSuggestions) as SuggestionSessionPayload;
+              if (typeof parsed.uniqueness_directive === 'string') setUniquenessDirective(parsed.uniqueness_directive);
+              if (typeof parsed.must_include_points === 'string') setMustInclude(parsed.must_include_points);
+              if (typeof parsed.campaign_objective === 'string') setCampaignObjective(parsed.campaign_objective);
+              if (typeof parsed.trend_context === 'string') setTrendContext(parsed.trend_context);
+              if (typeof parsed.target_word_count === 'number' && parsed.target_word_count > 0) {
+                setTargetWords(String(parsed.target_word_count));
+              }
+              if (typeof parsed.template_name === 'string' && parsed.template_name.trim()) {
+                setTemplateName(parsed.template_name.trim());
+              }
+              if (Array.isArray(parsed.template_blocks)) {
+                setTemplateBlocks(parsed.template_blocks);
+              }
+              if (typeof parsed.format_type === 'string' && isValidWhitepaperFormat(parsed.format_type)) {
+                setWhitepaperFormat(parsed.format_type);
+              }
+            } catch {
+              // ignore malformed suggestion payload
+            }
+            sessionStorage.removeItem(suggestionToken);
+          }
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to initialize generator.');
       } finally {
@@ -147,7 +223,7 @@ export default function WhitepaperGeneratePage() {
     if (selectedCompanyId) {
       void bootstrap();
     }
-  }, [selectedCompanyId, prefillBriefToken, prefillCardToken]);
+  }, [selectedCompanyId, prefillBriefToken, prefillCardToken, prefillBundleToken, templateToken, suggestionToken]);
 
   const handleGenerated = (
     output: BlogGenerationOutput & { content_blocks?: unknown[] },
@@ -225,6 +301,11 @@ export default function WhitepaperGeneratePage() {
       setSuggesting(false);
     }
   };
+
+  useEffect(() => {
+    if (!prefillTopic || suggestions || suggesting) return;
+    void fetchSuggestions();
+  }, [prefillTopic, suggestions, suggesting]);
 
   if (loading) {
     return (
@@ -310,9 +391,10 @@ export default function WhitepaperGeneratePage() {
                 >
                   <option value="2500">~2500 words (concise whitepaper)</option>
                   <option value="3000">~3000 words (standard whitepaper)</option>
-                  <option value="4000">~4000 words (comprehensive whitepaper)</option>
-                  <option value="5000">~5000 words (in-depth research paper)</option>
                 </select>
+                <p className="mt-1.5 text-xs text-amber-700">
+                  Whitepaper template generation currently runs most reliably up to 3000 words in a single pass. You can deepen the draft further once it opens in the editor.
+                </p>
               </div>
 
               <div>
@@ -366,20 +448,13 @@ export default function WhitepaperGeneratePage() {
                   placeholder="e.g. Present proprietary framework with data-backed methodology distinct from industry standard approaches."
                   className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm bg-white"
                 />
-                {!!suggestions?.uniqueness_directive_options?.length && (
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {suggestions.uniqueness_directive_options.map((option, idx) => (
-                      <button
-                        key={`ud-${idx}`}
-                        type="button"
-                        onClick={() => setUniquenessDirective((prev) => appendPointer(prev, option, '\n- '))}
-                        className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <SuggestionOptionPicker
+                  options={suggestions?.uniqueness_directive_options ?? []}
+                  accent="slate"
+                  onPick={(option) => setUniquenessDirective((prev) => appendPointer(prev, option, '\n- '))}
+                  onSelectAll={() => setUniquenessDirective(appendAllPointers(suggestions?.uniqueness_directive_options ?? [], '\n- '))}
+                  onClear={() => setUniquenessDirective('')}
+                />
               </div>
 
               <div>
@@ -391,20 +466,13 @@ export default function WhitepaperGeneratePage() {
                   placeholder="Comma-separated: executive summary, methodology section, data citations, strategic recommendations"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm bg-white"
                 />
-                {!!suggestions?.must_include_points_options?.length && (
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {suggestions.must_include_points_options.map((option, idx) => (
-                      <button
-                        key={`mi-${idx}`}
-                        type="button"
-                        onClick={() => setMustInclude((prev) => appendPointer(prev, option, ', '))}
-                        className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <SuggestionOptionPicker
+                  options={suggestions?.must_include_points_options ?? []}
+                  accent="slate"
+                  onPick={(option) => setMustInclude((prev) => appendPointer(prev, option, ', '))}
+                  onSelectAll={() => setMustInclude(appendAllPointers(suggestions?.must_include_points_options ?? [], ', '))}
+                  onClear={() => setMustInclude('')}
+                />
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
@@ -417,20 +485,13 @@ export default function WhitepaperGeneratePage() {
                     placeholder="e.g. establish thought leadership in AI governance for enterprise"
                     className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm bg-white"
                   />
-                  {!!suggestions?.campaign_objective_options?.length && (
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {suggestions.campaign_objective_options.map((option, idx) => (
-                        <button
-                          key={`co-${idx}`}
-                          type="button"
-                          onClick={() => setCampaignObjective((prev) => appendPointer(prev, option, '\n- '))}
-                          className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
-                        >
-                          {option}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  <SuggestionOptionPicker
+                    options={suggestions?.campaign_objective_options ?? []}
+                    accent="slate"
+                    onPick={(option) => setCampaignObjective((prev) => appendPointer(prev, option, '\n- '))}
+                    onSelectAll={() => setCampaignObjective(appendAllPointers(suggestions?.campaign_objective_options ?? [], '\n- '))}
+                    onClear={() => setCampaignObjective('')}
+                  />
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">Trend Context</label>
@@ -441,24 +502,15 @@ export default function WhitepaperGeneratePage() {
                     placeholder="e.g. emerging regulatory frameworks, market consolidation trends"
                     className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm bg-white"
                   />
-                  {!!suggestions?.trend_context_options?.length && (
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {suggestions.trend_context_options.map((option, idx) => (
-                        <button
-                          key={`tc-${idx}`}
-                          type="button"
-                          onClick={() => setTrendContext((prev) => appendPointer(prev, option, '\n- '))}
-                          className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
-                        >
-                          {option}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  <SuggestionOptionPicker
+                    options={suggestions?.trend_context_options ?? []}
+                    accent="slate"
+                    onPick={(option) => setTrendContext((prev) => appendPointer(prev, option, '\n- '))}
+                    onSelectAll={() => setTrendContext(appendAllPointers(suggestions?.trend_context_options ?? [], '\n- '))}
+                    onClear={() => setTrendContext('')}
+                  />
                 </div>
               </div>
-
-              <p className="text-[11px] text-gray-500">Tip: Click multiple suggestion chips to append multiple pointers per field.</p>
             </div>
 
             <button
@@ -485,6 +537,8 @@ export default function WhitepaperGeneratePage() {
           initialIntent={brief?.intent}
           initialTone={brief?.tone}
           initialRelatedBlogs={brief?.related_titles ?? []}
+          initialTemplateName={templateName}
+          initialTemplateBlocks={templateBlocks}
           contentType="whitepaper"
           initialFormatType={whitepaperFormat}
           baseAnswers={{

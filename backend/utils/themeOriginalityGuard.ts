@@ -2,7 +2,7 @@
  * Theme Originality Guard
  *
  * Prevents campaigns from repeating themes used in recent company campaigns.
- * Loads last N themes from twelve_week_plan + campaign_versions, checks similarity.
+ * Loads last N themes from campaign_week_plan + campaign_versions, checks similarity.
  */
 
 import { supabase } from '../db/supabaseClient';
@@ -12,7 +12,7 @@ export const DEFAULT_RECENT_THEMES_LIMIT = 50;
 export const DEFAULT_ORIGINALITY_THRESHOLD = 0.75;
 
 /**
- * Load recent themes for a company from twelve_week_plan and campaign_versions.
+ * Load recent themes for a company from campaign_week_plan and campaign_versions.
  * Extracts phase_label, theme, topics from blueprint.weeks and campaign_snapshot.weekly_plan.
  */
 export async function loadRecentCompanyThemes(
@@ -56,7 +56,7 @@ export async function loadRecentCompanyThemes(
     }
 
     const { data: planRows } = await supabase
-      .from('twelve_week_plan')
+      .from('campaign_week_plan')
       .select('blueprint')
       .in('campaign_id', campaignIds)
       .order('created_at', { ascending: false })

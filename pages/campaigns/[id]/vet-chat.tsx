@@ -5,8 +5,7 @@ import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { useCompanyContext } from '../../../components/CompanyContext';
 import { fetchWithAuth } from '../../../components/community-ai/fetchWithAuth';
-import CampaignAIChat from '../../../components/CampaignAIChat';
-import Header from '../../../components/Header';
+import CampaignAIChat from '../../../components/CampaignAIChat.dynamic';
 
 interface RecWeek {
   id: string;
@@ -99,7 +98,6 @@ export default function VetChatPage() {
       <Head>
         <title>Vet Recommendations – {campaign?.name || 'Campaign'}</title>
       </Head>
-      <Header />
       <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-teal-50 flex flex-col">
         <div className="p-4 border-b border-emerald-200 bg-white/80 backdrop-blur-sm">
           <Link

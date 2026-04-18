@@ -135,23 +135,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return 'Your Campaign';
     })();
 
-    // ── Week themes use the compact topic — NOT the full/enriched string.
-    // Passing a long topic into the angle templates causes it to appear
-    // verbatim in every week title, making card header and arc indistinguishable.
-    const [setA, setB, setC] = await Promise.all([
-      generateRichThemesForCampaignWeeks(titleTopic, weeks),
-      generateRichThemesForCampaignWeeks(titleTopic, weeks),
-      generateRichThemesForCampaignWeeks(titleTopic, weeks),
-    ]);
+    // ── 3 fundamentally different strategic archetypes ──────────────────────
+    // Each archetype defines a distinct phase progression, card framing, and
+    // week-theme approach so the 3 cards are genuinely different strategies —
+    // not seed-shifted variations of the same sequence.
+    const STRATEGY_ARCHETYPES = [
+      {
+        name: 'Educator',
+        phases: ['Awareness', 'Education', 'Solution', 'Conversion'],
+        titleAngle: 0,    // trend angle
+        summary: (t: string, w: number) =>
+          `${w}-week journey: introduce ${t}, build understanding, present your solution, and drive action.`,
+      },
+      {
+        name: 'Challenger',
+        phases: ['Problem', 'Proof', 'Solution', 'Conversion'],
+        titleAngle: 3,    // contrarian angle
+        summary: (t: string, w: number) =>
+          `${w}-week arc: expose the real problem with ${t}, back it with proof, reveal the fix, and convert.`,
+      },
+      {
+        name: 'Visionary',
+        phases: ['Awareness', 'Problem', 'Education', 'Proof'],
+        titleAngle: 4,    // future angle
+        summary: (t: string, w: number) =>
+          `${w}-week campaign: paint the future of ${t}, challenge the status quo, educate deeply, and prove results.`,
+      },
+    ];
 
-    // ── 3 distinct card-level headlines from different editorial angle seeds.
-    // Seed offsets (0, 3, 6) select different entries in the 6-angle wheel so
-    // each card presents a genuinely different strategic framing of the topic.
-    const cardTitles = [0, 3, 5].map((seed) =>
-      generateThemeFromTopic(titleTopic, undefined, seed)
-    );
-
-    // ── Phase metadata lookup (mirrors PHASE_METADATA in strategicThemeEngine)
+    // Phase metadata for objectives and content focus
     const PHASE_META: Record<string, { objective: string; content_focus: string; cta: string }> = {
       Awareness:   { objective: 'Build brand visibility and introduce your topic to a new audience',   content_focus: 'Educational content, industry insights, thought leadership',   cta: 'Follow · Subscribe' },
       Education:   { objective: 'Establish authority and teach your audience key concepts',             content_focus: 'How-to guides, frameworks, deep-dives',                          cta: 'Save · Share' },
@@ -161,26 +173,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       Conversion:  { objective: 'Drive decisive action and close the consideration loop',               content_focus: 'Offers, urgency plays, objection handling',                      cta: 'Buy Now · Schedule Demo' },
     };
 
-    function buildCard(themes: typeof setA, idx: number): BoltStrategyCard {
+    // Generate week themes for each archetype in parallel — each uses a different
+    // diversity_seed AND a different phase progression, ensuring distinct results.
+    const [setA, setB, setC] = await Promise.all(
+      STRATEGY_ARCHETYPES.map((arch, i) =>
+        generateRichThemesForCampaignWeeks(titleTopic, weeks, undefined, i * 2)
+      )
+    );
+
+    // Remap each set's phase_labels to match its archetype's progression
+    // so cards don't just have different week titles but different strategic arcs.
+    function remapPhases(
+      themes: Awaited<ReturnType<typeof generateRichThemesForCampaignWeeks>>,
+      archetype: typeof STRATEGY_ARCHETYPES[number]
+    ) {
+      return themes.map((t, i) => {
+        const phase = archetype.phases[i % archetype.phases.length];
+        const meta = PHASE_META[phase] ?? { objective: phase, content_focus: '', cta: '' };
+        return {
+          ...t,
+          phase_label: phase,
+          objective: meta.objective,
+          content_focus: meta.content_focus,
+          cta_focus: meta.cta,
+        };
+      });
+    }
+
+    const themeSets = [
+      remapPhases(setA, STRATEGY_ARCHETYPES[0]),
+      remapPhases(setB, STRATEGY_ARCHETYPES[1]),
+      remapPhases(setC, STRATEGY_ARCHETYPES[2]),
+    ];
+
+    function buildCard(themes: typeof themeSets[0], idx: number): BoltStrategyCard {
+      const arch = STRATEGY_ARCHETYPES[idx];
       const phaseLabels = themes.map((t) => t.phase_label ?? '').filter(Boolean);
       const uniquePhases = Array.from(new Set(phaseLabels));
 
-      // card title: a short editorial headline distinct from any week title
-      const title = cardTitles[idx] ?? generateThemeFromTopic(titleTopic, undefined, idx * 2);
-
-      // angle: the arc progression shown as a brief label
+      const title = generateThemeFromTopic(titleTopic, undefined, arch.titleAngle);
       const angle = uniquePhases.slice(0, 4).join(' → ') || cleanTopic;
-
-      // summary: campaign-level arc overview — describes the WHOLE journey,
-      // not just week 1. E.g. "A 4-week arc from Awareness to Conversion:
-      // build visibility, establish authority, tackle objections, drive action."
-      const arcDesc = uniquePhases
-        .slice(0, 4)
-        .map((phase) => PHASE_META[phase]?.objective ?? phase)
-        .join('; ');
-      const summary = arcDesc
-        ? `${weeks}-week arc: ${arcDesc}.`
-        : `A ${weeks}-week campaign focused on ${cleanTopic}.`;
+      const summary = arch.summary(titleTopic, weeks);
 
       return {
         id: `card-${idx}`,
@@ -199,9 +232,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const cards: BoltStrategyCard[] = [
-      buildCard(setA, 0),
-      buildCard(setB, 1),
-      buildCard(setC, 2),
+      buildCard(themeSets[0], 0),
+      buildCard(themeSets[1], 1),
+      buildCard(themeSets[2], 2),
     ];
 
     return res.status(200).json({ cards });

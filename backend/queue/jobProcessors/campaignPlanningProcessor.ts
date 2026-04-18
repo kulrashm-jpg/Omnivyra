@@ -198,7 +198,7 @@ async function persistPlan(
 
   // Edge case #1: only write if incoming plan_version >= existing (no regression)
   const { data: existing } = await supabase
-    .from('twelve_week_plan')
+    .from('campaign_week_plan')
     .select('blueprint')
     .eq('campaign_id', plan.campaign_id)
     .eq('source', 'v2_pipeline')
@@ -213,7 +213,7 @@ async function persistPlan(
     return;
   }
 
-  await supabase.from('twelve_week_plan').upsert({
+  await supabase.from('campaign_week_plan').upsert({
     campaign_id:   plan.campaign_id,
     source:        'v2_pipeline',
     status:        'ready',
@@ -363,7 +363,7 @@ export async function processCampaignPlanningJob(job: Job<CampaignPlanningJobPay
     console.error('[campaign-planning] failed', { campaignId, error: message });
 
     await setJobStatus(jobId, campaignId, 'failed', { error: message });
-    await supabase.from('twelve_week_plan').upsert({
+    await supabase.from('campaign_week_plan').upsert({
       campaign_id: campaignId,
       source:      'v2_pipeline',
       status:      'failed',

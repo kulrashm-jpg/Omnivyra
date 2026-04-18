@@ -26,6 +26,7 @@ const PLATFORM_WEIGHT: Record<string, number> = {
   facebook: 0,
   twitter: -0.05,
   x: -0.05,
+  hackernews: 0.1,
 };
 
 type LeadContextPayload = {

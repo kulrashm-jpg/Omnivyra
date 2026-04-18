@@ -10,6 +10,7 @@ import { createDefaultBlogTemplate } from '../../../lib/blog/blogTemplate';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../../lib/blog/topicDetection';
 import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import type { BlogGenerationOutput } from '../../../lib/blog/blogGenerationEngine';
+import { resolveGeneratedPrefillBlocks } from '../../../lib/content/editorPrefill';
 
 function useBlogAccess() {
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -24,7 +25,7 @@ function useBlogAccess() {
 const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
 
 type PrefillPayload = {
-  output?: (BlogGenerationOutput & { content_blocks?: unknown[] }) | null;
+  output?: (BlogGenerationOutput & { content_blocks?: unknown[]; content_markdown?: string }) | null;
   source?: string;
   target_word_count?: number;
 };
@@ -185,9 +186,7 @@ export default function AdminBlogNewPage() {
           tags: Array.isArray(output.tags) ? output.tags : [],
           seo_meta_title: output.seo_meta_title || '',
           seo_meta_description: output.seo_meta_description || '',
-          content_blocks: Array.isArray(output.content_blocks)
-            ? (output.content_blocks as BlogFormState['content_blocks'])
-            : DEFAULT_TEMPLATE,
+          content_blocks: resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE),
           content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
         });
         // Extract SEO keywords from generated output (attached by BlogGenerateModal)

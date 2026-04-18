@@ -19,6 +19,7 @@ import {
   type WritingStyleProfile,
 } from '../../lib/content/writingStyleEngine';
 import type { CompanyProfile } from '../../backend/services/companyProfileService';
+import type { BriefInsight, DraftFieldSuggestions, TemplateSessionPayload, EnrichedGap } from '../blogs.types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,17 +37,6 @@ interface Article {
   content_type: string;
 }
 
-interface BriefInsight {
-  company_id: string;
-  company_name: string;
-  company_context: string;
-  current_content: string;
-  writing_style: string;
-  writing_style_profile: WritingStyleProfile | null;
-  related_titles: string[];
-  intent: 'awareness' | 'authority' | 'conversion' | 'retention';
-  tone: string;
-}
 
 type FilterTab = 'all' | 'draft' | 'used';
 

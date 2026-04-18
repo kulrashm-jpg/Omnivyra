@@ -2,7 +2,7 @@
  * Campaign Readiness Service
  *
  * Calculates and stores readiness status for campaigns.
- * Considers: weekly_content_plans, weekly_content_refinements, twelve_week_plan blueprint, daily_content_plans.
+ * Considers: weekly_content_plans, weekly_content_refinements, campaign_week_plan blueprint, daily_content_plans.
  */
 
 import { supabase } from '../db/supabaseClient';

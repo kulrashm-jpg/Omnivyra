@@ -1,1 +1,12 @@
-{}
+{
+  "crons": [
+    {
+      "path": "/api/cron/process-scheduled-posts",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/analytics-ingestion",
+      "schedule": "0 2 * * *"
+    }
+  ]
+}

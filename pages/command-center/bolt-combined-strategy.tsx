@@ -549,7 +549,7 @@ export default function BoltCombinedStrategyPage() {
 
   return (
     <>
-    <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-purple-50 py-8 px-3 sm:px-4 lg:px-6">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-3 sm:px-4 lg:px-6">
       <div className="max-w-7xl mx-auto space-y-6">
 
         {/* Back */}
@@ -567,9 +567,9 @@ export default function BoltCombinedStrategyPage() {
             <span className="text-3xl">🔀</span>
             <div>
               <h1 className="text-xl font-bold text-gray-900">BOLT (Combined) Strategy Builder</h1>
-              <p className="text-sm text-violet-700 font-medium">Text + Creator Campaign</p>
+              <p className="text-sm font-medium text-gray-600">Text + Creator Campaign</p>
             </div>
-            <span className="ml-auto text-xs font-semibold px-3 py-1 rounded-full bg-violet-100 text-violet-800">AI + Creator</span>
+            <span className="ml-auto rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">AI + Creator</span>
           </div>
           <p className="text-gray-500 text-sm">Run text-based AI content and creator-dependent media in a single coordinated campaign.</p>
         </div>
@@ -578,7 +578,7 @@ export default function BoltCombinedStrategyPage() {
         <div className="flex gap-5 items-start">
 
           {/* LEFT: Form */}
-          <div className="flex-1 min-w-0 bg-white rounded-2xl border border-violet-200 shadow-sm divide-y divide-gray-100">
+          <div className="flex-1 min-w-0 bg-white rounded-2xl border border-gray-200 shadow-sm divide-y divide-gray-100">
 
             {/* Topic */}
             <div className="p-5">

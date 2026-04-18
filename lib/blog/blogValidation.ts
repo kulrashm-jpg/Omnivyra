@@ -55,10 +55,10 @@ export type FormMeta = {
   tags:                 string[];
   /** User-selected word count target from the generation modal (800/1200/1600/2000). Defaults to 800. */
   target_word_count?:   number;
-  /** Blog format type — adjusts structural validation rules. Defaults to 'standard'. */
-  format_type?:         BlogFormatType;
+  /** Format type — adjusts structural validation rules. Accepts blog, newsletter, article, etc. format values. */
+  format_type?:         string;
   /** Content type — articles/whitepapers get reduced SEO/linking weight, increased depth weight. */
-  content_type?:        'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide';
+  content_type?:        'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide' | 'case-study';
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ export function calculateQualityScore(
   form: FormMeta,
 ): QualityScore {
   const targetWords = form.target_word_count && form.target_word_count >= 300 ? form.target_word_count : 800;
-  const formatType: BlogFormatType = form.format_type || 'standard';
+  const formatType = (form.format_type || 'standard') as BlogFormatType;
 
   // Get format-specific validation overrides (null for 'standard')
   const formatRules = getStructureRules(formatType, targetWords);
@@ -226,7 +226,7 @@ export function calculateQualityScore(
 
   // ── Linking score (0–10) — not applicable for articles or whitepapers ──────
   let linking = 0;
-  if (form.content_type !== 'article' && form.content_type !== 'whitepaper' && form.content_type !== 'guide') {
+  if (form.content_type !== 'article' && form.content_type !== 'whitepaper' && form.content_type !== 'guide' && form.content_type !== 'case-study') {
     if (internalLinks >= 2)               linking += 10;
     else if (internalLinks === 1)         linking += 5;
   }
@@ -239,16 +239,17 @@ export function calculateQualityScore(
   // Newsletter: Structure 25 + Depth 20 + SEO 15 + GEO 20 + Linking 10 =  90
   // Story:      Structure 20 + Depth 30 + SEO 10 + GEO 20 + Linking  0 =  80
   const isArticle    = form.content_type === 'article';
+  const isCaseStudy  = form.content_type === 'case-study';
   const isWhitepaper = form.content_type === 'whitepaper';
   const isNewsletter = form.content_type === 'newsletter';
   const isStory      = form.content_type === 'story';
   const isGuide      = form.content_type === 'guide';
 
   const finalStructure = isStory ? Math.min(20, Math.round(structure * 0.8)) : structure;
-  const finalDepth     = (isWhitepaper || isGuide) ? Math.min(30, Math.round(depth * 1.2)) : isArticle ? Math.min(35, Math.round(depth * 1.4)) : isStory ? Math.min(30, Math.round(depth * 1.2)) : isNewsletter ? Math.min(20, Math.round(depth * 0.8)) : depth;
-  const finalSeo       = isStory ? Math.min(10, Math.round(seo * 0.4)) : (isArticle || isWhitepaper || isNewsletter || isGuide) ? Math.min(15, Math.round(seo * 0.6)) : seo;
+  const finalDepth     = (isWhitepaper || isGuide || isCaseStudy) ? Math.min(30, Math.round(depth * 1.2)) : isArticle ? Math.min(35, Math.round(depth * 1.4)) : isStory ? Math.min(30, Math.round(depth * 1.2)) : isNewsletter ? Math.min(20, Math.round(depth * 0.8)) : depth;
+  const finalSeo       = isStory ? Math.min(10, Math.round(seo * 0.4)) : (isArticle || isCaseStudy || isWhitepaper || isNewsletter || isGuide) ? Math.min(15, Math.round(seo * 0.6)) : seo;
   const finalGeo       = (isNewsletter || isStory) ? Math.min(20, Math.round(geo * 1.33)) : geo;
-  const finalLinking   = (isArticle || isWhitepaper || isStory || isGuide) ? 0 : linking;
+  const finalLinking   = (isArticle || isCaseStudy || isWhitepaper || isStory || isGuide) ? 0 : linking;
 
   // ── Issues ───────────────────────────────────────────────────────────────
   const issues: ValidationIssue[] = [];
@@ -276,12 +277,12 @@ export function calculateQualityScore(
     issues.push({ severity: 'warning', category: 'depth', message: `Content is short (${totalWords} words) — aim for ${targetWords}+` });
   if (shortParaCount > 2)
     issues.push({ severity: 'warning', category: 'depth', message: `${shortParaCount} sections under 50 words — add supporting detail` });
-  if (internalLinks === 0 && form.content_type !== 'article' && form.content_type !== 'whitepaper' && form.content_type !== 'guide')
+  if (internalLinks === 0 && form.content_type !== 'article' && form.content_type !== 'case-study' && form.content_type !== 'whitepaper' && form.content_type !== 'guide')
     issues.push({ severity: 'warning', category: 'linking', message: 'Add internal links to related Omnivyra articles' });
   if (refsCount < 3)
     issues.push({ severity: 'warning', category: 'geo', message: `Add ${3 - refsCount} more reference${3 - refsCount > 1 ? 's' : ''} for GEO authority (found ${refsCount})` });
 
-  const maxScore = (isWhitepaper || isGuide) ? 85 : isStory ? 80 : (isArticle || isNewsletter) ? 90 : 100;
+  const maxScore = (isWhitepaper || isGuide || isCaseStudy) ? 85 : isStory ? 80 : (isArticle || isNewsletter) ? 90 : 100;
   const total = Math.min(maxScore, finalStructure + finalDepth + finalSeo + finalGeo + finalLinking);
 
   return {

@@ -1,3 +1,5 @@
+import { wordCount } from '../../pages/blogs.helpers';
+
 /**
  * Editor Content Enforcer
  *
@@ -88,9 +90,7 @@ function tokenize(text: string): string[] {
     .filter((t) => t.length > 3 && !STOP_WORDS.has(t));
 }
 
-function wordCount(html: string): number {
-  return stripHtml(html).split(/\s+/).filter(Boolean).length;
-}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC TYPES

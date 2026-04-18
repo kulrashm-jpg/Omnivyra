@@ -24,15 +24,15 @@ export async function runOwnedGeneration(
 
   switch (contentType as OwnedLongformContentType) {
     case 'newsletter':
-      return runNewsletterGeneration(input);
+      return runNewsletterGeneration({ ...input, contentType: 'newsletter' } as any);
     case 'article':
-      return runArticleGeneration(input);
+      return runArticleGeneration({ ...input, contentType: 'article' } as any);
     case 'guide':
-      return runGuideGeneration(input);
+      return runGuideGeneration({ ...input, contentType: 'guide' } as any);
     case 'story':
-      return runStoryGeneration(input);
+      return runStoryGeneration({ ...input, contentType: 'story' } as any);
     case 'whitepaper':
-      return runWhitepaperGeneration(input);
+      return runWhitepaperGeneration({ ...input, contentType: 'whitepaper' } as any);
     case 'blog':
     default:
       return runBlogGeneration({

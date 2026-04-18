@@ -169,7 +169,7 @@ export function normalizeReportDomain(input: string): string {
 async function getCompanyDomain(companyId: string): Promise<string> {
   const { data, error } = await supabase
     .from('companies')
-    .select('website_url, website_domain')
+    .select('website, website_domain')
     .eq('id', companyId)
     .maybeSingle();
 
@@ -178,8 +178,8 @@ async function getCompanyDomain(companyId: string): Promise<string> {
   }
 
   const rawDomain =
-    ((data as { website_url?: string | null; website_domain?: string | null } | null)?.website_url) ||
-    ((data as { website_url?: string | null; website_domain?: string | null } | null)?.website_domain) ||
+    ((data as { website?: string | null; website_domain?: string | null } | null)?.website) ||
+    ((data as { website?: string | null; website_domain?: string | null } | null)?.website_domain) ||
     '';
 
   return normalizeReportDomain(rawDomain);

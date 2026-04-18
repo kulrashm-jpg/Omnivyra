@@ -26,6 +26,7 @@ import {
 import { publishToPlatform } from '../../adapters/platformAdapter';
 import { categorizeError } from '../../services/errorRecoveryService';
 import { recordPostAnalytics } from '../../services/analyticsService';
+import { schedulePostPolls } from '../../services/analyticsNormalizationService';
 import { logActivity } from '../../services/activityLogger';
 import { getCampaignReadiness } from '../../services/campaignReadinessService';
 import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
@@ -166,6 +167,27 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
         );
       } catch (analyticsError: any) {
         console.warn('Failed to record analytics:', analyticsError.message);
+      }
+
+      // Schedule analytics polls at +15min and +24h
+      try {
+        const { data: acct } = await supabase
+          .from('social_accounts')
+          .select('company_id')
+          .eq('id', social_account_id)
+          .single();
+        if (acct?.company_id) {
+          await schedulePostPolls({
+            scheduledPostId:  scheduled_post_id,
+            socialAccountId:  social_account_id,
+            platform:         scheduledPost.platform,
+            platformPostId:   result.platform_post_id,
+            companyId:        String(acct.company_id),
+            userId:           user_id,
+          });
+        }
+      } catch (pollScheduleErr: any) {
+        console.warn('[publishProcessor] schedulePostPolls failed:', pollScheduleErr?.message);
       }
 
       // Log activity

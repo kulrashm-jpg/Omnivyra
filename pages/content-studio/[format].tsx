@@ -3,6 +3,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { POST_FORMAT_OPTIONS, getThreadStructureRules, type PostFormatType } from '../../lib/blog/blogStructureTemplates';
+import { getRecommendedTemplateCards, getTemplateCards } from '../../lib/content/contentTemplateCards';
 
 type ContentFormat = 'story' | 'whitepaper' | 'post';
 type ContextMode = 'company' | 'focused' | 'none';
@@ -152,6 +153,10 @@ export default function ContentStudioFormatPage() {
   const [postFormat, setPostFormat] = useState<PostFormatType>(initialPostFormat);
   const [threadPosts, setThreadPosts] = useState<string[]>([]);
   const [threadCopied, setThreadCopied] = useState(false);
+
+  const activeManagedType = format === 'post' && postFormat === 'thread' ? 'thread' : format;
+  const templateCards = useMemo(() => getTemplateCards(activeManagedType), [activeManagedType]);
+  const recommendedTemplateCards = useMemo(() => getRecommendedTemplateCards(activeManagedType), [activeManagedType]);
 
   useEffect(() => {
     if (authChecked && !user?.userId) {
@@ -599,6 +604,47 @@ export default function ContentStudioFormatPage() {
                 >
                   Apply Intelligence to Brief Inputs
                 </button>
+              </div>
+
+              <div className="bg-white border border-gray-200 rounded-2xl p-5">
+                <h3 className="text-base font-bold text-gray-900 mb-2">Template Families</h3>
+                {recommendedTemplateCards.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 mb-2">Recommended</p>
+                    <div className="space-y-2">
+                      {recommendedTemplateCards.map((card) => (
+                        <div key={card.id} className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-emerald-900">{card.title}</p>
+                            {card.formatType && (
+                              <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                                {card.formatType}
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-xs text-emerald-800">{card.description}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-600 mb-2">Available</p>
+                  <div className="space-y-2">
+                    {templateCards.map((card) => (
+                      <div key={card.id} className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-gray-900">{card.title}</p>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                            {card.source}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-gray-600">{card.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="bg-white border border-gray-200 rounded-2xl p-5">

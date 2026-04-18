@@ -5,8 +5,8 @@
  * Feature 1: Unread = messages not yet read by current user (message_reads).
  */
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { getMessageCounts } from '../../../backend/services/collaborationMessageService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -36,38 +36,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { data: msgRows, error: msgError } = await supabase
-      .from('calendar_messages')
-      .select('id, message_date')
-      .in('campaign_id', campaignIds.length ? campaignIds : [authCampaignId])
-      .in('message_date', dates);
-
-    if (msgError) {
-      console.error('[calendar/message-counts]', msgError);
-      return res.status(500).json({ error: 'Failed to fetch counts' });
-    }
-
-    const msgIds = (msgRows || []).map((r: { id: string }) => r.id);
-    let readMsgIds = new Set<string>();
-    if (msgIds.length > 0 && access.userId) {
-      const { data: readRows } = await supabase
-        .from('message_reads')
-        .select('message_id')
-        .eq('message_source', 'calendar')
-        .eq('user_id', access.userId)
-        .in('message_id', msgIds);
-      readMsgIds = new Set((readRows || []).map((r: { message_id: string }) => r.message_id));
-    }
-
-    const counts: Record<string, { total: number; unread: number }> = {};
-    for (const d of dates) counts[d] = { total: 0, unread: 0 };
-    for (const r of msgRows || []) {
-      const d = String(r.message_date || '');
-      if (d && dates.includes(d)) {
-        counts[d].total += 1;
-        if (!readMsgIds.has(r.id)) counts[d].unread += 1;
-      }
-    }
+    const counts = await getMessageCounts({
+      table: 'calendar_messages',
+      select: 'id, message_date',
+      groupField: 'message_date',
+      groupValues: dates,
+      source: 'calendar',
+      userId: access.userId,
+      applyFilters: (query) =>
+        query
+          .in('campaign_id', campaignIds.length ? campaignIds : [authCampaignId])
+          .in('message_date', dates),
+    });
     return res.status(200).json(counts);
   } catch (err: unknown) {
     console.error('[calendar/message-counts]', err);

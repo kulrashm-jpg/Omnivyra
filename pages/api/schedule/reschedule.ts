@@ -7,6 +7,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 
 function parseDate(str: string): Date | null {
   const m = String(str || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -31,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { data: post, error: postErr } = await supabase
       .from('scheduled_posts')
-      .select('id, campaign_id, scheduled_for')
+      .select('id, campaign_id, scheduled_for, social_account_id, user_id, status')
       .eq('id', postId)
       .single();
 
@@ -79,6 +80,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .update({ event_date: newDateStr })
       .eq('scheduled_post_id', postId)
       .eq('event_type', 'activity');
+
+    try {
+      if (post.social_account_id && post.status === 'scheduled') {
+        await enqueueScheduledPostAt(postId, String(post.user_id), String(post.social_account_id), newScheduledFor.toISOString());
+      }
+    } catch (enqueueError: any) {
+      console.warn('[schedule/reschedule] enqueueScheduledPostAt failed (non-fatal):', enqueueError?.message);
+    }
 
     return res.status(200).json({
       success: true,

@@ -1,20 +1,25 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
-import { CheckCircle, XCircle } from 'lucide-react';
+import { CheckCircle } from 'lucide-react';
 import type { OpportunityTabProps } from './types';
 import EngineContextPanel from '../EngineContextPanel';
 import EngineOverridePanel from '../EngineOverridePanel';
 import UnifiedContextModeSelector, { type ContextMode, type FocusModule } from '../engine-framework/UnifiedContextModeSelector';
 import EngineJobStatusPanel from '../../engines/EngineJobStatusPanel';
 import { useEngineJobPolling } from '../../../hooks/useEngineJobPolling';
+import EmptyState from '../../shared/EmptyState';
+import ExamplePreview from '../../shared/ExamplePreview';
+import { trackActivationEvent } from '../../../lib/analytics/activationEvents';
 
-const PLATFORMS = [
+const PLATFORM_LABELS = [
   { id: 'instagram', label: 'Instagram' },
   { id: 'facebook', label: 'Facebook' },
   { id: 'twitter', label: 'X' },
   { id: 'reddit', label: 'Reddit' },
   { id: 'linkedin', label: 'LinkedIn' },
 ] as const;
+
+const PLATFORM_LABEL_MAP = new Map<string, string>(PLATFORM_LABELS.map((item) => [item.id, item.label]));
 
 type JobStatus = 'idle' | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'COMPLETED_WITH_WARNINGS' | 'FAILED';
 
@@ -67,6 +72,53 @@ type LeadCluster = {
   latest_post_at?: string | null;
 };
 
+type ActiveLeadsContextResponse = {
+  companyId: string;
+  platforms: Array<{
+    id: string;
+    label: string;
+    availability?: 'connected' | 'public';
+    recommended?: boolean;
+    recommendation_reason?: string | null;
+  }>;
+  publicSourceGroups?: Array<{
+    id: string;
+    label: string;
+    description: string;
+    source_ids: string[];
+    recommended: boolean;
+  }>;
+  recommendationSummary?: {
+    headline: string;
+    body: string;
+    highlights: string[];
+  } | null;
+  integrationReadiness?: {
+    headline: string;
+    body: string;
+    status: 'strong' | 'partial' | 'limited';
+    highlights: string[];
+  } | null;
+  communities: Array<{ id: string; label: string }>;
+  externalApis: Array<{ id: string; label: string; provider_key: string; category: string; is_paid: boolean }>;
+};
+
+type ListeningSourceOption = {
+  id: string;
+  label: string;
+  availability?: 'connected' | 'public';
+  recommended?: boolean;
+  recommendation_reason?: string | null;
+};
+
+type PublicSourceGroup = {
+  id: string;
+  label: string;
+  description: string;
+  sources: ListeningSourceOption[];
+  recommended: boolean;
+};
+
 /** Cluster confidence: weighted composite of intent, urgency, signal_count, trend_velocity. Returns 0-100. */
 function clusterConfidence(c: LeadCluster): number {
   const intent = (c.avg_intent_score ?? 0) * 100;
@@ -108,44 +160,100 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
   const [clusterDomainFilter, setClusterDomainFilter] = useState<string | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
-  /** Set of platform ids that have a connected connector (API returns e.g. 'twitter'; we match by PLATFORMS[].id). null = not loaded or no permission. */
-  const [connectedPlatforms, setConnectedPlatforms] = useState<Set<string> | null>(null);
+  const [availablePlatforms, setAvailablePlatforms] = useState<Array<{
+    id: string;
+    label: string;
+    availability?: 'connected' | 'public';
+    recommended?: boolean;
+    recommendation_reason?: string | null;
+  }>>([]);
+  const [availableCommunities, setAvailableCommunities] = useState<Array<{ id: string; label: string }>>([]);
+  const [availableExternalApis, setAvailableExternalApis] = useState<ActiveLeadsContextResponse['externalApis']>([]);
+  const [selectedExternalApis, setSelectedExternalApis] = useState<string[]>([]);
+  const [selectedCommunities, setSelectedCommunities] = useState<string[]>([]);
+  const [activePublicGroup, setActivePublicGroup] = useState<string | null>(null);
+  const [publicSourceGroups, setPublicSourceGroups] = useState<PublicSourceGroup[]>([]);
+  const [recommendationSummary, setRecommendationSummary] = useState<ActiveLeadsContextResponse['recommendationSummary']>(null);
+  const [integrationReadiness, setIntegrationReadiness] = useState<ActiveLeadsContextResponse['integrationReadiness']>(null);
 
-  const fetchConnectorStatus = useCallback(async () => {
+  const fetchActiveLeadsContext = useCallback(async () => {
     if (!companyId || !fetchWithAuth) {
-      setConnectedPlatforms(null);
+      setAvailablePlatforms([]);
+      setAvailableCommunities([]);
+      setAvailableExternalApis([]);
       return;
     }
     try {
-      const res = await fetchWithAuth(
-        `/api/community-ai/connectors/status?tenant_id=${encodeURIComponent(companyId)}&organization_id=${encodeURIComponent(companyId)}`
-      );
+      const res = await fetchWithAuth(`/api/active-leads/context?companyId=${encodeURIComponent(companyId)}`);
       if (!res.ok) {
-        setConnectedPlatforms(null);
+        setAvailablePlatforms([]);
+        setAvailableCommunities([]);
+        setAvailableExternalApis([]);
         return;
       }
-      const data = (await res.json()) as
-        | { connections?: { platform: string; connected?: boolean }[] }
-        | { platform: string; connected?: boolean }[];
-      const list = Array.isArray(data) ? data : data?.connections ?? [];
-      const set = new Set<string>();
-      for (const r of list || []) {
-        if (r.connected !== false && r.platform) {
-          const key = String(r.platform).toLowerCase().trim();
-          set.add(key);
-          if (key === 'twitter') set.add('x');
-          if (key === 'x') set.add('twitter');
-        }
-      }
-      setConnectedPlatforms(set);
+      const data = (await res.json()) as ActiveLeadsContextResponse;
+      const normalizedPlatforms = Array.isArray(data.platforms) ? data.platforms : [];
+      setAvailablePlatforms(normalizedPlatforms);
+      setAvailableCommunities(Array.isArray(data.communities) ? data.communities : []);
+      setAvailableExternalApis(Array.isArray(data.externalApis) ? data.externalApis : []);
+      setRecommendationSummary(data.recommendationSummary ?? null);
+      setIntegrationReadiness(data.integrationReadiness ?? null);
+      const byId = new Map(normalizedPlatforms.map((platform) => [platform.id, platform]));
+      const nextPublicGroups = Array.isArray(data.publicSourceGroups)
+        ? data.publicSourceGroups
+            .map((group) => ({
+              id: group.id,
+              label: group.label,
+              description: group.description,
+              recommended: group.recommended,
+              sources: (Array.isArray(group.source_ids) ? group.source_ids : [])
+                .map((id) => byId.get(id))
+                .filter(Boolean) as ListeningSourceOption[],
+            }))
+            .filter((group) => group.sources.length > 0)
+        : [];
+      setPublicSourceGroups(nextPublicGroups);
     } catch {
-      setConnectedPlatforms(null);
+      setAvailablePlatforms([]);
+      setAvailableCommunities([]);
+      setAvailableExternalApis([]);
+      setPublicSourceGroups([]);
+      setRecommendationSummary(null);
+      setIntegrationReadiness(null);
     }
   }, [companyId, fetchWithAuth]);
 
   useEffect(() => {
-    fetchConnectorStatus();
-  }, [fetchConnectorStatus]);
+    fetchActiveLeadsContext();
+  }, [fetchActiveLeadsContext]);
+
+  useEffect(() => {
+    if (platforms.length > 0 || availablePlatforms.length === 0) return;
+    const recommendedPlatforms = availablePlatforms
+      .filter((platform) => platform.recommended)
+      .map((platform) => platform.id);
+    if (recommendedPlatforms.length > 0) {
+      setPlatforms(recommendedPlatforms);
+    }
+  }, [availablePlatforms, platforms.length]);
+
+  const connectedPlatformOptions = availablePlatforms.filter((platform) => platform.availability === 'connected');
+  const visiblePublicGroup =
+    publicSourceGroups.find((group) => group.id === activePublicGroup) ??
+    publicSourceGroups[0] ??
+    null;
+
+  useEffect(() => {
+    if (publicSourceGroups.length === 0) {
+      setActivePublicGroup(null);
+      return;
+    }
+    if (activePublicGroup && publicSourceGroups.some((group) => group.id === activePublicGroup)) {
+      return;
+    }
+    const nextGroup = publicSourceGroups.find((group) => group.recommended) ?? publicSourceGroups[0];
+    setActivePublicGroup(nextGroup.id);
+  }, [activePublicGroup, publicSourceGroups]);
 
   const { job: polledJob, error: pollError } = useEngineJobPolling<{
     status?: string;
@@ -186,6 +294,18 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
     );
   };
 
+  const toggleExternalApi = (id: string) => {
+    setSelectedExternalApis((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleCommunity = (id: string) => {
+    setSelectedCommunities((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
   const runListening = async () => {
     if (!companyId || platforms.length === 0) return;
     if (contextMode === 'NONE' && !additionalDirection.trim()) {
@@ -215,6 +335,8 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
           regions,
           keywords: keywordInput.trim() ? keywordInput.trim().split(/\s*,\s*/).filter(Boolean) : [],
           mode: listeningMode,
+          external_api_connection_ids: selectedExternalApis,
+          communities: selectedCommunities,
           context_mode: contextMode,
           focused_modules: contextMode === 'FOCUSED' && focusedModules.length > 0 ? focusedModules : undefined,
           additional_direction: additionalDirection.trim() || overrideText.trim() || undefined,
@@ -337,33 +459,185 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
             </div>
           </div>
           <div>
-            <span className="block text-xs text-gray-500 mb-2">Platforms</span>
+            <span className="block text-xs text-gray-500 mb-2">Listening sources</span>
+            {availablePlatforms.some((platform) => platform.recommended) && (
+              <div className="mb-3 text-xs text-gray-500">
+                Recommended sources are prioritized from the company profile so the scan starts closer to the right buyer conversations.
+              </div>
+            )}
+            {recommendationSummary && (
+              <div className="mb-3 rounded-lg border border-emerald-100 bg-emerald-50/50 p-3">
+                <div className="text-sm font-medium text-emerald-800">{recommendationSummary.headline}</div>
+                <div className="mt-1 text-xs leading-5 text-emerald-900/80">{recommendationSummary.body}</div>
+                {Array.isArray(recommendationSummary.highlights) && recommendationSummary.highlights.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {recommendationSummary.highlights.map((highlight) => (
+                      <span
+                        key={highlight}
+                        className="inline-flex items-center rounded-full border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-medium text-emerald-700"
+                      >
+                        {highlight}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {integrationReadiness && (
+              <div
+                className={`mb-3 rounded-lg border p-3 ${
+                  integrationReadiness.status === 'strong'
+                    ? 'border-sky-100 bg-sky-50/50'
+                    : integrationReadiness.status === 'partial'
+                      ? 'border-amber-100 bg-amber-50/50'
+                      : 'border-gray-200 bg-gray-50'
+                }`}
+              >
+                <div className="text-sm font-medium text-gray-800">{integrationReadiness.headline}</div>
+                <div className="mt-1 text-xs leading-5 text-gray-600">{integrationReadiness.body}</div>
+                {Array.isArray(integrationReadiness.highlights) && integrationReadiness.highlights.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {integrationReadiness.highlights.map((highlight) => (
+                      <span
+                        key={highlight}
+                        className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-600"
+                      >
+                        {highlight}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {publicSourceGroups.length > 0 && (
+              <div className="space-y-3 rounded-lg border border-sky-100 bg-sky-50/40 p-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Public listening paths</div>
+                  <div className="mt-1 text-xs leading-5 text-sky-800/80">
+                    Pick the public discovery category that matches the business, then select the recommended sources under it. Access details stay handled in the background.
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {publicSourceGroups.map((group) => (
+                    <button
+                      key={group.id}
+                      type="button"
+                      onClick={() => setActivePublicGroup(group.id)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                        visiblePublicGroup?.id === group.id
+                          ? 'border-sky-600 bg-sky-600 text-white'
+                          : group.recommended
+                            ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                            : 'border-sky-200 bg-white text-sky-700'
+                      }`}
+                    >
+                      {group.label}
+                    </button>
+                  ))}
+                </div>
+                {visiblePublicGroup && (
+                  <div className="space-y-3 rounded-lg border border-sky-100 bg-white p-3">
+                    <div className="text-sm font-medium text-gray-800">{visiblePublicGroup.label}</div>
+                    <div className="text-xs leading-5 text-gray-500">{visiblePublicGroup.description}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {visiblePublicGroup.sources.map((source) => (
+                        <button
+                          key={source.id}
+                          type="button"
+                          onClick={() => togglePlatform(source.id)}
+                          className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                            platforms.includes(source.id)
+                              ? 'border-sky-600 bg-sky-600 text-white'
+                              : 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100'
+                          }`}
+                        >
+                          {source.label || PLATFORM_LABEL_MAP.get(source.id) || source.id}
+                        </button>
+                      ))}
+                    </div>
+                    {visiblePublicGroup.sources.map((source) => (
+                      source.recommendation_reason ? (
+                        <div key={`${source.id}-reason`} className="text-xs leading-5 text-gray-500">
+                          <span className="font-medium text-gray-700">{source.label}:</span> {source.recommendation_reason}
+                        </div>
+                      ) : null
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {connectedPlatformOptions.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">Connected sources</div>
+                <div className="flex flex-wrap gap-3">
+                  {connectedPlatformOptions.map((p) => (
+                    <label key={p.id} className="flex max-w-sm items-start gap-2 cursor-pointer rounded-lg border border-gray-200 px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={platforms.includes(p.id)}
+                        onChange={() => togglePlatform(p.id)}
+                        className="mt-1 rounded border-gray-300"
+                      />
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium text-gray-700">{p.label || PLATFORM_LABEL_MAP.get(p.id) || p.id}</span>
+                          {p.recommended && (
+                            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                              Recommended
+                            </span>
+                          )}
+                          <span title="Connected" aria-hidden>
+                            <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
+                          </span>
+                        </div>
+                        {p.recommendation_reason && (
+                          <div className="text-xs leading-5 text-gray-500">{p.recommendation_reason}</div>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            {availablePlatforms.length === 0 && (
+              <div className="text-sm text-gray-500">No listening sources are available for Active Leads yet.</div>
+            )}
+          </div>
+          <div>
+            <span className="block text-xs text-gray-500 mb-2">Communities</span>
             <div className="flex flex-wrap gap-3">
-              {PLATFORMS.map((p) => {
-                const isConnected = connectedPlatforms === null ? null : connectedPlatforms.has(p.id);
-                return (
-                  <label key={p.id} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={platforms.includes(p.id)}
-                      onChange={() => togglePlatform(p.id)}
-                      className="rounded border-gray-300"
-                    />
-                    <span className="text-sm text-gray-700">{p.label}</span>
-                    {connectedPlatforms !== null && (
-                      isConnected ? (
-                        <span title="Connected" aria-hidden>
-                          <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
-                        </span>
-                      ) : (
-                        <span title="Not connected — connect in Engagement Center to use this platform" aria-hidden>
-                          <XCircle className="h-4 w-4 text-red-500 shrink-0" />
-                        </span>
-                      )
-                    )}
-                  </label>
-                );
-              })}
+              {availableCommunities.length === 0 ? (
+                <div className="text-sm text-gray-500">No configured communities assigned to Active Leads yet.</div>
+              ) : availableCommunities.map((community) => (
+                <label key={community.id} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedCommunities.includes(community.id)}
+                    onChange={() => toggleCommunity(community.id)}
+                    className="rounded border-gray-300"
+                  />
+                  <span className="text-sm text-gray-700">{community.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <span className="block text-xs text-gray-500 mb-2">Assigned external APIs</span>
+            <div className="flex flex-wrap gap-3">
+              {availableExternalApis.length === 0 ? (
+                <div className="text-sm text-gray-500">No external APIs assigned to Active Leads yet.</div>
+              ) : availableExternalApis.map((api) => (
+                <label key={api.id} className="flex items-center gap-2 cursor-pointer rounded-full border border-gray-200 px-3 py-1.5">
+                  <input
+                    type="checkbox"
+                    checked={selectedExternalApis.includes(api.id)}
+                    onChange={() => toggleExternalApi(api.id)}
+                    className="rounded border-gray-300"
+                  />
+                  <span className="text-sm text-gray-700">{api.label}</span>
+                  <span className="text-xs text-gray-400">{api.is_paid ? 'Paid' : 'Included'}</span>
+                </label>
+              ))}
             </div>
           </div>
           <div>
@@ -546,7 +820,41 @@ export default function ActiveLeadsTab(props: OpportunityTabProps) {
             </div>
           </div>
           {filteredResults.length === 0 ? (
-            <div className="text-sm text-gray-500 py-4">No leads in {funnelTab} stage.</div>
+            <EmptyState
+              tone={results.length === 0 ? 'first-time' : 'no-results'}
+              title={results.length === 0 ? 'Track your first interaction' : 'No results found'}
+              description={
+                results.length === 0
+                  ? 'Run one listening pass to surface the first real conversations worth turning into leads.'
+                  : `There are no leads in the ${funnelTab} stage right now. Switch stages or run another listening pass.`
+              }
+              primaryAction={{
+                label: results.length === 0 ? 'Run social listening' : 'Show active leads',
+                onClick: () => {
+                  trackActivationEvent('empty_state_primary_clicked', {
+                    accountId: companyId,
+                    context: 'active_leads_tab',
+                    meta: { funnelTab, listeningMode },
+                  });
+                  if (results.length === 0) {
+                    runListening();
+                    return;
+                  }
+                  setFunnelTab('Active');
+                },
+              }}
+              secondaryAction={{
+                label: 'Try with sample data',
+                onClick: () => {
+                  trackActivationEvent('sample_used', {
+                    accountId: companyId,
+                    context: 'active_leads_tab',
+                  });
+                  router.push('/engagement/leads?sample=1');
+                },
+              }}
+              examplePreview={<ExamplePreview variant="engagement" />}
+            />
           ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredResults.map((lead) => {

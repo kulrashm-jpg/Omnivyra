@@ -5,6 +5,8 @@
 
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import EmptyState from '../shared/EmptyState';
+import ExamplePreview from '../shared/ExamplePreview';
 
 export interface TrendSignalItem {
   topic: string;
@@ -50,8 +52,16 @@ export function TrendSignalsPanel({
       <Card className={className}>
         <CardHeader>
           <CardTitle>Trend Signals</CardTitle>
-          <p className="text-sm text-slate-600">No trend signals yet.</p>
         </CardHeader>
+        <CardContent>
+          <EmptyState
+            title="Spot your first trend"
+            description="Trend signals help you see what topics are gaining momentum before they become obvious everywhere else."
+            primaryAction={{ label: 'Generate your first insight', href: '/dashboard?tab=intelligence&intelTab=market-pulse' }}
+            secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
+            examplePreview={<ExamplePreview variant="insight" />}
+          />
+        </CardContent>
       </Card>
     );
   }

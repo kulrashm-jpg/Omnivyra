@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Activity, AlertTriangle, MessageSquareMore, Sparkles, TrendingUp } from 'lucide-react';
+import EmptyState from '../shared/EmptyState';
+import ExamplePreview from '../shared/ExamplePreview';
+import { trackActivationEvent } from '../../lib/analytics/activationEvents';
 
 type DashboardResponse = {
   priority_items?: {
@@ -146,6 +149,18 @@ export default function EngagementIntelligenceSection({
     [insights]
   );
 
+  const hasAnySignal = useMemo(() => {
+    return (
+      attention.unanswered + attention.pending + attention.opportunities + attention.underperforming > 0 ||
+      !!topPlatform ||
+      !!topPlatformKpi ||
+      risingTrends.length > 0 ||
+      !!topRisk ||
+      !!insights?.summary_insight ||
+      recommendedActions.length > 0
+    );
+  }, [attention, topPlatform, topPlatformKpi, risingTrends.length, topRisk, insights?.summary_insight, recommendedActions.length]);
+
   return (
     <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -183,6 +198,36 @@ export default function EngagementIntelligenceSection({
         </div>
       )}
 
+      {!error && !loading && !hasAnySignal ? (
+        <div className="mt-5">
+          <EmptyState
+            title="Track your first interaction"
+            description="As soon as conversations, replies, and performance signals start coming in, this section will turn them into a clear engagement summary."
+            primaryAction={{
+              label: 'Open Engagement Center',
+              onClick: () => {
+                trackActivationEvent('empty_state_primary_clicked', {
+                  accountId: companyId,
+                  context: 'engagement_intelligence',
+                });
+                window.location.href = '/engagement';
+              },
+            }}
+            secondaryAction={{
+              label: 'Try with sample data',
+              onClick: () => {
+                trackActivationEvent('sample_used', {
+                  accountId: companyId,
+                  context: 'engagement_intelligence',
+                });
+                window.location.href = '/engagement/leads?sample=1';
+              },
+            }}
+            examplePreview={<ExamplePreview variant="engagement" />}
+          />
+        </div>
+      ) : null}
+
       <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border border-gray-200 bg-slate-50 p-4">
           <div className="flex items-center gap-2 text-sm font-medium text-slate-800">
@@ -203,14 +248,14 @@ export default function EngagementIntelligenceSection({
             Strongest Platform
           </div>
           <div className="mt-3 text-lg font-semibold text-slate-900">
-            {loading ? 'Loading...' : topPlatform?.platform || topPlatformKpi?.platform || 'No data'}
+            {loading ? 'Loading...' : topPlatform?.platform || topPlatformKpi?.platform || 'Waiting for first signal'}
           </div>
           <p className="mt-2 text-sm text-slate-600">
             {topPlatform
               ? `Engagement score ${Number(topPlatform.engagement_score ?? 0).toFixed(1)} with ${topPlatform.pending_actions} pending actions.`
               : topPlatformKpi
               ? `Goal hit rate ${Math.round(topPlatformKpi.goal_hit_rate)}%.`
-              : 'No platform performance signals available yet.'}
+              : 'Connect a channel and publish one post to see which platform is performing best.'}
           </p>
         </div>
 
@@ -223,7 +268,7 @@ export default function EngagementIntelligenceSection({
             {loading ? (
               <p className="text-sm text-slate-500">Loading...</p>
             ) : risingTrends.length === 0 ? (
-              <p className="text-sm text-slate-500">No trend acceleration detected.</p>
+              <p className="text-sm text-slate-500">No rising topics yet. Fresh audience activity will surface the first trend here.</p>
             ) : (
               risingTrends.map((item, index) => (
                 <div key={`${item.platform}-${item.content_type}-${index}`} className="text-sm text-slate-700">
@@ -247,7 +292,7 @@ export default function EngagementIntelligenceSection({
             {loading ? 'Loading...' : topRisk ? `${topRisk.platform} · ${topRisk.metric}` : 'No major anomalies'}
           </div>
           <p className="mt-2 text-sm text-slate-600">
-            {topRisk ? topRisk.reason : 'No anomaly-based risk is currently standing out.'}
+            {topRisk ? topRisk.reason : 'No major engagement risk stands out yet. This will light up when a drop or anomaly needs attention.'}
           </p>
         </div>
       </div>
@@ -261,7 +306,7 @@ export default function EngagementIntelligenceSection({
           <p className="mt-3 text-sm text-gray-700">
             {loading
               ? 'Loading summary...'
-              : insights?.summary_insight || 'No engagement summary has been generated yet.'}
+              : insights?.summary_insight || 'Your first engagement summary will appear here once the system has enough live conversation signal.'}
           </p>
         </div>
 
@@ -274,7 +319,7 @@ export default function EngagementIntelligenceSection({
             {loading ? (
               <p className="text-sm text-gray-500">Loading actions...</p>
             ) : recommendedActions.length === 0 ? (
-              <p className="text-sm text-gray-500">No recommended actions available yet.</p>
+              <p className="text-sm text-gray-500">No next actions yet. Once signals appear, this will suggest the clearest move to take.</p>
             ) : (
               recommendedActions.map((action, index) => (
                 <div key={`${action}-${index}`} className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-gray-700">

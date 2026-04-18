@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { Plus, Plug, Globe, Rss, Pencil, Trash2, RefreshCw, CheckCircle, XCircle, Clock, X } from 'lucide-react';
-import Header from '../components/Header';
 import { useCompanyContext } from '../components/CompanyContext';
 
 type IntegrationType = 'lead_webhook' | 'wordpress' | 'custom_blog_api';
@@ -356,8 +355,6 @@ export default function IntegrationsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header />
-
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {/* Page header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">

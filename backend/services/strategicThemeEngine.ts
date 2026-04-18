@@ -134,7 +134,8 @@ export async function generateThemeFromTopic(
 export async function generateThemesForCampaignWeeks(
   topic: string,
   weeks: number,
-  campaign_tone?: string
+  campaign_tone?: string,
+  diversity_seed: number = 0
 ): Promise<string[]> {
   const t = topic.trim();
   if (!t || weeks < 1) return [];
@@ -142,12 +143,14 @@ export async function generateThemesForCampaignWeeks(
   const variants = generateTopicVariants(t);
 
   // Progression engine (primary): stage + editorial angle per week
+  // Apply diversity_seed to shift which progression stage each week starts at
   const progressionResults: string[] = [];
   for (let i = 0; i < weeks; i++) {
-    const stage = THEME_PROGRESSION[i % THEME_PROGRESSION.length];
+    const stageIdx = (i + diversity_seed) % THEME_PROGRESSION.length;
+    const stage = THEME_PROGRESSION[stageIdx];
     let angle: string;
     try {
-      angle = generateThemeAngleForProgression(t, stage, i) || t;
+      angle = generateThemeAngleForProgression(t, stage, i + diversity_seed) || t;
     } catch {
       angle = t;
     }
@@ -166,10 +169,10 @@ export async function generateThemesForCampaignWeeks(
       let rawTitle = '';
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        const variantIdx = attempt < 2 ? i % variants.length : (i + 1) % variants.length;
+        const variantIdx = attempt < 2 ? (i + diversity_seed) % variants.length : (i + diversity_seed + 1) % variants.length;
         const variant = variants[variantIdx];
-        const seed = getDiversitySeedForAngle(t, angles[i]);
-        const structure = attempt < 2 ? getHeadlineStructure(t, i) : undefined;
+        const seed = getDiversitySeedForAngle(t, angles[i]) + diversity_seed;
+        const structure = attempt < 2 ? getHeadlineStructure(t, i + diversity_seed) : undefined;
         const avoidPrefix = attempt >= 1 && previousPrefix ? previousPrefix : undefined;
 
         rawTitle = generateThemeTitle(
@@ -217,11 +220,12 @@ export async function generateThemesForCampaignWeeks(
 export async function generateRichThemesForCampaignWeeks(
   topic: string,
   weeks: number,
-  campaign_tone?: string
+  campaign_tone?: string,
+  diversity_seed: number = 0
 ): Promise<RichThemeEntry[]> {
-  const titles = await generateThemesForCampaignWeeks(topic, weeks, campaign_tone);
+  const titles = await generateThemesForCampaignWeeks(topic, weeks, campaign_tone, diversity_seed);
   return titles.map((title, i) => {
-    const stage = THEME_PROGRESSION[i % THEME_PROGRESSION.length];
+    const stage = THEME_PROGRESSION[(i + diversity_seed) % THEME_PROGRESSION.length];
     const meta = PHASE_METADATA[stage] ?? {
       objective: `Drive results for ${stage.toLowerCase()} phase`,
       content_focus: 'Content aligned to campaign phase',

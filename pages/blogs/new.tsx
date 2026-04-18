@@ -6,18 +6,21 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../components/blog/BlogEditorForm';
 import { ContentQualityPanel, type ImproveArea } from '../../components/content/ContentQualityPanel';
+import EditorShareActions from '../../components/content/EditorShareActions';
 import { createDefaultBlogTemplate } from '../../lib/blog/blogTemplate';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../lib/blog/topicDetection';
-import { AlertTriangle, XCircle, Loader2, Copy, Download, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
+import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
+import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
 
 const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
 
 type PrefillPayload = {
-  output?: (BlogGenerationOutput & { content_blocks?: unknown[] }) | null;
+  output?: (BlogGenerationOutput & { content_blocks?: unknown[]; content_markdown?: string }) | null;
   source?: string;
   target_word_count?: number;
   format_type?: BlogFormatType;
@@ -26,6 +29,8 @@ type PrefillPayload = {
 export default function BlogNewPage() {
   const router = useRouter();
   const { selectedCompanyId } = useCompanyContext();
+  const editId = typeof router.query.edit === 'string' ? router.query.edit : null;
+  const isEditing = Boolean(editId);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveState, setLiveState] = useState<BlogFormState | null>(null);
@@ -38,12 +43,8 @@ export default function BlogNewPage() {
   const [formatType, setFormatType] = useState<BlogFormatType | undefined>(undefined);
   const [primaryKeyword, setPrimaryKeyword] = useState<string | null>(null);
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[] | null>(null);
-  const [showUseMenu, setShowUseMenu] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [markingUsed, setMarkingUsed] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
 
-  // Duplication detection
   const [existingPosts, setExistingPosts] = useState<ExistingPostMeta[]>([]);
   const [dupResult, setDupResult] = useState<DuplicationResult | null>(null);
   const dupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -127,7 +128,6 @@ export default function BlogNewPage() {
     }
   };
 
-  // Fetch existing posts once for duplication checking
   useEffect(() => {
     if (!selectedCompanyId) return;
     fetch(`/api/company/blogs?company_id=${selectedCompanyId}`, { credentials: 'include' })
@@ -145,63 +145,98 @@ export default function BlogNewPage() {
   }, [selectedCompanyId]);
 
   useEffect(() => {
-    if (!router.isReady) return;
+    if (!router.isReady || !selectedCompanyId) return;
 
-    const token = typeof router.query.prefill === 'string' ? router.query.prefill : '';
-    if (!token) {
-      setPrefillChecked(true);
-      return;
-    }
+    const bootstrap = async () => {
+      if (editId) {
+        try {
+          const res = await fetch(`/api/blogs/${editId}?company_id=${encodeURIComponent(selectedCompanyId)}`, {
+            credentials: 'include',
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data?.error || 'Failed to load blog');
 
-    try {
-      const raw = sessionStorage.getItem(token);
-      if (!raw) {
+          const blog = data?.blog as Record<string, unknown>;
+          setSavedId(editId);
+          setPrefillInitial({
+            title: typeof blog?.title === 'string' ? blog.title : '',
+            slug: typeof blog?.slug === 'string' ? blog.slug : '',
+            excerpt: typeof blog?.excerpt === 'string' ? blog.excerpt : '',
+            category: typeof blog?.category === 'string' ? blog.category : '',
+            tags: Array.isArray(blog?.tags) ? (blog.tags as string[]) : [],
+            seo_meta_title: typeof blog?.seo_meta_title === 'string' ? blog.seo_meta_title : '',
+            seo_meta_description: typeof blog?.seo_meta_description === 'string' ? blog.seo_meta_description : '',
+            featured_image_url: typeof blog?.featured_image_url === 'string' ? blog.featured_image_url : '',
+            content_markdown: typeof blog?.content === 'string' ? blog.content : '',
+            content_blocks: Array.isArray(blog?.content_blocks) && blog.content_blocks.length > 0
+              ? (blog.content_blocks as BlogFormState['content_blocks'])
+              : DEFAULT_TEMPLATE,
+            is_featured: blog?.is_featured === true,
+            status: (typeof blog?.status === 'string' ? blog.status : 'draft') as BlogFormState['status'],
+            published_at: typeof blog?.published_at === 'string' ? blog.published_at : '',
+          });
+          setPrefillNotice('Editing an existing blog. Update the draft and save when ready.');
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Failed to load blog');
+        } finally {
+          setPrefillChecked(true);
+        }
+        return;
+      }
+
+      const token = typeof router.query.prefill === 'string' ? router.query.prefill : '';
+      if (!token) {
         setPrefillChecked(true);
         return;
       }
 
-      const parsed = JSON.parse(raw) as PrefillPayload;
-      const output = parsed?.output;
-      if (parsed?.target_word_count && parsed.target_word_count >= 300) {
-        setTargetWordCount(parsed.target_word_count);
-      }
-      if (typeof parsed?.format_type === 'string' && parsed.format_type.trim()) {
-        setFormatType(parsed.format_type);
-      }
-      if (output) {
-        setPrefillInitial({
-          title: output.title || '',
-          excerpt: output.excerpt || '',
-          category: output.category || '',
-          tags: Array.isArray(output.tags) ? output.tags : [],
-          seo_meta_title: output.seo_meta_title || '',
-          seo_meta_description: output.seo_meta_description || '',
-          content_blocks: Array.isArray(output.content_blocks)
-            ? (output.content_blocks as BlogFormState['content_blocks'])
-            : DEFAULT_TEMPLATE,
-          content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
-          format_type: typeof parsed?.format_type === 'string' ? parsed.format_type : undefined,
-        });
-        // Extract SEO keywords from generated output (attached by BlogGenerateModal)
-        const outputAny = output as unknown as Record<string, unknown>;
-        if (typeof outputAny.primary_keyword === 'string') setPrimaryKeyword(outputAny.primary_keyword);
-        if (Array.isArray(outputAny.secondary_keywords)) setSecondaryKeywords(outputAny.secondary_keywords as string[]);
-        if (parsed.source === 'company_blog_intelligence') {
-          setPrefillNotice('Draft prefilled from your blog intelligence. Review and publish when ready.');
+      try {
+        const raw = sessionStorage.getItem(token);
+        if (!raw) {
+          setPrefillChecked(true);
+          return;
         }
-      }
-      sessionStorage.removeItem(token);
-    } catch {
-      // Invalid token payload should not block editor usage.
-    } finally {
-      const nextQuery = { ...router.query };
-      delete nextQuery.prefill;
-      void router.replace({ pathname: router.pathname, query: nextQuery }, undefined, { shallow: true });
-      setPrefillChecked(true);
-    }
-  }, [router.isReady]);
 
-  // Debounced duplication check whenever title or tags change
+        const parsed = JSON.parse(raw) as PrefillPayload;
+        const output = parsed?.output;
+        if (parsed?.target_word_count && parsed.target_word_count >= 300) {
+          setTargetWordCount(parsed.target_word_count);
+        }
+        if (typeof parsed?.format_type === 'string' && parsed.format_type.trim()) {
+          setFormatType(parsed.format_type);
+        }
+        if (output) {
+          setPrefillInitial({
+            title: output.title || '',
+            excerpt: output.excerpt || '',
+            category: output.category || '',
+            tags: Array.isArray(output.tags) ? output.tags : [],
+            seo_meta_title: output.seo_meta_title || '',
+            seo_meta_description: output.seo_meta_description || '',
+            content_blocks: resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE),
+            content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
+            format_type: typeof parsed?.format_type === 'string' ? parsed.format_type : undefined,
+          });
+          const outputAny = output as unknown as Record<string, unknown>;
+          if (typeof outputAny.primary_keyword === 'string') setPrimaryKeyword(outputAny.primary_keyword);
+          if (Array.isArray(outputAny.secondary_keywords)) setSecondaryKeywords(outputAny.secondary_keywords as string[]);
+          if (parsed.source === 'company_blog_intelligence') {
+            setPrefillNotice('Draft prefilled from your blog intelligence. Review and publish when ready.');
+          }
+        }
+        sessionStorage.removeItem(token);
+      } catch {
+      } finally {
+        const nextQuery = { ...router.query };
+        delete nextQuery.prefill;
+        void router.replace({ pathname: router.pathname, query: nextQuery }, undefined, { shallow: true });
+        setPrefillChecked(true);
+      }
+    };
+
+    void bootstrap();
+  }, [router.isReady, selectedCompanyId, editId, router.query, router]);
+
   useEffect(() => {
     const title = liveState?.title?.trim() ?? '';
     const tags  = liveState?.tags ?? [];
@@ -230,8 +265,12 @@ export default function BlogNewPage() {
     setError(null);
     setIsSaving(true);
     try {
-      const res = await fetch('/api/company/blogs', {
-        method: 'POST',
+      const endpoint = isEditing && editId
+        ? `/api/blogs/${encodeURIComponent(editId)}?company_id=${encodeURIComponent(selectedCompanyId)}`
+        : '/api/company/blogs';
+      const method = isEditing && editId ? 'PUT' : 'POST';
+      const res = await fetch(endpoint, {
+        method,
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -257,8 +296,8 @@ export default function BlogNewPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Save failed');
-      setSavedId(data.id ?? null);
-      setPrefillNotice('Blog post saved. You can now copy, export, or mark it as used.');
+      setSavedId((data?.id ?? data?.blog?.id ?? editId) || null);
+      setPrefillNotice(isEditing ? 'Blog updated. You can now copy, export, or mark it as used.' : 'Blog post saved. You can now copy, export, or mark it as used.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');
     } finally {
@@ -284,25 +323,17 @@ export default function BlogNewPage() {
     });
   };
 
-  const handleCopy = () => {
+  const handlePostToSocial = () => {
     if (!liveState) return;
-    const text = liveState.content_markdown || liveState.title || '';
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+    launchSocialPostingFromContent({
+      router,
+      contentType: 'blog',
+      title: liveState.title,
+      content: liveState.content_markdown || '',
+      tags: liveState.tags,
+      excerpt: liveState.excerpt,
+      sourceId: savedId,
     });
-  };
-
-  const handleExport = () => {
-    if (!liveState) return;
-    const text = `# ${liveState.title}\n\n${liveState.content_markdown || ''}`;
-    const blob = new Blob([text], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${(liveState.title || 'blog-post').toLowerCase().replace(/\s+/g, '-')}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   const handleMarkUsed = async (platform?: string) => {
@@ -310,7 +341,6 @@ export default function BlogNewPage() {
       setError('Save the post first before marking it as used.');
       return;
     }
-    setMarkingUsed(true);
     try {
       const res = await fetch('/api/content/mark-used', {
         method: 'POST',
@@ -326,26 +356,17 @@ export default function BlogNewPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Failed to mark as used');
       setPrefillNotice(`Blog post marked as used${platform ? ` on ${platform}` : ''}.`);
-      setShowUseMenu(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to mark as used');
-    } finally {
-      setMarkingUsed(false);
     }
   };
 
-  if (!prefillChecked) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <Loader2 className="h-10 w-10 animate-spin text-[#0B5ED7]" />
-      </div>
-    );
-  }
+  if (!prefillChecked) return <div className="flex min-h-screen items-center justify-center bg-gray-50"><Loader2 className="h-10 w-10 animate-spin text-[#0B5ED7]" /></div>;
 
   return (
     <>
       <Head>
-        <title>New Post | Blog Intelligence</title>
+        <title>{isEditing ? 'Edit Blog' : 'New Blog'} | Blog Intelligence</title>
       </Head>
       <div className="min-h-screen bg-gray-50">
         <div className="border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
@@ -353,14 +374,14 @@ export default function BlogNewPage() {
             <Link href="/dashboard" className="flex shrink-0 items-center" aria-label="Home">
               <img src="/logo.png" alt="Logo" width={100} height={40} className="h-10 w-auto object-contain sm:h-11" />
             </Link>
-            <Link href="/blogs" className="text-sm font-medium text-gray-600 hover:text-gray-900">
-              ← Back to Blog Intelligence
+            <Link href="/blogs/create" className="text-sm font-medium text-gray-600 hover:text-gray-900">
+              Back to Create Blog
             </Link>
           </div>
         </div>
 
         <div className="mx-auto max-w-[1200px] p-6">
-          <h1 className="mb-6 text-2xl font-bold text-gray-900">New Post</h1>
+          <h1 className="mb-6 text-2xl font-bold text-gray-900">{isEditing ? 'Edit Blog' : 'New Blog'}</h1>
           {prefillNotice && (
             <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
               {prefillNotice}
@@ -418,62 +439,31 @@ export default function BlogNewPage() {
                   ...(prefillInitial || {}),
                 }}
                 onSubmit={handleSubmit}
-                onCancel={() => router.push('/blogs')}
-                submitLabel="Create post"
+                onCancel={() => router.push('/blogs/create')}
+                submitLabel={isEditing ? 'Update blog' : 'Create blog'}
                 isSaving={isSaving}
                 onStateChange={setLiveState}
                 externalPatch={editorPatch}
               />
 
-              <div className="mt-6 border-t border-gray-200 pt-4">
-                <div className="mb-3 flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-gray-700">Use / Share</h3>
-                  {savedId && (
-                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-600">Saved</span>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={handleCopy}
-                    className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-                  >
-                    {copied ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                    {copied ? 'Copied!' : 'Copy Content'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleExport}
-                    className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    Export
-                  </button>
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setShowUseMenu(!showUseMenu)}
-                      disabled={markingUsed}
-                      className="flex items-center gap-1.5 rounded-lg bg-[#0B5ED7] px-3 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
-                    >
-                      {markingUsed ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                      Mark as Used
-                    </button>
-                    {showUseMenu && (
-                      <div className="absolute left-0 top-full z-20 mt-1 w-44 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
-                        <button onClick={() => handleMarkUsed()} className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50">General use</button>
-                        <button onClick={() => handleMarkUsed('website')} className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50">Website</button>
-                        <button onClick={() => handleMarkUsed('linkedin')} className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50">LinkedIn</button>
-                        <button onClick={() => handleMarkUsed('email')} className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50">Email</button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <EditorShareActions
+                saved={Boolean(savedId)}
+                copyText={liveState?.content_markdown || liveState?.title || ''}
+                exportText={`# ${liveState?.title || ''}\n\n${liveState?.content_markdown || ''}`}
+                exportFileName={`${(liveState?.title || 'blog-post').toLowerCase().replace(/\s+/g, '-')}.md`}
+                onMarkUsed={handleMarkUsed}
+                onPostToSocial={handlePostToSocial}
+                markUsedOptions={[
+                  { label: 'General use' },
+                  { label: 'Website', value: 'website' },
+                  { label: 'LinkedIn', value: 'linkedin' },
+                  { label: 'Email', value: 'email' },
+                ]}
+              />
             </div>
 
             {/* ── Quality panel (sticky right sidebar) ────────────────────── */}
-            <div className="hidden xl:block w-[280px] shrink-0 sticky top-6 self-start">
+            <div className="hidden lg:block w-[280px] shrink-0 sticky top-6 self-start">
               {liveState && (
                 <ContentQualityPanel
                   blocks={liveState.content_blocks}
@@ -500,3 +490,4 @@ export default function BlogNewPage() {
     </>
   );
 }
+

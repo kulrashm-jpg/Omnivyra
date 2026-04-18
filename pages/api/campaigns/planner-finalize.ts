@@ -72,7 +72,7 @@ function normalizeContentType(type: string): string {
   return (map[key] ?? key) || 'post';
 }
 
-/** Build weeks structure from calendar_plan for twelve_week_plan; skeleton comes from planner state only. */
+/** Build weeks structure from calendar_plan for campaign_week_plan; skeleton comes from planner state only. */
 function buildWeeksFromCalendarPlan(calendarPlan: {
   weeks?: unknown[];
   days?: Array<{ week_number: number; day: string; activities?: unknown[] }>;
@@ -495,11 +495,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .update({
         duration_weeks: durationWeeks,
         start_date: startDate,
-        current_stage: 'twelve_week_plan',
+        current_stage: 'campaign_week_plan',
         updated_at: new Date().toISOString(),
       })
       .eq('id', campaignId);
-    void syncCampaignVersionStage(campaignId, 'twelve_week_plan', companyId).catch(() => {});
+    void syncCampaignVersionStage(campaignId, 'campaign_week_plan', companyId).catch(() => {});
 
     // -------------------------------------------------------------------------
     // ADAPTER BRANCH (additive — does NOT modify the block below)

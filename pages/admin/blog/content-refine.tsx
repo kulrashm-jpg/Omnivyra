@@ -6,17 +6,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { Loader2, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 import type { BlogGenerationOutput } from '../../../lib/blog/blogGenerationEngine';
+import type { BriefInsight, DraftFieldSuggestions, TemplateSessionPayload, EnrichedGap } from '../../blogs.types';
 
-type BriefInsight = {
-  company_id: string;
-  company_name: string;
-  company_context: string;
-  current_content: string;
-  writing_style: string;
-  related_titles: string[];
-  intent: 'awareness' | 'authority' | 'conversion' | 'retention';
-  tone: string;
-};
+
 
 type PrefillPayload = {
   selectedCompanyId: string;

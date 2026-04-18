@@ -1,3 +1,5 @@
+import { wordCount } from '../../pages/blogs.helpers';
+
 /**
  * Content Quality Enhancer v2.3
  *
@@ -189,9 +191,7 @@ function tokenize(text: string): string[] {
     .filter((t) => t.length > 3 && !STOP_WORDS.has(t));
 }
 
-function wordCount(html: string): number {
-  return stripHtml(html).split(/\s+/).filter(Boolean).length;
-}
+
 
 function isTemplate(value: string): boolean {
   if (!value || value.length < 5) return true;

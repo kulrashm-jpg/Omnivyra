@@ -1,4 +1,5 @@
 import { calculateQualityScore, type FormMeta } from '../blog/blogValidation';
+import type { BlogFormatType } from '../blog/blogStructureTemplates';
 import { analyzeOptimization, type OptimizationAction, type InstructionCode } from '../blog/optimizationEngine';
 import { applyOptimizationActions, type BlogForRegeneration } from '../blog/regenerationExecutor';
 import type { ContentBlock } from '../blog/blockTypes';
@@ -233,7 +234,7 @@ export async function improveContentDraft(input: ImproveContentDraftInput): Prom
     ? calculateNewsletterQualityScore(safeDraft.content_blocks, {
         ...toFormMeta(safeDraft),
         content_type: 'newsletter',
-        format_type: safeDraft.format_type,
+        format_type: safeDraft.format_type as BlogFormatType | undefined,
       })
     : calculateQualityScore(safeDraft.content_blocks, {
         ...toFormMeta(safeDraft),
@@ -270,7 +271,7 @@ export async function improveContentDraft(input: ImproveContentDraftInput): Prom
     ? calculateNewsletterQualityScore(updated.content_blocks, {
         ...toFormMeta(updated),
         content_type: 'newsletter',
-        format_type: updated.format_type,
+        format_type: updated.format_type as BlogFormatType | undefined,
       })
     : calculateQualityScore(updated.content_blocks, {
         ...toFormMeta(updated),

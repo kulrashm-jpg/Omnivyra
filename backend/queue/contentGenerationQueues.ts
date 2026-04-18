@@ -163,6 +163,41 @@ export const CONTENT_QUEUE_CONFIG: Record<string, QueueConfig> = {
     removeOnComplete: { age: 3600 },
     removeOnFail: { age: 604800 },
   },
+
+  // ─── WHATSAPP BROADCAST QUEUE ────────────────────────────────────────────
+  'whatsapp-broadcast': {
+    concurrency: 2,
+    priority: 6,
+    defaultBackoff: { type: 'exponential', delay: 5000 },
+    attempts: 3,
+    removeOnComplete: { age: 86400 },
+    removeOnFail: { age: 604800 },
+  },
+
+  // ─── WHATSAPP WEBHOOK EVENT QUEUE ────────────────────────────────────────
+  // Processes raw Meta webhook payloads async — ack in <10ms, process later.
+  // jobId = sha256(rawBody) provides replay dedup at queue insertion.
+  'whatsapp-webhook': {
+    concurrency: 3,
+    priority: 8,
+    defaultBackoff: { type: 'exponential', delay: 2000 },
+    attempts: 5,
+    removeOnComplete: { age: 86400 },
+    removeOnFail: { age: 604800 },
+  },
+
+  // ─── ANALYTICS INGESTION QUEUE ───────────────────────────────────────────
+  // Two job types:
+  //   'daily-growth'  — triggered by cron at 02:00 UTC
+  //   'post-polls'    — triggered after publish (15-min + 24-h delayed)
+  'analytics-ingestion': {
+    concurrency: 1,          // sequential — avoids API rate limit bursts
+    priority: 2,
+    defaultBackoff: { type: 'exponential', delay: 10000 },
+    attempts: 3,
+    removeOnComplete: { age: 86400 },
+    removeOnFail: { age: 604800 },
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -340,6 +375,61 @@ export async function startBoltContentWorkers(processor: (job: any) => Promise<a
   });
 
   console.info('[bolt-content-worker] started, concurrency=', config.concurrency);
+}
+
+/**
+ * Start the WhatsApp broadcast worker.
+ * Processes wa-broadcast-batch jobs — calls processBatch() from whatsappBroadcastService.
+ */
+export async function startWhatsAppBroadcastWorker(processor: (job: any) => Promise<any>): Promise<void> {
+  const config = CONTENT_QUEUE_CONFIG['whatsapp-broadcast']!;
+  const worker = new Worker('whatsapp-broadcast', processor, {
+    connection: getConnectionConfig(),
+    concurrency: config.concurrency,
+  });
+
+  worker.on('completed', (job) => {
+    console.info('[wa-broadcast-worker][completed]', {
+      jobId: job.id,
+      processingTime: (job.finishedOn ?? 0) - (job.processedOn ?? 0),
+    });
+  });
+
+  worker.on('failed', (job, error) => {
+    console.error('[wa-broadcast-worker][failed]', { jobId: job?.id, error: String(error) });
+  });
+
+  console.info('[wa-broadcast-worker] started, concurrency=', config.concurrency);
+}
+
+export async function startWhatsAppWebhookWorker(processor: (job: any) => Promise<any>): Promise<void> {
+  const config = CONTENT_QUEUE_CONFIG['whatsapp-webhook']!;
+  const worker = new Worker('whatsapp-webhook', processor, {
+    connection: getConnectionConfig(),
+    concurrency: config.concurrency,
+  });
+  worker.on('completed', (job) => {
+    console.info('[wa-webhook-worker][completed]', { jobId: job.id });
+  });
+  worker.on('failed', (job, error) => {
+    console.error('[wa-webhook-worker][failed]', { jobId: job?.id, error: String(error) });
+  });
+  console.info('[wa-webhook-worker] started, concurrency=', config.concurrency);
+}
+
+export async function startAnalyticsIngestionWorker(processor: (job: any) => Promise<any>): Promise<void> {
+  const config = CONTENT_QUEUE_CONFIG['analytics-ingestion']!;
+  const worker = new Worker('analytics-ingestion', processor, {
+    connection: getConnectionConfig(),
+    concurrency: config.concurrency,
+  });
+  worker.on('completed', (job) => {
+    console.info('[analytics-ingestion-worker][completed]', { jobId: job.id });
+  });
+  worker.on('failed', (job, error) => {
+    console.error('[analytics-ingestion-worker][failed]', { jobId: job?.id, error: String(error) });
+  });
+  console.info('[analytics-ingestion-worker] started, concurrency=', config.concurrency);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

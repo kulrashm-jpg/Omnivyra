@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
 import { TourProvider } from '../components/tour/TourContext';
+import AppLayout from '../components/layout/AppLayout';
 
 // NOTE: clearSupabaseSession() was removed here.  It wiped sb-* localStorage
 // keys (including PKCE code-verifiers) on every page load, which broke magic-
@@ -126,7 +127,11 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // This prevents a flash of protected content before we know the user's auth state,
   // and prevents a premature redirect to /login before we know the user is NOT authenticated.
   if (!isPublic && !authChecked) {
-    return null;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+      </div>
+    );
   }
 
   // While authChecked but unauthenticated, render nothing (useEffect above handles redirect).
@@ -134,10 +139,22 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     return null;
   }
 
+  // Onboarding pages that should NOT get the app header (they have their own layout)
+  const isOnboardingRoute = router.pathname.startsWith('/onboarding');
+  const isLoginRoute = router.pathname === '/login' || router.pathname === '/signup' || router.pathname === '/create-account';
+  const isCaptureRoute = router.pathname.startsWith('/capture');
+
+  // Authenticated routes get AppLayout (header + footer)
+  const showAppLayout = isAuthenticated && !isPublic && !isOnboardingRoute && !isLoginRoute && !isCaptureRoute;
+
   return (
     <>
       {showLandingNavbar && <LandingNavbar />}
-      {children}
+      {showAppLayout ? (
+        <AppLayout>{children}</AppLayout>
+      ) : (
+        children
+      )}
     </>
   );
 };

@@ -1,3 +1,4 @@
+import { normalizePlatform } from '../constants/platforms';
 import { CompanyProfile, getProfile, validateCompanyProfile } from './companyProfileService';
 import {
   alignTrendsToPlans,
@@ -118,18 +119,6 @@ const EXECUTION_SOCIAL_PLATFORMS = new Set([
   'reddit',
   'facebook',
 ]);
-
-const normalizePlatform = (platform: string): string => {
-  const lower = platform.trim().toLowerCase();
-  if (lower === 'twitter' || lower === 'x') return 'x';
-  if (lower === 'youtube') return 'youtube';
-  if (lower === 'linkedin') return 'linkedin';
-  if (lower === 'instagram') return 'instagram';
-  if (lower === 'facebook') return 'facebook';
-  if (lower === 'tiktok') return 'tiktok';
-  if (lower === 'reddit') return 'reddit';
-  return lower;
-};
 
 const getObjectiveCampaignTypes = (objective: CampaignObjective): string[] => {
   switch (objective) {

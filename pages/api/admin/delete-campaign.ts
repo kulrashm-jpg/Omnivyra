@@ -60,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         'daily_content_plans',
         'weekly_content_refinements',
         'weekly_content_plans',
-        'twelve_week_plan',
+        'campaign_week_plan',
         'campaign_analytics',
         'ai_feedback',
         'ai_improvements',

@@ -34,6 +34,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     related_blogs,
     series_blog_ids,
     format_type,
+    template_blocks,
+    template_name,
+    target_word_count,
+    cache_version,
   } = req.body ?? {};
 
   if (!company_id || typeof company_id !== 'string')
@@ -92,11 +96,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         series_blog_ids:  Array.isArray(series_blog_ids)
           ? series_blog_ids.filter((id: unknown) => typeof id === 'string')
           : undefined,
-        answers:          answers && typeof answers === 'object' ? answers as Record<string, string> : undefined,
+        answers:          (() => {
+          const a = answers && typeof answers === 'object' ? answers as Record<string, string> : {};
+          if (target_word_count && !a.target_word_count) a.target_word_count = String(target_word_count);
+          return Object.keys(a).length > 0 ? a : undefined;
+        })(),
         selected_angle:   selected_angle as BlogAngle | undefined,
         tone:             typeof tone === 'string' ? tone.trim() : undefined,
         blogTable:        'blogs',
         formatType:       isValidGuideFormat(format_type) ? format_type : 'comprehensive',
+        template_blocks:  Array.isArray(template_blocks) ? template_blocks : undefined,
+        template_name:    typeof template_name === 'string' ? template_name : undefined,
+        cache_version:    typeof cache_version === 'string' ? cache_version : undefined,
         companyContext: {
           audience:                 str('target_audience') || str('audience'),
           brand_voice:              str('brand_voice') || str('writing_style'),

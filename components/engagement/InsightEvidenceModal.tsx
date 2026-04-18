@@ -3,20 +3,11 @@
  */
 
 import React from 'react';
+import { PLATFORM_EMOJI_ICONS as PLATFORM_ICONS, getPlatformEmoji as getPlatformIcon } from '../../utils/platformEmojis';
 
-const PLATFORM_ICONS: Record<string, string> = {
-  linkedin: '💼',
-  twitter: '🐦',
-  youtube: '▶️',
-  reddit: '🤖',
-  slack: '💬',
-  discord: '🎮',
-  github: '🐙',
-};
 
-function getPlatformIcon(platform: string): string {
-  return PLATFORM_ICONS[platform?.toLowerCase() ?? ''] ?? '💬';
-}
+
+
 
 export type InsightEvidence = {
   thread_id: string;

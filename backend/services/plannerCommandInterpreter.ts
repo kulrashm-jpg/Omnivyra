@@ -6,6 +6,7 @@
  */
 
 import type { PlannerCommand } from '../types/plannerCommands';
+import { normalizePlatform } from '../constants/platforms';
 
 /** Minimal calendar plan shape for interpreter (avoids circular/component imports). */
 export interface PlannerCalendarActivity {
@@ -30,9 +31,7 @@ export interface PlannerCalendarPlan {
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-function normalizePlatform(p: string): string {
-  return String(p ?? '').toLowerCase().trim().replace(/^twitter$/i, 'x');
-}
+
 
 function normalizeDay(d: string): string {
   const n = String(d ?? '').trim();

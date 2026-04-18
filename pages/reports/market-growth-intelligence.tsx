@@ -60,35 +60,53 @@ export default function MarketGrowthIntelligencePage() {
         />
       </Head>
 
-      <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-teal-50">
-        {/* Back Nav */}
-        <div className="border-b border-gray-200 bg-white sticky top-0 z-40">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
-            <button onClick={() => router.push('/reports')} className="inline-flex items-center gap-2 text-gray-600 hover:text-gray-900 text-sm transition-colors">
-              ← Back to Reports
-            </button>
-            <span className="bg-red-100 text-red-700 text-xs font-bold px-3 py-1 rounded-full">80–150 Credits</span>
-          </div>
-        </div>
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">
+        <div className="mx-auto max-w-4xl">
+          <button onClick={() => router.push('/reports')} className="mb-8 inline-flex items-center gap-2 text-sm text-gray-600 transition-colors hover:text-gray-900">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+            </svg>
+            Back to Reports
+          </button>
 
-        {/* Hero Section */}
-        <section className="relative px-4 py-20 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-4xl text-center">
-            <div className="mb-6 inline-block">
-              <span className="rounded-full bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-700">
-                Premium Intelligence
-              </span>
+        <div className="mb-8 rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px] lg:items-end">
+            <div className="max-w-3xl">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Report System</p>
+              <h1 className="text-3xl font-bold tracking-tight text-gray-900 md:text-4xl">Market & Growth Intelligence Report</h1>
+              <p className="mt-3 text-sm leading-relaxed text-gray-600 md:text-base">
+                Understand your market position, where momentum is moving, and where growth deserves more investment.
+              </p>
             </div>
 
-            <h1 className="mb-4 text-5xl font-bold tracking-tight text-gray-900 sm:text-6xl">
-              Market & Growth Intelligence Report
-            </h1>
+            <div className="grid grid-cols-2 gap-3 lg:w-[240px]">
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Credits</p>
+                <p className="mt-1 text-base font-semibold text-gray-900">80-150</p>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Turnaround</p>
+                <p className="mt-1 text-base font-semibold text-gray-900">3-5 min</p>
+              </div>
+            </div>
+          </div>
 
-            <p className="mx-auto mb-8 max-w-2xl text-xl text-gray-600">
-              See where the market is moving — and where you're falling behind. Understand competitive positioning, budget direction, and your biggest growth opportunities.
-            </p>
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Designed For</p>
+              <p className="mt-1 text-sm text-gray-700">Teams making larger strategic choices on positioning, budget direction, and market opportunities.</p>
+            </div>
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Decision Quality</p>
+              <p className="mt-1 text-sm text-gray-700">Shows market pressure, competitor movement, and where the next meaningful growth opportunities sit.</p>
+            </div>
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Output Standard</p>
+              <p className="mt-1 text-sm text-gray-700">Strategic growth report built for investment choices, expansion decisions, and competitive review.</p>
+            </div>
+          </div>
 
-            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:justify-center sm:gap-4">
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
               <button
                 onClick={() => setIsModalOpen(true)}
                 disabled={!integrationsConnected}
@@ -101,9 +119,9 @@ export default function MarketGrowthIntelligencePage() {
                 Generate Report
                 <ArrowRight className="h-5 w-5" />
               </button>
-            </div>
+          </div>
 
-            <p className="text-sm text-gray-500 mb-2">
+            <p className="mt-4 text-sm text-gray-500 mb-2">
               {integrationsConnected ? (
                 <span className="flex items-center justify-center gap-1">
                   <CheckCircle2 className="h-4 w-4 text-green-600" />
@@ -117,8 +135,7 @@ export default function MarketGrowthIntelligencePage() {
               )}
             </p>
             <p className="text-xs text-gray-400">Takes 3–5 minutes to generate • PDF download included</p>
-          </div>
-        </section>
+        </div>
         {/* When to Use This */}
         <section className="px-4 py-12 sm:px-6 lg:px-8 bg-emerald-50">
           <div className="mx-auto max-w-4xl">
@@ -545,6 +562,7 @@ export default function MarketGrowthIntelligencePage() {
         onClose={() => setIsModalOpen(false)}
         onSubmitSuccess={() => {}}
       />
+      </div>
     </>
   );
 }

@@ -1,3 +1,4 @@
+import { normalizePlatform } from '../constants/platforms';
 /**
  * Scheduling Intelligence — Phase 6
  *
@@ -49,10 +50,7 @@ const PLATFORM_BEST_TIMES: Record<string, TimeWindow[]> = {
   default: [{ start: '09:00', end: '10:00' }],
 };
 
-function normalizePlatform(platform: string): string {
-  const s = String(platform ?? '').trim().toLowerCase();
-  return s === 'x' ? 'twitter' : s;
-}
+
 
 /**
  * Get recommended posting days per platform (short names: Tue, Wed, etc).

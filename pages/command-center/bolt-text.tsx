@@ -9,15 +9,15 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 
-type ContentFormat = 'post' | 'blog' | 'short_story' | 'article' | 'newsletter';
+type ContentFormat = 'post' | 'tweet' | 'short_story' | 'article' | 'poll';
 type OutcomeView = 'week_plan' | 'daily_plan' | 'schedule';
 
 const CONTENT_FORMATS: { value: ContentFormat; label: string; description: string }[] = [
   { value: 'post', label: 'Post', description: 'Short-form social content' },
-  { value: 'blog', label: 'Blog', description: 'Long-form SEO articles' },
+  { value: 'tweet', label: 'Tweet', description: 'Single punchy statement' },
   { value: 'short_story', label: 'Short Story', description: 'Narrative-driven content' },
   { value: 'article', label: 'Article', description: 'Thought leadership pieces' },
-  { value: 'newsletter', label: 'Newsletter', description: 'Email-first distribution' },
+  { value: 'poll', label: 'Poll', description: 'Interactive engagement content' },
 ];
 
 const DURATION_OPTIONS: { value: number; label: string }[] = [
@@ -166,7 +166,7 @@ export default function BoltTextSetupPage() {
               Content Type
             </h2>
             <p className="text-xs text-gray-400 mb-4">What kind of content should BOLT produce?</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-2 gap-2.5">
               {CONTENT_FORMATS.map((fmt) => (
                 <button
                   key={fmt.value}

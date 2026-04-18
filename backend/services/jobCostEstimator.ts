@@ -57,6 +57,7 @@ const OPERATION_OUTPUT_TOKENS: Record<string, number> = {
   generateDailyPlan:                 1_500,
   generateDailyDistributionPlan:     2_000,
   generateContentBlueprint:           600,
+  blogGeneration:                    8_000,
   generateContentForDay:             1_200,
   regenerateContent:                   800,
   generateMasterContent:             1_200,
@@ -78,10 +79,10 @@ const DEFAULT_OUTPUT_TOKENS = 800;
 // ── Plan-level cost limits (USD per call) ─────────────────────────────────────
 
 const PLAN_COST_LIMITS: Record<string, number> = {
-  free:         0.005,  // $0.005 max per call — block heavy calls
-  trial:        0.005,
-  starter:      0.010,
-  basic:        0.010,
+  free:         0.200,  // raised for BOLT Text — small campaigns need 6-10 AI calls
+  trial:        0.200,
+  starter:      0.200,
+  basic:        0.200,
   growth:       0.050,
   pro:          0.200,
   professional: 0.200,
@@ -246,13 +247,20 @@ export async function evaluateJobCost(
   // 2. Check per-call cost limit for the plan
   const callLimit = PLAN_COST_LIMITS[planKey] ?? DEFAULT_PLAN_COST_LIMIT;
   if (estimate.estimatedUsd > callLimit) {
-    // For lower plans, block outright. For higher plans, downgrade model.
+    // For lower plans, downgrade model instead of blocking — BOLT Text needs
+    // generateMasterContent + generatePlatformVariants for all content types.
     if (planKey === 'free' || planKey === 'trial' || planKey === 'starter' || planKey === 'basic') {
-      return {
-        action: 'block',
-        estimate,
-        reason: `Estimated cost $${estimate.estimatedUsd.toFixed(4)} exceeds ${planKey} plan limit of $${callLimit.toFixed(4)} per call.`,
-      };
+      if (requestedModel !== MINI_MODEL) {
+        const miniEstimate = estimateCost(MINI_MODEL, messages, operation, batchSize);
+        return {
+          action: 'downgrade',
+          estimate: miniEstimate,
+          effectiveModel: MINI_MODEL,
+          reason: `Cost $${estimate.estimatedUsd.toFixed(4)} > ${planKey} limit $${callLimit.toFixed(4)}; downgraded to ${MINI_MODEL}`,
+        };
+      }
+      // Already on mini model — allow it through
+      return { action: 'allow', estimate, effectiveModel: requestedModel };
     }
     // Downgrade model to reduce cost
     if (requestedModel !== MINI_MODEL) {

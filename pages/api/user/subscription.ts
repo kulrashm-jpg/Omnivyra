@@ -22,16 +22,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const companyId = typeof req.query.company_id === 'string' ? req.query.company_id : null;
 
   try {
-    // Resolve org UUID from company_id
-    let organizationId = companyId;
-    if (companyId) {
-      const { data: org } = await supabase
-        .from('organizations')
-        .select('id')
-        .eq('company_id', companyId)
-        .maybeSingle();
-      if (org?.id) organizationId = org.id;
-    }
+    // organization_plan_assignments uses company_id directly as the organization_id
+    const organizationId = companyId;
 
     const plan = organizationId
       ? await resolveOrganizationPlanLimits(organizationId)

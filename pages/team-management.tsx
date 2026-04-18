@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { ArrowLeft, Shield, UserPlus, Users, RefreshCw } from 'lucide-react';
 import { getAuthToken } from '../utils/getAuthToken';
 import { useCompanyContext } from '../components/CompanyContext';
-import Header from '../components/Header';
+import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 
 type TeamMember = {
   user_id?: string;
@@ -43,19 +43,6 @@ export default function TeamManagement() {
     userRole === 'SUPER_ADMIN' ||
     userRole === 'ADMIN';
 
-  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const token = await getAuthToken();
-    if (!token) {
-      throw new Error('Not authenticated');
-    }
-    return fetch(input, {
-      ...init,
-      headers: {
-        ...(init?.headers || {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  };
 
   const loadUsers = async () => {
     if (!selectedCompanyId) return;
@@ -253,7 +240,6 @@ export default function TeamManagement() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-purple-100 to-pink-100">
-      <Header />
       <div className="bg-gradient-to-r from-indigo-200/90 via-purple-200/90 to-pink-200/90 backdrop-blur-sm border-b border-purple-300/50 shadow-lg">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">

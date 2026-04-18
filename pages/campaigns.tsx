@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Trash2 } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
-import Header from '../components/Header';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import { getStageLabelWithDuration } from '../backend/types/CampaignStage';
 import { navigateToCampaign } from '../lib/campaignResumeStore';
+import EmptyState from '../components/shared/EmptyState';
+import ExamplePreview from '../components/shared/ExamplePreview';
+import { sampleCampaign } from '../lib/activation/sampleData';
+import { trackActivationEvent } from '../lib/analytics/activationEvents';
 
 interface Campaign {
   id: string;
@@ -25,6 +29,7 @@ interface Campaign {
 }
 
 export default function CampaignsList() {
+  const router = useRouter();
   const { selectedCompanyId } = useCompanyContext();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -37,7 +42,7 @@ export default function CampaignsList() {
     ? campaigns
     : campaigns.filter((c) => {
         const stage = c.current_stage || c.status;
-        if (stageFilter === 'week_plan') return stage === 'week_plan' || stage === 'twelve_week_plan';
+        if (stageFilter === 'week_plan') return stage === 'week_plan' || stage === 'campaign_week_plan';
         return stage === stageFilter;
       });
 
@@ -50,6 +55,21 @@ export default function CampaignsList() {
     }
     fetchCampaigns();
   }, [selectedCompanyId]);
+
+  useEffect(() => {
+    if (router.query.sample !== '1') return;
+    setCampaigns((current) =>
+      current.some((campaign) => campaign.id === sampleCampaign.id)
+        ? current
+        : ([sampleCampaign as Campaign, ...current])
+    );
+    setStageFilter('all');
+    trackActivationEvent('first_campaign_created', {
+      accountId: selectedCompanyId,
+      context: 'campaigns_page',
+      meta: { source: 'sample' },
+    });
+  }, [router.query.sample]);
 
   useEffect(() => {
     if (!notice) return;
@@ -159,7 +179,7 @@ export default function CampaignsList() {
   const stageColors: Record<string, string> = {
     planning: 'bg-blue-50 text-blue-700 border border-blue-200',
     week_plan: 'bg-indigo-50 text-indigo-700 border border-indigo-200',
-    twelve_week_plan: 'bg-indigo-50 text-indigo-700 border border-indigo-200', // legacy
+    campaign_week_plan: 'bg-indigo-50 text-indigo-700 border border-indigo-200', // legacy
     daily_plan: 'bg-amber-50 text-amber-700 border border-amber-200',
     charting: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
     schedule: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
@@ -180,7 +200,6 @@ export default function CampaignsList() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {notice && (
           <div
@@ -231,27 +250,29 @@ export default function CampaignsList() {
         </div>
 
         {/* Stage Filter */}
-        <div className="flex flex-wrap gap-2 mb-5">
-          {[
-            { id: 'all', label: 'All' },
-            { id: 'planning', label: 'Planning' },
-            { id: 'week_plan', label: 'Week Plan' },
-            { id: 'daily_plan', label: 'Daily Plan' },
-            { id: 'schedule', label: 'Schedule' },
-          ].map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setStageFilter(s.id)}
-              className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                stageFilter === s.id
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
+        {campaigns.length > 0 ? (
+          <div className="flex flex-wrap gap-2 mb-5">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'planning', label: 'Planning' },
+              { id: 'week_plan', label: 'Week Plan' },
+              { id: 'daily_plan', label: 'Daily Plan' },
+              { id: 'schedule', label: 'Schedule' },
+            ].map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setStageFilter(s.id)}
+                className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                  stageFilter === s.id
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {/* Campaigns Table */}
         {isLoading ? (
@@ -260,33 +281,46 @@ export default function CampaignsList() {
             <p className="mt-4 text-sm text-gray-500">Loading campaigns...</p>
           </div>
         ) : filteredCampaigns.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 text-center py-16 shadow-sm">
-            <Target className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-base font-semibold text-gray-900 mb-1">
-              {campaigns.length === 0 ? 'No Campaigns Yet' : 'No campaigns in this stage'}
-            </h3>
-            <p className="text-sm text-gray-500 mb-6">
-              {campaigns.length === 0
-                ? 'Create your first campaign to get started with content planning'
-                : 'Try selecting "All" or another stage'}
-            </p>
-            {campaigns.length === 0 ? (
-              <button
-                onClick={() => window.location.href = '/campaign-planner?mode=direct'}
-                className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-medium text-sm transition-colors mx-auto"
-              >
-                <Plus className="w-4 h-4" />
-                Create Your First Campaign
-              </button>
-            ) : (
-              <button
-                onClick={() => setStageFilter('all')}
-                className="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-5 py-2.5 rounded-lg font-medium text-sm transition-colors mx-auto"
-              >
-                View All Campaigns
-              </button>
-            )}
-          </div>
+          <EmptyState
+            tone={campaigns.length === 0 ? 'first-time' : 'no-results'}
+            illustration={<Target className="h-6 w-6" />}
+            title={campaigns.length === 0 ? 'Launch your first campaign' : 'No results found'}
+            description={
+              campaigns.length === 0
+                ? 'Start one campaign and you will immediately see planning, progress, and content output in one flow.'
+                : 'Nothing matches this stage right now. Clear the filter or launch a new campaign.'
+            }
+            primaryAction={{
+              label: campaigns.length === 0 ? 'Launch your first campaign' : 'Clear filters',
+              onClick: () => {
+                trackActivationEvent('empty_state_primary_clicked', {
+                  accountId: selectedCompanyId,
+                  context: 'campaigns_page',
+                  meta: { stageFilter },
+                });
+                if (campaigns.length === 0) {
+                  window.location.href = '/campaign-planner?mode=direct';
+                  return;
+                }
+                setStageFilter('all');
+              },
+            }}
+            secondaryAction={
+              campaigns.length === 0
+                ? {
+                    label: 'Try with sample data',
+                    onClick: () => {
+                      trackActivationEvent('sample_used', {
+                        accountId: selectedCompanyId,
+                        context: 'campaigns_page',
+                      });
+                      router.push('/campaigns?sample=1');
+                    },
+                  }
+                : undefined
+            }
+            examplePreview={campaigns.length === 0 ? <ExamplePreview variant="campaign" /> : undefined}
+          />
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             {/* Table Header — hidden on mobile, shown on sm+ */}

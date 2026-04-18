@@ -1,3 +1,5 @@
+import { normalizePlatform } from '../constants/platforms';
+
 /**
  * BOLT Optimization Service
  * Connects Campaign Learning Layer to BOLT execution decisions.
@@ -35,11 +37,7 @@ const CONTENT_TYPE_ALTERNATIVE_PLATFORMS: Record<string, string[]> = {
   article: ['linkedin', 'blog'],
 };
 
-function normalizePlatform(p: string): string {
-  const s = String(p ?? '').trim().toLowerCase();
-  if (s === 'twitter') return 'x';
-  return s || 'linkedin';
-}
+
 
 function normalizeContentType(ct: string): string {
   return String(ct ?? 'post').trim().toLowerCase();

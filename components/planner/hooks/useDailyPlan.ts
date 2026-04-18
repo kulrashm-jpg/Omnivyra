@@ -1,0 +1,791 @@
+/**
+ * useDailyPlan — all state and fetch/mutation logic extracted from DailyPlanningInterface.
+ * Pure data/logic hook; no JSX.
+ */
+
+import React, { useState, useEffect } from 'react';
+import { parseDailyExecutionMetadata } from '../../../lib/dailyExecutionMetadata';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface DailyActivity {
+  id: string;
+  executionId: string;
+  sourceType: 'planned' | 'manual';
+  day: string;
+  date: string;
+  time: string;
+  platform: string;
+  contentType: string;
+  title: string;
+  description: string;
+  status: 'planned' | 'in-progress' | 'completed' | 'committed' | 'scheduled';
+  aiSuggested: boolean;
+  aiEdited: boolean;
+  topic?: string;
+  objective?: string;
+  platforms?: string[];
+  summary?: string;
+  cta?: string;
+  content?: any;
+  voiceNotes?: any[];
+  dailyExecutionItem?: DailyExecutionItem;
+}
+
+export interface DailyExecutionItem {
+  execution_id: string;
+  source_type: 'planned' | 'manual';
+  campaign_id?: string;
+  week_number?: number;
+  platform: string;
+  content_type: string;
+  topic?: string;
+  title?: string;
+  content?: string;
+  intent?: Record<string, unknown>;
+  writer_content_brief?: Record<string, unknown>;
+  narrative_role?: string;
+  progression_step?: number;
+  global_progression_index?: number;
+  status: 'draft' | 'scheduled';
+  scheduled_time?: string;
+  retention_state?: 'temporary' | 'saved' | 'archived';
+  expires_at?: string | null;
+  archived_at?: string | null;
+  content_visibility?: boolean;
+  retention_reminders?: Array<{
+    days_before: 30 | 15 | 7 | 1;
+    remind_at: string;
+    sent: boolean;
+  }>;
+  created_at?: string | null;
+  master_content?: {
+    id: string;
+    generated_at: string;
+    content: string;
+    generation_status: 'pending' | 'generated' | 'failed';
+    generation_source: 'ai';
+    content_type_mode?: 'text' | 'media_blueprint';
+    required_media?: boolean;
+    media_status?: 'missing' | 'ready';
+    decision_trace?: {
+      source_topic: string;
+      objective: string;
+      pain_point: string;
+      outcome_promise: string;
+      writing_angle: string;
+      tone_used: string;
+      narrative_role: string;
+      progression_step: number | null;
+    };
+  };
+  platform_variants?: Array<{
+    platform: string;
+    content_type: string;
+    generated_content: string;
+    generation_status: 'pending' | 'generated' | 'failed';
+    locked_variant: boolean;
+    adapted_from_master?: boolean;
+    adaptation_style?: 'platform_specific';
+    requires_media?: boolean;
+    generation_overrides?: Record<string, unknown>;
+    adaptation_trace?: {
+      platform: string;
+      style_strategy: string;
+      character_limit_used: number | null;
+      format_family: string;
+      media_constraints_applied: boolean;
+      adaptation_reason: string;
+    };
+    discoverability_meta?: {
+      optimized: boolean;
+      strategy_source: 'ai' | 'deterministic';
+      platform: string;
+      content_type: string;
+      hashtag_target: { min: number; max: number; recommended: number };
+      keyword_clusters: { primary: string[]; secondary: string[]; intent_outcome: string[] };
+      hashtags: string[];
+      youtube_tags?: string[];
+      generated_at: string;
+    };
+    algorithmic_formatting_meta?: { platform: string; formatting_applied: true };
+    media_search_intent?: {
+      media_requirements: Array<{
+        role: string;
+        media_type: 'image' | 'video' | 'thumbnail' | 'illustration';
+        required: boolean;
+        orientation: 'portrait' | 'landscape' | 'square';
+        primary_query: string;
+        alternative_queries: string[];
+        style_tags: string[];
+        platform_reason: string;
+      }>;
+    };
+  }>;
+  media_assets?: Array<{ id?: string; type: string; source_url: string; status: 'attached' }>;
+  media_status?: 'missing' | 'ready';
+  execution_readiness?: {
+    text_ready: boolean;
+    media_ready: boolean;
+    platform_ready: boolean;
+    discoverability_ready: boolean;
+    algorithm_ready: boolean;
+    ready_to_schedule: boolean;
+    blocking_reasons: string[];
+  };
+  execution_jobs?: Array<{
+    job_id: string;
+    platform: string;
+    content_type: string;
+    variant_ref: string;
+    ready_to_schedule: boolean;
+    status: 'ready' | 'blocked';
+    blocking_reasons: string[];
+  }>;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+export const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const RETENTION_DEFAULT_MONTHS = 12;
+
+// ── Pure helpers (exported for use in sub-components) ─────────────────────────
+
+export function warnDailyNormalizationIssue(item: Partial<DailyExecutionItem>, context: string) {
+  if (!String(item.execution_id || '').trim())
+    console.warn('[daily-normalization][missing-execution-id]', { context });
+  if (!String(item.source_type || '').trim())
+    console.warn('[daily-normalization][missing-source-type]', { context, execution_id: item.execution_id || null });
+  if (!String(item.platform || '').trim())
+    console.warn('[daily-normalization][missing-platform]', { context, execution_id: item.execution_id || null });
+  if (!String(item.content_type || '').trim())
+    console.warn('[daily-normalization][missing-content-type]', { context, execution_id: item.execution_id || null });
+}
+
+export function computeDefaultExpiryDateLocal(createdAt?: string | null): string {
+  const base = createdAt ? new Date(createdAt) : new Date();
+  const seed = Number.isFinite(base.getTime()) ? base : new Date();
+  const expiry = new Date(seed);
+  expiry.setMonth(expiry.getMonth() + RETENTION_DEFAULT_MONTHS);
+  return expiry.toISOString();
+}
+
+export function buildRetentionReminderScheduleLocal(expiresAt?: string | null) {
+  const expires = expiresAt ? new Date(expiresAt) : null;
+  if (!expires || !Number.isFinite(expires.getTime())) return [];
+  return [30, 15, 7, 1].map((daysBefore) => {
+    const remindAt = new Date(expires);
+    remindAt.setDate(remindAt.getDate() - daysBefore);
+    return { days_before: daysBefore as 30 | 15 | 7 | 1, remind_at: remindAt.toISOString(), sent: false };
+  });
+}
+
+export function applyDefaultRetentionLocal(item: DailyExecutionItem): DailyExecutionItem {
+  const state = item.retention_state || 'temporary';
+  const createdAt = item.created_at || new Date().toISOString();
+  if (state === 'saved') {
+    return { ...item, retention_state: 'saved', expires_at: null, archived_at: item.archived_at ?? null, content_visibility: typeof item.content_visibility === 'boolean' ? item.content_visibility : true, retention_reminders: Array.isArray(item.retention_reminders) ? item.retention_reminders : [], created_at: createdAt };
+  }
+  if (state === 'archived') {
+    return { ...item, retention_state: 'archived', archived_at: item.archived_at || new Date().toISOString(), content_visibility: false, expires_at: item.expires_at ?? null, retention_reminders: Array.isArray(item.retention_reminders) ? item.retention_reminders : (item.expires_at ? buildRetentionReminderScheduleLocal(item.expires_at) : []), created_at: createdAt };
+  }
+  const expiresAt = item.expires_at || computeDefaultExpiryDateLocal(createdAt);
+  return { ...item, retention_state: 'temporary', expires_at: expiresAt, archived_at: item.archived_at ?? null, content_visibility: typeof item.content_visibility === 'boolean' ? item.content_visibility : true, retention_reminders: Array.isArray(item.retention_reminders) ? item.retention_reminders : buildRetentionReminderScheduleLocal(expiresAt), created_at: createdAt };
+}
+
+export function normalizeStatusForActivity(status: unknown): DailyActivity['status'] {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'scheduled') return 'scheduled';
+  if (normalized === 'committed') return 'committed';
+  if (normalized === 'completed') return 'completed';
+  if (normalized === 'in-progress') return 'in-progress';
+  return 'planned';
+}
+
+export function normalizeManualActivityToDailyItem(activity: Partial<DailyActivity>, campaignId?: string | null, weekNumber?: number): DailyExecutionItem {
+  const execution_id = String(activity.executionId || '').trim() || `manual-${Date.now()}`;
+  const normalized: DailyExecutionItem = {
+    execution_id,
+    source_type: 'manual',
+    campaign_id: campaignId || undefined,
+    week_number: Number.isFinite(Number(weekNumber)) ? Number(weekNumber) : undefined,
+    platform: String(activity.platform || 'linkedin').toLowerCase(),
+    content_type: String(activity.contentType || 'post').toLowerCase(),
+    topic: activity.title || undefined,
+    title: activity.title || undefined,
+    content: activity.description || undefined,
+    status: 'draft',
+    scheduled_time: activity.time || undefined,
+    master_content: activity.dailyExecutionItem?.master_content,
+    platform_variants: Array.isArray(activity.dailyExecutionItem?.platform_variants) ? activity.dailyExecutionItem?.platform_variants : undefined,
+    media_assets: Array.isArray(activity.dailyExecutionItem?.media_assets) ? activity.dailyExecutionItem?.media_assets : undefined,
+    media_status: activity.dailyExecutionItem?.media_status,
+    execution_readiness: activity.dailyExecutionItem?.execution_readiness,
+    execution_jobs: Array.isArray(activity.dailyExecutionItem?.execution_jobs) ? activity.dailyExecutionItem?.execution_jobs : undefined,
+  };
+  const withRetention = applyDefaultRetentionLocal(normalized);
+  warnDailyNormalizationIssue(withRetention, 'normalizeManualActivityToDailyItem');
+  return withRetention;
+}
+
+export function normalizeActivityToDailyItem(activity: Partial<DailyActivity>, campaignId?: string | null, weekNumber?: number): DailyExecutionItem {
+  const source_type: 'planned' | 'manual' = activity.sourceType === 'planned' ? 'planned' : (activity.dailyExecutionItem?.source_type === 'planned' ? 'planned' : 'manual');
+  const execution_id = String(activity.executionId || activity.dailyExecutionItem?.execution_id || '').trim() || `${source_type === 'manual' ? 'manual' : 'planned'}-${Date.now()}`;
+  const normalized: DailyExecutionItem = {
+    execution_id,
+    source_type,
+    campaign_id: campaignId || activity.dailyExecutionItem?.campaign_id || undefined,
+    week_number: Number.isFinite(Number(weekNumber)) ? Number(weekNumber) : (Number.isFinite(Number(activity.dailyExecutionItem?.week_number)) ? Number(activity.dailyExecutionItem?.week_number) : undefined),
+    platform: String(activity.platform || activity.dailyExecutionItem?.platform || 'linkedin').toLowerCase(),
+    content_type: String(activity.contentType || activity.dailyExecutionItem?.content_type || 'post').toLowerCase(),
+    topic: activity.dailyExecutionItem?.topic || activity.title || undefined,
+    title: activity.title || activity.dailyExecutionItem?.title || undefined,
+    content: activity.description || activity.dailyExecutionItem?.content || undefined,
+    intent: activity.dailyExecutionItem?.intent,
+    writer_content_brief: activity.dailyExecutionItem?.writer_content_brief,
+    narrative_role: activity.dailyExecutionItem?.narrative_role,
+    progression_step: activity.dailyExecutionItem?.progression_step,
+    global_progression_index: activity.dailyExecutionItem?.global_progression_index,
+    status: 'draft',
+    scheduled_time: activity.time || activity.dailyExecutionItem?.scheduled_time || undefined,
+    master_content: activity.dailyExecutionItem?.master_content,
+    platform_variants: Array.isArray(activity.dailyExecutionItem?.platform_variants) ? activity.dailyExecutionItem?.platform_variants : undefined,
+    media_assets: Array.isArray(activity.dailyExecutionItem?.media_assets) ? activity.dailyExecutionItem?.media_assets : undefined,
+    media_status: activity.dailyExecutionItem?.media_status,
+    execution_readiness: activity.dailyExecutionItem?.execution_readiness,
+    execution_jobs: Array.isArray(activity.dailyExecutionItem?.execution_jobs) ? activity.dailyExecutionItem?.execution_jobs : undefined,
+  };
+  const withRetention = applyDefaultRetentionLocal(normalized);
+  warnDailyNormalizationIssue(withRetention, 'normalizeActivityToDailyItem');
+  return withRetention;
+}
+
+export function countStrategicFactors(activities: DailyActivity[]): number {
+  const factors = new Set<string>();
+  for (const activity of activities) {
+    const trace = activity.dailyExecutionItem?.master_content?.decision_trace;
+    if (!trace) continue;
+    [trace.objective, trace.pain_point, trace.writing_angle, trace.tone_used].forEach((value) => {
+      const normalized = String(value || '').trim();
+      if (normalized) factors.add(normalized);
+    });
+  }
+  return factors.size;
+}
+
+// ── Hook ──────────────────────────────────────────────────────────────────────
+
+export interface UseDailyPlanOptions {
+  week: any;
+  campaignId: string | null;
+  campaignData: any;
+  onSave: (weekData: any) => void;
+  initialDay?: string | null;
+}
+
+export function useDailyPlan({ week, campaignId, campaignData, onSave, initialDay }: UseDailyPlanOptions) {
+  const [dailyActivities, setDailyActivities] = useState<DailyActivity[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [legacyDailyDetected, setLegacyDailyDetected] = useState(false);
+  const [executionModeActive, setExecutionModeActive] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
+  const [showAiSuggestions, setShowAiSuggestions] = useState(false);
+  const [aiEditPermission, setAiEditPermission] = useState(false);
+  const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false);
+  const [activeTab, setActiveTab] = useState<'planning' | 'content' | 'voice'>('planning');
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [showDayActivitiesView, setShowDayActivitiesView] = useState(false);
+  const [isDayActivitiesMinimized, setIsDayActivitiesMinimized] = useState(false);
+  const [isDayActivitiesMaximized, setIsDayActivitiesMaximized] = useState(false);
+  const [selectedActivityIdForDetail, setSelectedActivityIdForDetail] = useState<string | null>(null);
+  const [showContentPanel, setShowContentPanel] = useState(false);
+  const [platformCatalogPlatforms, setPlatformCatalogPlatforms] = useState<any[]>([]);
+  const [autopilotSummary, setAutopilotSummary] = useState<{ scheduled: number; skipped: number } | null>(null);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [pendingDeleteActivityId, setPendingDeleteActivityId] = useState<string | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [expandedDayCards, setExpandedDayCards] = useState<Set<string>>(() => new Set(DAYS_OF_WEEK));
+
+  const fallbackPlatforms = ['linkedin', 'facebook', 'instagram', 'x', 'youtube', 'tiktok'];
+  const fallbackPlatformContentTypes: Record<string, string[]> = {
+    linkedin: ['post', 'article', 'video'],
+    facebook: ['post', 'video', 'story', 'reel', 'event'],
+    instagram: ['feed_post', 'story', 'reel'],
+    x: ['tweet', 'thread', 'video'],
+    youtube: ['video', 'short', 'live'],
+    tiktok: ['video', 'live', 'post'],
+  };
+
+  const asObject = (value: unknown): Record<string, any> | null =>
+    value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/platform-intelligence/catalog')
+      .then((res) => res.ok ? res.json() : {})
+      .then((data: any) => {
+        if (!cancelled && Array.isArray(data?.platforms)) setPlatformCatalogPlatforms(data.platforms);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const platforms = React.useMemo(() => {
+    if (!platformCatalogPlatforms.length) return fallbackPlatforms;
+    const keys = platformCatalogPlatforms.map((p) => String(p?.canonical_key || '').toLowerCase().trim()).filter(Boolean);
+    return keys.length > 0 ? keys : fallbackPlatforms;
+  }, [platformCatalogPlatforms]);
+
+  const platformContentTypes = React.useMemo(() => {
+    if (!platformCatalogPlatforms.length) return fallbackPlatformContentTypes;
+    const next: Record<string, string[]> = {};
+    platformCatalogPlatforms.forEach((p) => {
+      const key = String(p?.canonical_key || '').toLowerCase().trim();
+      const raw = Array.isArray(p?.supported_content_types) ? p.supported_content_types : [];
+      const types = raw.map((t: any) => String(t || '').toLowerCase().trim()).filter(Boolean);
+      if (key && types.length > 0) next[key] = Array.from(new Set(types));
+    });
+    return Object.keys(next).length > 0 ? next : fallbackPlatformContentTypes;
+  }, [platformCatalogPlatforms]);
+
+  const getAllContentTypes = () => [...new Set(Object.values(platformContentTypes).flat())];
+
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  const mapDailyExecutionItemToActivity = (item: any, index: number): DailyActivity => {
+    if (!String(item?.source_type || '').trim()) {
+      console.warn('[daily-normalization][missing-source-type]', { context: 'mapDailyExecutionItemToActivity', execution_id: item?.execution_id ?? null });
+    }
+    const sourceType: 'planned' | 'manual' = String(item?.source_type || '').trim() === 'planned' ? 'planned' : 'manual';
+    const executionId = String(item?.execution_id || '').trim() || `${sourceType}-${Date.now()}-${index}`;
+    const progressionIndexRaw = Number(item?.global_progression_index);
+    const normalizedDay = String(item?.day || item?.day_of_week || '').trim();
+    const hasExplicitDay = DAYS_OF_WEEK.includes(normalizedDay);
+    const fallbackDayIndex = Number.isFinite(progressionIndexRaw) ? ((Math.floor(progressionIndexRaw) % DAYS_OF_WEEK.length) + DAYS_OF_WEEK.length) % DAYS_OF_WEEK.length : (index % DAYS_OF_WEEK.length);
+    const day = hasExplicitDay ? normalizedDay : DAYS_OF_WEEK[fallbackDayIndex];
+    const dayIndex = hasExplicitDay ? DAYS_OF_WEEK.indexOf(normalizedDay) : fallbackDayIndex;
+    const dateObj = new Date(week.dates?.start || new Date());
+    dateObj.setDate(dateObj.getDate() + dayIndex);
+    const scheduledRaw = String(item?.scheduled_time || '').trim();
+    const normalizedTime = scheduledRaw ? scheduledRaw.split(':').slice(0, 2).join(':') : `${9 + (index % 3)}:00`;
+    const intent = item?.intent && typeof item.intent === 'object' ? item.intent : undefined;
+    const writerBrief = item?.writer_content_brief && typeof item.writer_content_brief === 'object' ? item.writer_content_brief : undefined;
+    const variants = Array.isArray(item?.platform_variants) ? item.platform_variants : [];
+    const variantPlatforms: string[] = variants.map((v: any) => String(v?.platform || '').trim().toLowerCase()).filter((p: string) => Boolean(p));
+    const uniquePlatforms: string[] = Array.from(new Set<string>(variantPlatforms));
+    const dailyExecutionItem: DailyExecutionItem = {
+      execution_id: executionId,
+      source_type: sourceType,
+      campaign_id: campaignId || undefined,
+      week_number: Number.isFinite(Number(week.weekNumber)) ? Number(week.weekNumber) : undefined,
+      platform: String(item?.platform || uniquePlatforms[0] || 'linkedin').toLowerCase(),
+      content_type: String(item?.content_type || 'post').toLowerCase(),
+      topic: typeof item?.topic === 'string' ? item.topic : undefined,
+      title: typeof item?.title === 'string' ? item.title : undefined,
+      content: typeof item?.content === 'string' ? item.content : undefined,
+      intent,
+      writer_content_brief: writerBrief,
+      narrative_role: typeof item?.narrative_role === 'string' ? item.narrative_role : undefined,
+      progression_step: Number.isFinite(Number(item?.progression_step)) ? Number(item.progression_step) : undefined,
+      global_progression_index: Number.isFinite(Number(item?.global_progression_index)) ? Number(item.global_progression_index) : undefined,
+      status: normalizeStatusForActivity(item?.status) === 'scheduled' ? 'scheduled' : 'draft',
+      scheduled_time: normalizedTime,
+      master_content: item?.master_content && typeof item.master_content === 'object' ? item.master_content : undefined,
+      platform_variants: Array.isArray(item?.platform_variants) ? item.platform_variants : undefined,
+      media_assets: Array.isArray(item?.media_assets) ? item.media_assets : undefined,
+      media_status: item?.media_status === 'ready' || item?.media_status === 'missing' ? item.media_status : undefined,
+      execution_readiness: item?.execution_readiness && typeof item.execution_readiness === 'object' ? item.execution_readiness : undefined,
+      execution_jobs: Array.isArray(item?.execution_jobs) ? item.execution_jobs : undefined,
+    };
+    const normalizedDailyExecutionItem = applyDefaultRetentionLocal(dailyExecutionItem);
+    warnDailyNormalizationIssue(normalizedDailyExecutionItem, 'mapDailyExecutionItemToActivity');
+    return {
+      id: executionId,
+      executionId,
+      sourceType,
+      day,
+      date: dateObj.toISOString().split('T')[0],
+      time: normalizedTime,
+      platform: normalizedDailyExecutionItem.platform,
+      contentType: normalizedDailyExecutionItem.content_type,
+      title: normalizedDailyExecutionItem.title || normalizedDailyExecutionItem.topic || `${day} ${normalizedDailyExecutionItem.content_type}`,
+      description: normalizedDailyExecutionItem.content || `Content for ${day}`,
+      status: normalizeStatusForActivity(item?.status),
+      aiSuggested: false,
+      aiEdited: false,
+      topic: String(item?.topic || normalizedDailyExecutionItem.topic || '').trim() || undefined,
+      objective: String((intent as any)?.objective || '').trim() || undefined,
+      platforms: uniquePlatforms,
+      summary: String((writerBrief as any)?.core_message || '').trim() || undefined,
+      cta: String((intent as any)?.cta_type || '').trim() || undefined,
+      dailyExecutionItem: normalizedDailyExecutionItem,
+    };
+  };
+
+  const loadCommittedDailyActivities = async (): Promise<DailyActivity[] | null> => {
+    if (!campaignId || !week?.weekNumber) return [];
+    try {
+      const response = await fetch(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(campaignId)}`);
+      if (!response.ok) return [];
+      const payload = await response.json();
+      const plans = Array.isArray(payload) ? payload : [];
+      const currentWeekPlans = plans.filter((plan: any) => Number(plan?.weekNumber) === Number(week.weekNumber));
+      if (currentWeekPlans.length === 0) return [];
+      const weeklyItems: any[] = Array.isArray(week?.daily_execution_items) ? week.daily_execution_items : [];
+      const committedActivities: DailyActivity[] = currentWeekPlans.map((plan: any, idx: number) => {
+        const meta = parseDailyExecutionMetadata(plan?.formatNotes);
+        const executionId = String(meta.execution_id || `committed-${plan?.id || idx}`).trim();
+        const sourceType: 'planned' | 'manual' = meta.source_type === 'planned' ? 'planned' : 'manual';
+        const timeRaw = String(plan?.scheduledTime || '').trim();
+        const normalizedTime = timeRaw ? timeRaw.split(':').slice(0, 2).join(':') : '09:00';
+        const committedRaw = asObject(plan?.dailyObject) || {};
+        const planTopic = String(plan?.topic || plan?.title || (committedRaw as any).topic || (committedRaw as any).topicTitle || '').trim().toLowerCase();
+        const planPlatform = String(plan?.platform || (committedRaw as any).platform || '').trim().toLowerCase();
+        const matchedWeeklyItem =
+          weeklyItems.find((item: any) => String(item?.execution_id || '').trim() === executionId) ||
+          weeklyItems.find((item: any) => {
+            const itemTopic = String(item?.topic || item?.title || '').trim().toLowerCase();
+            const itemPlatform = String(item?.platform || '').trim().toLowerCase();
+            return !!planTopic && itemTopic === planTopic && (!planPlatform || itemPlatform === planPlatform);
+          }) || null;
+        const matchedIntent = asObject((committedRaw as any)?.intent) || asObject(matchedWeeklyItem?.intent);
+        const matchedWriterBrief = asObject((committedRaw as any)?.writer_content_brief) || asObject(matchedWeeklyItem?.writer_content_brief);
+        const matchedMasterContent = asObject((committedRaw as any)?.master_content) || asObject(matchedWeeklyItem?.master_content);
+        const matchedVariants = Array.isArray((committedRaw as any)?.platform_variants) ? (committedRaw as any).platform_variants : (Array.isArray(matchedWeeklyItem?.platform_variants) ? matchedWeeklyItem.platform_variants : undefined);
+        const matchedMediaAssets = Array.isArray((committedRaw as any)?.media_assets) ? (committedRaw as any).media_assets : (Array.isArray(matchedWeeklyItem?.media_assets) ? matchedWeeklyItem.media_assets : undefined);
+        const matchedMediaStatus = (committedRaw as any)?.media_status === 'ready' || (committedRaw as any)?.media_status === 'missing' ? (committedRaw as any).media_status : (matchedWeeklyItem?.media_status === 'ready' || matchedWeeklyItem?.media_status === 'missing' ? matchedWeeklyItem.media_status : undefined);
+        const dailyExecutionItem: DailyExecutionItem = {
+          execution_id: executionId,
+          source_type: sourceType,
+          campaign_id: campaignId,
+          week_number: Number(week.weekNumber),
+          platform: String(plan?.platform || 'linkedin').toLowerCase(),
+          content_type: String(plan?.contentType || 'post').toLowerCase(),
+          topic: plan?.topic || plan?.title || (committedRaw as any)?.topic || matchedWeeklyItem?.topic || undefined,
+          title: plan?.title || (committedRaw as any)?.title || matchedWeeklyItem?.title || undefined,
+          content: plan?.content || (committedRaw as any)?.content || matchedWeeklyItem?.content || undefined,
+          intent: matchedIntent || undefined,
+          writer_content_brief: matchedWriterBrief || undefined,
+          narrative_role: String((committedRaw as any)?.narrative_role || '').trim() || (typeof matchedWeeklyItem?.narrative_role === 'string' ? matchedWeeklyItem.narrative_role : undefined),
+          progression_step: Number.isFinite(Number((committedRaw as any)?.progression_step)) ? Number((committedRaw as any).progression_step) : (Number.isFinite(Number(matchedWeeklyItem?.progression_step)) ? Number(matchedWeeklyItem.progression_step) : undefined),
+          global_progression_index: Number.isFinite(Number((committedRaw as any)?.global_progression_index)) ? Number((committedRaw as any).global_progression_index) : (Number.isFinite(Number(matchedWeeklyItem?.global_progression_index)) ? Number(matchedWeeklyItem.global_progression_index) : undefined),
+          status: 'draft',
+          scheduled_time: normalizedTime,
+          retention_state: meta.retention_state,
+          expires_at: meta.expires_at,
+          archived_at: meta.archived_at,
+          content_visibility: meta.content_visibility,
+          retention_reminders: meta.retention_reminders,
+          created_at: typeof plan?.created_at === 'string' ? plan.created_at : undefined,
+          master_content: (matchedMasterContent as any) || undefined,
+          platform_variants: matchedVariants,
+          media_assets: matchedMediaAssets,
+          media_status: matchedMediaStatus,
+          execution_readiness: (committedRaw as any)?.execution_readiness && typeof (committedRaw as any).execution_readiness === 'object' ? (committedRaw as any).execution_readiness : (matchedWeeklyItem?.execution_readiness && typeof matchedWeeklyItem.execution_readiness === 'object' ? matchedWeeklyItem.execution_readiness : undefined),
+          execution_jobs: Array.isArray((committedRaw as any)?.execution_jobs) ? (committedRaw as any).execution_jobs : (Array.isArray(matchedWeeklyItem?.execution_jobs) ? matchedWeeklyItem.execution_jobs : undefined),
+        };
+        const normalizedDailyExecutionItem = applyDefaultRetentionLocal(dailyExecutionItem);
+        warnDailyNormalizationIssue(normalizedDailyExecutionItem, 'loadCommittedDailyActivities');
+        return {
+          id: String(plan?.id || `${week.weekNumber}-${executionId}-${idx}`),
+          executionId,
+          sourceType,
+          day: DAYS_OF_WEEK.includes(String(plan?.dayOfWeek || '').trim()) ? String(plan.dayOfWeek).trim() : DAYS_OF_WEEK[idx % DAYS_OF_WEEK.length],
+          date: String(plan?.date || new Date().toISOString().split('T')[0]),
+          time: normalizedTime,
+          platform: normalizedDailyExecutionItem.platform,
+          contentType: normalizedDailyExecutionItem.content_type,
+          title: String(plan?.title || normalizedDailyExecutionItem.topic || 'Submitted Activity'),
+          description: String(plan?.content || ''),
+          status: 'committed',
+          aiSuggested: false,
+          aiEdited: false,
+          dailyExecutionItem: normalizedDailyExecutionItem,
+        };
+      });
+      return committedActivities;
+    } catch (error) {
+      console.warn('[daily-normalization][db-load-failed]', { week: week?.weekNumber, error: String(error) });
+      return null;
+    }
+  };
+
+  const initializeDailyActivities = () => {
+    const dailyExecutionItems = Array.isArray(week?.daily_execution_items) ? week.daily_execution_items : [];
+    if (dailyExecutionItems.length > 0) {
+      const activities = dailyExecutionItems.map((item: any, index: number) => mapDailyExecutionItemToActivity(item, index));
+      setDailyActivities(activities);
+      setExecutionModeActive(true);
+      setLegacyDailyDetected(false);
+      return;
+    }
+    setExecutionModeActive(false);
+    setDailyActivities([]);
+    setLegacyDailyDetected((Array.isArray(week?.daily) && week.daily.length > 0) || (Array.isArray(week?.content) && week.content.length > 0));
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const init = async () => {
+      setIsLoading(true);
+      try { initializeDailyActivities(); }
+      finally { if (!cancelled) setIsLoading(false); }
+    };
+    void init();
+    return () => { cancelled = true; };
+  }, [campaignId, week?.weekNumber, week?.daily_execution_items, week?.daily, week?.content]);
+
+  useEffect(() => {
+    if (!initialDay) return;
+    const normalized = String(initialDay).trim();
+    if (!DAYS_OF_WEEK.includes(normalized)) return;
+    setSelectedDay(normalized);
+    setActiveTab('planning');
+  }, [initialDay]);
+
+  const warnExecutionIntegrity = (activities: DailyActivity[], context: string) => {
+    const issues = activities.map((activity) => {
+      const item = normalizeActivityToDailyItem(activity, campaignId, week.weekNumber);
+      const missingExecutionId = !String(item.execution_id || '').trim();
+      const missingExecutionJobs = !Array.isArray(item.execution_jobs) || item.execution_jobs.length === 0;
+      if (!missingExecutionId && !missingExecutionJobs) return null;
+      return { activityId: activity.id, day: activity.day, missingExecutionId, missingExecutionJobs };
+    }).filter(Boolean);
+    if (issues.length > 0) console.warn('[daily-execution-guard][missing-required-fields]', { context, issues });
+  };
+
+  const generateAISuggestions = async () => {
+    setIsGeneratingSuggestions(true);
+    try {
+      const response = await fetch('/api/ai/generate-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId, weekNumber: week.weekNumber, weekData: week, campaignData, campaignGoals: campaignData.goals || [], brandVoice: 'DrishiQ - clarity engine that solves life miseries', useAI: true, requestType: 'daily-suggestions' }),
+      });
+      if (response.ok) {
+        const result = await response.json();
+        setAiSuggestions(result.suggestions || []);
+        setShowAiSuggestions(true);
+      }
+    } catch (error) {
+      console.error('Error generating AI suggestions:', error);
+    } finally {
+      setIsGeneratingSuggestions(false);
+    }
+  };
+
+  const improveDailyPlan = async (day: string) => {
+    try {
+      const response = await fetch('/api/ai/daily-amendment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId, weekNumber: week.weekNumber, day, currentDailyActivities: dailyActivities.filter(a => a.day === day), campaignData, weekData: week }),
+      });
+      if (response.ok) {
+        const result = await response.json();
+        const improvedActivities = (result.improvedActivities || []).map((activity: any, index: number) => {
+          const seeded: DailyActivity = { id: String(activity.id || `${week.weekNumber}-${day}-${Date.now()}-${index}`), executionId: String(activity.executionId || ''), sourceType: activity.sourceType === 'planned' ? 'planned' : 'manual', day: String(activity.day || day), date: String(activity.date || new Date().toISOString().split('T')[0]), time: String(activity.time || '09:00'), platform: String(activity.platform || 'linkedin'), contentType: String(activity.contentType || 'post'), title: String(activity.title || 'Improved Activity'), description: String(activity.description || activity.content || ''), status: activity.status || 'planned', aiSuggested: Boolean(activity.aiSuggested), aiEdited: true };
+          const dei = normalizeManualActivityToDailyItem(seeded, campaignId, week.weekNumber);
+          return { ...seeded, executionId: dei.execution_id, dailyExecutionItem: dei };
+        });
+        setDailyActivities(prev => prev.filter(a => a.day !== day).concat(improvedActivities));
+        notify('success', `${day} plan updated by AI. Review and submit when ready.`);
+      }
+    } catch (error) {
+      console.error('Error improving daily plan:', error);
+      notify('error', 'Failed to improve daily plan. Please try again.');
+    }
+  };
+
+  const commitDailyPlan = async (day: string) => {
+    const dayActivities = dailyActivities.filter(a => a.day === day).map((activity) => {
+      const dei = normalizeActivityToDailyItem(activity, campaignId, week.weekNumber);
+      return { ...activity, executionId: dei.execution_id, sourceType: dei.source_type, dailyExecutionItem: dei };
+    });
+    warnExecutionIntegrity(dayActivities, 'commitDailyPlan');
+    try {
+      const response = await fetch('/api/campaigns/commit-daily-plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campaignId, weekNumber: week.weekNumber, day, activities: dayActivities, commitType: 'finalize' }) });
+      if (response.ok) {
+        notify('success', `${day} plan submitted successfully.`);
+        setDailyActivities(prev => prev.map(a => a.day === day ? { ...a, status: 'committed' } : a));
+      } else throw new Error('Failed to commit plan');
+    } catch {
+      notify('error', 'Failed to submit daily plan. Please try again.');
+    }
+  };
+
+  const applyAISuggestion = (suggestion: any) => {
+    const activitySeed: DailyActivity = { id: `${week.weekNumber}-${Date.now()}`, executionId: '', sourceType: 'manual', day: suggestion.day || 'Monday', date: suggestion.date || new Date().toISOString().split('T')[0], time: suggestion.time || '09:00', platform: suggestion.platform || 'linkedin', contentType: suggestion.contentType || 'post', title: suggestion.title || 'AI Suggested Content', description: suggestion.description || suggestion.content || '', status: 'planned', aiSuggested: true, aiEdited: false };
+    const dei = normalizeManualActivityToDailyItem(activitySeed, campaignId, week.weekNumber);
+    setDailyActivities(prev => [...prev, { ...activitySeed, executionId: dei.execution_id, dailyExecutionItem: dei }]);
+  };
+
+  const updateActivity = (id: string, updates: Partial<DailyActivity>) => {
+    setDailyActivities(prev => prev.map(activity => {
+      if (activity.id !== id) return activity;
+      const merged = { ...activity, ...updates };
+      const dei = normalizeActivityToDailyItem(merged, campaignId, week.weekNumber);
+      return { ...merged, executionId: dei.execution_id, sourceType: dei.source_type, dailyExecutionItem: dei };
+    }));
+  };
+
+  const deleteActivity = async (id: string) => {
+    try {
+      const response = await fetch('/api/admin/check-super-admin');
+      const result = await response.json();
+      if (!result.isSuperAdmin) { notify('error', 'Access denied. Only super admins can delete activities.'); return; }
+      setPendingDeleteActivityId(id);
+      setDeleteReason('');
+    } catch {
+      notify('error', 'Error verifying permissions. Please try again.');
+    }
+  };
+
+  const confirmDeleteActivity = async () => {
+    if (!pendingDeleteActivityId) return;
+    const id = pendingDeleteActivityId;
+    setPendingDeleteActivityId(null);
+    try {
+      const deleteResponse = await fetch('/api/admin/delete-activity', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activityId: id, reason: deleteReason.trim() || 'No reason provided', ipAddress: '127.0.0.1', userAgent: navigator.userAgent }) });
+      if (deleteResponse.ok) {
+        const deleteResult = await deleteResponse.json();
+        if (deleteResult.success) { setDailyActivities(prev => prev.filter(a => a.id !== id)); notify('success', 'Activity deleted successfully.'); }
+        else notify('error', `Delete failed: ${deleteResult.error}`);
+      } else notify('error', 'Failed to delete activity.');
+    } catch { notify('error', 'Failed to delete activity. Please try again.'); }
+  };
+
+  const addNewActivity = (day: string) => {
+    const date = new Date(week.dates?.start || new Date());
+    date.setDate(date.getDate() + DAYS_OF_WEEK.indexOf(day));
+    const activitySeed: DailyActivity = { id: `${week.weekNumber}-${Date.now()}`, executionId: '', sourceType: 'manual', day, date: date.toISOString().split('T')[0], time: '09:00', platform: 'linkedin', contentType: 'post', title: 'New Activity', description: '', status: 'planned', aiSuggested: false, aiEdited: false, content: null, voiceNotes: [] };
+    const dei = normalizeManualActivityToDailyItem(activitySeed, campaignId, week.weekNumber);
+    setDailyActivities(prev => [...prev, { ...activitySeed, executionId: dei.execution_id, dailyExecutionItem: dei }]);
+  };
+
+  const openContentPanel = (day: string) => { setSelectedDay(day); setShowContentPanel(true); setActiveTab('content'); };
+  const openVoiceNotes = (day: string) => { setSelectedDay(day); setActiveTab('voice'); };
+
+  const handleContentSave = (content: any[]) => {
+    if (selectedDay) setDailyActivities(prev => prev.map(a => a.day === selectedDay ? { ...a, content } : a));
+  };
+
+  const handleVoiceTranscription = (transcription: any) => {
+    if (selectedDay) setDailyActivities(prev => prev.map(a => a.day === selectedDay ? { ...a, voiceNotes: [...(a.voiceNotes || []), transcription], description: a.description + '\n\nVoice Note: ' + transcription.text } : a));
+  };
+
+  const saveDailyPlan = () => {
+    warnExecutionIntegrity(dailyActivities, 'saveDailyPlan');
+    onSave({ ...week, dailyActivities, dailyPlanned: true });
+  };
+
+  const getActivitiesForDay = (day: string) => dailyActivities.filter(a => a.day === day);
+
+  const normalizeComparableText = (value: unknown): string => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+  const getActivityScheduleGroup = (activityId: string): DailyActivity[] => {
+    const anchor = dailyActivities.find((a) => a.id === activityId);
+    if (!anchor) return [];
+    const normalizedTitle = normalizeComparableText(anchor.title || anchor.topic || '');
+    if (!normalizedTitle) return [anchor];
+    return dailyActivities.filter((a) => a.day === anchor.day && normalizeComparableText(a.title || a.topic || '') === normalizedTitle).sort((a, b) => (a.platform || '').localeCompare(b.platform || ''));
+  };
+
+  const openActivityWorkspace = (activityId: string) => {
+    const anchor = dailyActivities.find((a) => a.id === activityId);
+    if (!anchor) return;
+    const schedules = getActivityScheduleGroup(activityId);
+    const payload = { campaignId, weekNumber: week?.weekNumber, day: anchor.day, activityId: anchor.id, title: anchor.title, topic: anchor.topic, description: anchor.description, dailyExecutionItem: anchor.dailyExecutionItem || null, source: 'daily' as const, schedules: schedules.map((item) => ({ id: item.id, platform: item.platform, contentType: item.contentType, date: item.date, time: item.time, status: item.status, description: item.description, title: item.title })) };
+    const workspaceKey = `activity-workspace-${campaignId ?? 'campaign'}-${String(anchor.id || `w${week?.weekNumber}-${anchor.day}-${(anchor.title || anchor.topic || '').toString().trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 40)}`)}`;
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(workspaceKey, JSON.stringify(payload));
+        window.open(`/activity-workspace?workspaceKey=${encodeURIComponent(workspaceKey)}`, '_blank');
+      }
+    } catch { notify('error', 'Unable to open activity workspace. Please try again.'); }
+  };
+
+  const openDayActivitiesView = (day: string) => { setSelectedDay(day); setIsDayActivitiesMinimized(false); setIsDayActivitiesMaximized(false); setShowDayActivitiesView(true); setActiveTab('planning'); };
+
+  const toggleDayCardSize = (day: string) => {
+    setExpandedDayCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(day)) next.delete(day); else next.add(day);
+      return next;
+    });
+  };
+
+  const runAutopilotWeek = async () => {
+    try {
+      const weekPayload = { ...week, daily_execution_items: dailyActivities.map((a) => normalizeActivityToDailyItem(a, campaignId, week.weekNumber)) };
+      const response = await fetch('/api/campaigns/autopilot-week', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ week: weekPayload, options: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } }) });
+      if (!response.ok) throw new Error('Failed to run autopilot');
+      const payload = await response.json();
+      const updatedItems: any[] = Array.isArray(payload?.week?.daily_execution_items) ? payload.week.daily_execution_items : [];
+      const byExecutionId = new Map<string, any>(updatedItems.map((item) => [String(item?.execution_id || '').trim(), item] as const).filter(([id]) => Boolean(id)));
+      setDailyActivities((prev) => prev.map((activity) => {
+        const id = String(activity.executionId || activity.dailyExecutionItem?.execution_id || '').trim();
+        const nextItem = id ? byExecutionId.get(id) : null;
+        if (!nextItem) return activity;
+        const nextTime = String(nextItem?.scheduled_time || '').trim();
+        const nextStatus = String(nextItem?.status || '').toLowerCase() === 'scheduled' ? 'scheduled' : activity.status;
+        return { ...activity, time: nextTime || activity.time, status: nextStatus, dailyExecutionItem: nextItem };
+      }));
+      setAutopilotSummary({ scheduled: Number(payload?.summary?.scheduled_items) || 0, skipped: Number(payload?.summary?.skipped_missing_media) || 0 });
+    } catch { notify('error', 'Failed to run autopilot for this week.'); }
+  };
+
+  // Workspace message listener
+  useEffect(() => {
+    const handleWorkspaceMessage = (event: MessageEvent) => {
+      if (typeof window === 'undefined') return;
+      if (event.origin !== window.location.origin) return;
+      const payload = event.data as { type?: string; schedules?: Array<{ id: string; date?: string; time?: string; description?: string; title?: string }>; dailyExecutionItem?: Record<string, unknown> | null };
+      if (!payload || payload.type !== 'ACTIVITY_WORKSPACE_SAVE' || !Array.isArray(payload.schedules)) return;
+      const updatesById = new Map(payload.schedules.map((s) => [String(s.id), s]));
+      const workspaceDailyExecutionItem = payload.dailyExecutionItem && typeof payload.dailyExecutionItem === 'object' ? payload.dailyExecutionItem : null;
+      setDailyActivities((prev) => prev.map((activity) => {
+        const update = updatesById.get(String(activity.id));
+        if (!update) return activity;
+        const merged = { ...activity, date: typeof update.date === 'string' ? update.date : activity.date, time: typeof update.time === 'string' ? update.time : activity.time, description: typeof update.description === 'string' ? update.description : activity.description, title: typeof update.title === 'string' ? update.title : activity.title, dailyExecutionItem: workspaceDailyExecutionItem ? ({ ...(activity.dailyExecutionItem || {}), ...workspaceDailyExecutionItem } as any) : activity.dailyExecutionItem };
+        const dei = normalizeActivityToDailyItem(merged, campaignId, week.weekNumber);
+        return { ...merged, executionId: dei.execution_id, sourceType: dei.source_type, dailyExecutionItem: dei };
+      }));
+    };
+    if (typeof window !== 'undefined') window.addEventListener('message', handleWorkspaceMessage);
+    return () => { if (typeof window !== 'undefined') window.removeEventListener('message', handleWorkspaceMessage); };
+  }, [campaignId, week?.weekNumber]);
+
+  const selectedActivityScheduleGroup = selectedActivityIdForDetail ? getActivityScheduleGroup(selectedActivityIdForDetail) : [];
+  const selectedActivityAnchor = selectedActivityIdForDetail ? dailyActivities.find((a) => a.id === selectedActivityIdForDetail) || null : null;
+
+  return {
+    // state
+    dailyActivities, isLoading, legacyDailyDetected, executionModeActive,
+    aiSuggestions, showAiSuggestions, aiEditPermission, setAiEditPermission,
+    isGeneratingSuggestions, activeTab, setActiveTab,
+    selectedDay, setSelectedDay, showDayActivitiesView, setShowDayActivitiesView,
+    isDayActivitiesMinimized, setIsDayActivitiesMinimized,
+    isDayActivitiesMaximized, setIsDayActivitiesMaximized,
+    selectedActivityIdForDetail, setSelectedActivityIdForDetail,
+    showContentPanel, autopilotSummary, notice,
+    pendingDeleteActivityId, deleteReason, setDeleteReason, setPendingDeleteActivityId,
+    expandedDayCards, platforms, platformContentTypes,
+    selectedActivityScheduleGroup, selectedActivityAnchor,
+    // actions
+    generateAISuggestions, improveDailyPlan, commitDailyPlan,
+    applyAISuggestion, updateActivity, deleteActivity, confirmDeleteActivity,
+    addNewActivity, openContentPanel, openVoiceNotes,
+    handleContentSave, handleVoiceTranscription, saveDailyPlan,
+    getActivitiesForDay, getActivityScheduleGroup, openActivityWorkspace,
+    openDayActivitiesView, toggleDayCardSize, runAutopilotWeek,
+    getAllContentTypes,
+    countStrategicFactors: () => countStrategicFactors(dailyActivities),
+  };
+}

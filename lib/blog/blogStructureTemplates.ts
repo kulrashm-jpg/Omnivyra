@@ -503,7 +503,7 @@ export function isValidNewsletterFormat(value: unknown): value is NewsletterForm
  * Newsletters emphasize audience engagement, scannability, and recurring value.
  */
 export function getNewsletterStructureRules(
-  formatType: NewsletterFormatType,
+  formatType: NewsletterFormatType | 'curated' | 'editorial' | 'digest',
   targetWordCount: number,
 ): StructureRules {
   const tw = targetWordCount && targetWordCount >= 300 ? targetWordCount : 1200;

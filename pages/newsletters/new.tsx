@@ -6,17 +6,21 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../components/blog/BlogEditorForm';
 import { ContentQualityPanel, type ImproveArea } from '../../components/content/ContentQualityPanel';
+import EditorShareActions from '../../components/content/EditorShareActions';
 import { createDefaultBlogTemplate } from '../../lib/blog/blogTemplate';
+import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../lib/blog/topicDetection';
-import { AlertTriangle, XCircle, Loader2, Copy, Download, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
+import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
+import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
 
 const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
 
 type PrefillPayload = {
-  output?: (BlogGenerationOutput & { content_blocks?: unknown[] }) | null;
+  output?: (BlogGenerationOutput & { content_blocks?: unknown[]; content_markdown?: string }) | null;
   source?: string;
   target_word_count?: number;
   format_type?: string;
@@ -40,9 +44,6 @@ export default function NewsletterNewPage() {
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[] | null>(null);
 
   // Use/Share state
-  const [showUseMenu, setShowUseMenu] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [markingUsed, setMarkingUsed] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
 
   // Duplication detection
@@ -178,11 +179,9 @@ export default function NewsletterNewPage() {
           tags: Array.isArray(output.tags) ? output.tags : [],
           seo_meta_title: output.seo_meta_title || '',
           seo_meta_description: output.seo_meta_description || '',
-          content_blocks: Array.isArray(output.content_blocks)
-            ? (output.content_blocks as BlogFormState['content_blocks'])
-            : DEFAULT_TEMPLATE,
+          content_blocks: resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE),
           content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
-          format_type: typeof parsed?.format_type === 'string' ? parsed.format_type : undefined,
+          format_type: typeof parsed?.format_type === 'string' ? parsed.format_type as BlogFormatType : undefined,
         });
         const outputAny = output as unknown as Record<string, unknown>;
         if (typeof outputAny.primary_keyword === 'string') setPrimaryKeyword(outputAny.primary_keyword);
@@ -291,35 +290,26 @@ export default function NewsletterNewPage() {
   };
 
   // ── Copy content to clipboard ──────────────────────────────────────────────
-  const handleCopy = () => {
+  const handlePostToSocial = () => {
     if (!liveState) return;
-    const text = liveState.content_markdown || liveState.title || '';
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+    launchSocialPostingFromContent({
+      router,
+      contentType: 'newsletter',
+      title: liveState.title,
+      content: liveState.content_markdown || '',
+      tags: liveState.tags,
+      excerpt: liveState.excerpt,
+      sourceId: savedId,
     });
   };
 
   // ── Export as text file ────────────────────────────────────────────────────
-  const handleExport = () => {
-    if (!liveState) return;
-    const text = `# ${liveState.title}\n\n${liveState.content_markdown || ''}`;
-    const blob = new Blob([text], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${(liveState.title || 'newsletter').toLowerCase().replace(/\s+/g, '-')}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   // ── Mark as used ───────────────────────────────────────────────────────────
   const handleMarkUsed = async (platform?: string) => {
     if (!savedId || !selectedCompanyId) {
       setError('Save the newsletter first before marking as used.');
       return;
     }
-    setMarkingUsed(true);
     try {
       const res = await fetch('/api/content/mark-used', {
         method: 'POST',
@@ -335,11 +325,8 @@ export default function NewsletterNewPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Failed to mark as used');
       setPrefillNotice(`Newsletter marked as used${platform ? ` on ${platform}` : ''}. Great work!`);
-      setShowUseMenu(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to mark as used');
-    } finally {
-      setMarkingUsed(false);
     }
   };
 
@@ -436,50 +423,25 @@ export default function NewsletterNewPage() {
                     <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">Saved</span>
                   )}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={handleCopy}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
-                  >
-                    {copied ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                    {copied ? 'Copied!' : 'Copy Content'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleExport}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    Export
-                  </button>
-
-                  {/* Mark as Used dropdown */}
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setShowUseMenu(!showUseMenu)}
-                      disabled={markingUsed}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg bg-amber-600 text-white hover:opacity-90 transition-colors disabled:opacity-50"
-                    >
-                      {markingUsed ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                      Mark as Used
-                    </button>
-                    {showUseMenu && (
-                      <div className="absolute top-full left-0 mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
-                        <button onClick={() => handleMarkUsed()} className="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">General use</button>
-                        <button onClick={() => handleMarkUsed('email')} className="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Email campaign</button>
-                        <button onClick={() => handleMarkUsed('linkedin')} className="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">LinkedIn</button>
-                        <button onClick={() => handleMarkUsed('website')} className="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Website</button>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <EditorShareActions
+                  saved={Boolean(savedId)}
+                  copyText={liveState?.content_markdown || liveState?.title || ''}
+                  exportText={`# ${liveState?.title || ''}\n\n${liveState?.content_markdown || ''}`}
+                  exportFileName={`${(liveState?.title || 'newsletter').toLowerCase().replace(/\s+/g, '-')}.md`}
+                  onMarkUsed={handleMarkUsed}
+                  onPostToSocial={handlePostToSocial}
+                  markUsedOptions={[
+                    { label: 'General use' },
+                    { label: 'Email campaign', value: 'email' },
+                    { label: 'LinkedIn', value: 'linkedin' },
+                    { label: 'Website', value: 'website' },
+                  ]}
+                />
               </div>
             </div>
 
             {/* ── Quality panel (sticky right sidebar) ────────────────────── */}
-            <div className="hidden xl:block w-[280px] shrink-0 sticky top-6 self-start">
+            <div className="hidden lg:block w-[280px] shrink-0 sticky top-6 self-start">
               {liveState && (
                 <ContentQualityPanel
                   blocks={liveState.content_blocks}

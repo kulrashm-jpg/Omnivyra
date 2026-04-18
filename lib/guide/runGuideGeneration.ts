@@ -1,21 +1,18 @@
 import {
-  runBlogGeneration,
-  type BlogGenerationRequest,
-  type BlogGenerationResult,
-} from '../blog/runBlogGeneration';
+  runManagedContentGeneration,
+  type ManagedGenerationRequest,
+  type ManagedGenerationResult,
+} from '../content/runManagedContentGeneration';
 
 export type GuideGenerationRequest =
-  Omit<BlogGenerationRequest, 'contentType'> & {
+  Omit<ManagedGenerationRequest, 'contentType'> & {
     contentType?: 'guide';
   };
 
-export type GuideGenerationResult = BlogGenerationResult;
+export type GuideGenerationResult = ManagedGenerationResult;
 
 export async function runGuideGeneration(
   input: GuideGenerationRequest,
 ): Promise<GuideGenerationResult> {
-  return runBlogGeneration({
-    ...input,
-    contentType: 'guide',
-  });
+  return runManagedContentGeneration(input, 'guide');
 }

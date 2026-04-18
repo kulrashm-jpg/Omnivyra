@@ -66,6 +66,9 @@ function parseRedisUrl(url: string) {
 }
 
 const redisConfig = parseRedisUrl(REDIS_URL);
+const IS_OPTIONAL_LOCAL_REDIS =
+  redisConfig.host === 'localhost' || redisConfig.host === '127.0.0.1';
+const REDIS_ERROR_LOG_COOLDOWN_MS = 30_000;
 
 export function getRedisConfig() {
   return redisConfig;
@@ -79,7 +82,9 @@ export function getConnectionConfig() {
     password: redisConfig.password,
     ...(redisConfig.tls ? { tls: redisConfig.tls } : {}),
     enableReadyCheck: false,
-    maxRetriesPerRequest: null,
+    maxRetriesPerRequest: IS_OPTIONAL_LOCAL_REDIS ? 1 : null,
+    lazyConnect: true,
+    ...(IS_OPTIONAL_LOCAL_REDIS ? { retryStrategy: () => null } : {}),
   };
 }
 
@@ -87,6 +92,15 @@ export function getConnectionConfig() {
 let redisConnection: IORedis | null = null;
 let redisInfraStarted = false;
 let usageProtectionReadyPromise: Promise<void> = Promise.resolve();
+let redisUnavailable = false;
+let lastRedisErrorLogAt = 0;
+
+function logRedisErrorOnce(err: unknown): void {
+  const now = Date.now();
+  if (now - lastRedisErrorLogAt < REDIS_ERROR_LOG_COOLDOWN_MS) return;
+  lastRedisErrorLogAt = now;
+  console.error('Redis connection error:', err);
+}
 
 function ensureRedisInfraStarted(): void {
   if (redisInfraStarted) return;
@@ -108,24 +122,28 @@ function ensureRedisInfraStarted(): void {
 }
 
 function getRedisConnection(): IORedis {
-  ensureRedisInfraStarted();
 
   if (!redisConnection) {
-    redisConnection = new IORedis({
-      host: redisConfig.host,
-      port: redisConfig.port,
-      password: redisConfig.password,
-      tls: redisConfig.host.includes('upstash.io') ? {} : undefined,
-      enableReadyCheck: false,
-      maxRetriesPerRequest: null,
-    });
+    redisConnection = new IORedis(getConnectionConfig());
 
     redisConnection.on('error', (err) => {
-      console.error('Redis connection error:', err);
+      if (IS_OPTIONAL_LOCAL_REDIS) {
+        redisUnavailable = true;
+      }
+      logRedisErrorOnce(err);
     });
 
     redisConnection.on('connect', () => {
       console.log('✅ Redis connected');
+      redisUnavailable = false;
+      ensureRedisInfraStarted();
+    });
+
+    redisConnection.connect().catch((err) => {
+      if (IS_OPTIONAL_LOCAL_REDIS) {
+        redisUnavailable = true;
+      }
+      logRedisErrorOnce(err);
     });
   }
   return redisConnection;
@@ -152,7 +170,10 @@ export function getInstrumentedClient(feature: RedisFeature | string): IORedis {
 // Usage protection readiness is now lazy and starts only when Redis-backed
 // queue/worker functionality is used.
 export function getUsageProtectionReady(): Promise<void> {
-  ensureRedisInfraStarted();
+  getRedisConnection();
+  if (redisUnavailable && IS_OPTIONAL_LOCAL_REDIS) {
+    return Promise.resolve();
+  }
   return usageProtectionReadyPromise;
 }
 

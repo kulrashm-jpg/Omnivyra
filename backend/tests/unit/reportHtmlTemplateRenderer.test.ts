@@ -154,7 +154,8 @@ describe('reportHtmlTemplateRenderer', () => {
     expect(html).toContain('id="section-1"');
     expect(html).toContain('id="section-8"');
     expect(html).toContain('Digital Authority Snapshot');
-    expect(html).toContain('page-hero-header');
+    expect(html).toContain('id="completed-report"');
+    expect(html).toContain('Executive Snapshot');
     expect(html).toContain('Strategic Position');
     expect(html).toContain('Performance Scores');
     expect(html).toContain('Competitor Intelligence');
@@ -208,9 +209,9 @@ describe('reportHtmlTemplateRenderer', () => {
       nextSteps: [],
     });
 
-    expect(html).toContain('<strong>2-4 weeks:</strong> directional movement should appear on the target pages first.');
-    expect(html).toContain('<strong>1-3 months:</strong> stronger click quality and page-level engagement should become visible.');
-    expect(html).toContain('<strong>3-6 months:</strong> the change should compound into better qualified discovery and conversion readiness.');
+    expect(html).toContain('directional movement should appear on the target pages first.');
+    expect(html).toContain('stronger click quality and page-level engagement should become visible.');
+    expect(html).toContain('the change should compound into better qualified discovery and conversion readiness.');
     expect(html).not.toContain('2-4 weeks: 2-4 weeks');
     expect(html).not.toContain('1-3 months: 1-3 months');
     expect(html).not.toContain('3-6 months: 3-6 months');
@@ -371,8 +372,8 @@ describe('reportHtmlTemplateRenderer', () => {
     expect(html).toContain('Backlink data pending');
     expect(html).toContain('Pending');
     expect(html).toContain('connect GSC');
-    expect(html).toContain('#incomplete-report { display: none !important; }');
-    expect(html).toContain('page-break-before: auto;');
+    expect(html).toContain('PDF-SEGMENT-START');
+    expect(html).toContain('Directional Signals And Follow-Up Detail');
   });
 
   it('selects the visual intelligence template for Omnivyra performance reports', () => {

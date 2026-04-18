@@ -1,11 +1,4 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
-import { trackDbOp } from '../../lib/redis/usageProtection';
-import { config } from '@/config';
-
-// Load .env.local for server (helps during Next.js hot reload / env reload)
-dotenv.config({ path: `${process.cwd()}/.env.local` });
-dotenv.config();
 
 /**
  * Supabase Admin Client — lazy singleton.
@@ -16,12 +9,28 @@ dotenv.config();
  * The error will still surface clearly at request time if the key is absent.
  */
 let _client: SupabaseClient | null = null;
+let _serverEnvLoaded = false;
+let _trackDbOp:
+  | ((count: number, type: 'read' | 'write') => void)
+  | null
+  | undefined;
 
-function getAdminClient(): SupabaseClient {
-  if (_client) return _client;
+function ensureServerEnvLoaded(): void {
+  if (_serverEnvLoaded) return;
+  _serverEnvLoaded = true;
 
-  const url = config.SUPABASE_URL;
-  const key = config.SUPABASE_SERVICE_ROLE_KEY;
+  // Keep dotenv on the runtime path only so Next build doesn't need to analyze it.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const dotenv = require('dotenv') as typeof import('dotenv');
+  dotenv.config({ path: `${process.cwd()}/.env.local` });
+  dotenv.config();
+}
+
+function getSupabaseConfig(): { url: string; key: string } {
+  ensureServerEnvLoaded();
+
+  const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url) {
     throw new Error('SUPABASE_URL is missing in environment variables. Set SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL in .env.local');
@@ -29,6 +38,32 @@ function getAdminClient(): SupabaseClient {
   if (!key) {
     throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing. Add it to your deployment environment variables (Vercel/Railway Settings → Environment Variables).');
   }
+
+  return { url, key };
+}
+
+function trackDbOperation(count: number, type: 'read' | 'write'): void {
+  if (_trackDbOp === null) return;
+
+  if (_trackDbOp === undefined) {
+    try {
+      // Keep the large Redis protection module off the hot import path.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const usageProtection = require('../../lib/redis/usageProtection') as typeof import('../../lib/redis/usageProtection');
+      _trackDbOp = usageProtection.trackDbOp;
+    } catch {
+      _trackDbOp = null;
+      return;
+    }
+  }
+
+  _trackDbOp?.(count, type);
+}
+
+function getAdminClient(): SupabaseClient {
+  if (_client) return _client;
+
+  const { url, key } = getSupabaseConfig();
 
   _client = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -55,11 +90,11 @@ export const supabase = new Proxy({} as SupabaseClient, {
             if (typeof method !== 'function') return method;
             if (bProp === 'select') {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              return function (...a: any[]) { trackDbOp(1, 'read'); return method.apply(bTarget, a); };
+              return function (...a: any[]) { trackDbOperation(1, 'read'); return method.apply(bTarget, a); };
             }
             if (bProp === 'insert' || bProp === 'upsert' || bProp === 'update' || bProp === 'delete') {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              return function (...a: any[]) { trackDbOp(1, 'write'); return method.apply(bTarget, a); };
+              return function (...a: any[]) { trackDbOperation(1, 'write'); return method.apply(bTarget, a); };
             }
             return method.bind(bTarget);
           },

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getAuthToken } from '@/utils/getAuthToken';
 import { Bell, RefreshCw, TrendingDown, TrendingUp, Lightbulb } from 'lucide-react';
+import EmptyState from '../shared/EmptyState';
+import ExamplePreview from '../shared/ExamplePreview';
 
 type AutomationEvent = {
   id: string;
@@ -90,7 +92,13 @@ export default function ReportAutomationActivityFeed({ companyId }: { companyId:
               Loading automation events...
             </div>
           ) : automationEvents.length === 0 ? (
-            <p className="text-sm text-gray-500">No automation events yet.</p>
+            <EmptyState
+              title="See your first automation trigger"
+              description="Once snapshot monitoring is active, this feed will show what changed and why a new report was created."
+              primaryAction={{ label: 'Generate your first insight', href: '/dashboard?tab=intelligence&intelTab=market-pulse' }}
+              secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
+              examplePreview={<ExamplePreview variant="insight" />}
+            />
           ) : (
             <ul className="space-y-3">
               {automationEvents.slice(0, 5).map((item) => (
@@ -114,7 +122,13 @@ export default function ReportAutomationActivityFeed({ companyId }: { companyId:
               Loading alert feed...
             </div>
           ) : notificationEvents.length === 0 ? (
-            <p className="text-sm text-gray-500">No report alerts yet.</p>
+            <EmptyState
+              title="See your first report alert"
+              description="Alerts will call out wins, declines, and opportunities as soon as the system has enough signal."
+              primaryAction={{ label: 'Generate your first insight', href: '/dashboard?tab=intelligence&intelTab=market-pulse' }}
+              secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
+              examplePreview={<ExamplePreview variant="insight" />}
+            />
           ) : (
             <ul className="space-y-3">
               {notificationEvents.slice(0, 5).map((item) => (

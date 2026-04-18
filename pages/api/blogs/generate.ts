@@ -60,6 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     template_blocks,
     template_name,
     target_word_count,
+    cache_version,
   } = req.body ?? {};
 
   if (!company_id || typeof company_id !== 'string')
@@ -132,6 +133,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         formatType:       isValidBlogFormat(format_type) ? format_type : 'standard',
         template_blocks:  Array.isArray(template_blocks) ? template_blocks : undefined,
         template_name:    typeof template_name === 'string' ? template_name : undefined,
+        cache_version:    typeof cache_version === 'string' ? cache_version : undefined,
         companyContext: {
           audience:                 str('target_audience') || str('audience'),
           brand_voice:              str('brand_voice') || str('writing_style'),

@@ -18,6 +18,8 @@ import { discordAdapter } from './discordAdapter';
 import { githubDiscussionsAdapter } from './githubDiscussionsAdapter';
 import { stackoverflowAdapter } from './stackoverflowAdapter';
 import { productHuntAdapter } from './productHuntAdapter';
+import { threadsAdapter } from './threadsAdapter';
+import { tiktokAdapter } from './tiktokAdapter';
 
 const ADAPTER_MAP: Record<string, IPlatformAdapter> = {
   linkedin: linkedinAdapter,
@@ -33,6 +35,8 @@ const ADAPTER_MAP: Record<string, IPlatformAdapter> = {
   github: githubDiscussionsAdapter,
   stackoverflow: stackoverflowAdapter,
   producthunt: productHuntAdapter,
+  threads: threadsAdapter,
+  tiktok: tiktokAdapter,
 };
 
 /**
@@ -57,5 +61,7 @@ export {
   githubDiscussionsAdapter,
   stackoverflowAdapter,
   productHuntAdapter,
+  threadsAdapter,
+  tiktokAdapter,
 };
 export type { IPlatformAdapter } from './baseAdapter';

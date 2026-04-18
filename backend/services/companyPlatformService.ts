@@ -57,11 +57,11 @@ function getContentTypesForPlatform(platform: string): string[] {
 /** Extract platform key from external API config (category or name). */
 function platformFromApiConfig(config: { category?: string | null; name?: string | null }): string | null {
   const cat = (config.category ?? '').toString().toLowerCase().trim();
-  if (cat && /^(linkedin|facebook|instagram|youtube|x|twitter|tiktok|reddit|blog)$/.test(cat)) {
+  if (cat && /^(linkedin|facebook|instagram|youtube|x|twitter|tiktok|reddit|pinterest|blog)$/.test(cat)) {
     return cat === 'twitter' ? 'x' : cat;
   }
   const name = (config.name ?? '').toString().toLowerCase();
-  const match = name.match(/(linkedin|facebook|instagram|youtube|twitter|x|tiktok|reddit|blog)/i);
+  const match = name.match(/(linkedin|facebook|instagram|youtube|twitter|x|tiktok|reddit|pinterest|blog)/i);
   if (match) {
     const p = match[1].toLowerCase();
     return p === 'twitter' ? 'x' : p;

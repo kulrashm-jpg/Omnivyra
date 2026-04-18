@@ -13,7 +13,7 @@ import { getQueue, getEngagementPollingQueue } from '../queue/bullmqClient';
 import { createQueueJob } from '../db/queries';
 import { getCampaignReadiness } from '../services/campaignReadinessService';
 import { addIntelligencePollingJob } from '../queue/intelligencePollingQueue';
-import { INTELLIGENCE_POLLER_USER_ID } from '../services/externalApiService';
+import { INTELLIGENCE_POLLER_USER_ID, isApiSourceExecutable } from '../services/externalApiService';
 import { clusterRecentSignals } from '../services/signalClusterEngine';
 import { generateSignalIntelligence } from '../services/signalIntelligenceEngine';
 import { generateStrategicThemes } from '../services/strategicThemeEngine';
@@ -318,13 +318,13 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
     // Global fallback: no company configs — use all active API sources
     const { data: activeSources, error: sourcesError } = await supabase
       .from('external_api_sources')
-      .select('id, name, rate_limit_per_min')
+      .select('id, name, rate_limit_per_min, is_enabled_global, is_whitelisted, category')
       .eq('is_active', true);
 
     if (sourcesError || !activeSources?.length) {
       return { enqueued: 0, skipped: 0, reasons: { skipped_rate_limit: 0, skipped_disabled: 0 } };
     }
-    sources = activeSources;
+    sources = activeSources.filter(isApiSourceExecutable);
     useGlobalFallback = true;
     console.log('[intelligence] global polling enabled — no company configs found');
   } else {
@@ -338,14 +338,14 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
     }
     const { data: companySources, error: sourcesError } = await supabase
       .from('external_api_sources')
-      .select('id, name, rate_limit_per_min')
+      .select('id, name, rate_limit_per_min, is_enabled_global, is_whitelisted, category')
       .eq('is_active', true)
       .in('id', enabledSourceIds);
 
     if (sourcesError || !companySources?.length) {
       return { enqueued: 0, skipped: 0, reasons: { skipped_rate_limit: 0, skipped_disabled: 0 } };
     }
-    sources = companySources;
+    sources = companySources.filter(isApiSourceExecutable);
     useGlobalFallback = false;
     console.log('[intelligence] company polling enabled');
   }

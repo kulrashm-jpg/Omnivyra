@@ -1,7 +1,7 @@
 /**
  * BlogGenerateModal
  *
- * 4-step modal for AI blog generation.
+ * Shared 4-step modal for AI long-form content generation.
  *
  * Step 1 — Theme Input:    topic, cluster, intent, series selection
  * Step 2 — Clarify:        targeted questions (only when signal is weak)
@@ -25,6 +25,9 @@ import type { AngleEffectivenessEntry } from '../../lib/blog/feedbackOptimizatio
 import type { SEOIntelligenceResult } from '../../lib/blog/seoIntelligenceEngine';
 import type { TrendIntelligenceResult } from '../../lib/blog/trendIntelligenceEngine';
 import { BLOG_FORMAT_OPTIONS, ARTICLE_FORMAT_OPTIONS, WHITEPAPER_FORMAT_OPTIONS, NEWSLETTER_FORMAT_OPTIONS, STORY_FORMAT_OPTIONS, GUIDE_FORMAT_OPTIONS, type BlogFormatType, type ArticleFormatType, type WhitepaperFormatType, type NewsletterFormatType, type StoryFormatType, type GuideFormatType } from '../../lib/blog/blogStructureTemplates';
+import type { ContentBlock } from '../../lib/blog/blockTypes';
+import { getRecommendedTemplateCards, getTemplateCards } from '../../lib/content/contentTemplateCards';
+import type { ManagedContentType } from '../../lib/content/contentTemplateRegistry';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -53,8 +56,10 @@ interface Props {
   initialTone?: string;
   initialRelatedBlogs?: string[];
   baseAnswers?: Record<string, string>;
-  /** 'blog' (default), 'article', 'whitepaper', 'newsletter', 'story', or 'guide' — changes API endpoint and prompt tone */
-  contentType?: 'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide';
+  initialTemplateName?: string;
+  initialTemplateBlocks?: ContentBlock[];
+  /** 'blog' (default), 'article', 'whitepaper', 'newsletter', 'story', 'guide', or 'case-study' — changes API endpoint and prompt tone */
+  contentType?: 'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide' | 'case-study';
   /** Format type from briefing page. Default: 'standard'. */
   initialFormatType?: BlogFormatType | ArticleFormatType | WhitepaperFormatType | NewsletterFormatType | StoryFormatType | GuideFormatType;
   onClose:     () => void;
@@ -119,6 +124,8 @@ export default function BlogGenerateModal({
   initialTone,
   initialRelatedBlogs,
   baseAnswers,
+  initialTemplateName,
+  initialTemplateBlocks,
   contentType = 'blog',
   initialFormatType = 'standard',
   onClose,
@@ -170,6 +177,22 @@ export default function BlogGenerateModal({
     }
   }, [initialTargetWords]);
 
+  const managedContentType = contentType as ManagedContentType;
+  const templateCards = React.useMemo(() => getTemplateCards(managedContentType), [managedContentType]);
+  const recommendedTemplateCards = React.useMemo(
+    () => getRecommendedTemplateCards(managedContentType),
+    [managedContentType],
+  );
+  const activeTemplateName = typeof initialTemplateName === 'string' ? initialTemplateName.trim().toLowerCase() : '';
+  const activeFormatType = typeof initialFormatType === 'string' ? initialFormatType.trim().toLowerCase() : 'standard';
+
+  function isActiveTemplateCard(card: { title: string; formatType?: string }) {
+    if (activeTemplateName) {
+      return card.title.trim().toLowerCase() === activeTemplateName;
+    }
+    return typeof card.formatType === 'string' && card.formatType.trim().toLowerCase() === activeFormatType;
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   const publishedBlogs = blogs.filter(b => b.id && b.title);
@@ -177,7 +200,7 @@ export default function BlogGenerateModal({
   function toggleBlogId(id: string) {
     setSelectedBlogIds(prev => {
       const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
-      // Angle lock-in: detect dominant angle from selected series blogs
+      // Angle lock-in: detect dominant angle from selected related long-form pieces
       if (next.length > 0) {
         const counts: Record<string, number> = {};
         for (const bid of next) {
@@ -198,8 +221,33 @@ export default function BlogGenerateModal({
     });
   }
 
-  const apiEndpoint = contentType === 'whitepaper' ? '/api/whitepapers/generate' : contentType === 'guide' ? '/api/guides/generate' : contentType === 'newsletter' ? '/api/newsletters/generate' : contentType === 'story' ? '/api/stories/generate' : contentType === 'article' ? '/api/articles/generate' : '/api/blogs/generate';
-  const contentLabel = contentType === 'whitepaper' ? 'whitepaper' : contentType === 'guide' ? 'guide' : contentType === 'article' ? 'article' : 'blog';
+  const apiEndpoint = contentType === 'whitepaper'
+    ? '/api/whitepapers/generate'
+    : contentType === 'guide'
+      ? '/api/guides/generate'
+      : contentType === 'newsletter'
+        ? '/api/newsletters/generate'
+        : contentType === 'story'
+          ? '/api/stories/generate'
+          : contentType === 'article'
+            ? '/api/articles/generate'
+            : contentType === 'case-study'
+              ? '/api/case-studies/generate'
+              : '/api/blogs/generate';
+  const contentLabel = contentType === 'whitepaper'
+    ? 'whitepaper'
+    : contentType === 'guide'
+      ? 'guide'
+      : contentType === 'newsletter'
+        ? 'newsletter'
+        : contentType === 'story'
+          ? 'story'
+          : contentType === 'article'
+            ? 'article'
+            : contentType === 'case-study'
+              ? 'case study'
+            : 'blog';
+  const contentLabelTitle = contentLabel.charAt(0).toUpperCase() + contentLabel.slice(1);
 
   function buildBody(extra: Record<string, unknown> = {}): Record<string, unknown> {
     const mergedAnswers = {
@@ -213,7 +261,10 @@ export default function BlogGenerateModal({
       topic:      topic.trim(),
       content_type: contentType,
       format_type: initialFormatType,
+      cache_version: `live-path-sync-v2:${contentType}:${String(initialFormatType || 'standard')}`,
     };
+    if (initialTemplateName)          body.template_name = initialTemplateName;
+    if (initialTemplateBlocks?.length) body.template_blocks = initialTemplateBlocks;
     if (cluster)                    body.cluster        = cluster;
     if (intent)                     body.intent         = intent;
     if (Object.keys(mergedAnswers).length) body.answers = mergedAnswers;
@@ -312,7 +363,7 @@ export default function BlogGenerateModal({
     }
   }
 
-  // ── Submit angle → generate full blog ────────────────────────────────────
+  // ── Submit angle → generate full content draft ───────────────────────────
   async function generateFull() {
     if (!selectedAngle) return;
     setError('');
@@ -358,7 +409,7 @@ export default function BlogGenerateModal({
         <div className="bg-gradient-to-r from-indigo-600 to-violet-600 px-6 py-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">
             <Sparkles className="h-5 w-5 text-white" />
-            <h2 className="text-base font-bold text-white">Generate Blog from Theme</h2>
+            <h2 className="text-base font-bold text-white">Generate {contentLabelTitle} from Theme</h2>
           </div>
           <button
             onClick={onClose}
@@ -480,6 +531,72 @@ export default function BlogGenerateModal({
                       ?? GUIDE_FORMAT_OPTIONS.find(f => f.value === initialFormatType)?.label
                       ?? 'Standard'}
                   </span>
+                </div>
+              )}
+
+              {(recommendedTemplateCards.length > 0 || templateCards.length > 0) && (
+                <div className="space-y-3">
+                  {recommendedTemplateCards.length > 0 && (
+                    <div>
+                      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Recommended Templates</p>
+                      <div className="grid gap-2">
+                        {recommendedTemplateCards.map((card) => {
+                          const active = isActiveTemplateCard(card);
+                          return (
+                            <div
+                              key={`recommended-${card.id}`}
+                              className={`rounded-xl border px-3 py-2.5 ${
+                                active
+                                  ? 'border-indigo-300 bg-indigo-50'
+                                  : 'border-amber-200 bg-amber-50/60'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className={`text-sm font-semibold ${active ? 'text-indigo-700' : 'text-gray-800'}`}>{card.title}</p>
+                                  <p className="mt-0.5 text-xs text-gray-600">{card.description}</p>
+                                </div>
+                                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                  active ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'
+                                }`}>
+                                  {active ? 'Current' : 'Recommended'}
+                                </span>
+                              </div>
+                              {card.recommendedFor.length > 0 && (
+                                <p className="mt-2 text-[11px] text-gray-500">
+                                  Best for: {card.recommendedFor.join(', ')}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {templateCards.length > 0 && (
+                    <div>
+                      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Available Template Families</p>
+                      <div className="flex flex-wrap gap-2">
+                        {templateCards.map((card) => {
+                          const active = isActiveTemplateCard(card);
+                          return (
+                            <div
+                              key={card.id}
+                              className={`rounded-full border px-2.5 py-1 text-[11px] ${
+                                active
+                                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+                                  : 'border-gray-200 bg-white text-gray-600'
+                              }`}
+                              title={card.description}
+                            >
+                              {card.title}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -618,7 +735,7 @@ export default function BlogGenerateModal({
                     <strong>Recommended:</strong> {recommendedAngle.charAt(0).toUpperCase() + recommendedAngle.slice(1)}
                     {effectivenessBased
                       ? ` — ${Math.round((angleEffectiveness[recommendedAngle]?.score ?? 0) * 100)}% effective based on past content`
-                      : ' — based on your past blog performance'}
+                      : ` — based on your past ${contentLabel} performance`}
                   </span>
                 </div>
               )}
@@ -768,7 +885,7 @@ export default function BlogGenerateModal({
                   disabled={!selectedAngle}
                   className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
-                  <Sparkles className="h-4 w-4" /> Write This {contentLabel === 'article' ? 'Article' : 'Blog'}
+                  <Sparkles className="h-4 w-4" /> Write This {contentLabelTitle}
                 </button>
               </div>
             </div>

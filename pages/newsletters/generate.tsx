@@ -9,23 +9,10 @@ import BlogGenerateModal from '../../components/blog/BlogGenerateModal';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import { NEWSLETTER_FORMAT_OPTIONS, isValidNewsletterFormat, type NewsletterFormatType } from '../../lib/blog/blogStructureTemplates';
+import type { ContentBlock } from '../../lib/blog/blockTypes';
+import type { BriefInsight, DraftFieldSuggestions, TemplateSessionPayload, EnrichedGap } from '../blogs.types';
 
-type BriefInsight = {
-  company_id: string;
-  company_context: string;
-  current_content: string;
-  writing_style: string;
-  related_titles: string[];
-  intent: 'awareness' | 'authority' | 'conversion' | 'retention';
-  tone: string;
-};
 
-type DraftFieldSuggestions = {
-  uniqueness_directive_options: string[];
-  must_include_points_options: string[];
-  campaign_objective_options: string[];
-  trend_context_options: string[];
-};
 
 type BlogPost = {
   id: string;
@@ -33,6 +20,7 @@ type BlogPost = {
   slug: string | null;
   angle_type?: string | null;
 };
+
 
 function appendPointer(existing: string, nextPointer: string, separator: string): string {
   const next = (nextPointer || '').trim();
@@ -58,6 +46,7 @@ export default function NewsletterGeneratePage() {
   const prefillReason = typeof router.query.prefill_reason === 'string' ? router.query.prefill_reason.trim() : '';
   const prefillBriefToken = typeof router.query.prefill_brief === 'string' ? router.query.prefill_brief.trim() : '';
   const prefillCardToken = typeof router.query.prefill_card === 'string' ? router.query.prefill_card.trim() : '';
+  const templateToken = typeof router.query.tpl === 'string' ? router.query.tpl.trim() : '';
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +63,8 @@ export default function NewsletterGeneratePage() {
   const [suggestions, setSuggestions] = useState<DraftFieldSuggestions | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [templateBlocks, setTemplateBlocks] = useState<ContentBlock[] | undefined>(undefined);
+  const [templateName, setTemplateName] = useState<string | undefined>(undefined);
   const [newsletterFormat, setNewsletterFormat] = useState<NewsletterFormatType>(() => {
     const qf = router.query.format;
     return typeof qf === 'string' && isValidNewsletterFormat(qf) ? qf : 'weekly-brief';
@@ -137,6 +128,33 @@ export default function NewsletterGeneratePage() {
             sessionStorage.removeItem(prefillCardToken);
           }
         }
+
+        if (templateToken && typeof window !== 'undefined') {
+          const rawTemplate = sessionStorage.getItem(templateToken);
+          if (rawTemplate) {
+            try {
+              const parsed = JSON.parse(rawTemplate) as TemplateSessionPayload;
+              if (Array.isArray(parsed.blocks)) {
+                setTemplateBlocks(parsed.blocks);
+              }
+              if (typeof parsed.template_name === 'string' && parsed.template_name.trim()) {
+                setTemplateName(parsed.template_name.trim());
+              }
+              if (typeof parsed.format_type === 'string' && isValidNewsletterFormat(parsed.format_type)) {
+                setNewsletterFormat(parsed.format_type);
+              }
+              if (typeof parsed.topic === 'string' && parsed.topic.trim()) {
+                // only set if no explicit query topic was provided
+              }
+              if (typeof parsed.target_words === 'number' && parsed.target_words >= 300) {
+                setTargetWords(String(parsed.target_words));
+              }
+            } catch {
+              // ignore malformed template payload
+            }
+            sessionStorage.removeItem(templateToken);
+          }
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to initialize generator.');
       } finally {
@@ -147,7 +165,7 @@ export default function NewsletterGeneratePage() {
     if (selectedCompanyId) {
       void bootstrap();
     }
-  }, [selectedCompanyId, prefillBriefToken, prefillCardToken]);
+  }, [selectedCompanyId, prefillBriefToken, prefillCardToken, templateToken]);
 
   const handleGenerated = (
     output: BlogGenerationOutput & { content_blocks?: unknown[] },
@@ -487,6 +505,8 @@ export default function NewsletterGeneratePage() {
           initialRelatedBlogs={brief?.related_titles ?? []}
           contentType="newsletter"
           initialFormatType={newsletterFormat}
+          initialTemplateName={templateName}
+          initialTemplateBlocks={templateBlocks}
           baseAnswers={{
             ...(brief ? {
               company_context: brief.company_context,

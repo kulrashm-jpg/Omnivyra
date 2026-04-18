@@ -43,7 +43,7 @@ export async function generateCampaignRecommendations(input: {
     profile = {};
   }
 
-  const stage = (campaign?.current_stage as string) || 'twelve_week_plan';
+  const stage = (campaign?.current_stage as string) || 'campaign_week_plan';
   const weeks = blueprint?.weeks ?? [];
   const durationWeeks = campaign?.duration_weeks ?? blueprint?.duration_weeks ?? weeks.length ?? 12;
 
@@ -207,7 +207,7 @@ export async function mergeRecommendationsIntoPlan(input: {
   });
 
   let { data: planRow } = await supabase
-    .from('twelve_week_plan')
+    .from('campaign_week_plan')
     .select('id')
     .eq('campaign_id', input.campaignId)
     .in('status', ['edited_committed', 'committed'])
@@ -216,7 +216,7 @@ export async function mergeRecommendationsIntoPlan(input: {
     .maybeSingle();
   if (!planRow?.id) {
     const { data: anyPlan } = await supabase
-      .from('twelve_week_plan')
+      .from('campaign_week_plan')
       .select('id')
       .eq('campaign_id', input.campaignId)
       .order('updated_at', { ascending: false })
@@ -241,7 +241,7 @@ export async function mergeRecommendationsIntoPlan(input: {
   }));
 
   const { error } = await supabase
-    .from('twelve_week_plan')
+    .from('campaign_week_plan')
     .update({
       weeks: weeksForDb,
       blueprint: { campaign_id: input.campaignId, duration_weeks: mergedWeeks.length, weeks: mergedWeeks },

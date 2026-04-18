@@ -1,5 +1,5 @@
 /**
- * InboxDashboard — top-level layout: PlatformTabs, ThreadList, ThreadView.
+ * InboxDashboard - top-level layout: PlatformTabs, ThreadList, ThreadView.
  */
 
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
@@ -17,6 +17,9 @@ import { useCompanyIntegrations } from '@/hooks/useCompanyIntegrations';
 import { useEngagementMessages } from '@/hooks/useEngagementMessages';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 import { recordEngagementEvent } from '@/lib/engagementTelemetry';
+import EmptyState from '@/components/shared/EmptyState';
+import ExamplePreview from '@/components/shared/ExamplePreview';
+import { trackActivationEvent } from '@/lib/analytics/activationEvents';
 
 type EngagementReadiness = {
   connected_platforms: string[];
@@ -58,8 +61,18 @@ export function InboxDashboard({
     [selectedPlatform]
   );
 
-  const { counts, loading: countsLoading, error: countsError, refresh: refreshCounts } = usePlatformCounts(organizationId);
-  const { workQueue, loading: workQueueLoading, error: workQueueError, refresh: refreshWorkQueue } = useWorkQueue(organizationId);
+  const {
+    counts,
+    loading: countsLoading,
+    error: countsError,
+    refresh: refreshCounts,
+  } = usePlatformCounts(organizationId);
+  const {
+    workQueue,
+    loading: workQueueLoading,
+    error: workQueueError,
+    refresh: refreshWorkQueue,
+  } = useWorkQueue(organizationId);
   const { platforms: integrations } = useCompanyIntegrations(organizationId);
   const { items, loading, error, refresh } = useEngagementInbox(organizationId, filters);
   const { messages, loading: messagesLoading, refresh: refreshMessages } = useEngagementMessages(
@@ -104,7 +117,7 @@ export function InboxDashboard({
     try {
       const params = new URLSearchParams({
         organization_id: organizationId,
-        organizationId: organizationId,
+        organizationId,
       });
       const res = await fetch(`/api/engagement/readiness?${params.toString()}`, {
         credentials: 'include',
@@ -160,9 +173,9 @@ export function InboxDashboard({
 
   const handleSelectThreadById = useCallback(
     (threadId: string) => {
-      const t = items.find((x) => x.thread_id === threadId);
-      if (t) {
-        handleSelectThread(t);
+      const thread = items.find((entry) => entry.thread_id === threadId);
+      if (thread) {
+        handleSelectThread(thread);
         setMobileTab('conversation');
       }
     },
@@ -189,50 +202,30 @@ export function InboxDashboard({
     () => Object.values(counts).reduce((sum, entry) => sum + (entry?.thread_count ?? 0), 0),
     [counts]
   );
-  const connectedLabels = useMemo(
-    () => integrations.map((integration) => integration.label),
-    [integrations]
+  const actionableThreads = workQueue.total_actionable_threads ?? 0;
+  const highPriorityThreads = useMemo(
+    () =>
+      (workQueue.platforms ?? []).reduce(
+        (sum, platform) => sum + (platform.high_priority_threads ?? 0),
+        0
+      ),
+    [workQueue]
   );
-  const showReadinessEmptyState =
-    !loading && !authorFilter && filteredItems.length === 0;
-  const platformScopeLabel = selectedPlatform === 'all'
-    ? 'all connected platforms'
-    : integrations.find((integration) => integration.platform === selectedPlatform)?.label || selectedPlatform;
-  const captureChecklist = useMemo(() => {
-    const base = [
-      'Comments and replies on published posts from connected platforms',
-      'Thread-level inbox items grouped by platform, priority, and conversation type',
-      'AI-assisted response suggestions, lead signals, and next-action guidance',
-    ];
-    if (connectedLabels.length > 0) {
-      return base.map((item, index) =>
-        index === 0 ? `${item}. Current connection scope: ${connectedLabels.join(', ')}.` : item
-      );
-    }
-    return base;
-  }, [connectedLabels]);
-  const testChecklist = useMemo(() => {
-    if (connectedLabels.length === 0) {
-      return [
-        'Connect at least one social account in Social Platforms.',
-        'Publish a post from the connected workspace so the platform creates a real post ID.',
-        'Create an external comment or reply on that published post, then refresh this page.',
-      ];
-    }
-
-    return [
-      `Publish one post from ${connectedLabels[0]} using this workspace connection.`,
-      'Add a real external comment or reply on that post from another account.',
-      'Refresh Engagement Center and confirm the thread appears under All and the platform tab.',
-      'Open the thread and verify AI recommendations, reply, and like actions are available.',
-    ];
-  }, [connectedLabels]);
+  const connectedPlatformsCount = integrations.length;
+  const showReadinessEmptyState = !loading && !authorFilter && filteredItems.length === 0;
+  const platformScopeLabel =
+    selectedPlatform === 'all'
+      ? 'all connected platforms'
+      : integrations.find((integration) => integration.platform === selectedPlatform)?.label ||
+        selectedPlatform;
   const readinessBlockers = readiness?.blockers ?? [];
   const topStatusMessage = readinessLoading
     ? 'Checking engagement readiness...'
     : readinessError
       ? readinessError
       : readinessBlockers[0] || null;
+  const hasConnectedAccounts = (readiness?.active_social_accounts ?? integrations.length) > 0;
+  const hasPublishedPosts = (readiness?.published_posts ?? 0) > 0;
 
   const handleMarkResolved = useCallback(() => {
     if (organizationId && selectedThread) {
@@ -316,7 +309,7 @@ export function InboxDashboard({
           break;
         case 'e':
           setMobileTab('assistant');
-          setAiDrawerOpen((o) => !o);
+          setAiDrawerOpen((open) => !open);
           break;
         case 'l': {
           if (messages.length > 0) {
@@ -333,13 +326,7 @@ export function InboxDashboard({
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [
-    filteredItems,
-    selectedThread,
-    messages,
-    handleSelectThread,
-    handleLike,
-  ]);
+  }, [filteredItems, selectedThread, messages, handleSelectThread, handleLike]);
 
   const handleIgnore = useCallback(
     async (threadId: string) => {
@@ -370,52 +357,103 @@ export function InboxDashboard({
 
   if (!organizationId) {
     return (
-      <div className={`flex flex-col h-full items-center justify-center p-8 text-slate-500 ${className}`}>
+      <div className={`flex h-full flex-col items-center justify-center p-8 text-slate-500 ${className}`}>
         Select a company to view the engagement inbox.
       </div>
     );
   }
 
   return (
-    <div className={`flex flex-col h-full ${className}`}>
-      <header className="shrink-0 px-4 py-3 border-b border-slate-200 bg-white">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-900">Engagement Center</h1>
-            <p className="mt-1 text-sm text-slate-600">
-              Manage conversations, replies, and next actions from your connected platforms.
-            </p>
+    <div className={`flex h-full flex-col ${className}`}>
+      <header className="shrink-0 border-b border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.10),_transparent_38%),linear-gradient(180deg,_#ffffff_0%,_#f8fbff_100%)] px-4 py-4">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-3xl">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-blue-700">
+                Engagement Command Center
+              </p>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                Stay ahead of conversations that need action
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                Review live replies, spot high-priority threads, and move from triage to response
+                without leaving the workspace.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Link
+                href="/engagement/leads"
+                className="inline-flex items-center rounded-full border border-blue-200 bg-white px-4 py-2 text-sm font-medium text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50"
+              >
+                View Potential Leads
+              </Link>
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={loading || countsLoading || workQueueLoading}
+                className="inline-flex items-center rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Refresh Workspace
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Link href="/engagement/leads" className="text-sm text-blue-600 hover:text-blue-800">
-              Potential Leads
-            </Link>
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={loading || countsLoading || workQueueLoading}
-              className="text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
-            >
-              Refresh
-            </button>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Open Threads
+              </p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{filteredItems.length}</p>
+              <p className="mt-1 text-sm text-slate-600">
+                active conversation{filteredItems.length === 1 ? '' : 's'} in the current view
+              </p>
+            </div>
+            <div className="rounded-2xl border border-blue-200 bg-blue-50/90 px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">
+                Need Response
+              </p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{actionableThreads}</p>
+              <p className="mt-1 text-sm text-blue-900/80">
+                thread{actionableThreads === 1 ? '' : 's'} waiting in the action queue
+              </p>
+            </div>
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                High Priority
+              </p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{highPriorityThreads}</p>
+              <p className="mt-1 text-sm text-amber-900/80">
+                conversation{highPriorityThreads === 1 ? '' : 's'} deserve faster follow-up
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Connected Platforms
+              </p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{connectedPlatformsCount}</p>
+              <p className="mt-1 text-sm text-slate-600">
+                platform{connectedPlatformsCount === 1 ? '' : 's'} feeding this inbox
+              </p>
+            </div>
           </div>
         </div>
+
         <PlatformTabs
           counts={counts}
           selectedPlatform={selectedPlatform}
           onSelectPlatform={handleSelectPlatform}
           workQueue={workQueue}
-          platforms={integrations.map((i) => i.platform)}
+          platforms={integrations.map((integration) => integration.platform)}
           loading={countsLoading || workQueueLoading}
-          className="mt-3"
+          className="mt-4"
         />
         {error && (
-          <div className="mt-2 p-2 rounded bg-red-50 text-red-700 text-sm" role="alert">
+          <div className="mt-2 rounded bg-red-50 p-2 text-sm text-red-700" role="alert">
             {error}
           </div>
         )}
         {!error && (countsError || workQueueError) && (
-          <div className="mt-2 p-2 rounded bg-amber-50 text-amber-800 text-sm" role="status">
+          <div className="mt-2 rounded bg-amber-50 p-2 text-sm text-amber-800" role="status">
             {countsError || workQueueError}
           </div>
         )}
@@ -423,50 +461,54 @@ export function InboxDashboard({
 
       <WorkQueueSummary workQueue={workQueue} loading={workQueueLoading} />
 
-      {/* Mobile tab bar (< 768px) */}
-      <div className="md:hidden shrink-0 flex border-b border-slate-200 bg-white">
-        <button
-          type="button"
-          onClick={() => setMobileTab('threads')}
-          className={`flex-1 px-4 py-2 text-sm font-medium ${
-            mobileTab === 'threads' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-600'
-          }`}
-        >
-          Threads
-        </button>
-        <button
-          type="button"
-          onClick={() => setMobileTab('conversation')}
-          className={`flex-1 px-4 py-2 text-sm font-medium ${
-            mobileTab === 'conversation' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-600'
-          }`}
-        >
-          Conversation
-        </button>
-        <button
-          type="button"
-          onClick={() => setMobileTab('assistant')}
-          className={`flex-1 px-4 py-2 text-sm font-medium ${
-            mobileTab === 'assistant' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-600'
-          }`}
-        >
-          AI
-        </button>
+      <div className="shrink-0 border-b border-slate-200 bg-white md:hidden">
+        <div className="flex">
+          <button
+            type="button"
+            onClick={() => setMobileTab('threads')}
+            className={`flex-1 px-4 py-2 text-sm font-medium ${
+              mobileTab === 'threads' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-600'
+            }`}
+          >
+            Threads
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileTab('conversation')}
+            className={`flex-1 px-4 py-2 text-sm font-medium ${
+              mobileTab === 'conversation'
+                ? 'border-b-2 border-blue-600 text-blue-600'
+                : 'text-slate-600'
+            }`}
+          >
+            Conversation
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileTab('assistant')}
+            className={`flex-1 px-4 py-2 text-sm font-medium ${
+              mobileTab === 'assistant'
+                ? 'border-b-2 border-blue-600 text-blue-600'
+                : 'text-slate-600'
+            }`}
+          >
+            AI
+          </button>
+        </div>
       </div>
 
-      <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
-        {/* ThreadList - hidden on mobile when other tab selected; 25% on md, 30% on lg */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
         <section
           className={`flex flex-col overflow-hidden border-r border-slate-200 bg-white ${
             mobileTab !== 'threads' ? 'hidden md:flex' : 'flex'
-          } md:flex-[0_0_30%] md:min-w-0 md:max-w-[360px]`}
+          } md:min-w-0 md:max-w-[360px] md:flex-[0_0_30%]`}
         >
           <ThreadList
             items={filteredItems}
             loading={loading}
             selectedThreadId={selectedThread?.thread_id}
-            onSelectThread={(t) => {
-              handleSelectThread(t);
+            onSelectThread={(thread) => {
+              handleSelectThread(thread);
               setMobileTab('conversation');
             }}
             emptyMessage={
@@ -476,88 +518,94 @@ export function InboxDashboard({
             }
             emptyState={
               showReadinessEmptyState ? (
-                <div className="w-full max-w-md rounded-xl border border-slate-200 bg-slate-50 p-4 text-left text-sm text-slate-600 shadow-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h3 className="text-base font-semibold text-slate-900">
-                        Engagement is connected, but no activity has reached the inbox yet.
-                      </h3>
-                      <p className="mt-1 text-sm text-slate-600">
-                        The current view is scoped to {platformScopeLabel}. Once real engagement is pulled in, the thread list will populate here.
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 border border-slate-200">
-                      {totalThreads} thread{totalThreads === 1 ? '' : 's'}
-                    </span>
-                  </div>
+                <div className="w-full max-w-2xl space-y-4">
+                  <EmptyState
+                    tone={hasConnectedAccounts && hasPublishedPosts ? 'partial' : 'first-time'}
+                    title={
+                      hasConnectedAccounts
+                        ? hasPublishedPosts
+                          ? 'You are almost there'
+                          : 'Create your first post'
+                        : 'Track your first interaction'
+                    }
+                    description={
+                      hasConnectedAccounts
+                        ? hasPublishedPosts
+                          ? `The inbox is scoped to ${platformScopeLabel}. Publish one real post, then refresh to pull the first live conversation into this workspace.`
+                          : 'Your channels are connected. Publish one post and the first replies will start flowing into the inbox here.'
+                        : 'Connect a social account first so comments, replies, and lead signals can flow into one place.'
+                    }
+                    primaryAction={{
+                      label: hasConnectedAccounts
+                        ? hasPublishedPosts
+                          ? 'Refresh inbox'
+                          : 'Create your first post'
+                        : 'Connect your first channel',
+                      onClick: () => {
+                        trackActivationEvent('empty_state_primary_clicked', {
+                          accountId: organizationId,
+                          context: 'engagement_inbox',
+                          meta: {
+                            connected_accounts: readiness?.active_social_accounts ?? integrations.length,
+                            published_posts: readiness?.published_posts ?? 0,
+                          },
+                        });
+                        if (!hasConnectedAccounts) {
+                          router.push('/social-platforms');
+                          return;
+                        }
+                        if (!hasPublishedPosts) {
+                          router.push('/content-studio?sample=1');
+                          return;
+                        }
+                        handleRefresh();
+                      },
+                    }}
+                    secondaryAction={{
+                      label: 'Try with sample data',
+                      onClick: () => {
+                        trackActivationEvent('sample_used', {
+                          accountId: organizationId,
+                          context: 'engagement_inbox',
+                        });
+                        router.push('/engagement/leads?sample=1');
+                      },
+                    }}
+                    examplePreview={<ExamplePreview variant="engagement" />}
+                  />
 
-                  {topStatusMessage && (
-                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  {topStatusMessage ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                       {topStatusMessage}
                     </div>
-                  )}
+                  ) : null}
 
-                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-                    <div className="rounded-lg bg-white p-3 border border-slate-200">
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
                       <div className="text-slate-500">Connected Accounts</div>
                       <div className="mt-1 text-lg font-semibold text-slate-900">
                         {readiness?.active_social_accounts ?? integrations.length}
                       </div>
                     </div>
-                    <div className="rounded-lg bg-white p-3 border border-slate-200">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
                       <div className="text-slate-500">Published Posts</div>
                       <div className="mt-1 text-lg font-semibold text-slate-900">
                         {readiness?.published_posts ?? 0}
                       </div>
                     </div>
-                    <div className="rounded-lg bg-white p-3 border border-slate-200">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
                       <div className="text-slate-500">Raw Comments</div>
                       <div className="mt-1 text-lg font-semibold text-slate-900">
                         {readiness?.raw_comments ?? 0}
                       </div>
                     </div>
-                    <div className="rounded-lg bg-white p-3 border border-slate-200">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
                       <div className="text-slate-500">Unified Threads</div>
                       <div className="mt-1 text-lg font-semibold text-slate-900">
                         {readiness?.threads ?? totalThreads}
                       </div>
                     </div>
                   </div>
-
-                  <div className="mt-4">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      What This Captures Today
-                    </div>
-                    <ul className="mt-2 space-y-2 text-sm text-slate-700">
-                      {captureChecklist.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div className="mt-4">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Best Validation Flow
-                    </div>
-                    <ol className="mt-2 space-y-2 text-sm text-slate-700 list-decimal list-inside">
-                      {testChecklist.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ol>
-                  </div>
-
-                  {readinessBlockers.length > 1 && (
-                    <div className="mt-4">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Remaining Gaps
-                      </div>
-                      <ul className="mt-2 space-y-2 text-sm text-slate-700">
-                        {readinessBlockers.slice(1).map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
                 </div>
               ) : undefined
             }
@@ -566,11 +614,10 @@ export function InboxDashboard({
           />
         </section>
 
-        {/* ThreadView / Conversation - tablet: 75%, desktop: 45%; mobile: tab */}
         <section
-          className={`relative flex flex-col overflow-hidden bg-slate-50 border-r border-slate-200 ${
+          className={`relative flex flex-col overflow-hidden border-r border-slate-200 bg-slate-50 ${
             mobileTab !== 'conversation' ? 'hidden md:flex' : 'flex'
-          } md:flex-[0_0_45%] md:min-w-0`}
+          } md:min-w-0 md:flex-[0_0_45%]`}
         >
           <ThreadView
             thread={selectedThread}
@@ -585,13 +632,8 @@ export function InboxDashboard({
           />
         </section>
 
-        {/* AI Assistant - desktop lg: 25% panel; md: drawer overlay; mobile: tab */}
         <>
-          <section
-            className={`hidden lg:flex flex-col overflow-hidden bg-slate-50 border-l border-slate-200 shrink-0 flex-[0_0_25%] min-w-[200px] ${
-              mobileTab !== 'assistant' ? '' : ''
-            }`}
-          >
+          <section className="hidden min-w-[200px] shrink-0 flex-[0_0_25%] flex-col overflow-hidden border-l border-slate-200 bg-slate-50 lg:flex">
             <AIEngagementAssistant
               thread={selectedThread}
               messages={messages}
@@ -604,59 +646,56 @@ export function InboxDashboard({
               }}
             />
           </section>
-          {/* Tablet AI drawer trigger */}
-          <div className="hidden md:flex lg:hidden shrink-0 border-l border-slate-200 items-center px-2">
+
+          <div className="hidden shrink-0 items-center border-l border-slate-200 px-2 md:flex lg:hidden">
             <button
               type="button"
               onClick={() => setAiDrawerOpen(!aiDrawerOpen)}
-              className="p-2 text-sm text-slate-600 hover:bg-slate-100 rounded"
+              className="rounded px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
             >
-              Copilot {aiDrawerOpen ? '▼' : '▶'}
+              Copilot {aiDrawerOpen ? 'Hide' : 'Open'}
             </button>
           </div>
-          {/* Tablet AI drawer overlay */}
+
           {aiDrawerOpen && (
-            <div
-              className="hidden md:block lg:hidden fixed inset-0 z-50"
-              aria-modal
-            >
+            <div className="fixed inset-0 z-50 hidden md:block lg:hidden" aria-modal>
               <div
                 className="absolute inset-0 bg-black/30"
                 onClick={() => setAiDrawerOpen(false)}
               />
-              <div className="absolute right-0 top-0 bottom-0 w-full max-w-sm bg-white shadow-xl flex flex-col">
-                <div className="shrink-0 flex items-center justify-between p-3 border-b border-slate-200">
+              <div className="absolute right-0 top-0 bottom-0 flex w-full max-w-sm flex-col bg-white shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-200 p-3">
                   <span className="font-medium">Engagement Copilot</span>
                   <button
                     type="button"
                     onClick={() => setAiDrawerOpen(false)}
                     className="p-1 text-slate-500 hover:text-slate-700"
                   >
-                    ✕
+                    Close
                   </button>
                 </div>
                 <div className="flex-1 overflow-hidden">
-                <AIEngagementAssistant
-                  thread={selectedThread}
-                  messages={messages}
-                  organizationId={organizationId}
-                  items={items}
-                  onSelectThread={handleSelectThreadById}
-                  onFilterByAuthor={(authorName, platform) => {
-                    setAuthorFilter({ authorName, platform });
-                    setMobileTab('threads');
-                    setAiDrawerOpen(false);
-                  }}
-                  className="h-full border-0"
-                />
+                  <AIEngagementAssistant
+                    thread={selectedThread}
+                    messages={messages}
+                    organizationId={organizationId}
+                    items={items}
+                    onSelectThread={handleSelectThreadById}
+                    onFilterByAuthor={(authorName, platform) => {
+                      setAuthorFilter({ authorName, platform });
+                      setMobileTab('threads');
+                      setAiDrawerOpen(false);
+                    }}
+                    className="h-full border-0"
+                  />
                 </div>
               </div>
             </div>
           )}
         </>
-        {/* Mobile: AI panel when tab selected */}
+
         <section
-          className={`md:hidden flex flex-col overflow-hidden bg-slate-50 ${
+          className={`flex flex-col overflow-hidden bg-slate-50 md:hidden ${
             mobileTab !== 'assistant' ? 'hidden' : 'flex'
           }`}
         >

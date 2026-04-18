@@ -24,7 +24,7 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react';
-import CampaignAIChat from '../components/CampaignAIChat';
+import CampaignAIChat from '../components/CampaignAIChat.dynamic';
 import { isCreatorDependentContentType } from '../utils/contentTaxonomy';
 
 export default function ContentCreation() {

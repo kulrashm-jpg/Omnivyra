@@ -5,8 +5,7 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
-import CampaignAIChat from '../components/CampaignAIChat';
-import Header from '../components/Header';
+import CampaignAIChat from '../components/CampaignAIChat.dynamic';
 
 export default function AIChatPage() {
   const router = useRouter();
@@ -68,7 +67,6 @@ export default function AIChatPage() {
     return (
       <>
         <Head><title>AI Chat – Campaign required</title></Head>
-        <Header />
         <div className="min-h-screen flex items-center justify-center bg-gray-50">
           <div className="text-center">
             <p className="text-gray-600 mb-4">Campaign ID is required.</p>
@@ -84,7 +82,6 @@ export default function AIChatPage() {
       <Head>
         <title>AI Enhance – {(campaignData as { name?: string })?.name ?? 'Campaign'}</title>
       </Head>
-      <Header />
       <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-purple-50 flex flex-col">
         <div className="p-4 border-b border-indigo-200 bg-white/80 backdrop-blur-sm shrink-0">
           <Link

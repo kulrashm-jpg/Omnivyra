@@ -1,11 +1,10 @@
 /**
- * Command Center → Create Content Sub-page
+ * Command Center -> Create Content
  *
- * Shown when user clicks the "Create Content" card on the Command Center.
- * Presents 6 content format cards in a 2×3 grid:
- *   Row 1: Post, Blog, Story
- *   Row 2: Article, Whitepaper, Case Study
- *   Row 3: Thread, Guide, Newsletter
+ * Nine-card content entry for professional marketing teams.
+ * Row 1: Post, Blog, Story
+ * Row 2: Article, Whitepaper, Case Study
+ * Row 3: Thread, Guide, Newsletter
  */
 
 import React from 'react';
@@ -15,8 +14,9 @@ import { useCompanyContext } from '../../components/CompanyContext';
 interface ContentCard {
   id: string;
   icon: string;
-  badge?: string;
-  badgeColor?: string;
+  category: string;
+  effortBand: string;
+  outcome: string;
   title: string;
   description: string;
   bullets: string[];
@@ -29,21 +29,21 @@ interface ContentCard {
 }
 
 const CONTENT_CARDS: ContentCard[] = [
-  // ── Row 1: Post, Blog, Story ──────────────────────────────────────────────
   {
     id: 'post',
-    icon: '📱',
-    badge: '1–5 Credits',
-    badgeColor: 'bg-green-100 text-green-800',
+    icon: 'P',
+    category: 'Short-form',
+    effortBand: '1-5 Credits',
+    outcome: 'Platform-ready social copy for executive-grade publishing',
     title: 'Post',
-    description: 'Compose high-impact social media posts and multi-post threads for LinkedIn, Twitter/X, and more.',
+    description: 'Create polished short-form content for brand, demand, and thought-leadership moments across professional channels.',
     bullets: [
-      'Platform-specific tone and formatting',
-      'Thread / series creation support',
-      'Hashtag and engagement optimization',
+      'Platform-native formatting and tone control',
+      'Built for modern B2B brand presence',
+      'Clean handoff into publishing workflows',
     ],
     cta: 'Create Post',
-    route: '/content-studio/post',
+    route: '/posts/create',
     accentFrom: 'from-green-50',
     accentTo: 'to-teal-50',
     borderColor: 'border-green-200',
@@ -51,15 +51,16 @@ const CONTENT_CARDS: ContentCard[] = [
   },
   {
     id: 'blog',
-    icon: '✍️',
-    badge: '5–15 Credits',
-    badgeColor: 'bg-purple-100 text-purple-800',
+    icon: 'B',
+    category: 'Long-form',
+    effortBand: '5-15 Credits',
+    outcome: 'Search-focused content that builds authority and supports pipeline growth',
     title: 'Blog',
-    description: 'Write long-form SEO-optimized articles that rank, educate, and convert your target audience.',
+    description: 'Build strategic blog content that strengthens discoverability, authority, and buyer education without losing editorial quality.',
     bullets: [
-      'AI-assisted topic research and outlines',
-      'SEO scoring and keyword suggestions',
-      'Publish directly to your company blog',
+      'Structured for search, clarity, and trust',
+      'Editorial flow with stronger topic discipline',
+      'Designed for teams that care about output quality',
     ],
     cta: 'Create Blog',
     route: '/blogs/create',
@@ -70,15 +71,16 @@ const CONTENT_CARDS: ContentCard[] = [
   },
   {
     id: 'story',
-    icon: '📖',
-    badge: '3–8 Credits',
-    badgeColor: 'bg-pink-100 text-pink-800',
+    icon: 'S',
+    category: 'Narrative',
+    effortBand: '3-8 Credits',
+    outcome: 'Brand-led story assets with stronger narrative precision',
     title: 'Story',
-    description: 'Craft compelling stories that connect with your audience across social media and email.',
+    description: 'Shape narrative-driven content that brings brand personality, customer truth, and strategic relevance together.',
     bullets: [
-      'Brand-voice aligned story formats',
-      'Optimized for social engagement',
-      'Multi-platform story adaptation',
+      'Narrative structures matched to channel context',
+      'Stronger audience resonance and recall',
+      'Useful across social, email, and brand campaigns',
     ],
     cta: 'Create Story',
     route: '/stories/create',
@@ -87,18 +89,18 @@ const CONTENT_CARDS: ContentCard[] = [
     borderColor: 'border-pink-200',
     ctaColor: 'bg-pink-600 hover:bg-pink-700',
   },
-  // ── Row 2: Article, Whitepaper, Case Study ────────────────────────────────
   {
     id: 'article',
-    icon: '📰',
-    badge: '5–15 Credits',
-    badgeColor: 'bg-orange-100 text-orange-800',
+    icon: 'A',
+    category: 'Editorial',
+    effortBand: '5-15 Credits',
+    outcome: 'High-trust articles with sharper market framing and clarity',
     title: 'Article',
-    description: 'Create in-depth journalistic articles with balanced perspectives, research, and citations.',
+    description: 'Develop more journalistic, perspective-led content with deeper analysis, stronger framing, and executive readability.',
     bullets: [
-      'Journalistic quality and balanced viewpoints',
-      'Research-depth with real citations',
-      'Publish or syndicate across channels',
+      'Balanced, research-led content development',
+      'Useful for executive and category narratives',
+      'Built for credibility, not generic thought leadership',
     ],
     cta: 'Create Article',
     route: '/articles/create',
@@ -109,15 +111,16 @@ const CONTENT_CARDS: ContentCard[] = [
   },
   {
     id: 'whitepaper',
-    icon: '📄',
-    badge: '20–40 Credits',
-    badgeColor: 'bg-blue-100 text-blue-800',
+    icon: 'W',
+    category: 'Authority Asset',
+    effortBand: '20-40 Credits',
+    outcome: 'Long-form assets built for enterprise trust and buyer confidence',
     title: 'Whitepaper',
-    description: 'Develop authoritative whitepapers to showcase expertise, generate leads, and build credibility.',
+    description: 'Produce premium authority assets that support enterprise trust, category education, and serious buyer conversations.',
     bullets: [
-      'In-depth research and data synthesis',
-      'Professional formatting and layout',
-      'Gated download lead generation ready',
+      'Deeper strategic structure and argumentation',
+      'Designed for high-consideration buying journeys',
+      'Supports lead generation and sales enablement',
     ],
     cta: 'Create Whitepaper',
     route: '/whitepapers/create',
@@ -128,38 +131,39 @@ const CONTENT_CARDS: ContentCard[] = [
   },
   {
     id: 'case-study',
-    icon: '🏆',
-    badge: '10–25 Credits',
-    badgeColor: 'bg-teal-100 text-teal-800',
+    icon: 'C',
+    category: 'Proof',
+    effortBand: '10-25 Credits',
+    outcome: 'Proof-led customer stories your sales team can reuse',
     title: 'Case Study',
-    description: 'Tell your success stories. AI guides you through structured data collection via voice or text chat.',
+    description: 'Turn customer wins into disciplined proof assets that showcase challenge, intervention, outcomes, and learning.',
     bullets: [
-      'Voice + text AI chat collects your data',
-      'Structured: challenge, solution, results',
-      'Ready-to-publish customer success story',
+      'Structured for persuasion and credibility',
+      'Built around measurable business outcomes',
+      'Works across website, sales, and campaign use cases',
     ],
     cta: 'Create Case Study',
-    route: '/case-studies/new',
+    route: '/case-studies/create',
     accentFrom: 'from-teal-50',
     accentTo: 'to-emerald-50',
     borderColor: 'border-teal-200',
     ctaColor: 'bg-teal-600 hover:bg-teal-700',
   },
-  // ── Row 3: Thread, Guide, Newsletter ──────────────────────────────────────
   {
     id: 'thread',
-    icon: '🧵',
-    badge: '2–5 Credits',
-    badgeColor: 'bg-emerald-100 text-emerald-800',
+    icon: 'T',
+    category: 'Sequence',
+    effortBand: '2-5 Credits',
+    outcome: 'Connected thread sequences built for stronger retention',
     title: 'Thread',
-    description: 'Create structured multi-post threads for LinkedIn and Twitter/X — hook, build, and close.',
+    description: 'Create multi-part thread content that moves from hook to payoff with clearer pacing and stronger retention.',
     bullets: [
-      '5–10 connected posts per thread',
-      'Hook → Build → CTA structure',
-      'Copy as numbered thread for any platform',
+      'Built for narrative momentum and clarity',
+      'Strong fit for thought leadership sequences',
+      'Ready for LinkedIn or X thread publishing',
     ],
     cta: 'Create Thread',
-    route: '/content-studio/post?postFormat=thread',
+    route: '/threads/create',
     accentFrom: 'from-emerald-50',
     accentTo: 'to-green-50',
     borderColor: 'border-emerald-200',
@@ -167,15 +171,16 @@ const CONTENT_CARDS: ContentCard[] = [
   },
   {
     id: 'guide',
-    icon: '📚',
-    badge: '15–30 Credits',
-    badgeColor: 'bg-violet-100 text-violet-800',
+    icon: 'G',
+    category: 'Pillar Content',
+    effortBand: '15-30 Credits',
+    outcome: 'Evergreen guides that build authority over time',
     title: 'Guide',
-    description: 'Build comprehensive, evergreen pillar content — 3000+ words of deep, authoritative expertise.',
+    description: 'Build durable pillar content that teaches clearly, ranks well, and gives buyers a stronger reason to trust your brand.',
     bullets: [
-      'Pillar content for SEO authority',
-      '5–10 deep sections with sub-headings',
-      'Evergreen resource that compounds over time',
+      'Comprehensive educational structure',
+      'Useful for SEO, enablement, and owned media',
+      'Designed to become a reusable category resource',
     ],
     cta: 'Create Guide',
     route: '/guides/create',
@@ -186,15 +191,16 @@ const CONTENT_CARDS: ContentCard[] = [
   },
   {
     id: 'newsletter',
-    icon: '📧',
-    badge: '3–10 Credits',
-    badgeColor: 'bg-amber-100 text-amber-800',
+    icon: 'N',
+    category: 'Audience Nurture',
+    effortBand: '3-10 Credits',
+    outcome: 'Newsletters with a stronger point of view and clearer value',
     title: 'Newsletter',
-    description: 'Draft engaging newsletters that nurture your audience and drive consistent readership.',
+    description: 'Develop newsletter content with a clearer editorial stance, sharper structure, and stronger executive usefulness.',
     bullets: [
-      'Audience-tuned tone and structure',
-      'Curated insights with original commentary',
-      'Ready for email platform or CMS',
+      'Tailored to insight, brief, strategy, or action modes',
+      'Built for modern B2B readership expectations',
+      'Designed to support retention and brand authority',
     ],
     cta: 'Create Newsletter',
     route: '/newsletters/create',
@@ -217,8 +223,8 @@ export default function CreateContentSubPage() {
 
   if (!authChecked || isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600" />
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
+        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-slate-700" />
       </div>
     );
   }
@@ -226,68 +232,116 @@ export default function CreateContentSubPage() {
   if (!user?.userId) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-3 sm:px-4 lg:px-6">
-      <div className="max-w-5xl mx-auto">
-
-        {/* Back button */}
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">
+      <div className="mx-auto max-w-6xl">
         <button
           onClick={() => router.push('/command-center')}
-          className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-800 mb-8 transition-colors"
+          className="mb-8 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-800"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
           </svg>
           Back to Command Center
         </button>
 
-        {/* Header */}
-        <div className="text-center mb-10">
-          <div className="text-5xl mb-3">✍️</div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Create Content</h1>
-          <p className="text-gray-500 max-w-xl mx-auto">
-            Turn insights into impact. Choose a content format and start creating content your audience is
-            searching for.
-          </p>
+        <div className="mb-8 rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px] lg:items-end">
+            <div className="max-w-3xl">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                Content System
+              </p>
+              <h1 className="text-3xl font-bold tracking-tight text-gray-900 md:text-4xl">
+                Create premium content across text format
+              </h1>
+              <p className="mt-3 text-sm leading-relaxed text-gray-600 md:text-base">
+                Choose the format that fits the outcome you need. Each path is designed to feel consistent,
+                executive-ready, and strong enough for teams working from founder-led marketing all the way up to
+                CMO-level planning.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 lg:w-[240px]">
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Formats</p>
+                <p className="mt-1 text-base font-semibold text-gray-900">9</p>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">UX Goal</p>
+                <p className="mt-1 text-base font-semibold text-gray-900">Consistent</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Designed For</p>
+              <p className="mt-1 text-sm text-gray-700">High-standards marketing teams that cannot compromise on brand, clarity, or buyer trust.</p>
+            </div>
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Decision Quality</p>
+              <p className="mt-1 text-sm text-gray-700">Every path helps teams choose the right structure before generation begins.</p>
+            </div>
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Output Standard</p>
+              <p className="mt-1 text-sm text-gray-700">Professional, polished, and aligned to serious B2B marketing expectations.</p>
+            </div>
+          </div>
         </div>
 
-        {/* Cards — 2×3 responsive grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div className="mb-5 flex items-center justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Select A Content Type</p>
+            <p className="mt-1 text-sm text-gray-600">Every card below leads into a more deliberate creation path with stronger information hierarchy.</p>
+          </div>
+          <p className="hidden text-sm text-gray-500 md:block">9 content paths</p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {CONTENT_CARDS.map((card) => (
             <div
               key={card.id}
               onClick={() => router.push(card.route)}
-              className={`rounded-xl p-5 border-2 cursor-pointer hover:shadow-xl hover:scale-105 transition-all bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} flex flex-col`}
+              className={`group flex min-h-[500px] cursor-pointer flex-col rounded-[24px] border bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)]`}
             >
-              {/* Icon + badge */}
-              <div className="flex items-start justify-between mb-4">
-                <span className="text-4xl">{card.icon}</span>
-                {card.badge && (
-                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${card.badgeColor}`}>
-                    {card.badge}
+              <div className="mb-5 flex items-start justify-between gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/80 bg-white/85 text-lg font-semibold text-gray-900 shadow-sm">
+                  {card.icon}
+                </div>
+                <div className="text-right">
+                  <span className="inline-flex rounded-full bg-white/85 px-2.5 py-1 text-[11px] font-semibold text-gray-700 shadow-sm">
+                    {card.category}
                   </span>
-                )}
+                  <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.14em] text-gray-400">{card.effortBand}</p>
+                </div>
               </div>
 
-              {/* Title + description */}
-              <h2 className="text-lg font-bold text-gray-900 mb-2">{card.title}</h2>
-              <p className="text-sm text-gray-600 mb-4 flex-1">{card.description}</p>
+              <div className="flex h-[126px] flex-col">
+                <h2 className="h-[32px] text-xl font-semibold tracking-tight text-gray-900">{card.title}</h2>
+                <p className="mt-3 h-[84px] text-sm leading-relaxed text-gray-600">{card.description}</p>
+              </div>
 
-              {/* Bullets */}
-              <ul className="space-y-1.5 mb-5 text-sm">
-                {card.bullets.map((b, i) => (
-                  <li key={i} className="flex items-start gap-2 text-gray-700">
-                    <span className="text-purple-500 font-bold mt-0.5">•</span>
-                    {b}
+              <div className="mt-5 flex h-[74px] flex-col rounded-2xl border border-white/80 bg-white/75 px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Primary Outcome</p>
+                <p className="mt-1 text-sm font-medium leading-5 text-gray-800">{card.outcome}</p>
+              </div>
+
+              <ul className="mt-5 flex h-[102px] flex-col justify-start space-y-2 text-sm">
+                {card.bullets.map((b, index) => (
+                  <li key={index} className="flex items-start gap-2 text-gray-700">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-gray-900/70" />
+                    <span>{b}</span>
                   </li>
                 ))}
               </ul>
 
-              {/* CTA */}
               <button
-                onClick={(e) => { e.stopPropagation(); router.push(card.route); }}
-                className={`w-full py-2.5 ${card.ctaColor} text-white text-sm font-semibold rounded-lg transition-colors shadow-sm`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  router.push(card.route);
+                }}
+                className={`mt-6 w-full rounded-xl py-3 text-sm font-semibold text-white shadow-sm transition-colors ${card.ctaColor}`}
               >
-                {card.cta} →
+                {card.cta}
               </button>
             </div>
           ))}

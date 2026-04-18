@@ -38,7 +38,7 @@ const LOCK_STALE_MS = 30 * 60 * 1000;
 const JOB_NAME = 'daily_intelligence';
 const ACTIVE_STATUSES = new Set([
   'planning', 'scheduled', 'active', 'approved', 'draft',
-  'content-creation', 'schedule-review', 'twelve_week_plan', 'execution_ready',
+  'content-creation', 'schedule-review', 'campaign_week_plan', 'execution_ready',
 ]);
 
 function toStrategicInsightCompatibility(decisions: Array<{

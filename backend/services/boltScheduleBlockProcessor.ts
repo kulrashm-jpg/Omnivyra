@@ -26,6 +26,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
 import {
   generateMasterContentFromIntent,
   buildPlatformVariantsFromMaster,
@@ -93,7 +94,7 @@ const BLOG_CONTENT_TYPES = new Set(['blog', 'article', 'newsletter', 'white_pape
 
 /** Platform → DB content_type fallback map (mirrors structuredPlanScheduler) */
 const FALLBACK_CT_MAP: Record<string, Record<string, string>> = {
-  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
+  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', poll: 'poll', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
   x:         { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
   twitter:   { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
   instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', newsletter: 'feed_post', short_story: 'feed_post', white_paper: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post', blog: 'feed_post' },
@@ -221,7 +222,7 @@ function buildItemFromEnriched(
       narrativeStyle:            (enriched.narrativeStyle            ?? brief.narrativeStyle            ?? enriched.brand_voice ?? '') as string,
       topicGoal:                 (enriched.dailyObjective            ?? brief.topicGoal                 ?? enriched.objective ?? '') as string,
     },
-    content_type: 'post',
+    content_type: String(enriched.content_type ?? enriched.contentType ?? 'post').toLowerCase(),
     active_platform_targets: platformTargets,
   };
 }
@@ -427,6 +428,11 @@ export async function processBlockSchedule(
           master = await generateMasterContentFromIntent(item);
         }
       } catch (err) {
+        console.error('[block-processor] Master generation FAILED', {
+          contentType, topic,
+          error: (err as Error)?.message,
+          stack: (err as Error)?.stack?.split('\n').slice(0, 3).join(' | '),
+        });
         emit?.({ phase: 'error', contentType, topic, message: (err as Error)?.message ?? 'Master generation failed' });
         blockSkipped += topicRows.length;
         continue;
@@ -538,7 +544,7 @@ export async function processBlockSchedule(
         const repurpose    = repurposeIndex.get(row.id) ?? { index: 1, total: 1 };
 
         // ── Insert scheduled_post immediately ───────────────────────────────
-        const { error: insertError } = await supabase.from('scheduled_posts').insert({
+        const { data: inserted, error: insertError } = await supabase.from('scheduled_posts').insert({
           user_id:           campaign.user_id,
           social_account_id: socialAccountId,
           campaign_id:       campaignId,
@@ -552,13 +558,26 @@ export async function processBlockSchedule(
           repurpose_total:   repurpose.total,
           created_at:        new Date().toISOString(),
           updated_at:        new Date().toISOString(),
-        });
+        }).select('id').maybeSingle();
 
         if (insertError) {
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
           console.warn('[block-processor] Insert failed for', platform, topic, insertError.message);
           continue;
+        }
+
+        if ((inserted as any)?.id) {
+          try {
+            await enqueueScheduledPostAt(
+              String((inserted as any).id),
+              String(campaign.user_id),
+              String(socialAccountId),
+              scheduledFor.toISOString(),
+            );
+          } catch (enqueueError: any) {
+            console.warn('[block-processor] enqueueScheduledPostAt failed (non-fatal):', enqueueError?.message);
+          }
         }
 
         blockScheduled++;

@@ -8,6 +8,7 @@ import { Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import BlogGenerateModal from '../../../components/blog/BlogGenerateModal';
 import type { BlogGenerationOutput } from '../../../lib/blog/blogGenerationEngine';
 import { BLOG_FORMAT_OPTIONS, type BlogFormatType } from '../../../lib/blog/blogStructureTemplates';
+import type { BriefInsight, DraftFieldSuggestions, TemplateSessionPayload, EnrichedGap } from '../../blogs.types';
 
 type CompanyOption = {
   id: string;
@@ -15,23 +16,9 @@ type CompanyOption = {
   industry?: string | null;
 };
 
-type BriefInsight = {
-  company_id: string;
-  company_name: string;
-  company_context: string;
-  current_content: string;
-  writing_style: string;
-  related_titles: string[];
-  intent: 'awareness' | 'authority' | 'conversion' | 'retention';
-  tone: string;
-};
 
-type DraftFieldSuggestions = {
-  uniqueness_directive_options: string[];
-  must_include_points_options: string[];
-  campaign_objective_options: string[];
-  trend_context_options: string[];
-};
+
+
 
 function appendPointer(existing: string, nextPointer: string, separator: string): string {
   const next = (nextPointer || '').trim();

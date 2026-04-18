@@ -692,12 +692,16 @@ export function buildGenerationUserPrompt(input: BlogGenerationInput): string {
       lines.push('## CLASSIC TEMPLATE DEPTH DIRECTIVE');
       lines.push('- This article uses the Classic template. Make each section teach the reader something concrete.');
       lines.push('- Avoid generic advice. Support claims with examples, reasoning, or practical specifics.');
+      lines.push('- Use at least 4 substantial H2 sections, and each one should contain 2-4 full paragraphs instead of short fragments.');
+      lines.push('- The Summary must be fully written and synthesize the argument into a clear takeaway.');
+      lines.push('- The References section must include at least 3 credible sources so the draft has real GEO support.');
       lines.push('- Each section should end with a clear takeaway sentence.');
       lines.push('');
     } else {
       lines.push('## CLASSIC TEMPLATE DEPTH DIRECTIVE');
       lines.push('- This article uses the Classic template. Even at 800+ words, sections must contain real explanation and practical value.');
       lines.push('- Keep the writing concise, but do not write thin filler or outline-like paragraphs.');
+      lines.push('- Use at least 3 substantial H2 sections, and make the Summary and References blocks complete rather than token.');
       lines.push('- Each section should include at least one useful example, implication, or takeaway.');
       lines.push('');
     }
@@ -1202,7 +1206,8 @@ ${structure}
 ${normalizedTemplateName === 'comparison' ? '- For comparison templates: compare the same decision criteria across both options, explain tradeoffs explicitly, and make every verdict scenario-specific.\n- In comparison columns, each option needs real analysis plus concrete strengths or limitations, not headline bullets only.' : ''}
 ${normalizedTemplateName === 'tutorial' ? '- For tutorial templates: every step needs action, rationale, and at least one caution, check, or implementation note.' : ''}
 ${normalizedTemplateName === 'magazine' ? '- For magazine templates: quotes, columns, and visual moments should deepen the editorial argument instead of replacing it.' : ''}
-${normalizedTemplateName === 'visual feature' ? '- For visual feature templates: images can support the story, but the written sections must still carry full analytical weight.' : ''}
+${normalizedTemplateName === 'visual feature' ? '- For visual feature templates: images can support the story, but the written sections must still carry full analytical weight.\n- Fill every H2 heading, write a complete summary, include at least 3 credible references, and give every image block both a descriptive alt text and a contextual caption.' : ''}
+${normalizedTemplateName === 'comparison' ? '- For comparison templates: every top-level H2 must be filled, the verdict callout must be decisive, the summary must be complete, and the references block must include at least 3 credible sources.' : ''}
 ${contentType === 'newsletter' ? '- For newsletter templates: write for forwarding and extraction. Key insights, callouts, quotes, and summary blocks must be sharp enough to stand alone in inbox previews, AI answers, and social sharing.\n- Make every section feel like part of one coherent letter, not detached article fragments.\n- Use current, concrete stakes so the newsletter feels timely and reader-relevant right now.' : ''}
 ${contentType === 'newsletter' ? '- For newsletter templates: do not underwrite the main idea. Build depth through reasoning, concrete examples, recognizable patterns, and clear implications for the reader.\n- Every substantive newsletter paragraph must feel complete and standalone, not like a note to expand later.' : ''}
 ${contentType === 'newsletter' ? '- For insight-letter newsletters specifically: the reader must be able to point to a clear hook, context, insight, expansion, implication, and closing by the time the draft is finished.' : ''}
@@ -1250,6 +1255,63 @@ export function parseTemplateOutput(
     filledBlocks.push(mergeBlockContent(tplBlock, aiBlock));
   }
 
+  const topLevelKeyInsights = Array.isArray(raw.key_insights)
+    ? raw.key_insights
+        .map((item: unknown) => String(item ?? '').trim())
+        .filter(Boolean)
+    : [];
+  const topLevelReferences = Array.isArray(raw.references)
+    ? raw.references
+    : Array.isArray(raw.sources)
+    ? raw.sources
+    : [];
+  const fallbackSummary =
+    typeof raw.summary === 'string' ? raw.summary.trim() :
+    typeof raw.excerpt === 'string' ? raw.excerpt.trim() :
+    '';
+
+  const normalizedBlocks = filledBlocks.map((block) => {
+    if (block.type === 'key_insights') {
+      const hasFilledItems = block.items.some((item) => item.trim().length > 0);
+      if (!hasFilledItems && topLevelKeyInsights.length > 0) {
+        return {
+          ...block,
+          items: block.items.map((_, index) => topLevelKeyInsights[index] ?? ''),
+        };
+      }
+    }
+
+    if (block.type === 'summary' && block.body.trim().length === 0 && fallbackSummary) {
+      return {
+        ...block,
+        body: fallbackSummary,
+      };
+    }
+
+    if (block.type === 'references') {
+      const hasFilledRefs = block.items.some((item) => item.title.trim().length > 0 || item.url.trim().length > 0);
+      if (!hasFilledRefs && topLevelReferences.length > 0) {
+        return {
+          ...block,
+          items: block.items.map((existing, index) => {
+            const ref = topLevelReferences[index];
+            if (!ref) return existing;
+            if (typeof ref === 'string') {
+              return { ...existing, title: ref.trim(), url: '' };
+            }
+            return {
+              ...existing,
+              title: String(ref?.title ?? ref?.text ?? '').trim(),
+              url: String(ref?.url ?? ref?.href ?? '').trim(),
+            };
+          }),
+        };
+      }
+    }
+
+    return block;
+  });
+
   return {
     title,
     excerpt:              raw.excerpt || '',
@@ -1259,7 +1321,7 @@ export function parseTemplateOutput(
     seo_meta_title:       raw.seo_meta_title || '',
     seo_meta_description: raw.seo_meta_description || '',
     key_insights:         Array.isArray(raw.key_insights) ? raw.key_insights : [],
-    content_blocks:       filledBlocks,
+    content_blocks:       normalizedBlocks,
   };
 }
 
@@ -1298,6 +1360,22 @@ function normalizeHeadingText(aiData: any): string {
   return value.trim();
 }
 
+function fallbackHeadingFromHint(tplBlock: ContentBlock): string {
+  const hint = typeof (tplBlock as any)?.hint === 'string' ? (tplBlock as any).hint.trim() : '';
+  if (!hint) return '';
+
+  const beforeDash = hint.split(/[-—–]/)[0]?.trim() ?? '';
+  const candidate = (beforeDash || hint)
+    .replace(/^write\s+/i, '')
+    .replace(/^add\s+/i, '')
+    .replace(/^create\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!candidate) return '';
+  return candidate.length <= 80 ? candidate : candidate.slice(0, 77).trimEnd();
+}
+
 function normalizeSummaryBody(aiData: any): string {
   const value =
     typeof aiData?.body === 'string' ? aiData.body :
@@ -1317,7 +1395,7 @@ function mergeBlockContent(tplBlock: ContentBlock, aiData: any): ContentBlock {
         ...rest,
         text: typeof tplBlock.text === 'string' && tplBlock.text.trim().length > 0
           ? tplBlock.text
-          : normalizeHeadingText(aiData),
+          : (normalizeHeadingText(aiData) || fallbackHeadingFromHint(tplBlock)),
         anchor: '',
       };
     case 'key_insights':

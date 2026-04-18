@@ -1,3 +1,4 @@
+import { normalizePlatform } from '../constants/platforms';
 import { randomUUID } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 
@@ -103,19 +104,6 @@ const safeMany = async <T>(
     }
     return { data: null, error };
   }
-};
-
-const normalizePlatform = (platform: string | null | undefined): string | null => {
-  if (!platform || typeof platform !== 'string') return null;
-  const lower = platform.trim().toLowerCase();
-  if (!lower) return null;
-  if (lower === 'x' || lower === 'twitter') return 'x';
-  if (lower === 'linkedin') return 'linkedin';
-  if (lower === 'instagram') return 'instagram';
-  if (lower === 'facebook') return 'facebook';
-  if (lower === 'youtube') return 'youtube';
-  if (lower === 'tiktok') return 'tiktok';
-  return lower;
 };
 
 const normalizeTopic = (value: string | null | undefined): string | null => {

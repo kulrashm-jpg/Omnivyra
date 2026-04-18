@@ -189,7 +189,20 @@ async function runSourceRecommendation(
   payload: BoltPayload
 ): Promise<string> {
   const { companyId, userId, generatedCampaignId, sourceStrategicTheme, executionConfig, recId, title, description, sourceOpportunityId, regionsFromCard } = payload;
-  const safeUserId = normalizeOptionalUuid(userId);
+  let safeUserId = normalizeOptionalUuid(userId);
+
+  // If userId is null (auth fell back to dev context), resolve from company membership
+  if (!safeUserId && companyId) {
+    const { data: companyUser } = await supabase
+      .from('user_company_roles')
+      .select('user_id')
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    safeUserId = normalizeOptionalUuid((companyUser as any)?.user_id);
+  }
+
   const sourceThemeTitle = getStoredStrategicThemeTitle(sourceStrategicTheme);
 
   let campaignId: string;
@@ -675,6 +688,10 @@ async function runScheduleStructuredPlan(
     if (!isNaN(p) && p > 0) frequencyPerWeek = p;
   }
 
+  // BOLT Text campaigns are small (≤5 formats, ≤4 weeks, text-only) — use the
+  // inline block processor path instead of the queue/worker path.  The queue path
+  // depends on BullMQ workers which may not be running in serverless environments.
+  // Omitting run_id forces scheduleStructuredPlan to use processBlockSchedule inline.
   const result = await scheduleStructuredPlan(
     { weeks: plan.weeks } as Parameters<typeof scheduleStructuredPlan>[0],
     campaignId,
@@ -683,7 +700,6 @@ async function runScheduleStructuredPlan(
       onProgress,
       frequencyPerWeek,
       eligiblePlatforms: eligiblePlatforms?.length ? eligiblePlatforms : undefined,
-      run_id: runId,
     }
   );
   await supabase
@@ -816,9 +832,9 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
     for (let i = 0; i < STAGES.length; i++) {
       const stage = STAGES[i];
       if (stage === 'schedule-structured-plan' && !shouldSchedule) continue;
-      // week_plan stops at the blueprint (commit-plan). Activity cards come from blueprint
-      // execution_items — no daily_content_plans rows needed or wanted.
-      if (stage === 'generate-weekly-structure' && isWeekPlanOnly) continue;
+      // Note: generate-weekly-structure now runs even for week_plan so that
+      // daily_content_plans rows (activity cards) are created and visible
+      // on the campaign detail page.
 
       if (campaignId) {
         try {

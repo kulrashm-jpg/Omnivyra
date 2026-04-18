@@ -4,26 +4,11 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { PLATFORM_EMOJI_ICONS as PLATFORM_ICONS, getPlatformEmoji as getPlatformIcon } from '../../utils/platformEmojis';
 
-const PLATFORM_ICONS: Record<string, string> = {
-  linkedin: '💼',
-  twitter: '🐦',
-  youtube: '▶️',
-  reddit: '🤖',
-  facebook: '👤',
-  instagram: '📷',
-  tiktok: '🎵',
-  slack: '💬',
-  discord: '🎮',
-  github: '🐙',
-  stackoverflow: '📚',
-  producthunt: '🚀',
-  hackernews: '🟠',
-};
 
-function getPlatformIcon(platform: string): string {
-  return PLATFORM_ICONS[platform?.toLowerCase() ?? ''] ?? '💬';
-}
+
+
 
 function formatLastActive(lastAt: string | null): string {
   if (!lastAt) return '—';

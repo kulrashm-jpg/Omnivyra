@@ -13,7 +13,7 @@ export async function loadNormalizedPortfolioInputs(companyId: string): Promise<
     .from('campaigns')
     .select('id, name, status')
     .eq('company_id', companyId)
-    .in('status', ['active', 'scheduled', 'execution_ready', 'twelve_week_plan']);
+    .in('status', ['active', 'scheduled', 'execution_ready', 'campaign_week_plan']);
 
   if (error) {
     throw new Error(`Failed to load campaigns for portfolio normalization: ${error.message}`);

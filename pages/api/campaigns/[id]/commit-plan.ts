@@ -1,7 +1,7 @@
 
 /**
  * POST /api/campaigns/[id]/commit-plan
- * Commits a structured AI-generated plan to the blueprint (twelve_week_plan)
+ * Commits a structured AI-generated plan to the blueprint (campaign_week_plan)
  * so it appears in the work/commit view (campaign-details, recommendations).
  * Does NOT schedule posts — use schedule-structured-plan for that.
  */

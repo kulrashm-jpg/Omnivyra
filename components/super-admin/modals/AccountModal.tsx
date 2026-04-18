@@ -1,0 +1,108 @@
+import React from 'react';
+
+export interface AccountForm {
+  account_name: string;
+  api_key_env_name: string;
+  api_key_value: string;
+  oauth_client_id: string;
+  oauth_client_secret: string;
+  rate_limit_per_min: string;
+  rate_limit_per_day: string;
+  priority: string;
+  is_active: boolean;
+}
+
+export interface AccountModalState {
+  apiId: string;
+  apiName: string;
+  authType: string;
+  mode: 'add' | 'edit';
+  account?: any;
+}
+
+interface AccountModalProps {
+  accountModal: AccountModalState;
+  accountForm: AccountForm;
+  accountError: string | null;
+  isSavingAccount: boolean;
+  onChange: (form: AccountForm) => void;
+  onSave: () => void;
+  onClose: () => void;
+}
+
+export default function AccountModal({ accountModal, accountForm, accountError, isSavingAccount, onChange, onSave, onClose }: AccountModalProps) {
+  const needsApiKey = ['bearer', 'api_key', 'query', 'query_param'].includes(accountModal.authType);
+  const needsOauth = accountModal.authType === 'oauth2';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-xl bg-white shadow-xl">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">{accountModal.mode === 'add' ? 'Add Account' : 'Edit Account'}</h3>
+            <p className="text-xs text-gray-500 mt-0.5">{accountModal.apiName}</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+        </div>
+        <div className="px-6 py-4 space-y-4">
+          {accountError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{accountError}</div>}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Account Name *</label>
+            <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Primary Account, Account #2" value={accountForm.account_name} onChange={(e) => onChange({ ...accountForm, account_name: e.target.value })} />
+          </div>
+          {needsApiKey && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">API Key Env Var Name <span className="font-normal text-gray-400">— name of .env variable</span></label>
+                <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="e.g. YOUTUBE_API_KEY_2" value={accountForm.api_key_env_name} onChange={(e) => onChange({ ...accountForm, api_key_env_name: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">API Key Value <span className="font-normal text-gray-400">— stored encrypted</span></label>
+                <input type="password" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder={accountModal.mode === 'edit' ? '(unchanged)' : 'Enter API key'} value={accountForm.api_key_value} onChange={(e) => onChange({ ...accountForm, api_key_value: e.target.value })} />
+              </div>
+            </>
+          )}
+          {needsOauth && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">OAuth Client ID</label>
+                <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="OAuth2 Client ID" value={accountForm.oauth_client_id} onChange={(e) => onChange({ ...accountForm, oauth_client_id: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">OAuth Client Secret</label>
+                <input type="password" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder={accountModal.mode === 'edit' ? '(unchanged)' : 'Client Secret'} value={accountForm.oauth_client_secret} onChange={(e) => onChange({ ...accountForm, oauth_client_secret: e.target.value })} />
+              </div>
+            </>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Priority</label>
+              <input type="number" min="1" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="1" value={accountForm.priority} onChange={(e) => onChange({ ...accountForm, priority: e.target.value })} />
+              <p className="text-[10px] text-gray-400 mt-1">Lower = tried first</p>
+            </div>
+            <div className="flex items-center gap-2 pt-5">
+              <input type="checkbox" id="sa-acct-active" checked={accountForm.is_active} onChange={(e) => onChange({ ...accountForm, is_active: e.target.checked })} className="rounded border-gray-300" />
+              <label htmlFor="sa-acct-active" className="text-xs text-gray-700">Active</label>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Rate Limit / min</label>
+              <input type="number" min="0" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. 60" value={accountForm.rate_limit_per_min} onChange={(e) => onChange({ ...accountForm, rate_limit_per_min: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Rate Limit / day</label>
+              <input type="number" min="0" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. 10000" value={accountForm.rate_limit_per_day} onChange={(e) => onChange({ ...accountForm, rate_limit_per_day: e.target.value })} />
+            </div>
+          </div>
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+          <button type="button" onClick={onSave} disabled={isSavingAccount} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+            {isSavingAccount ? 'Saving…' : accountModal.mode === 'add' ? 'Add Account' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

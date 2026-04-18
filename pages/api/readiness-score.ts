@@ -110,14 +110,32 @@ export default async function handler(
       });
     }
 
+    // Resolve internal user ID (user_company_roles.user_id references public.users.id)
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('id')
+      .eq('supabase_uid', session.user.id)
+      .maybeSingle();
+
+    if (!userRow) {
+      return res.status(401).json({ success: false, error: 'User not found' });
+    }
+
     // Get user's company
-    const { data: userCompanyRole } = await supabase
+    const requestedCompanyId =
+      typeof req.query.company_id === 'string' ? req.query.company_id.trim() : '';
+
+    const { data: activeRoles } = await supabase
       .from('user_company_roles')
       .select('company_id')
-      .eq('user_id', session.user.id)
-      .single();
+      .eq('user_id', userRow.id)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false });
 
-    const companyId = userCompanyRole?.company_id;
+    const allowedCompanyIds = (activeRoles || []).map((role) => role.company_id).filter(Boolean);
+    const companyId = requestedCompanyId && allowedCompanyIds.includes(requestedCompanyId)
+      ? requestedCompanyId
+      : allowedCompanyIds[0];
 
     if (!companyId) {
       return res.status(400).json({

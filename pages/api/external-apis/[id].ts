@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { validatePlatformConfig } from '../../../backend/services/externalApiService';
+import { validatePlatformConfig, VALID_API_CATEGORIES } from '../../../backend/services/externalApiService';
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 import { invalidateCompanyConfigCacheForApiSource } from '../../../backend/services/companyApiConfigCache';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -105,6 +105,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       purpose,
       category,
       is_active,
+      is_whitelisted,
+      is_enabled_global,
       method,
       auth_type,
       api_key_name,
@@ -149,6 +151,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: validation.message || 'Invalid platform config' });
     }
 
+    // ── Category + whitelist validation (SuperAdmin paths only) ─────────────
+    if (category !== undefined && category !== null) {
+      if (!VALID_API_CATEGORIES.includes(category as any)) {
+        return res.status(400).json({
+          error: `Invalid category "${category}". Allowed values: ${VALID_API_CATEGORIES.join(', ')}`,
+        });
+      }
+    }
+
+    // Determine effective category (new value or fall back to existing)
+    const effectiveCategory = category ?? existingRecord?.category ?? null;
+    // Determine effective is_whitelisted
+    const effectiveIsWhitelisted = is_whitelisted !== undefined
+      ? Boolean(is_whitelisted)
+      : (existingRecord?.is_whitelisted ?? false);
+
+    // Enforce: SuperAdmin setting category=others must whitelist the API
+    if (hasPlatformScope && effectiveCategory === 'others' && !effectiveIsWhitelisted) {
+      // Only block if the caller is explicitly changing something that would leave it in a bad state
+      // (i.e. they're actively setting category=others or clearing whitelist)
+      const categoryChangedToOthers = category === 'others';
+      const whitelistExplicitlyCleared = is_whitelisted === false;
+      if (categoryChangedToOthers || whitelistExplicitlyCleared) {
+        return res.status(400).json({
+          error: 'APIs with category "others" must have is_whitelisted = true to be usable. Pass is_whitelisted: true or choose a different category.',
+        });
+      }
+    }
+
+    // Tenant users cannot change category or whitelist status
+    if (!hasPlatformScope) {
+      if (category !== undefined || is_whitelisted !== undefined || is_enabled_global !== undefined) {
+        return res.status(403).json({
+          error: 'Category, whitelist, and global-enable status can only be changed by Super Admin.',
+        });
+      }
+    }
+
     const resolvedAuthType = auth_type ?? existingRecord?.auth_type ?? 'none';
     const resolvedApiKeyName = api_key_name ?? existingRecord?.api_key_name ?? null;
     const resolvedApiKeyEnv = api_key_env_name ?? existingRecord?.api_key_env_name ?? null;
@@ -168,8 +208,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         name,
         base_url,
         purpose,
-        category,
+        category: effectiveCategory,
         is_active,
+        ...(hasPlatformScope && is_whitelisted !== undefined ? { is_whitelisted: effectiveIsWhitelisted } : {}),
+        ...(hasPlatformScope && is_enabled_global !== undefined ? { is_enabled_global: Boolean(is_enabled_global) } : {}),
         method: resolvedMethod,
         auth_type: resolvedAuthType,
         api_key_name: resolvedApiKeyName,

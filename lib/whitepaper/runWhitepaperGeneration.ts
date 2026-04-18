@@ -1,21 +1,18 @@
 import {
-  runBlogGeneration,
-  type BlogGenerationRequest,
-  type BlogGenerationResult,
-} from '../blog/runBlogGeneration';
+  runManagedContentGeneration,
+  type ManagedGenerationRequest,
+  type ManagedGenerationResult,
+} from '../content/runManagedContentGeneration';
 
 export type WhitepaperGenerationRequest =
-  Omit<BlogGenerationRequest, 'contentType'> & {
+  Omit<ManagedGenerationRequest, 'contentType'> & {
     contentType?: 'whitepaper';
   };
 
-export type WhitepaperGenerationResult = BlogGenerationResult;
+export type WhitepaperGenerationResult = ManagedGenerationResult;
 
 export async function runWhitepaperGeneration(
   input: WhitepaperGenerationRequest,
 ): Promise<WhitepaperGenerationResult> {
-  return runBlogGeneration({
-    ...input,
-    contentType: 'whitepaper',
-  });
+  return runManagedContentGeneration(input, 'whitepaper');
 }

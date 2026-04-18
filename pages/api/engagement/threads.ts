@@ -34,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let query = supabase
       .from('engagement_threads')
-      .select('id, platform, platform_thread_id, root_message_id, source_id, organization_id, created_at, updated_at')
+      .select('id, platform, platform_thread_id, root_message_id, source_id, organization_id, created_at, updated_at, window_open, window_expires_at')
       .eq('organization_id', organizationId)
       .order('updated_at', { ascending: false })
       .limit(limit);
@@ -60,6 +60,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       organization_id: r.organization_id,
       created_at: r.created_at,
       updated_at: r.updated_at,
+      window_open: r.window_open ?? null,
+      window_expires_at: r.window_expires_at ?? null,
     }));
 
     return res.status(200).json({ threads });

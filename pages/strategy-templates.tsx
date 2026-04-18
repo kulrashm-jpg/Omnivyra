@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import Header from '../components/Header';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 
 type StrategyTemplate = {
@@ -181,7 +180,6 @@ export default function StrategyTemplatesPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header />
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         <div className="bg-white rounded-lg shadow p-6">
           <h1 className="text-2xl font-bold text-gray-900">Strategy Templates</h1>

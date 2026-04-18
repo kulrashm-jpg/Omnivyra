@@ -9,7 +9,7 @@ import { compressDecisionObjects, type DecisionNarrativeCluster } from './Decisi
 import { generateNarratives, type DecisionNarrative } from './NarrativeService';
 import { attachNarrativeTrust, type NarrativeTrustEnvelope } from './TrustService';
 import { buildActionPlaybooks, type NarrativeActionPlaybook } from './ActionService';
-import { ensureSnapshotDecisionFloor } from './snapshotReportService';
+import { ensureSnapshotDecisionFloor } from './snapshotReport/floorHelpers';
 import { buildPublicDomainAuditDecisions } from './publicDomainAuditService';
 
 export type OrchestratedNarrativeBundle = {
@@ -132,6 +132,7 @@ export async function buildOrchestratedReport(params: {
     const snapshotFloor = ensureSnapshotDecisionFloor({
       companyId: params.companyId,
       decisions: composition.decisions,
+      minInsights: 3,
     });
 
     composition = composeDecisionIntelligenceFromConfig({

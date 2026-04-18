@@ -9,7 +9,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { companyId, platforms, regions, keywords, mode: modeInput, context_mode, focused_modules, additional_direction } = req.body || {};
+    const {
+      companyId,
+      platforms,
+      regions,
+      keywords,
+      mode: modeInput,
+      context_mode,
+      focused_modules,
+      additional_direction,
+      external_api_connection_ids,
+      communities,
+    } = req.body || {};
 
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
@@ -91,6 +102,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             context_mode: context_mode ?? 'FULL',
             focused_modules: Array.isArray(focused_modules) ? focused_modules : undefined,
             additional_direction: typeof additional_direction === 'string' ? additional_direction : undefined,
+            external_api_connection_ids: Array.isArray(external_api_connection_ids)
+              ? external_api_connection_ids.filter((item: unknown) => typeof item === 'string')
+              : undefined,
+            communities: Array.isArray(communities)
+              ? communities.filter((item: unknown) => typeof item === 'string')
+              : undefined,
           }
         : null;
 

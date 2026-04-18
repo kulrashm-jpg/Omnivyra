@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
 import { resolveUserContext as resolveFromLib, UserContext, type MembershipType } from '../lib/userContext';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
-import { getCompanyRoleIncludingInvited, normalizePermissionRole, Role } from './rbacService';
+import { getCompanyRoleIncludingInvited, normalizePermissionRole, Role } from './rbacPrimitives';
 import { getContentArchitectCompanyId, isContentArchitectSession } from './contentArchitectService';
 
 export type { UserContext, MembershipType };

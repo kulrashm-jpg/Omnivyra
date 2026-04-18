@@ -96,10 +96,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // 2. Draft plan: twelve_week_plan with status=draft (same table as committed)
+    // 2. Draft plan: campaign_week_plan with status=draft (same table as committed)
     try {
       const { data: draftRow } = await supabase
-        .from('twelve_week_plan')
+        .from('campaign_week_plan')
         .select('weeks, blueprint, updated_at')
         .eq('campaign_id', campaignId)
         .eq('status', 'draft')

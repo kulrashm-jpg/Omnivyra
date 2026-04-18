@@ -38,6 +38,7 @@ export function BoltCampaignChat({ companyId, context, onApplyTopic }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const scroll = () => setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
 
@@ -46,8 +47,10 @@ export function BoltCampaignChat({ companyId, context, onApplyTopic }: Props) {
     if (!text || loading) return;
     if (!companyId) { setError('No company selected.'); return; }
 
-    setHistory((h) => [...h, { role: 'user', text }]);
+    // Clear input FIRST, then update history — prevents stale closure keeping old text
     setMessage('');
+    if (inputRef.current) inputRef.current.value = '';
+    setHistory((h) => [...h, { role: 'user', text }]);
     setLoading(true);
     setError(null);
     scroll();
@@ -148,6 +151,7 @@ export function BoltCampaignChat({ companyId, context, onApplyTopic }: Props) {
       {/* Input */}
       <div className="flex-shrink-0 flex gap-2 items-end px-3 py-3 border-t border-gray-100">
         <textarea
+          ref={inputRef}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), void handleSend())}

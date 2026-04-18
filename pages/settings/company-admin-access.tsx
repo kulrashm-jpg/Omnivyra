@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
-import Header from '@/components/Header';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { getAuthToken } from '@/utils/getAuthToken';
 import { ChevronDown, ChevronRight, Building2, Brain, Activity, Save } from 'lucide-react';
@@ -245,8 +244,6 @@ export default function CompanyAdminAccessPage() {
       <Head>
         <title>Company Admin Access Settings</title>
       </Head>
-      <Header />
-
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
         <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
           <div className="flex items-start justify-between gap-4">

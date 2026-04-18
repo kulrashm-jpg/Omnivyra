@@ -16,6 +16,7 @@ import { CardState, RequirementStatus, CommandCenterCard, Requirement } from '..
 export interface FeatureStatus {
   key: string;
   status: 'completed' | 'not_started' | 'in_progress';
+  score: number;        // 0.0–1.0
   completedAt?: string;
 }
 
@@ -27,6 +28,12 @@ export interface ReadinessData {
   features: FeatureStatus[];
 }
 
+interface CompanyProfileSignal {
+  hasWebsite: boolean;
+  profileScore: number;
+  socialScore: number;
+}
+
 /**
  * Feature to Card mapping
  */
@@ -34,6 +41,7 @@ const FEATURE_CARD_MAP: Record<string, string[]> = {
   report_generated: ['reports'],
   blog_created: ['blogs'],
   campaign_created: ['campaigns'],
+  campaign_published: ['campaigns'],
   social_accounts_connected: ['campaigns', 'engagement'],
   api_configured: ['campaigns'],
   company_profile_completed: ['reports', 'blogs', 'campaigns'],
@@ -73,13 +81,15 @@ export function getCardStateFromFeatures(
     return 'not_started';
   }
 
-  const completedCount = features.filter(
-    (f) => requiredFeatures.includes(f.key) && f.status === 'completed',
+  const relevantFeatures = features.filter((feature) => requiredFeatures.includes(feature.key));
+  const completedCount = relevantFeatures.filter((feature) => feature.status === 'completed').length;
+  const inProgressCount = relevantFeatures.filter(
+    (feature) => feature.status === 'in_progress' || feature.score > 0,
   ).length;
 
   if (completedCount === requiredFeatures.length) {
     return 'ready';
-  } else if (completedCount > 0) {
+  } else if (completedCount > 0 || inProgressCount > 0) {
     return 'in_progress';
   } else {
     return 'not_started';
@@ -155,6 +165,102 @@ export function generateDynamicRequirements(
     .filter((req): req is NonNullable<typeof req> => req !== null) as Requirement[];
 }
 
+/** Fallback: derive a readiness score directly from FeatureStatus array */
+function deriveReadinessFromFeatures(features: FeatureStatus[]): ReadinessData {
+  const completed = features.filter((f) => f.score >= 1).length;
+  const total = features.length || 1;
+  const score = Math.round(features.reduce((sum, f) => sum + f.score, 0) / total * 100);
+  return { score, level: '', completedFeatures: completed, totalFeatures: total, features };
+}
+
+function buildProfileFallbackFeatures(profileSignals: CompanyProfileSignal): FeatureStatus[] {
+  let features: FeatureStatus[] = [];
+  features = upsertFeatureScore(features, 'company_profile_completed', profileSignals.profileScore);
+  features = upsertFeatureScore(features, 'website_connected', profileSignals.hasWebsite ? 1 : 0);
+  features = upsertFeatureScore(features, 'social_accounts_connected', profileSignals.socialScore);
+  return features;
+}
+
+function statusFromScore(score: number): FeatureStatus['status'] {
+  if (score >= 1) return 'completed';
+  if (score > 0) return 'in_progress';
+  return 'not_started';
+}
+
+function upsertFeatureScore(
+  features: FeatureStatus[],
+  key: string,
+  nextScore: number,
+): FeatureStatus[] {
+  const next = [...features];
+  const index = next.findIndex((feature) => feature.key === key);
+  const normalizedScore = Math.max(0, Math.min(1, nextScore));
+  const existingScore = index >= 0 ? next[index]?.score ?? 0 : 0;
+  const mergedScore = Math.max(existingScore, normalizedScore);
+  const normalized: FeatureStatus = {
+    key,
+    status: statusFromScore(mergedScore),
+    score: mergedScore,
+  };
+
+  if (index >= 0) {
+    next[index] = { ...next[index], ...normalized };
+  } else {
+    next.push(normalized);
+  }
+
+  return next;
+}
+
+async function fetchCompanyProfileSignals(companyId: string): Promise<CompanyProfileSignal> {
+  try {
+    const response = await fetch(
+      `/api/company-profile?companyId=${encodeURIComponent(companyId)}&includeCompleteness=0`,
+      {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
+
+    if (!response.ok) {
+      return { hasWebsite: false, profileScore: 0, socialScore: 0 };
+    }
+
+    const data = await response.json() as any;
+    const profile = data?.profile || null;
+    const teamSize =
+      profile?.team_size ??
+      profile?.company_size ??
+      profile?.size ??
+      profile?.report_settings?.company_facts?.team_size ??
+      null;
+    const profileFields = [
+      Boolean(profile?.name?.trim?.()),
+      Boolean(profile?.industry?.trim?.()),
+      Boolean(String(teamSize ?? '').trim()),
+    ];
+    const socialCount = [
+      profile?.linkedin_url,
+      profile?.facebook_url,
+      profile?.instagram_url,
+      profile?.x_url,
+      profile?.youtube_url,
+      profile?.tiktok_url,
+      profile?.reddit_url,
+    ]
+      .filter((value) => typeof value === 'string' && value.trim().length > 0)
+      .length;
+
+    return {
+      hasWebsite: Boolean(profile?.website_url?.trim()),
+      profileScore: profileFields.filter(Boolean).length / profileFields.length,
+      socialScore: socialCount === 0 ? 0 : socialCount === 1 ? 0.4 : socialCount === 2 ? 0.7 : 1,
+    };
+  } catch {
+    return { hasWebsite: false, profileScore: 0, socialScore: 0 };
+  }
+}
+
 /**
  * Fetch feature completion and readiness data from backend
  */
@@ -162,49 +268,61 @@ export async function fetchReadinessData(
   companyId: string,
 ): Promise<{ features: FeatureStatus[]; readiness: ReadinessData } | null> {
   try {
-    // Fetch features
+    const profileSignalsPromise = fetchCompanyProfileSignals(companyId);
+
+    // Fetch features — sync=true recomputes from live DB data on every visit
     const featuresRes = await fetch(
-      `/api/feature-completion?sync=false`,
+      `/api/feature-completion?sync=true&company_id=${encodeURIComponent(companyId)}`,
       {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       },
     );
+
+    const profileSignals = await profileSignalsPromise;
+    let features: FeatureStatus[] = [];
 
     if (!featuresRes.ok) {
       console.warn('[readiness-service] Failed to fetch features:', featuresRes.statusText);
-      return null;
+      features = buildProfileFallbackFeatures(profileSignals);
+    } else {
+      const featuresData = await featuresRes.json() as any;
+      features = (featuresData.data?.features || []).map((f: any) => ({
+        key: f.key ?? f.feature_key,
+        status: f.status,
+        score: typeof f.score === 'number' ? f.score : (f.status === 'completed' ? 1 : 0),
+        completedAt: f.completedAt ?? f.completed_at,
+      }));
+      features = upsertFeatureScore(features, 'website_connected', profileSignals.hasWebsite ? 1 : 0);
+      features = upsertFeatureScore(features, 'company_profile_completed', profileSignals.profileScore);
+      features = upsertFeatureScore(features, 'social_accounts_connected', profileSignals.socialScore);
     }
 
-    const featuresData = await featuresRes.json() as any;
-    const features: FeatureStatus[] = (featuresData.data?.features || []).map((f: any) => ({
-      key: f.feature_key,
-      status: f.status,
-      completedAt: f.completed_at,
-    }));
-
-    // Fetch readiness score
-    const scoreRes = await fetch(
-      `/api/readiness-score`,
-      {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      },
-    );
-
-    if (!scoreRes.ok) {
-      console.error('[readiness-service] Failed to fetch readiness score:', scoreRes.statusText);
-      return null;
+    // Fetch readiness score — no_cache=true bypasses the 5-min in-memory cache
+    let readiness: ReadinessData;
+    try {
+      const scoreRes = await fetch(
+        `/api/readiness-score?no_cache=true&company_id=${encodeURIComponent(companyId)}`,
+        // keep readiness tied to the selected company, not whichever company happens to be latest
+        { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+      );
+      if (scoreRes.ok) {
+        const scoreData = await scoreRes.json() as any;
+        const derived = deriveReadinessFromFeatures(features);
+        readiness = {
+          score: derived.score,
+          level: scoreData.data?.level || '',
+          completedFeatures: derived.completedFeatures,
+          totalFeatures: derived.totalFeatures,
+          features,
+        };
+      } else {
+        // Derive score locally from features if the score endpoint is unavailable
+        readiness = deriveReadinessFromFeatures(features);
+      }
+    } catch {
+      readiness = deriveReadinessFromFeatures(features);
     }
-
-    const scoreData = await scoreRes.json() as any;
-    const readiness: ReadinessData = {
-      score: scoreData.data?.score || 0,
-      level: scoreData.data?.level || '',
-      completedFeatures: scoreData.data?.completedFeatures || 0,
-      totalFeatures: scoreData.data?.totalFeatures || 0,
-      features,
-    };
 
     return { features, readiness };
   } catch (err) {

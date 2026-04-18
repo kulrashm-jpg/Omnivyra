@@ -91,37 +91,77 @@ export type FetchJsonWithBearerOptions = {
   init?: RequestInit & { headers?: Record<string, string> };
   extraHeaders?: Record<string, string>;
   getErrorMsg?: (data: any, status: number) => string;
+  /**
+   * Max 429 retries before throwing. Default: 2.
+   * Each retry waits for the Retry-After header value (or exponential backoff).
+   */
+  maxRetries?: number;
 };
 
 /**
  * Shared HTTP helper for Bearer-authenticated platform API calls.
- * Reduces duplication across adapters (LinkedIn, Twitter, Discord, etc.).
+ * Handles 429 rate-limit responses: reads Retry-After header and waits before
+ * retrying up to maxRetries times (default 2).
  */
 export async function fetchJsonWithBearer(
   url: string,
   token: string,
   opts?: FetchJsonWithBearerOptions
 ): Promise<any> {
-  const { init = {}, extraHeaders = {}, getErrorMsg } = opts ?? {};
+  const { init = {}, extraHeaders = {}, getErrorMsg, maxRetries = 2 } = opts ?? {};
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     ...(init.body ? { 'Content-Type': 'application/json' } : { Accept: 'application/json' }),
     ...(init.headers as Record<string, string> | undefined),
     ...extraHeaders,
   };
-  const response = await fetch(url, { ...init, headers });
-  const text = await response.text();
-  let data: any = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
+
+  let attempt = 0;
+  while (true) {
+    const response = await fetch(url, { ...init, headers });
+    const text = await response.text();
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
+    }
+
+    // ── 429 Rate-limited ──────────────────────────────────────────────────
+    if (response.status === 429 && attempt < maxRetries) {
+      const retryAfterRaw = response.headers.get('Retry-After')
+        ?? response.headers.get('X-RateLimit-Reset-After')
+        ?? response.headers.get('x-rate-limit-reset');
+
+      let delayMs: number;
+      if (retryAfterRaw) {
+        const parsed = Number(retryAfterRaw);
+        // Retry-After is seconds (RFC 7231) or an epoch timestamp
+        delayMs = parsed > 1_000_000_000
+          ? Math.max(0, parsed * 1000 - Date.now())   // epoch
+          : parsed * 1000;                              // seconds
+      } else {
+        // Exponential fallback: 5s, 10s, 20s …
+        delayMs = 5000 * Math.pow(2, attempt);
+      }
+
+      console.warn(
+        `[fetchJsonWithBearer] 429 rate-limited — waiting ${delayMs}ms before retry ${attempt + 1}/${maxRetries}`,
+        { url: url.split('?')[0] },
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+      attempt++;
+      continue;
+    }
+
+    if (!response.ok) {
+      const msg = getErrorMsg
+        ? getErrorMsg(data, response.status)
+        : data?.message || data?.error || data?.detail || data?.error_message
+          || `Request failed (${response.status})`;
+      throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    }
+
+    return data;
   }
-  if (!response.ok) {
-    const msg = getErrorMsg
-      ? getErrorMsg(data, response.status)
-      : data?.message || data?.error || data?.detail || data?.error_message || `Request failed (${response.status})`;
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-  }
-  return data;
 }

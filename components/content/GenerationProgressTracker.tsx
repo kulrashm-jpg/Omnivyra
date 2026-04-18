@@ -68,6 +68,10 @@ export default function GenerationProgressTracker({
 
   const progressPercent = useMemo(() => {
     if (!open || stages.length === 0) return 0;
+    const totalMs = Math.max(estimatedSeconds * 1000, 1000);
+    if (elapsedMs >= totalMs) {
+      return 94;
+    }
     const perStageMs = Math.max(2500, Math.round((estimatedSeconds * 1000) / Math.max(stages.length, 1)));
     const stageProgress = Math.min(1, (elapsedMs % perStageMs) / perStageMs);
     const completedStages = currentStageIndex / stages.length;

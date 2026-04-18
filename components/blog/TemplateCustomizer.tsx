@@ -28,7 +28,7 @@ import {
   duplicateBlock,
   insertBlockAfter,
 } from '../../lib/blog/blockUtils';
-import { BlockWrapper, BlockPicker } from './blocks';
+import { BlockWrapper, BlockPicker } from '../content/blocks';
 
 type Props = {
   blocks: ContentBlock[];

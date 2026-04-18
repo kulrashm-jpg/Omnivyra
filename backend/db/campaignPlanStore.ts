@@ -247,11 +247,11 @@ export async function saveDraftBlueprint(input: {
   (row as any).status = 'draft';
 
   if (existing?.id) {
-    const { error } = await supabase.from('twelve_week_plan').update(row).eq('id', existing.id);
+    const { error } = await supabase.from('campaign_week_plan').update(row).eq('id', existing.id);
     if (error) throw new Error(`Failed to update draft blueprint: ${error.message}`);
   } else {
     const insertPayload = { ...row, created_at: now } as any;
-    const { error } = await supabase.from('twelve_week_plan').insert(insertPayload);
+    const { error } = await supabase.from('campaign_week_plan').insert(insertPayload);
     if (error) throw new Error(`Failed to save draft blueprint: ${error.message}`);
   }
 }
@@ -261,7 +261,7 @@ export async function saveDraftBlueprint(input: {
  */
 export async function getLatestDraftPlan(campaignId: string): Promise<{ weeks: any[] } | null> {
   const { data } = await supabase
-    .from('twelve_week_plan')
+    .from('campaign_week_plan')
     .select('weeks, blueprint')
     .eq('campaign_id', campaignId)
     .eq('status', 'draft')
@@ -283,7 +283,7 @@ export async function commitDraftBlueprint(input: {
 }): Promise<void> {
   const weeksForDb = weeksForDbFromBlueprint(input.blueprint);
   const { data: draft } = await supabase
-    .from('twelve_week_plan')
+    .from('campaign_week_plan')
     .select('id')
     .eq('campaign_id', input.campaignId)
     .eq('status', 'draft')
@@ -300,11 +300,11 @@ export async function commitDraftBlueprint(input: {
     updated_at: new Date().toISOString(),
   };
   if (draft?.id) {
-    const { error } = await supabase.from('twelve_week_plan').update(updatePayload).eq('id', draft.id);
+    const { error } = await supabase.from('campaign_week_plan').update(updatePayload).eq('id', draft.id);
     if (error) throw new Error(`Failed to commit draft: ${error.message}`);
   } else {
     const snapshot_hash = `legacy-${input.campaignId}-${Date.now()}`;
-    const { error } = await supabase.from('twelve_week_plan').insert({
+    const { error } = await supabase.from('campaign_week_plan').insert({
       campaign_id: input.campaignId,
       snapshot_hash,
       weeks: weeksForDb,
@@ -329,7 +329,7 @@ export async function updateToEditedCommitted(input: {
 }): Promise<void> {
   const weeksForDb = weeksForDbFromBlueprint(input.blueprint);
   const { data: committed } = await supabase
-    .from('twelve_week_plan')
+    .from('campaign_week_plan')
     .select('id')
     .eq('campaign_id', input.campaignId)
     .in('status', ['committed', 'edited_committed'])
@@ -341,7 +341,7 @@ export async function updateToEditedCommitted(input: {
     throw new Error('No committed plan found to edit');
   }
   const { error } = await supabase
-    .from('twelve_week_plan')
+    .from('campaign_week_plan')
     .update({
       weeks: weeksForDb,
       blueprint: input.blueprint as any,
@@ -380,7 +380,7 @@ export async function savePlatformCustomizedContent(input: {
   raw_plan_text: string;
 }): Promise<void> {
   const { error } = await supabase
-    .from('twelve_week_plan')
+    .from('campaign_week_plan')
     .update({
       platform_content: {
         day: input.day,

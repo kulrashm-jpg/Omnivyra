@@ -335,12 +335,12 @@ async function loadCompanyFirmographics(companyId: string): Promise<{
 }> {
   const { data } = await supabase
     .from('companies')
-    .select('company_size')
+    .select('size')
     .eq('id', companyId)
     .maybeSingle();
 
   return {
-    teamSize: normalizeString((data as { company_size?: unknown } | null)?.company_size),
+    teamSize: normalizeString((data as { size?: unknown } | null)?.size),
   };
 }
 

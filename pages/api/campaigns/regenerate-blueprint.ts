@@ -9,7 +9,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
-import { runCampaignAiPlan } from '../../../backend/services/campaignAiOrchestrator';
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
 import { fromStructuredPlan } from '../../../backend/services/campaignBlueprintAdapter';
 import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../backend/services/campaignBlueprintService';
@@ -310,6 +309,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
 
       console.log('[PLAN INPUT SOURCE]', JSON.stringify(finalCollectedPlanningContext, null, 2));
+
+      const { runCampaignAiPlan } = await import('../../../backend/services/campaignAiOrchestrator');
 
       const aiResult = await runCampaignAiPlan({
         campaignId,

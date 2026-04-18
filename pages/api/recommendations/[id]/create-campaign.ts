@@ -1,11 +1,11 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { runCampaignAiPlan } from '../../../../backend/services/campaignAiOrchestrator';
 import {
   getUserRole,
   hasPermission,
   isPlatformSuperAdmin,
   isSuperAdmin,
+  Role,
 } from '../../../../backend/services/rbacService';
 import { getCampaignPlanningInputs } from '../../../../backend/services/campaignPlanningInputsService';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
@@ -260,6 +260,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     };
 
     console.log('[PLAN INPUT SOURCE]', JSON.stringify(finalCollectedPlanningContext, null, 2));
+
+    const { runCampaignAiPlan } = await import('../../../../backend/services/campaignAiOrchestrator');
 
     const planResult = await runCampaignAiPlan({
       campaignId: campaign.id,

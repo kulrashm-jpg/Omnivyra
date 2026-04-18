@@ -380,7 +380,7 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
-      operation: 'blogGeneration',
+      operation: 'newsletterGeneration',
       companyId: input.company_id,
       model: 'gpt-4o',
       temperature: 0.25,
@@ -398,6 +398,26 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
       retryReason = 'output was not valid structured sprint sheet JSON';
       continue;
     }
+    if (parsed.title.trim().length > 0 && parsed.title.trim().length < 20) {
+      parsed.title = `${parsed.title.trim()}: Sprint Sheet`;
+      if (!parsed.seo_meta_title?.trim()) {
+        parsed.seo_meta_title = parsed.title.trim();
+      }
+    }
+    if (!parsed.excerpt?.trim() || parsed.excerpt.trim().length < 70) {
+      const fallbackExcerpt = [
+        raw.summary_body,
+        raw.framework_intro_html,
+        raw.outcome_html,
+        parsed.title,
+      ].find((value) => typeof value === 'string' && value.trim().length > 0);
+      if (typeof fallbackExcerpt === 'string' && fallbackExcerpt.trim()) {
+        parsed.excerpt = fallbackExcerpt.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 155);
+      }
+    }
+    if (!parsed.seo_meta_description?.trim() || parsed.seo_meta_description.trim().length < 70) {
+      parsed.seo_meta_description = (parsed.excerpt || parsed.title).slice(0, 155).trim();
+    }
 
     let activeRaw = raw;
     let activeParsed = parsed;
@@ -405,7 +425,7 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
 
     if (evaluation.weak && attempt < 2) {
       const repair = await runCompletionWithOperation({
-        operation: 'blogGeneration',
+        operation: 'newsletterGeneration',
         companyId: input.company_id,
         model: 'gpt-4o',
         temperature: 0.2,
@@ -431,7 +451,7 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
 
     if (evaluation.weak && attempt < 2) {
       const depthRepair = await runCompletionWithOperation({
-        operation: 'blogGeneration',
+        operation: 'newsletterGeneration',
         companyId: input.company_id,
         model: 'gpt-4o',
         temperature: 0.2,
@@ -455,9 +475,9 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
       }
     }
 
-    if (evaluation.weak && evaluation.score.meta.wordCount < Math.round(targetWords * 0.85) && attempt < 2) {
+    if (evaluation.weak && evaluation.score.meta.wordCount < Math.round(targetWords * 0.9) && attempt < 2) {
       const expansion = await runCompletionWithOperation({
-        operation: 'blogGeneration',
+        operation: 'newsletterGeneration',
         companyId: input.company_id,
         model: 'gpt-4o',
         temperature: 0.25,
@@ -470,6 +490,32 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
       });
 
       const expansionRaw = expansion.output ? JSON.parse(expansion.output) : null;
+      const merged = mergeSprintSheetExpansion(activeRaw, expansionRaw, template);
+      if (merged) {
+        const repairedEvaluation = getSprintSheetComposite(merged.mergedParsed, targetWords);
+        if (repairedEvaluation.composite > evaluation.composite) {
+          activeRaw = merged.mergedRaw;
+          activeParsed = merged.mergedParsed;
+          evaluation = repairedEvaluation;
+        }
+      }
+    }
+
+    if (evaluation.weak && targetWords >= 1600 && evaluation.score.meta.wordCount < Math.round(targetWords * 0.95) && attempt < 2) {
+      const focusedExpansion = await runCompletionWithOperation({
+        operation: 'newsletterGeneration',
+        companyId: input.company_id,
+        model: 'gpt-4o',
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+        max_tokens: 4400,
+        messages: [
+          { role: 'system', content: 'You are rewriting the long-form execution body of a sprint sheet for a 1600-word target. Return only valid JSON. Materially expand the breakdown sections, make the sprint steps more concrete, and deepen the reasoning.' },
+          { role: 'user', content: buildSprintSheetExpansionPrompt(input, targetWords, activeRaw, retryReason || `draft is still materially below target length (${evaluation.score.meta.wordCount}/${targetWords} words)`) },
+        ],
+      });
+
+      const expansionRaw = focusedExpansion.output ? JSON.parse(focusedExpansion.output) : null;
       const merged = mergeSprintSheetExpansion(activeRaw, expansionRaw, template);
       if (merged) {
         const repairedEvaluation = getSprintSheetComposite(merged.mergedParsed, targetWords);

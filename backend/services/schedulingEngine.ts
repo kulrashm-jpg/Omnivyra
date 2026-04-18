@@ -1,3 +1,5 @@
+import { normalizePlatform } from '../constants/platforms';
+
 /**
  * Scheduling Intelligence Engine
  * BOLT: assigns optimal posting times by platform and prevents same-day collisions.
@@ -32,11 +34,7 @@ export type SchedulingOptions = {
   platformTimeOverrides?: Record<string, string>;
 };
 
-function normalizePlatform(p: string): string {
-  const s = String(p ?? '').trim().toLowerCase();
-  if (s === 'twitter') return 'x';
-  return s || 'linkedin';
-}
+
 
 /**
  * Merge default platform times with overrides. Overrides take precedence.

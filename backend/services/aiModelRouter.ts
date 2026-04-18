@@ -28,8 +28,10 @@ const MINI_ONLY_PLANS = new Set(['free', 'starter', 'trial', 'basic']);
 // Plans allowed to use full models — everything else defaults to mini
 const FULL_MODEL_PLANS = new Set(['pro', 'professional', 'enterprise', 'unlimited']);
 
-// Operations that may use a larger model on growth plans
-const PLANNING_OPS = new Set([
+// Operations that may use a larger model on growth plans.
+// Long-form content generation needs the same allowance as planning quality-wise,
+// otherwise blog/newsletter/article generation gets silently downgraded to mini.
+const FULL_MODEL_ALLOWED_OPS = new Set([
   'generateCampaignPlan',
   'previewStrategy',
   'generateDailyDistributionPlan',
@@ -37,6 +39,10 @@ const PLANNING_OPS = new Set([
   'profileEnrichment',
   'profileExtraction',
   'refineProblemTransformation',
+  'blogGeneration',
+  'blogOptimization',
+  'newsletterGeneration',
+  'newsletterOptimization',
 ]);
 
 // Usage fraction above which we force mini regardless of plan
@@ -97,6 +103,24 @@ export async function resolveEffectiveModel(
   const id = orgId ?? '';
   const { planKey, usageFraction } = await resolveOrgMeta(id);
 
+  // Long-form editorial generation quality degrades materially when silently
+  // forced to mini. Honor the requested model for these operations unless
+  // usage-based emergency downgrade applies.
+  if (['blogGeneration', 'blogOptimization', 'newsletterGeneration', 'newsletterOptimization'].includes(operation)) {
+    if (usageFraction >= USAGE_DOWNGRADE_THRESHOLD) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.info('[model-router] usage-downgrade', {
+          orgId: id.slice(0, 8),
+          usageFraction: usageFraction.toFixed(2),
+          from: requestedModel,
+          to: MINI_MODEL,
+        });
+      }
+      return MINI_MODEL;
+    }
+    return requestedModel;
+  }
+
   // Usage-based downgrade: above threshold, force mini regardless of plan
   if (usageFraction >= USAGE_DOWNGRADE_THRESHOLD) {
     if (process.env.NODE_ENV !== 'test') {
@@ -120,8 +144,9 @@ export async function resolveEffectiveModel(
     return requestedModel;
   }
 
-  // Growth / intermediate plans: mini by default, larger allowed for planning
-  if (PLANNING_OPS.has(operation)) {
+  // Growth / intermediate plans: mini by default, larger allowed for
+  // planning and long-form generation operations.
+  if (FULL_MODEL_ALLOWED_OPS.has(operation)) {
     return requestedModel; // allow requested model for planning ops
   }
   return MINI_MODEL;

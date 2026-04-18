@@ -11,6 +11,7 @@ import {
   updateLegacyScheduledPost,
 } from '@/backend/services/structuredPlanScheduler';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const { user, error } = await getSupabaseUserFromRequest(req);
@@ -76,6 +77,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             contentType: updateData.contentType,
           },
         });
+
+        try {
+          const { data: row } = await supabase
+            .from('scheduled_posts')
+            .select('id, social_account_id, scheduled_for, status')
+            .eq('id', id)
+            .eq('user_id', userId)
+            .maybeSingle();
+          if (row?.id && row.social_account_id && row.scheduled_for && row.status === 'scheduled') {
+            await enqueueScheduledPostAt(row.id, userId, String(row.social_account_id), String(row.scheduled_for));
+          }
+        } catch (enqueueError: any) {
+          console.warn('[schedule/posts/:id] enqueueScheduledPostAt failed after update (non-fatal):', enqueueError?.message);
+        }
         
         res.status(200).json({
           success: true,
@@ -110,6 +125,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         // Queue for immediate publishing (DB scheduler picks up due posts)
         await publishLegacyScheduledPostNow({ userId, id });
+        try {
+          const { data: row } = await supabase
+            .from('scheduled_posts')
+            .select('id, social_account_id, scheduled_for')
+            .eq('id', id)
+            .eq('user_id', userId)
+            .maybeSingle();
+          if (row?.id && row.social_account_id && row.scheduled_for) {
+            await enqueueScheduledPostAt(row.id, userId, String(row.social_account_id), String(row.scheduled_for));
+          }
+        } catch (enqueueError: any) {
+          console.warn('[schedule/posts/:id] enqueueScheduledPostAt failed after publish-now queue (non-fatal):', enqueueError?.message);
+        }
         const result = { success: true, queued: true, postId: id };
         
         res.status(200).json({

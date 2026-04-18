@@ -20,6 +20,13 @@ function normalizePlatform(platform: string): string {
   return p === 'twitter' ? 'x' : p;
 }
 
+function toLocalDateKey(value: Date): string {
+  const y = value.getFullYear();
+  const m = String(value.getMonth() + 1).padStart(2, '0');
+  const d = String(value.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -62,7 +69,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const campaignIds = Array.from(
       new Set((versionRows || []).map((r: { campaign_id: string }) => r.campaign_id).filter(Boolean))
     );
-    if (campaignIds.length === 0) {
+    const { data: roleRows, error: roleError } = await supabase
+      .from('user_company_roles')
+      .select('user_id')
+      .eq('company_id', companyId)
+      .eq('status', 'active');
+    if (roleError) {
+      return res.status(500).json({ error: 'Failed to load company users' });
+    }
+    const companyUserIds = Array.from(
+      new Set((roleRows || []).map((row: { user_id?: string }) => row.user_id).filter(Boolean))
+    ) as string[];
+    if (campaignIds.length === 0 && companyUserIds.length === 0) {
       return res.status(200).json([]);
     }
 
@@ -70,31 +88,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const stageFilter = typeof req.query.stageFilter === 'string' ? req.query.stageFilter.trim() : '';
 
     // 2. Query scheduled_posts — full range when stageFilter is active, otherwise month range
-    let q = supabase
-      .from('scheduled_posts')
-      .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status')
-      .in('campaign_id', campaignIds)
-      .in('status', ['scheduled', 'draft', 'publishing', 'published', 'pending'])
-      .order('scheduled_for', { ascending: true });
+    const applyDateRange = <T extends { gte: (...args: any[]) => T; lte: (...args: any[]) => T }>(query: T) => {
+      if (stageFilter) return query;
+      return query.gte('scheduled_for', startIso).lte('scheduled_for', endIso);
+    };
 
-    if (!stageFilter) {
-      q = q.gte('scheduled_for', startIso).lte('scheduled_for', endIso);
+    let campaignPosts: any[] = [];
+    if (campaignIds.length > 0) {
+      let q = supabase
+        .from('scheduled_posts')
+        .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status')
+        .in('campaign_id', campaignIds)
+        .in('status', ['scheduled', 'draft', 'publishing', 'published', 'pending'])
+        .order('scheduled_for', { ascending: true });
+
+      q = applyDateRange(q);
+
+      if (campaignIdFilter && campaignIds.includes(campaignIdFilter)) {
+        q = q.eq('campaign_id', campaignIdFilter);
+      }
+
+      const { data, error } = await q;
+      if (error) {
+        return res.status(500).json({ error: 'Failed to load scheduled posts' });
+      }
+      campaignPosts = data || [];
     }
 
-    const campaignIdFilter = typeof req.query.campaignId === 'string' ? req.query.campaignId.trim() : '';
-    if (campaignIdFilter && campaignIds.includes(campaignIdFilter)) {
-      q = q.eq('campaign_id', campaignIdFilter);
-    }
-    const { data: posts, error: pError } = await q;
+    let standalonePosts: any[] = [];
+    if (!campaignIdFilter && companyUserIds.length > 0) {
+      let q = supabase
+        .from('scheduled_posts')
+        .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status')
+        .in('user_id', companyUserIds)
+        .is('campaign_id', null)
+        .in('status', ['scheduled', 'draft', 'publishing', 'published', 'pending'])
+        .order('scheduled_for', { ascending: true });
 
-    if (pError) {
-      return res.status(500).json({ error: 'Failed to load scheduled posts' });
+      q = applyDateRange(q);
+
+      const { data, error } = await q;
+      if (error) {
+        return res.status(500).json({ error: 'Failed to load standalone scheduled posts' });
+      }
+      standalonePosts = data || [];
     }
+
+    const posts = [...campaignPosts, ...standalonePosts];
 
     const now = new Date().toISOString();
     const events = (posts || []).map((row: any) => {
       const scheduledFor = row.scheduled_for ? new Date(row.scheduled_for) : new Date();
-      const dateStr = scheduledFor.toISOString().slice(0, 10);
+      const dateStr = toLocalDateKey(scheduledFor);
       const title =
         (row.title && String(row.title).trim()) ||
         extractTitleFromContent(row.content);

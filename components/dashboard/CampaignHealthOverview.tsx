@@ -5,6 +5,8 @@
 
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import EmptyState from '../shared/EmptyState';
+import ExamplePreview from '../shared/ExamplePreview';
 
 export interface CampaignHealthItem {
   campaign_id: string;
@@ -50,8 +52,16 @@ export function CampaignHealthOverview({
       <Card className={className}>
         <CardHeader>
           <CardTitle>Campaign Health Overview</CardTitle>
-          <p className="text-sm text-slate-600">No campaign health reports yet.</p>
         </CardHeader>
+        <CardContent>
+          <EmptyState
+            title="See your first health snapshot"
+            description="As soon as you launch a campaign, this view will show what is strong, what is drifting, and what to fix next."
+            primaryAction={{ label: 'Launch your first campaign', href: '/campaign-planner?mode=direct' }}
+            secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
+            examplePreview={<ExamplePreview variant="campaign" />}
+          />
+        </CardContent>
       </Card>
     );
   }

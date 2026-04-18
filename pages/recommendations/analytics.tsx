@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import Header from '../../components/Header';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { getAuthToken } from '../../utils/getAuthToken';
 
@@ -66,7 +65,6 @@ export default function RecommendationsAnalyticsPage() {
   if (isCompanyLoading) {
     return (
       <div className="min-h-screen bg-gray-50">
-        <Header />
         <div className="p-6 text-gray-500">Loading company context...</div>
       </div>
     );
@@ -75,7 +73,6 @@ export default function RecommendationsAnalyticsPage() {
   if (!selectedCompanyId) {
     return (
       <div className="min-h-screen bg-gray-50">
-        <Header />
         <div className="p-6 text-gray-500">Select a company to view analytics.</div>
       </div>
     );
@@ -83,7 +80,6 @@ export default function RecommendationsAnalyticsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      <Header />
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="bg-white rounded-lg shadow p-6">
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Recommendation Analytics</h1>

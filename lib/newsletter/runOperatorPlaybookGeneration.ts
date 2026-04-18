@@ -215,6 +215,46 @@ EXPANSION RULES:
 - return only valid JSON`;
 }
 
+function buildOperatorPlaybookFocusedBodyPrompt(
+  input: NewsletterGenerationRequest,
+  targetWords: number,
+  currentDraft: any,
+  retryReason: string,
+): string {
+  const currentJson = JSON.stringify(currentDraft, null, 2);
+  return `TOPIC: ${input.topic}
+
+TARGET WORD COUNT: ${targetWords} words minimum
+
+CURRENT DRAFT JSON:
+${currentJson}
+
+FAILED BECAUSE:
+${retryReason}
+
+YOUR TASK:
+Rewrite only the long-form execution body so this Operator Playbook reads like a serious operator memo, not a short checklist. Keep the same shape and thesis, but make the execution logic fuller and more actionable.
+
+RETURN JSON WITH EXACTLY THESE FIELDS:
+{
+  "problem_html": "string with <p> tags",
+  "outcome_html": "string with <p> tags",
+  "framework_intro_html": "string with <p> tags",
+  "breakdown_sections": [{ "title": "string", "body": "string with <p> tags" }],
+  "cta_html": "string with <p> tags",
+  "summary_body": "string"
+}
+
+STRICT RULES:
+- problem_html should be at least ${targetWords >= 1600 ? '140' : targetWords >= 1200 ? '110' : '85'} words
+- outcome_html should be at least ${targetWords >= 1600 ? '120' : targetWords >= 1200 ? '95' : '75'} words
+- framework_intro_html should be at least ${targetWords >= 1600 ? '150' : targetWords >= 1200 ? '120' : '90'} words
+- each breakdown body should be at least ${targetWords >= 1600 ? '165' : targetWords >= 1200 ? '130' : '100'} words and include action, rationale, success signal, and failure mode
+- cta_html should be at least ${targetWords >= 1600 ? '90' : targetWords >= 1200 ? '70' : '50'} words
+- summary_body should be a strong 2-3 sentence operating standard
+- return only valid JSON`;
+}
+
 function parseOperatorPlaybookOutput(raw: any, template: ContentBlock[]) {
   if (!raw || typeof raw !== 'object') return null;
 
@@ -405,8 +445,9 @@ export async function runOperatorPlaybookGeneration(input: NewsletterGenerationR
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
-      operation: 'blogGeneration',
+      operation: 'newsletterGeneration',
       companyId: input.company_id,
+      cache_version: `${input.cache_version ?? 'newsletter'}:operator-playbook:v1:attempt:${attempt}`,
       model: 'gpt-4o',
       temperature: 0.25,
       response_format: { type: 'json_object' },
@@ -423,6 +464,26 @@ export async function runOperatorPlaybookGeneration(input: NewsletterGenerationR
       retryReason = 'output was not valid structured operator playbook JSON';
       continue;
     }
+    if (parsed.title.trim().length > 0 && parsed.title.trim().length < 20) {
+      parsed.title = `${parsed.title.trim()}: Operator Playbook`;
+      if (!parsed.seo_meta_title?.trim()) {
+        parsed.seo_meta_title = parsed.title.trim();
+      }
+    }
+    if (!parsed.excerpt?.trim() || parsed.excerpt.trim().length < 70) {
+      const fallbackExcerpt = [
+        raw.summary_body,
+        raw.framework_intro_html,
+        raw.outcome_html,
+        parsed.title,
+      ].find((value) => typeof value === 'string' && value.trim().length > 0);
+      if (typeof fallbackExcerpt === 'string' && fallbackExcerpt.trim()) {
+        parsed.excerpt = fallbackExcerpt.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 155);
+      }
+    }
+    if (!parsed.seo_meta_description?.trim() || parsed.seo_meta_description.trim().length < 70) {
+      parsed.seo_meta_description = (parsed.excerpt || parsed.title).slice(0, 155).trim();
+    }
 
     let activeRaw = raw;
     let activeParsed = parsed;
@@ -430,8 +491,9 @@ export async function runOperatorPlaybookGeneration(input: NewsletterGenerationR
 
     if (evaluation.weak && attempt < 2) {
       const repair = await runCompletionWithOperation({
-        operation: 'blogGeneration',
+        operation: 'newsletterGeneration',
         companyId: input.company_id,
+        cache_version: `${input.cache_version ?? 'newsletter'}:operator-playbook-repair:v1:attempt:${attempt}`,
         model: 'gpt-4o',
         temperature: 0.2,
         response_format: { type: 'json_object' },
@@ -456,8 +518,9 @@ export async function runOperatorPlaybookGeneration(input: NewsletterGenerationR
 
     if (evaluation.weak && attempt < 2) {
       const depthRepair = await runCompletionWithOperation({
-        operation: 'blogGeneration',
+        operation: 'newsletterGeneration',
         companyId: input.company_id,
+        cache_version: `${input.cache_version ?? 'newsletter'}:operator-playbook-depth:v1:attempt:${attempt}`,
         model: 'gpt-4o',
         temperature: 0.2,
         response_format: { type: 'json_object' },
@@ -480,10 +543,11 @@ export async function runOperatorPlaybookGeneration(input: NewsletterGenerationR
       }
     }
 
-    if (evaluation.weak && evaluation.score.meta.wordCount < Math.round(targetWords * 0.85) && attempt < 2) {
+    if (evaluation.weak && evaluation.score.meta.wordCount < Math.round(targetWords * 0.9) && attempt < 2) {
       const expansion = await runCompletionWithOperation({
-        operation: 'blogGeneration',
+        operation: 'newsletterGeneration',
         companyId: input.company_id,
+        cache_version: `${input.cache_version ?? 'newsletter'}:operator-playbook-expansion:v1:attempt:${attempt}`,
         model: 'gpt-4o',
         temperature: 0.25,
         response_format: { type: 'json_object' },
@@ -506,8 +570,62 @@ export async function runOperatorPlaybookGeneration(input: NewsletterGenerationR
       }
     }
 
+    if (evaluation.weak && targetWords >= 1600 && evaluation.score.meta.wordCount < Math.round(targetWords * 0.95) && attempt < 2) {
+      const focusedExpansion = await runCompletionWithOperation({
+        operation: 'newsletterGeneration',
+        companyId: input.company_id,
+        cache_version: `${input.cache_version ?? 'newsletter'}:operator-playbook-focused:v2:attempt:${attempt}`,
+        model: 'gpt-4o',
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+        max_tokens: 4600,
+        messages: [
+          { role: 'system', content: 'You are rewriting the long-form execution body of an operator playbook for a 1600-word target. Return only valid JSON. Materially expand the body, make the framework steps more specific, and deepen the breakdown reasoning.' },
+          { role: 'user', content: buildOperatorPlaybookFocusedBodyPrompt(input, targetWords, activeRaw, retryReason || `draft is still materially below target length (${evaluation.score.meta.wordCount}/${targetWords} words)`) },
+        ],
+      });
+
+      const focusedRaw = focusedExpansion.output ? JSON.parse(focusedExpansion.output) : null;
+      const merged = mergeOperatorPlaybookExpansion(activeRaw, focusedRaw, template);
+      if (merged) {
+        const repairedEvaluation = getOperatorPlaybookComposite(merged.mergedParsed, targetWords);
+        if (repairedEvaluation.composite > evaluation.composite) {
+          activeRaw = merged.mergedRaw;
+          activeParsed = merged.mergedParsed;
+          evaluation = repairedEvaluation;
+        }
+      }
+    }
+
+    if (evaluation.weak && attempt < 2) {
+      const focused = await runCompletionWithOperation({
+        operation: 'newsletterGeneration',
+        companyId: input.company_id,
+        cache_version: `${input.cache_version ?? 'newsletter'}:operator-playbook-focused:v1:attempt:${attempt}`,
+        model: 'gpt-4o',
+        temperature: 0.15,
+        response_format: { type: 'json_object' },
+        max_tokens: targetWords >= 1600 ? 4200 : 3200,
+        messages: [
+          { role: 'system', content: 'You are rewriting only the long-form execution body of an operator playbook. Return only valid JSON. Make it denser, clearer, and more action-ready.' },
+          { role: 'user', content: buildOperatorPlaybookFocusedBodyPrompt(input, targetWords, activeRaw, retryReason || 'depth is still too weak') },
+        ],
+      });
+
+      const focusedRaw = focused.output ? JSON.parse(focused.output) : null;
+      const merged = mergeOperatorPlaybookExpansion(activeRaw, focusedRaw, template);
+      if (merged) {
+        const repairedEvaluation = getOperatorPlaybookComposite(merged.mergedParsed, targetWords);
+        if (repairedEvaluation.composite > evaluation.composite) {
+          activeRaw = merged.mergedRaw;
+          activeParsed = merged.mergedParsed;
+          evaluation = repairedEvaluation;
+        }
+      }
+    }
+
     const { score, analysis, weak, composite } = evaluation;
-    if (composite > bestScore) { bestScore = composite; best = parsed; }
+    if (composite > bestScore) { bestScore = composite; best = activeParsed; }
     if (!weak) {
       return { needs_clarification: false, mode: 'full', confidence: 'high', template_used: true, hook_assessment: { strength: 'moderate', note: 'Newsletter-owned operator playbook generation path used.' }, result: activeParsed };
     }

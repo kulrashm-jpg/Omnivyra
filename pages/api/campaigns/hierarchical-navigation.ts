@@ -53,7 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        // Blueprint (twelve_week_plan) is source of truth for committed plans — check first
+        // Blueprint (campaign_week_plan) is source of truth for committed plans — check first
         const blueprint = await getUnifiedCampaignBlueprint(campaignId as string);
         const { data: weeklyRefinements } = await supabase
           .from('weekly_content_refinements')

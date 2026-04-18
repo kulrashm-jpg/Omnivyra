@@ -138,5 +138,6 @@ describe('reportPdfRenderer', () => {
     expect(htmlArg).toContain('id="pdf-report"');
     expect(htmlArg).toContain('class="report-page"');
     expect(htmlArg).toContain('#pdf-report { width: 186mm;');
+    expect(htmlArg).toContain('page-hero-header');
   });
 });

@@ -1,0 +1,84 @@
+import type { ThreadGenerationPayload, ThreadSessionPayload } from './threadFlow';
+
+export type ThreadPublishLink = {
+  scheduledPostId: string;
+  platform: string;
+  updatedAt?: string;
+};
+
+export type ThreadContinuationReplyDraft = {
+  threadId: string;
+  text: string;
+  createdAt: string;
+};
+
+function hasStorage(): boolean {
+  return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined';
+}
+
+export function createThreadSessionToken(): string {
+  return `thread_session_${Date.now()}`;
+}
+
+export function createThreadReplyDraftToken(): string {
+  return `thread_continue_reply_${Date.now()}`;
+}
+
+export function getThreadResultKey(sessionToken: string): string {
+  return `thread_result_${sessionToken}`;
+}
+
+export function getThreadPublishKey(sessionToken: string): string {
+  return `thread_publish_${sessionToken}`;
+}
+
+export function readThreadStorage<T>(key: string): T | null {
+  if (!hasStorage() || !key) return null;
+  const raw = sessionStorage.getItem(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    sessionStorage.removeItem(key);
+    return null;
+  }
+}
+
+export function writeThreadStorage(key: string, value: unknown): void {
+  if (!hasStorage() || !key) return;
+  sessionStorage.setItem(key, JSON.stringify(value));
+}
+
+export function removeThreadStorage(key: string): void {
+  if (!hasStorage() || !key) return;
+  sessionStorage.removeItem(key);
+}
+
+export function loadThreadSession(sessionToken: string): ThreadSessionPayload | null {
+  return readThreadStorage<ThreadSessionPayload>(sessionToken);
+}
+
+export function saveThreadSession(sessionToken: string, payload: ThreadSessionPayload): void {
+  writeThreadStorage(sessionToken, payload);
+}
+
+export function loadThreadResult(sessionToken: string): ThreadGenerationPayload | null {
+  return readThreadStorage<ThreadGenerationPayload>(getThreadResultKey(sessionToken));
+}
+
+export function saveThreadResult(sessionToken: string, payload: ThreadGenerationPayload): void {
+  writeThreadStorage(getThreadResultKey(sessionToken), payload);
+}
+
+export function loadThreadPublishLink(sessionToken: string): ThreadPublishLink | null {
+  return readThreadStorage<ThreadPublishLink>(getThreadPublishKey(sessionToken));
+}
+
+export function saveThreadPublishLink(sessionToken: string, payload: ThreadPublishLink): void {
+  writeThreadStorage(getThreadPublishKey(sessionToken), payload);
+}
+
+export function clearThreadPublishLink(sessionToken: string): void {
+  removeThreadStorage(getThreadPublishKey(sessionToken));
+}
+

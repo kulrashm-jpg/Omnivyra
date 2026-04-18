@@ -4,26 +4,18 @@
  */
 
 import { FeatureKey, FeatureCompletionRecord } from '../types/featureCompletion';
+import { FEATURE_WEIGHTS } from '../../config/readinessFeatures';
 
 /**
  * Weighted model for readiness scoring
  * Total = 100 points
  */
-export const FEATURE_WEIGHTS: Record<FeatureKey, number> = {
-  [FeatureKey.COMPANY_PROFILE_COMPLETED]: 10,
-  [FeatureKey.WEBSITE_CONNECTED]: 10,
-  [FeatureKey.BLOG_CREATED]: 15,
-  [FeatureKey.REPORT_GENERATED]: 15,
-  [FeatureKey.SOCIAL_ACCOUNTS_CONNECTED]: 15,
-  [FeatureKey.CAMPAIGN_CREATED]: 15,
-  [FeatureKey.CHROME_EXTENSION_INSTALLED]: 10,
-  [FeatureKey.API_CONFIGURED]: 10,
-};
+const WEIGHTS = FEATURE_WEIGHTS as Record<FeatureKey, number>;
 
 /**
  * Sum of all weights (validation)
  */
-export const TOTAL_WEIGHT = Object.values(FEATURE_WEIGHTS).reduce((a, b) => a + b, 0);
+export const TOTAL_WEIGHT = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
 
 /**
  * Breakdown item in score response
@@ -63,10 +55,13 @@ export function computeReadinessScore(
   // Process each feature
   for (const feature of features) {
     const featureKey = feature.feature_key as FeatureKey;
-    const weight = FEATURE_WEIGHTS[featureKey] ?? 0;
-    
-    // Points earned only if completed
-    const pointsEarned = feature.status === 'completed' ? weight : 0;
+    const weight = WEIGHTS[featureKey] ?? 0;
+
+    // Use partial score from metadata if available, else binary fallback
+    const partialScore: number = typeof feature.metadata?.score === 'number'
+      ? feature.metadata.score
+      : feature.status === 'completed' ? 1 : 0;
+    const pointsEarned = Math.round(partialScore * weight);
     totalScore += pointsEarned;
 
     if (feature.status === 'completed') {
@@ -127,7 +122,8 @@ export function getReadinessRecommendations(
         [FeatureKey.BLOG_CREATED]: 'Create your first blog post to unlock blogging features',
         [FeatureKey.REPORT_GENERATED]: 'Generate a content readiness report to see your analysis',
         [FeatureKey.SOCIAL_ACCOUNTS_CONNECTED]: 'Connect your social media accounts to enable campaigns',
-        [FeatureKey.CAMPAIGN_CREATED]: 'Create your first campaign to start distributing content',
+        [FeatureKey.CAMPAIGN_CREATED]: 'Create and stage your first campaign',
+        [FeatureKey.CAMPAIGN_PUBLISHED]: 'Publish or send your first campaign to your audience',
         [FeatureKey.CHROME_EXTENSION_INSTALLED]: 'Install the Chrome extension for real-time engagement notifications',
         [FeatureKey.API_CONFIGURED]: 'Configure API keys for campaign automation',
       };

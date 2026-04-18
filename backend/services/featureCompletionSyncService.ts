@@ -52,6 +52,7 @@ export async function syncFeatureCompletion(
         status: feature.status,
         metadata: {
           reason: feature.reason,
+          score: feature.score,
           computedAt: new Date().toISOString(),
         },
         completed_at: feature.status === 'completed' ? new Date() : null,

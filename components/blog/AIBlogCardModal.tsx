@@ -47,7 +47,7 @@ interface Props {
   writingStyleGuide?: string;
   onCardCreated?: (card: BlogCardPreview) => void;
   contentLabel?: string;
-  contentType?: 'blog' | 'newsletter';
+  contentType?: string;
   contentModeLabel?: string;
 }
 
@@ -73,11 +73,15 @@ export default function AIBlogCardModal({
   contentType = 'blog',
   contentModeLabel,
 }: Props) {
+  const normalizedCompanyName = companyName?.trim() || 'your company';
+  const openingMessage = contentType === 'post'
+    ? `Tell me the post angle, launch, or insight you want to share. I'll use ${normalizedCompanyName} context and keep this quick.`
+    : `Hi! I'm here to help you create an amazing ${contentLabel} card for ${normalizedCompanyName}. What topic or problem would you like to write about?`;
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 1,
       type: 'ai',
-      message: `Hi! I'm here to help you create an amazing ${contentLabel} card for ${companyName}. What topic or problem would you like to write about?`,
+      message: openingMessage,
       timestamp: new Date().toLocaleTimeString(),
     },
   ]);
@@ -400,7 +404,7 @@ export default function AIBlogCardModal({
             </div>
             <div>
               <h2 className="font-bold text-gray-900">Create Custom {contentLabel.charAt(0).toUpperCase() + contentLabel.slice(1)} Card</h2>
-              <p className="text-xs text-gray-500 mt-0.5">AI-assisted topic refinement for {companyName}</p>
+              <p className="text-xs text-gray-500 mt-0.5">AI-assisted topic refinement for {normalizedCompanyName}</p>
             </div>
           </div>
           <button
@@ -437,7 +441,7 @@ export default function AIBlogCardModal({
           ))}
 
           {/* Quick intent buttons (show during intent phase) */}
-          {conversationPhase === 'intent' && !isLoading && (
+          {conversationPhase === 'intent' && contentType !== 'post' && !isLoading && (
             <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-gray-100">
               {INTENT_OPTIONS.map(({ value, label, icon: Icon }) => (
                 <button

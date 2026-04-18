@@ -35,6 +35,8 @@ const CONDITIONAL_TYPES = new Set([
 const AI_AUTOMATED_TYPES = new Set([
   'text', 'post', 'article', 'thread', 'story', 'tweet', 'blog', 'update', 'comment', 'reply',
   'newsletter', 'white_paper', 'short_story', 'poll',
+  // Normalized forms (underscores/hyphens stripped by normalizeContentType)
+  'shortstory', 'whitepaper',
 ]);
 
 /**
@@ -77,9 +79,11 @@ export function inferExecutionMode(
     return 'AI_AUTOMATED';
   }
 
+  // Check AI_AUTOMATED first — 'shortstory' contains 'short' which would wrongly
+  // match CREATOR_TYPES. Explicit AI types must take precedence.
+  if ([...AI_AUTOMATED_TYPES].some((t) => ct.includes(t))) return 'AI_AUTOMATED';
   if ([...CREATOR_TYPES].some((t) => ct.includes(t))) return 'CREATOR_REQUIRED';
   if ([...CONDITIONAL_TYPES].some((t) => ct.includes(t))) return 'CONDITIONAL_AI';
-  if ([...AI_AUTOMATED_TYPES].some((t) => ct.includes(t))) return 'AI_AUTOMATED';
 
   if (ct.includes('video') || ct.includes('reel') || ct.includes('short') || ct.includes('audio') || ct.includes('podcast')) {
     return 'CREATOR_REQUIRED';

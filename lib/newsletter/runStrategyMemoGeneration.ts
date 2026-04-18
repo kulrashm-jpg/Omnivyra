@@ -14,6 +14,10 @@ import type {
 } from '../content/blockTypes';
 import { flattenBlocks } from '../content/blockUtils';
 
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function getTargetWords(input: NewsletterGenerationRequest): number {
   const raw = input.answers?.target_word_count;
   return raw ? parseInt(String(raw), 10) || 1600 : 1600;
@@ -97,12 +101,13 @@ DEPTH RULES:
 - why_it_matters_now_html must make urgency and timing feel decision-relevant, not generic
 - strategic_moves should be differentiated and decision-grade, not generic
 - references should support the memo with credible signals
-- shift_html should be about ${deeperTier ? '90-140' : '70-110'} words
-- forces_at_play_html should be about ${deeperTier ? '110-170' : '85-130'} words
-- why_it_matters_now_html should be about ${deeperTier ? '90-140' : '70-110'} words
-- analysis_html should be about ${deeperTier ? '220-320' : '170-260'} words
-- positioning_html should be about ${deeperTier ? '140-210' : '110-170'} words
-- thesis_html should be about ${deeperTier ? '90-130' : '70-100'} words
+- lead_callout should be at least 14 words and feel like a board-level thesis, not a slogan
+- shift_html should be about ${deeperTier ? '110-160' : '85-125'} words
+- forces_at_play_html should be about ${deeperTier ? '130-190' : '100-150'} words
+- why_it_matters_now_html should be about ${deeperTier ? '110-160' : '85-125'} words
+- analysis_html should be about ${deeperTier ? '260-360' : '210-300'} words
+- positioning_html should be about ${deeperTier ? '170-240' : '130-190'} words
+- thesis_html should be about ${deeperTier ? '100-145' : '80-115'} words
 - return only valid JSON`;
 }
 
@@ -205,6 +210,27 @@ function parseStrategyMemoOutput(raw: any, template: ContentBlock[]) {
   };
 }
 
+function ensureStrategyMemoSeo(result: ReturnType<typeof parseStrategyMemoOutput>) {
+  if (!result) return result;
+  const flat = flattenBlocks(result.content_blocks);
+  const paragraphs = flat.filter((block): block is ParagraphBlock => block.type === 'paragraph');
+  const summary = flat.find((block): block is SummaryBlock => block.type === 'summary');
+  const fallback = summary?.body?.trim() || stripHtml(paragraphs[0]?.html || '') || result.title;
+  if (!result.excerpt || result.excerpt.trim().length < 70) {
+    result.excerpt = fallback.slice(0, 155).trim();
+  }
+  if (result.title.trim().length > 0 && result.title.trim().length < 20) {
+    result.title = `${result.title.trim()}: Strategy Memo`;
+  }
+  if (!result.seo_meta_title || !result.seo_meta_title.trim()) {
+    result.seo_meta_title = result.title.trim();
+  }
+  if (!result.seo_meta_description || result.seo_meta_description.trim().length < 70) {
+    result.seo_meta_description = fallback.slice(0, 155).trim();
+  }
+  return result;
+}
+
 function analyzeStrategyMemoDraft(blocks: ContentBlock[]) {
   const flat = flattenBlocks(blocks);
   const paragraphs = flat.filter((block): block is ParagraphBlock => block.type === 'paragraph');
@@ -269,6 +295,9 @@ DEPTH TARGETS:
 - positioning_html: explain what strong teams should actually do, what to avoid, and why now
 - strategic_moves: each move must be a differentiated strategic action with rationale, not a generic recommendation
 - thesis_html: conclude with a sharper strategic lens, clearer decision frame, and explicit tradeoff
+- analysis_html should be at least 180 words
+- positioning_html should be at least 120 words
+- thesis_html should be at least 80 words
 - every rewritten section should feel like a memo for operators making a real decision, not commentary for observers
 - keep the same underlying thesis, but make the reasoning more developed
 - return only valid JSON`;
@@ -360,8 +389,9 @@ export async function runStrategyMemoGeneration(
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
-      operation: 'blogGeneration',
+      operation: 'newsletterGeneration',
       companyId: input.company_id,
+      cache_version: `${input.cache_version ?? 'newsletter'}:strategy-memo:v2:attempt:${attempt}`,
       model: 'gpt-4o',
       temperature: 0.25,
       response_format: { type: 'json_object' },
@@ -379,7 +409,7 @@ export async function runStrategyMemoGeneration(
     });
 
     const raw = completion.output ? JSON.parse(completion.output) : null;
-    const parsed = raw ? parseStrategyMemoOutput(raw, template) : null;
+    const parsed = raw ? ensureStrategyMemoSeo(parseStrategyMemoOutput(raw, template)) : null;
     if (!parsed) {
       retryReason = 'output was not valid structured strategy memo JSON';
       continue;
@@ -411,7 +441,7 @@ export async function runStrategyMemoGeneration(
     if (weakDepth) {
       try {
         const repair = await runCompletionWithOperation({
-          operation: 'blogGeneration',
+          operation: 'newsletterGeneration',
           companyId: input.company_id,
           model: 'gpt-4o',
           temperature: 0.2,
@@ -491,7 +521,7 @@ export async function runStrategyMemoGeneration(
     if (stillWeakAfterRepair) {
       try {
         const secondRepair = await runCompletionWithOperation({
-          operation: 'blogGeneration',
+          operation: 'newsletterGeneration',
           companyId: input.company_id,
           model: 'gpt-4o',
           temperature: 0.15,
@@ -567,7 +597,7 @@ export async function runStrategyMemoGeneration(
     if (stillMateriallyWeak) {
       try {
         const focusedRepair = await runCompletionWithOperation({
-          operation: 'blogGeneration',
+          operation: 'newsletterGeneration',
           companyId: input.company_id,
           model: 'gpt-4o',
           temperature: 0.1,

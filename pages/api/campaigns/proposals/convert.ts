@@ -1,7 +1,7 @@
 
 /**
  * POST /api/campaigns/proposals/convert
- * Convert proposal → campaign + twelve_week_plan, update proposal status = accepted
+ * Convert proposal → campaign + campaign_week_plan, update proposal status = accepted
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -111,12 +111,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await supabase
     .from('campaigns')
     .update({
-      current_stage: 'twelve_week_plan',
+      current_stage: 'campaign_week_plan',
       duration_weeks: blueprint.duration_weeks,
       updated_at: new Date().toISOString(),
     })
     .eq('id', campaignId);
-  void syncCampaignVersionStage(campaignId, 'twelve_week_plan', organizationId).catch(() => {});
+  void syncCampaignVersionStage(campaignId, 'campaign_week_plan', organizationId).catch(() => {});
 
   await saveCampaignBlueprintFromLegacy({
     campaignId,

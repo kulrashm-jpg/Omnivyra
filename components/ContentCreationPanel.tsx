@@ -27,6 +27,10 @@ import {
 } from 'lucide-react';
 import VoiceNotesComponent from './VoiceNotesComponent';
 import AIGenerationProgress from './AIGenerationProgress';
+import EmptyState from './shared/EmptyState';
+import ExamplePreview from './shared/ExamplePreview';
+import { buildSampleContent } from '../lib/activation/sampleData';
+import { trackActivationEvent } from '../lib/analytics/activationEvents';
 
 interface ContentItem {
   id: string;
@@ -125,6 +129,21 @@ export default function ContentCreationPanel({
     setIsCreating(true);
   };
 
+  const loadSampleContent = () => {
+    const sample = buildSampleContent(selectedPlatform, selectedContentType);
+    setContentItems([sample]);
+    onContentSave?.([sample]);
+    notify('success', 'Sample content loaded. You can edit it right away.');
+    trackActivationEvent('sample_used', {
+      context: `content_${context}`,
+      meta: { platform: selectedPlatform, contentType: selectedContentType },
+    });
+    trackActivationEvent('first_content_created', {
+      context: `content_${context}`,
+      meta: { source: 'sample' },
+    });
+  };
+
   const saveContentItem = (item: ContentItem) => {
     const updatedItem = {
       ...item,
@@ -147,6 +166,12 @@ export default function ContentCreationPanel({
     // Notify parent component
     if (onContentSave) {
       onContentSave([...contentItems.filter(c => c.id !== item.id), updatedItem]);
+    }
+    if (contentItems.length === 0) {
+      trackActivationEvent('first_content_created', {
+        context: `content_${context}`,
+        meta: { source: item.aiGenerated ? 'ai' : 'manual' },
+      });
     }
   };
 
@@ -230,6 +255,7 @@ export default function ContentCreationPanel({
           dayNumber,
           platform: selectedPlatform,
           contentType: selectedContentType,
+          provider: 'demo',
           requestType: 'content-generation'
         })
       });
@@ -253,6 +279,14 @@ export default function ContentCreationPanel({
           };
 
           setContentItems(prev => [...prev, aiContent]);
+          onContentSave?.([...contentItems, aiContent]);
+          if (contentItems.length === 0) {
+            trackActivationEvent('first_content_created', {
+              context: `content_${context}`,
+              meta: { source: 'ai_demo' },
+            });
+          }
+          notify('success', 'AI content generated successfully!');
         }
       }
     } catch (error) {
@@ -448,28 +482,27 @@ export default function ContentCreationPanel({
       {/* Content Items */}
       <div className="space-y-4">
         {contentItems.length === 0 ? (
-          <div className="text-center py-12">
-            <FileText className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-            <h4 className="text-lg font-medium text-gray-900 mb-2">No content yet</h4>
-            <p className="text-gray-600 mb-6">Create your first piece of content or use AI to generate ideas</p>
-            <div className="flex justify-center gap-3">
-              <button
-                onClick={createNewContent}
-                className="bg-gradient-to-r from-blue-500 to-cyan-600 hover:from-blue-600 hover:to-cyan-700 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2"
-              >
-                <Plus className="h-5 w-5" />
-                Create Content
-              </button>
-              <button
-                onClick={generateAIContent}
-                disabled={isGeneratingAI}
-                className="bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 disabled:opacity-50 text-white px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2"
-              >
-                <Sparkles className="h-5 w-5" />
-                AI Generate
-              </button>
-            </div>
-          </div>
+          <EmptyState
+            tone="first-time"
+            illustration={<FileText className="h-6 w-6" />}
+            title="Create your first piece of content"
+            description="Start with one draft and you will immediately see what good output looks like for this workflow."
+            primaryAction={{
+              label: 'Generate your first content',
+              onClick: () => {
+                trackActivationEvent('empty_state_primary_clicked', {
+                  context: `content_${context}`,
+                  meta: { action: 'generate_ai' },
+                });
+                generateAIContent();
+              },
+            }}
+            secondaryAction={{
+              label: 'Try with sample data',
+              onClick: loadSampleContent,
+            }}
+            examplePreview={<ExamplePreview variant="blog" />}
+          />
         ) : (
           contentItems.map((item) => (
             <div key={item.id} className="bg-white rounded-lg border border-gray-200 p-4">

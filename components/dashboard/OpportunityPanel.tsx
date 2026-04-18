@@ -9,6 +9,9 @@ import { useRouter } from 'next/router';
 import { Rocket } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import EmptyState from '../shared/EmptyState';
+import ExamplePreview from '../shared/ExamplePreview';
+import { trackActivationEvent } from '../../lib/analytics/activationEvents';
 
 export type OpportunityType =
   | 'content_opportunity'
@@ -205,8 +208,25 @@ export function OpportunityPanel({
         <Card className={className}>
           <CardHeader>
             <CardTitle>Market Opportunities</CardTitle>
-            <p className="text-sm text-slate-600">No opportunities detected yet.</p>
           </CardHeader>
+          <CardContent>
+            <EmptyState
+              title="Find your first opportunity"
+              description="Opportunities connect trends, audience behavior, and campaign signals into one recommended next move."
+              primaryAction={{
+                label: 'Generate your first insight',
+                onClick: () => {
+                  trackActivationEvent('empty_state_primary_clicked', {
+                    accountId: companyId,
+                    context: 'dashboard_opportunities',
+                  });
+                  router.push('/dashboard?tab=intelligence&intelTab=market-pulse');
+                },
+              }}
+              secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
+              examplePreview={<ExamplePreview variant="insight" />}
+            />
+          </CardContent>
         </Card>
       );
     }
@@ -293,10 +313,25 @@ export function OpportunityPanel({
       <Card className={className}>
         <CardHeader>
           <CardTitle>Opportunities</CardTitle>
-          <p className="text-sm text-slate-600">
-            No opportunities detected yet. Opportunities are generated from trends, engagement, strategic insights, and inbox signals.
-          </p>
         </CardHeader>
+        <CardContent>
+          <EmptyState
+            title="Find your first opportunity"
+            description="Opportunities appear once trend, engagement, and campaign signals are strong enough to suggest a practical next move."
+            primaryAction={{
+              label: 'Generate your first insight',
+              onClick: () => {
+                trackActivationEvent('empty_state_primary_clicked', {
+                  accountId: companyId,
+                  context: 'opportunity_panel',
+                });
+                router.push('/dashboard?tab=intelligence&intelTab=market-pulse');
+              },
+            }}
+            secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
+            examplePreview={<ExamplePreview variant="insight" />}
+          />
+        </CardContent>
       </Card>
     );
   }

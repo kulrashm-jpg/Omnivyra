@@ -11,7 +11,7 @@ import {
   Eye,
   Loader2
 } from 'lucide-react';
-import CampaignAIChat from '../components/CampaignAIChat';
+import CampaignAIChat from '../components/CampaignAIChat.dynamic';
 
 export default function ScheduleReview() {
   const [activeTab, setActiveTab] = useState('overview');

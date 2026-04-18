@@ -6,6 +6,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { createLegacyScheduledPost, listLegacyScheduledPosts } from '@/backend/services/structuredPlanScheduler';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const { user, error } = await getSupabaseUserFromRequest(req);
@@ -76,6 +77,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         scheduledFor: postData.scheduledFor,
         title: postData.title,
       });
+
+      try {
+        const { data: row } = await supabase
+          .from('scheduled_posts')
+          .select('id, social_account_id, scheduled_for')
+          .eq('id', scheduledPost.id)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (row?.id && row.social_account_id && row.scheduled_for) {
+          await enqueueScheduledPostAt(row.id, userId, String(row.social_account_id), String(row.scheduled_for));
+        }
+      } catch (enqueueError: any) {
+        console.warn('[schedule/posts] enqueueScheduledPostAt failed (non-fatal):', enqueueError?.message);
+      }
 
       res.status(201).json({
         success: true,

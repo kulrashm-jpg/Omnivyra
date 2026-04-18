@@ -32,10 +32,10 @@ async function resolveDomain(companyId: string, fallback?: string): Promise<stri
   if (fallback && fallback.trim().length > 0) return fallback.trim().toLowerCase();
   const { data } = await supabase
     .from('companies')
-    .select('website_domain, website_url')
+    .select('website_domain, website')
     .eq('id', companyId)
     .maybeSingle();
-  const raw = (data?.website_domain || data?.website_url || '').toString().trim().toLowerCase();
+  const raw = (data?.website_domain || data?.website || '').toString().trim().toLowerCase();
   return raw || null;
 }
 

@@ -188,7 +188,7 @@ export async function runCampaignHealthMonitor(): Promise<CampaignHealthMonitorR
     const { data: activeCampaigns } = await supabase
       .from('campaigns')
       .select('id, company_id')
-      .in('status', ['active', 'scheduled', 'execution_ready', 'twelve_week_plan']);
+      .in('status', ['active', 'scheduled', 'execution_ready', 'campaign_week_plan']);
 
     if (!activeCampaigns?.length) return result;
 

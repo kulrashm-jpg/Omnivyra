@@ -87,7 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // ── On complete: fetch full plan ──────────────────────────────────────────
   if (job.status === 'complete') {
     const { data: plan } = await supabase
-      .from('twelve_week_plan')
+      .from('campaign_week_plan')
       .select('blueprint, snapshot_hash, created_at')
       .eq('campaign_id', job.campaign_id)
       .eq('source', 'v2_pipeline')

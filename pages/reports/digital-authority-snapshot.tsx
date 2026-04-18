@@ -287,25 +287,17 @@ export default function DigitalAuthoritySnapshotPage() {
         />
       </Head>
 
-      <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50">
-
-        {/* Top nav */}
-        <div className="border-b border-gray-200 bg-white sticky top-0 z-40">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
-            <button
-              onClick={() => router.push('/reports')}
-              className="inline-flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors text-sm"
-            >
-              ← Back to Reports
-            </button>
-            <div className="flex items-center gap-2">
-              <span className="bg-green-500 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse">
-                ✨ FREE
-              </span>
-              <span className="text-sm text-gray-500">{selectedCompanyName}</span>
-            </div>
-          </div>
-        </div>
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">
+        <div className="mx-auto max-w-4xl">
+          <button
+            onClick={() => router.push('/reports')}
+            className="mb-8 inline-flex items-center gap-2 text-sm text-gray-600 transition-colors hover:text-gray-900"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+            </svg>
+            Back to Reports
+          </button>
 
         {/* SUCCESS STATE */}
         {step === 'success' && (
@@ -342,27 +334,46 @@ export default function DigitalAuthoritySnapshotPage() {
         {/* FORM STATE */}
         {(step === 'form' || step === 'submitting') && (
           <>
-            {/* Hero */}
-            <section className="px-4 py-14 sm:px-6 text-center">
-              <div className="max-w-2xl mx-auto">
-                <div className="inline-flex items-center gap-2 bg-green-100 text-green-800 text-sm font-semibold px-4 py-2 rounded-full mb-5">
-                  <Zap className="w-4 h-4" />
-                  Free — No Credit Card Required
+            <div className="mb-8 rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px] lg:items-end">
+                <div className="max-w-3xl">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Report System</p>
+                  <h1 className="text-3xl font-bold tracking-tight text-gray-900 md:text-4xl">Digital Authority Snapshot</h1>
+                  <p className="mt-3 text-sm leading-relaxed text-gray-600 md:text-base">
+                    Start with a focused baseline report that shows what is limiting your visibility, authority, and growth momentum.
+                  </p>
                 </div>
-                <h1 className="text-4xl sm:text-5xl font-bold text-gray-900 mb-4">
-                  Digital Authority Snapshot
-                </h1>
-                <p className="text-xl text-gray-600 mb-3">
-                  See exactly what's holding your growth back
-                </p>
-                <p className="text-sm text-gray-500">
-                  Complete the form below • Report ready in 2–5 minutes
-                </p>
+
+                <div className="grid grid-cols-2 gap-3 lg:w-[240px]">
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Report Type</p>
+                    <p className="mt-1 text-base font-semibold text-gray-900">Free</p>
+                  </div>
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Turnaround</p>
+                    <p className="mt-1 text-base font-semibold text-gray-900">2-5 min</p>
+                  </div>
+                </div>
               </div>
-            </section>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-3">
+                <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Designed For</p>
+                  <p className="mt-1 text-sm text-gray-700">Teams that need a credible first baseline before deeper performance or market analysis.</p>
+                </div>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Decision Quality</p>
+                  <p className="mt-1 text-sm text-gray-700">Shows the most important visibility, authority, and content gaps to act on first.</p>
+                </div>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Output Standard</p>
+                  <p className="mt-1 text-sm text-gray-700">Professional baseline report with usable takeaways, not just a teaser or scorecard.</p>
+                </div>
+              </div>
+            </div>
 
             {/* What You'll Get — 3-column highlights */}
-            <section className="px-4 pb-10 sm:px-6">
+            <section className="pb-10">
               <div className="max-w-3xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {[
                   { icon: '🎯', title: 'Visibility vs Competitors', desc: 'See exactly where you rank and why' },
@@ -379,7 +390,7 @@ export default function DigitalAuthoritySnapshotPage() {
             </section>
 
             {/* Form Card */}
-            <section className="px-4 pb-16 sm:px-6">
+            <section className="pb-16">
               <div className="max-w-2xl mx-auto">
                 <div className="bg-white rounded-2xl border-2 border-green-200 shadow-lg overflow-hidden">
 
@@ -562,6 +573,7 @@ export default function DigitalAuthoritySnapshotPage() {
             </section>
           </>
         )}
+        </div>
       </div>
     </>
   );

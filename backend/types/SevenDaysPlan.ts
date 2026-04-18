@@ -1,6 +1,6 @@
 /**
  * Seven Days Plan — detailed 7-day blueprint per week.
- * Mirrors twelve_week_plan.weeks conceptually; holds "book-level" detail per day.
+ * Mirrors campaign_week_plan.weeks conceptually; holds "book-level" detail per day.
  */
 
 export interface PlatformContentItem {

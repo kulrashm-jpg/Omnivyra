@@ -9,23 +9,12 @@ import BlogGenerateModal from '../../components/blog/BlogGenerateModal';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import { BLOG_FORMAT_OPTIONS, isValidBlogFormat, type BlogFormatType } from '../../lib/blog/blogStructureTemplates';
+import type { ContentBlock } from '../../lib/blog/blockTypes';
+import type { BriefInsight, DraftFieldSuggestions, TemplateSessionPayload, EnrichedGap } from '../blogs.types';
 
-type BriefInsight = {
-  company_id: string;
-  company_context: string;
-  current_content: string;
-  writing_style: string;
-  related_titles: string[];
-  intent: 'awareness' | 'authority' | 'conversion' | 'retention';
-  tone: string;
-};
 
-type DraftFieldSuggestions = {
-  uniqueness_directive_options: string[];
-  must_include_points_options: string[];
-  campaign_objective_options: string[];
-  trend_context_options: string[];
-};
+
+
 
 type BlogPost = {
   id: string;
@@ -33,6 +22,7 @@ type BlogPost = {
   slug: string | null;
   angle_type?: string | null;
 };
+
 
 function appendPointer(existing: string, nextPointer: string, separator: string): string {
   const next = (nextPointer || '').trim();
@@ -59,6 +49,7 @@ export default function BlogGeneratePage() {
   const prefillBriefToken = typeof router.query.prefill_brief === 'string' ? router.query.prefill_brief.trim() : '';
   const prefillCardToken = typeof router.query.prefill_card === 'string' ? router.query.prefill_card.trim() : '';
   const prefillSuggestionsToken = typeof router.query.prefill_suggestions === 'string' ? router.query.prefill_suggestions.trim() : '';
+  const templateToken = typeof router.query.tpl === 'string' ? router.query.tpl.trim() : '';
   const prefillFormat = typeof router.query.prefill_format === 'string' && isValidBlogFormat(router.query.prefill_format) ? router.query.prefill_format : null;
 
   const prefillWords = typeof router.query.words === 'string' && ['800', '1200', '1600', '2000'].includes(router.query.words) ? router.query.words : null;
@@ -78,6 +69,8 @@ export default function BlogGeneratePage() {
   const [suggestions, setSuggestions] = useState<DraftFieldSuggestions | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [templateBlocks, setTemplateBlocks] = useState<ContentBlock[] | undefined>(undefined);
+  const [templateName, setTemplateName] = useState<string | undefined>(undefined);
   const [formatType, setFormatType] = useState<BlogFormatType>(() => {
     const qf = router.query.format;
     if (typeof qf === 'string' && isValidBlogFormat(qf)) return qf;
@@ -162,6 +155,29 @@ export default function BlogGeneratePage() {
             sessionStorage.removeItem(prefillSuggestionsToken);
           }
         }
+
+        if (templateToken && typeof window !== 'undefined') {
+          const rawTemplate = sessionStorage.getItem(templateToken);
+          if (rawTemplate) {
+            try {
+              const parsed = JSON.parse(rawTemplate) as ContentBlock[] | TemplateSessionPayload;
+              if (Array.isArray(parsed)) {
+                setTemplateBlocks(parsed);
+              } else if (parsed && Array.isArray(parsed.blocks)) {
+                setTemplateBlocks(parsed.blocks);
+                if (typeof parsed.template_name === 'string' && parsed.template_name.trim()) {
+                  setTemplateName(parsed.template_name.trim());
+                }
+                if (typeof parsed.format_type === 'string' && isValidBlogFormat(parsed.format_type)) {
+                  setFormatType(parsed.format_type);
+                }
+              }
+            } catch {
+              // ignore malformed template session payload
+            }
+            sessionStorage.removeItem(templateToken);
+          }
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to initialize generator.');
       } finally {
@@ -172,7 +188,7 @@ export default function BlogGeneratePage() {
     if (selectedCompanyId) {
       void bootstrap();
     }
-  }, [selectedCompanyId, prefillBriefToken, prefillCardToken, prefillSuggestionsToken]);
+  }, [selectedCompanyId, prefillBriefToken, prefillCardToken, prefillSuggestionsToken, templateToken]);
 
   const handleGenerated = (
     output: BlogGenerationOutput & { content_blocks?: unknown[] },
@@ -517,6 +533,8 @@ export default function BlogGeneratePage() {
           initialTone={brief?.tone}
           initialRelatedBlogs={brief?.related_titles ?? []}
           initialFormatType={formatType}
+          initialTemplateName={templateName}
+          initialTemplateBlocks={templateBlocks}
           baseAnswers={{
             ...(brief ? {
               company_context: brief.company_context,

@@ -1,10 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Type checking handled by tsc; avoids false positives from Turbopack's stricter checker
-  // on Supabase generated types that drift from actual DB schema.
   typescript: {
-    ignoreBuildErrors: true,
+    tsconfigPath: 'tsconfig.build.json',
   },
+  experimental: {
+    webpackBuildWorker: true,
+  },
+  turbopack: {},
   // Don't bundle server-only packages - they use Node built-ins or are API-route-only.
   serverExternalPackages: [
     'bullmq', 'ioredis',
@@ -33,7 +35,21 @@ const nextConfig = {
     { source: '/blog/rss.xml', destination: '/api/blog/rss' },
     { source: '/blog/sitemap.xml', destination: '/api/blog/sitemap' },
   ],
-  webpack: (config, { isServer }) => {
+  redirects: async () => [
+    { source: '/blogs', destination: '/blogs/create', permanent: false },
+    { source: '/content-creation', destination: '/content-studio', permanent: false },
+    { source: '/content-studio/post', destination: '/posts/create', permanent: false },
+    { source: '/threads/generate', destination: '/threads/intelligence', permanent: false },
+    { source: '/threads/template', destination: '/threads/intelligence', permanent: false },
+    { source: '/threads/suggestions', destination: '/threads/intelligence', permanent: false },
+    { source: '/command-center/bolt-text-strategy', destination: '/command-center/bolt-text', permanent: false },
+  ],
+  webpack: (config, { isServer, dev }) => {
+    if (dev && !isServer && config.cache && config.cache.type === 'filesystem') {
+      // Avoid intermittent Windows rename failures under .next/dev/cache/webpack.
+      config.cache = { type: 'memory' };
+    }
+
     if (isServer) {
       config.externals = config.externals || [];
       // Node built-ins (and node: prefixed) for bullmq, ioredis, tokenStore, etc.

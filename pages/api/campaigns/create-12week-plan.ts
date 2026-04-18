@@ -158,12 +158,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .from('campaigns')
       .update({
         weekly_themes: weeklyThemes,
-        current_stage: 'twelve_week_plan',
+        current_stage: 'campaign_week_plan',
         duration_weeks: blueprint.duration_weeks || durationWeeks,
         updated_at: new Date().toISOString()
       })
       .eq('id', campaignId);
-    void syncCampaignVersionStage(campaignId, 'twelve_week_plan', companyId).catch(() => {});
+    void syncCampaignVersionStage(campaignId, 'campaign_week_plan', companyId).catch(() => {});
 
     await saveCampaignBlueprintFromLegacy({
       campaignId,

@@ -328,7 +328,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       name:               companyName.trim(),
       website:            website.trim() || companyId, // NOT NULL — use companyId as placeholder if blank
       industry:           industry.trim() || null,
-      company_size:       companySize.trim() || null,
+      size:               companySize.trim() || null,
       status:             'active',
       website_domain:     websiteDomain,
       admin_email_domain: adminEmailDomain,

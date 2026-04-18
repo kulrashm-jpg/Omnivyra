@@ -37,7 +37,7 @@ async function hasActiveCampaign(companyId: string): Promise<boolean> {
     .from('campaigns')
     .select('id, end_date, status')
     .eq('company_id', companyId)
-    .in('status', ['active', 'scheduled', 'execution_ready', 'twelve_week_plan'])
+    .in('status', ['active', 'scheduled', 'execution_ready', 'campaign_week_plan'])
     .or(`end_date.is.null,end_date.gt.${threshold}`)
     .limit(1);
 

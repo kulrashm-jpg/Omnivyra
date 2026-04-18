@@ -1,6 +1,6 @@
 /**
  * Unified read layer for campaign blueprints.
- * Resolves from twelve_week_plan, campaign_versions.campaign_snapshot.weekly_plan, or weekly_content_refinements.
+ * Resolves from campaign_week_plan, campaign_versions.campaign_snapshot.weekly_plan, or weekly_content_refinements.
  */
 
 import { supabase } from '../db/supabaseClient';
@@ -176,7 +176,7 @@ export async function assertBlueprintActive(campaignId: string): Promise<void> {
 
 /**
  * Get unified campaign blueprint from any available source.
- * Priority: twelve_week_plan → campaign_versions → weekly_content_refinements.
+ * Priority: campaign_week_plan → campaign_versions → weekly_content_refinements.
  * Returns null if no plan exists. Does not throw.
  */
 export async function getUnifiedCampaignBlueprint(
@@ -187,11 +187,11 @@ export async function getUnifiedCampaignBlueprint(
   }
 
   try {
-    // 1. Check twelve_week_plan (Flow B - Structured Blueprint)
+    // 1. Check campaign_week_plan (Flow B - Structured Blueprint)
     // Prefer: edited_committed > committed > draft (status column if present)
     let planRow: { weeks?: any; blueprint?: any } | null = null;
     const { data: planRows, error: planError } = await supabase
-      .from('twelve_week_plan')
+      .from('campaign_week_plan')
       .select('weeks, blueprint, status')
       .eq('campaign_id', campaignId)
       .order('updated_at', { ascending: false })
@@ -203,7 +203,7 @@ export async function getUnifiedCampaignBlueprint(
     } else if (planError) {
       // Fallback: status column may not exist; fetch without it
       const { data: fallbackRows } = await supabase
-        .from('twelve_week_plan')
+        .from('campaign_week_plan')
         .select('weeks, blueprint')
         .eq('campaign_id', campaignId)
         .order('updated_at', { ascending: false })
@@ -283,7 +283,7 @@ export type ResolvedCampaignPlanContext = {
 
 /**
  * Get resolved campaign plan context for endpoints.
- * Blueprint-first: twelve_week_plan.blueprint → campaign_snapshot.weekly_plan → weekly_content_refinements.
+ * Blueprint-first: campaign_week_plan.blueprint → campaign_snapshot.weekly_plan → weekly_content_refinements.
  * Never prefer campaign_snapshot over blueprint.
  * @param requireActiveBlueprint - When true, throws if blueprint_status !== ACTIVE (for execution flows)
  */

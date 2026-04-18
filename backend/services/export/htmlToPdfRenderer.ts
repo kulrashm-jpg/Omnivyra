@@ -35,9 +35,13 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
       '--headless=new',
       '--disable-gpu',
       '--no-first-run',
+      '--disable-extensions',
+      '--disable-background-networking',
       '--allow-file-access-from-files',
       `--print-to-pdf=${pdfPath}`,
       '--no-pdf-header-footer',
+      '--print-to-pdf-no-header',
+      '--run-all-compositor-stages-before-draw',
       `file:///${htmlPath.replace(/\\/g, '/')}`,
     ], {
       windowsHide: true,

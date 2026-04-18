@@ -12,8 +12,17 @@
 import OpenAI from 'openai';
 import type { SentimentLabel } from './engagementIngestService';
 import { deductCreditsAwaited as deductCredits } from './creditExecutionService';
+import {
+  formatContentForPlatform,
+  getPlatformLimits,
+} from '../utils/contentFormatter';
 
 const getClient = (): OpenAI => new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+function normalizePlatform(platform: string): string {
+  const normalized = String(platform ?? '').toLowerCase().trim();
+  return normalized === 'twitter' ? 'x' : normalized;
+}
 
 export type ReplyInput = {
   comment: string;
@@ -36,12 +45,33 @@ const PLATFORM_TONE: Record<string, string> = {
   linkedin:  'professional, thoughtful, first-person, no slang',
   instagram: 'warm, friendly, casual, emoji welcome, brief',
   tiktok:    'energetic, casual, Gen-Z aware, very brief, emoji ok',
-  twitter:   'punchy, direct, under 140 chars, no filler',
   x:         'punchy, direct, under 140 chars, no filler',
   facebook:  'conversational, warm, community-first, slightly longer ok',
   reddit:    'honest, humble, no corporate speak, cite reasoning',
   youtube:   'appreciative, encouraging, reference the video',
   pinterest: 'aspirational, helpful, keyword-aware',
+};
+
+const PLATFORM_REPLY_RULES: Record<string, string> = {
+  linkedin: 'Write 1-3 short sentences. Be useful, credible, and human. Avoid hashtags unless the comment itself clearly uses one that matters.',
+  instagram: 'Write 1-2 short sentences. Warm and friendly is good. Light emoji is acceptable, but keep it natural.',
+  tiktok: 'Write 1 short sentence or 2 very short lines. Keep it energetic and native, not corporate.',
+  x: 'Keep it tight and punchy. Prefer one concise response under 220 characters. No hashtags unless absolutely necessary.',
+  facebook: 'Write 1-3 conversational sentences. Sound approachable and community-minded, not scripted.',
+  reddit: 'Be direct, grounded, and specific. No corporate language, no hashtags, no salesy CTA, and no unnecessary emoji.',
+  youtube: 'Acknowledge the viewer and reference the video or takeaway when relevant. Keep it encouraging and concise.',
+  pinterest: 'Keep it short, helpful, and idea-oriented. Focus on the practical takeaway or inspiration, not chatter.',
+};
+
+const PLATFORM_REPLY_BUDGET: Record<string, number> = {
+  linkedin: 500,
+  instagram: 240,
+  tiktok: 180,
+  x: 220,
+  facebook: 500,
+  reddit: 600,
+  youtube: 350,
+  pinterest: 300,
 };
 
 const SENTIMENT_STRATEGY: Record<SentimentLabel, string> = {
@@ -71,15 +101,23 @@ const FEW_SHOT: Record<SentimentLabel, { comment: string; reply: string }> = {
 };
 
 export async function generateReply(input: ReplyInput): Promise<ReplyOutput> {
-  const platform   = String(input.platform ?? '').toLowerCase().trim();
+  const platform   = normalizePlatform(input.platform ?? '');
   const toneGuide  = PLATFORM_TONE[platform] ?? 'professional and helpful';
+  const replyRules = PLATFORM_REPLY_RULES[platform] ?? 'Keep it concise, helpful, and natural.';
   const strategy   = SENTIMENT_STRATEGY[input.sentiment] ?? SENTIMENT_STRATEGY.neutral;
   const example    = FEW_SHOT[input.sentiment] ?? FEW_SHOT.neutral;
   const brandVoice = input.brand_voice ? `\nBrand voice: ${input.brand_voice}` : '';
+  const platformLimit = getPlatformLimits(platform).maxChars;
+  const replyBudget = Math.min(
+    platformLimit,
+    PLATFORM_REPLY_BUDGET[platform] ?? 400,
+  );
 
   const systemPrompt = `You are a community manager writing replies on ${platform}.
 Tone: ${toneGuide}${brandVoice}
 Strategy: ${strategy}
+Platform rules: ${replyRules}
+Reply length budget: stay under ${replyBudget} characters.
 Keep replies concise and authentic. Never sound robotic or templated.`;
 
   const userPrompt = `Example:
@@ -104,11 +142,17 @@ Respond with JSON: {"reply":"<text>","confidence":<0-1>}`;
 
     const raw = response.choices[0]?.message?.content?.trim() ?? '{}';
     const parsed = JSON.parse(raw);
+    const formatted = formatContentForPlatform(String(parsed.reply ?? ''), platform, {
+      hashtags: [],
+      mentions: [],
+      links: [],
+    });
+    const reply = formatted.text.trim().slice(0, replyBudget).trim();
     if (input.company_id) {
       await deductCredits(input.company_id, 'reply_generation', { note: `Reply on ${platform}` });
     }
     return {
-      reply:      String(parsed.reply ?? '').trim(),
+      reply,
       confidence: Number(parsed.confidence) || 0.7,
       tone_used:  toneGuide,
       platform,

@@ -4,7 +4,9 @@ import {
   type SharedGenerationResult,
 } from '../content/sharedGenerationRunner';
 import { runInsightLetterGeneration } from './runInsightLetterGeneration';
+import { runSplitScreenInsightGeneration } from './runSplitScreenInsightGeneration';
 import { runWeeklyRadarGeneration } from './runWeeklyRadarGeneration';
+import { runWeeklyBoardGeneration } from './runWeeklyBoardGeneration';
 import { runMarketMapGeneration } from './runMarketMapGeneration';
 import { runStrategyMemoGeneration } from './runStrategyMemoGeneration';
 import { runOperatorPlaybookGeneration } from './runOperatorPlaybookGeneration';
@@ -23,6 +25,14 @@ function isMinimalThesisRequest(input: NewsletterGenerationRequest): boolean {
 
 function isSignalRadarRequest(input: NewsletterGenerationRequest): boolean {
   return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'signal radar';
+}
+
+function isAnalystBoardRequest(input: NewsletterGenerationRequest): boolean {
+  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'analyst board';
+}
+
+function isSplitScreenInsightRequest(input: NewsletterGenerationRequest): boolean {
+  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'split-screen insight';
 }
 
 function isMarketMapRequest(input: NewsletterGenerationRequest): boolean {
@@ -47,8 +57,14 @@ export async function runNewsletterGeneration(
   if (isMinimalThesisRequest(input)) {
     return runInsightLetterGeneration(input);
   }
+  if (isSplitScreenInsightRequest(input)) {
+    return runSplitScreenInsightGeneration(input);
+  }
   if (isSignalRadarRequest(input)) {
     return runWeeklyRadarGeneration(input);
+  }
+  if (isAnalystBoardRequest(input)) {
+    return runWeeklyBoardGeneration(input);
   }
   if (isStrategyMemoRequest(input)) {
     return runStrategyMemoGeneration(input);

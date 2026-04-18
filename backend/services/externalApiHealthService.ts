@@ -70,6 +70,8 @@ export const updateApiHealth = async (input: {
   /** Set when this update is from a Test API run; used for health status (dot/header). */
   last_test_status?: 'SUCCESS' | 'FAILED';
   last_test_at?: string;
+  /** Phase 2: which provider account produced this health event. Stored as metadata. */
+  accountId?: string | null;
 }): Promise<ApiHealthSnapshot | null> => {
   try {
     const { data, error } = await supabase
@@ -110,6 +112,8 @@ export const updateApiHealth = async (input: {
       last_test_status: lastTestStatus,
       last_test_at: lastTestAt,
       last_test_latency_ms: input.latencyMs,
+      // Phase 2: records which account last produced a health event (informational)
+      ...(input.accountId !== undefined ? { account_id: input.accountId ?? null } : {}),
     };
 
     let upsertError = (await supabase
@@ -117,7 +121,7 @@ export const updateApiHealth = async (input: {
       .upsert(payloadWithLastTest, { onConflict: 'api_source_id' })).error;
 
     if (upsertError && (upsertError.message?.includes('last_test') || upsertError.message?.includes('column'))) {
-      const payloadWithoutLastTest = {
+      const payloadWithoutLastTest: Record<string, unknown> = {
         api_source_id: input.apiId,
         last_success_at: lastSuccessAt,
         last_failure_at: lastFailureAt,
@@ -125,6 +129,7 @@ export const updateApiHealth = async (input: {
         failure_count: failureCount,
         freshness_score: freshnessScore,
         reliability_score: reliabilityScore,
+        ...(input.accountId !== undefined ? { account_id: input.accountId ?? null } : {}),
       };
       upsertError = (await supabase
         .from('external_api_health')

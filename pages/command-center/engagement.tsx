@@ -1,10 +1,3 @@
-/**
- * Command Center → Engagement Center Sub-page
- *
- * Shown when user clicks the "Engagement Center" (4th) card on the Command Center.
- * Presents 4 cards: Engagement Center, Market Pulse, Active Leads, Intelligence.
- */
-
 import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
@@ -12,8 +5,9 @@ import { useCompanyContext } from '../../components/CompanyContext';
 interface EngagementCard {
   id: string;
   icon: string;
-  badge?: string;
-  badgeColor?: string;
+  category: string;
+  effortBand: string;
+  outcome: string;
   title: string;
   description: string;
   bullets: string[];
@@ -28,15 +22,16 @@ interface EngagementCard {
 const ENGAGEMENT_CARDS: EngagementCard[] = [
   {
     id: 'engagement-center',
-    icon: '💬',
-    badge: 'Live',
-    badgeColor: 'bg-green-100 text-green-800',
+    icon: 'E',
+    category: 'Inbox',
+    effortBand: 'Live Response',
+    outcome: 'One place to monitor conversations and respond faster',
     title: 'Engagement Center',
-    description: 'Monitor conversations, reply to comments, and connect with your community in real time.',
+    description: 'Monitor conversations, reply to comments, and coordinate community response from a single live workspace.',
     bullets: [
-      'Unified inbox across all platforms',
-      'AI-suggested replies and responses',
-      'Sentiment tracking and priority alerts',
+      'Built for real-time conversation handling',
+      'Keeps response work in one shared place',
+      'Helps teams act faster on engagement',
     ],
     cta: 'Open Engagement Center',
     route: '/engagement',
@@ -47,18 +42,19 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
   },
   {
     id: 'market-pulse',
-    icon: '📡',
-    badge: 'Real-time',
-    badgeColor: 'bg-blue-100 text-blue-800',
+    icon: 'M',
+    category: 'Signals',
+    effortBand: 'Real-Time',
+    outcome: 'A live view of market signals, trends, and shifts',
     title: 'Market Pulse',
-    description: 'Track market trends, competitor activity, and industry signals as they happen.',
+    description: 'Track competitor activity, trend movement, and emerging market signals that shape content and campaign timing.',
     bullets: [
-      'Real-time competitor content tracking',
-      'Emerging trend identification',
-      'Actionable market opportunity alerts',
+      'Best for trend and market awareness',
+      'Surfaces movement that needs attention',
+      'Supports faster strategic response',
     ],
-    cta: 'Open in Intelligence',
-    route: '/dashboard?tab=intelligence&intelTab=market-pulse',
+    cta: 'Open Market Pulse',
+    route: '/dashboard/intelligence?intelTab=market-pulse',
     accentFrom: 'from-blue-50',
     accentTo: 'to-cyan-50',
     borderColor: 'border-blue-200',
@@ -66,18 +62,19 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
   },
   {
     id: 'active-leads',
-    icon: '🎯',
-    badge: 'CRM',
-    badgeColor: 'bg-purple-100 text-purple-800',
+    icon: 'L',
+    category: 'Leads',
+    effortBand: 'Lead Ops',
+    outcome: 'A clearer workspace for active leads and follow-up',
     title: 'Active Leads',
-    description: 'Manage and nurture high-intent leads generated from your content and campaigns.',
+    description: 'Review higher-intent leads generated from content and campaigns, then move them into more structured follow-up.',
     bullets: [
-      'Content-driven lead capture and scoring',
-      'Lead nurture sequences and follow-ups',
-      'Integration-ready for your CRM',
+      'Best for lead review and prioritization',
+      'Connects content activity to lead handling',
+      'Supports structured follow-up planning',
     ],
-    cta: 'Open in Intelligence',
-    route: '/dashboard?tab=intelligence&intelTab=active-leads',
+    cta: 'Open Active Leads',
+    route: '/dashboard/intelligence?intelTab=active-leads',
     accentFrom: 'from-purple-50',
     accentTo: 'to-violet-50',
     borderColor: 'border-purple-200',
@@ -85,18 +82,19 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
   },
   {
     id: 'intelligence',
-    icon: '🧠',
-    badge: 'AI Insights',
-    badgeColor: 'bg-indigo-100 text-indigo-800',
+    icon: 'I',
+    category: 'Insights',
+    effortBand: 'Strategic View',
+    outcome: 'AI-led insights for better marketing decisions and action',
     title: 'Intelligence',
-    description: 'Access deep AI-powered marketing intelligence, strategic insights, and growth recommendations.',
+    description: 'Access deeper marketing intelligence, strategic gaps, and AI-led recommendations that support ongoing decision-making.',
     bullets: [
-      'Predictive content performance scoring',
-      'Strategic gap analysis',
-      'Weekly AI-generated intelligence briefs',
+      'Best for strategic review and visibility',
+      'Highlights gaps and growth opportunities',
+      'Supports stronger planning decisions',
     ],
     cta: 'Open Intelligence',
-    route: '/dashboard?tab=intelligence&intelTab=intelligence',
+    route: '/intelligence',
     accentFrom: 'from-indigo-50',
     accentTo: 'to-slate-50',
     borderColor: 'border-indigo-200',
@@ -116,8 +114,8 @@ export default function EngagementSubPage() {
 
   if (!authChecked || isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500" />
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
+        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-orange-500" />
       </div>
     );
   }
@@ -125,68 +123,115 @@ export default function EngagementSubPage() {
   if (!user?.userId) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-3 sm:px-4 lg:px-6">
-      <div className="max-w-5xl mx-auto">
-
-        {/* Back button */}
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">
+      <div className="mx-auto max-w-6xl">
         <button
           onClick={() => router.push('/command-center')}
-          className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-800 mb-8 transition-colors"
+          className="mb-8 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-800"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
           </svg>
           Back to Command Center
         </button>
 
-        {/* Header */}
-        <div className="text-center mb-10">
-          <div className="text-5xl mb-3">💬</div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Engagement & Intelligence</h1>
-          <p className="text-gray-500 max-w-xl mx-auto">
-            Monitor your community, then move into a single intelligence workspace for market pulse,
-            active leads, and strategic campaign visibility.
-          </p>
+        <div className="mb-8 rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px] lg:items-end">
+            <div className="max-w-3xl">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                Engagement System
+              </p>
+              <h1 className="text-3xl font-bold tracking-tight text-gray-900 md:text-4xl">
+                Manage engagement and intelligence
+              </h1>
+              <p className="mt-3 text-sm leading-relaxed text-gray-600 md:text-base">
+                Choose the workspace that fits the activity you need. Each path is designed to feel consistent,
+                executive-ready, and strong enough for ongoing engagement, monitoring, and intelligence review.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 lg:w-[240px]">
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Workspaces</p>
+                <p className="mt-1 text-base font-semibold text-gray-900">4</p>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">UX Goal</p>
+                <p className="mt-1 text-base font-semibold text-gray-900">Consistent</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Designed For</p>
+              <p className="mt-1 text-sm text-gray-700">Teams handling live engagement, monitoring signals, active leads, and broader intelligence review.</p>
+            </div>
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Decision Quality</p>
+              <p className="mt-1 text-sm text-gray-700">Each path helps teams enter the right engagement or intelligence workflow with less ambiguity.</p>
+            </div>
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Output Standard</p>
+              <p className="mt-1 text-sm text-gray-700">Professional workspaces built for faster response, better visibility, and more structured marketing decisions.</p>
+            </div>
+          </div>
         </div>
 
-        {/* Cards — 2×2 responsive grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+        <div className="mb-5 flex items-center justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Select An Engagement Type</p>
+            <p className="mt-1 text-sm text-gray-600">Every card below leads into a more deliberate engagement or intelligence path with stronger information hierarchy.</p>
+          </div>
+          <p className="hidden text-sm text-gray-500 md:block">4 engagement paths</p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
           {ENGAGEMENT_CARDS.map((card) => (
             <div
               key={card.id}
               onClick={() => router.push(card.route)}
-              className={`rounded-xl p-5 border-2 cursor-pointer hover:shadow-xl hover:scale-105 transition-all bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} flex flex-col`}
+              className={`group flex min-h-[500px] cursor-pointer flex-col rounded-[24px] border bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)]`}
             >
-              {/* Icon + badge */}
-              <div className="flex items-start justify-between mb-4">
-                <span className="text-4xl">{card.icon}</span>
-                {card.badge && (
-                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${card.badgeColor}`}>
-                    {card.badge}
+              <div className="mb-5 flex items-start justify-between gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/80 bg-white/85 text-lg font-semibold text-gray-900 shadow-sm">
+                  {card.icon}
+                </div>
+                <div className="text-right">
+                  <span className="inline-flex rounded-full bg-white/85 px-2.5 py-1 text-[11px] font-semibold text-gray-700 shadow-sm">
+                    {card.category}
                   </span>
-                )}
+                  <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.14em] text-gray-400">{card.effortBand}</p>
+                </div>
               </div>
 
-              {/* Title + description */}
-              <h2 className="text-lg font-bold text-gray-900 mb-2">{card.title}</h2>
-              <p className="text-sm text-gray-600 mb-4 flex-1">{card.description}</p>
+              <div className="flex h-[126px] flex-col">
+                <h2 className="h-[32px] text-xl font-semibold tracking-tight text-gray-900">{card.title}</h2>
+                <p className="mt-3 h-[84px] text-sm leading-relaxed text-gray-600">{card.description}</p>
+              </div>
 
-              {/* Bullets */}
-              <ul className="space-y-1.5 mb-5 text-sm">
-                {card.bullets.map((b, i) => (
-                  <li key={i} className="flex items-start gap-2 text-gray-700">
-                    <span className="text-orange-500 font-bold mt-0.5">•</span>
-                    {b}
+              <div className="mt-5 flex h-[74px] flex-col rounded-2xl border border-white/80 bg-white/75 px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Primary Outcome</p>
+                <p className="mt-1 text-sm font-medium leading-5 text-gray-800">{card.outcome}</p>
+              </div>
+
+              <ul className="mt-5 flex h-[102px] flex-col justify-start space-y-2 text-sm">
+                {card.bullets.map((bullet, index) => (
+                  <li key={index} className="flex items-start gap-2 text-gray-700">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-gray-900/70" />
+                    <span>{bullet}</span>
                   </li>
                 ))}
               </ul>
 
-              {/* CTA */}
               <button
-                onClick={(e) => { e.stopPropagation(); router.push(card.route); }}
-                className={`w-full py-2.5 ${card.ctaColor} text-white text-sm font-semibold rounded-lg transition-colors shadow-sm`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  router.push(card.route);
+                }}
+                className={`mt-6 w-full rounded-xl py-3 text-sm font-semibold text-white shadow-sm transition-colors ${card.ctaColor}`}
               >
-                {card.cta} →
+                {card.cta}
               </button>
             </div>
           ))}

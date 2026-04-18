@@ -17,7 +17,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const access = await requireCampaignAccess(req, res, campaignId);
     if (!access) return;
 
-    // Blueprint (twelve_week_plan) is source of truth for committed plans — check first
+    // Blueprint (campaign_week_plan) is source of truth for committed plans — check first
     const blueprint = await getUnifiedCampaignBlueprint(access.campaignId);
     const rawFlag = Array.isArray(raw) ? raw[0] : raw;
     const wantsRawBlueprint =

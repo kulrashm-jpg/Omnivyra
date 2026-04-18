@@ -10,7 +10,7 @@
  *   - storeFragments() to populate fragment reuse for subsequent campaigns
  *   - Funnel-stage aware content type mapping
  *
- * Output is stored in DB as the twelve_week_plan blueprint JSON.
+ * Output is stored in DB as the campaign_week_plan blueprint JSON.
  */
 
 import { tryTemplateBlueprintFor } from './aiTemplateLayer';
@@ -260,7 +260,7 @@ function expandWeek(
  * @param campaignId - Campaign ID (for slot ID generation)
  * @param strategy   - Output from generateCampaignStrategy() (Layer 2)
  * @param mapped     - Output from mapStrategyToSkeleton() (strategyMapper)
- * @returns ExpandedCampaignPlan — ready to be stored in twelve_week_plan
+ * @returns ExpandedCampaignPlan — ready to be stored in campaign_week_plan
  */
 export function expandCampaign(
   campaignId: string,

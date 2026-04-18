@@ -29,7 +29,7 @@ const ACTIVE_STATUSES = new Set([
   'draft',
   'content-creation',
   'schedule-review',
-  'twelve_week_plan',
+  'campaign_week_plan',
   'execution_ready',
 ]);
 

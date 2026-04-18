@@ -11,6 +11,7 @@
 import { supabase } from '../db/supabaseClient';
 import { getToken as getTokenFromStore } from '../auth/tokenStore';
 import { encryptCredential, decryptCredential } from '../auth/credentialEncryption';
+import { normalizePlatform } from '../constants/platforms';
 
 type TokenInput = {
   access_token: string;
@@ -19,8 +20,6 @@ type TokenInput = {
   /** G2.4: User who connected; allows owner to disconnect own. */
   connected_by_user_id?: string | null;
 };
-
-const normalizePlatform = (platform: string) => platform.toString().trim().toLowerCase();
 
 function encryptToken(plain: string): string {
   if (!plain || !plain.trim()) return '';

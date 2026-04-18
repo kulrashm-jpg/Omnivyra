@@ -20,7 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const campaignId = id;
 
-    // 1. 12 Week Plan (blueprint in twelve_week_plan)
+    // 1. 12 Week Plan (blueprint in campaign_week_plan)
     const blueprint = await getUnifiedCampaignBlueprint(campaignId);
     const has12WeekPlan = !!(blueprint?.weeks?.length);
 

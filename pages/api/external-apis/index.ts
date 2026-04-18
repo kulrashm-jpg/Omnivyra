@@ -5,6 +5,7 @@ import {
   getExternalApiRuntimeSnapshot,
   savePlatformConfig,
   validatePlatformConfig,
+  VALID_API_CATEGORIES,
 } from '../../../backend/services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
@@ -184,6 +185,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             .in('api_source_id', apiIds)
         : { data: [] };
 
+      // Account counts per API (platform-scope only — tenant view doesn't need this)
+      const { data: accountRows } = (platformScopeRequested && !companyId && apiIds.length)
+        ? await supabase
+            .from('api_provider_accounts')
+            .select('api_source_id, is_active')
+            .in('api_source_id', apiIds)
+        : { data: [] };
+
+      const accountCountMap = (accountRows || []).reduce<Record<string, { total: number; active: number }>>(
+        (acc, row) => {
+          const entry = acc[row.api_source_id] ?? { total: 0, active: 0 };
+          entry.total += 1;
+          if (row.is_active) entry.active += 1;
+          acc[row.api_source_id] = entry;
+          return acc;
+        },
+        {}
+      );
+
       const { data: usageRows } = apiIds.length
         ? await supabase
             .from('external_api_usage')
@@ -337,10 +357,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             : null;
 
         const { oauth_client_id_encrypted, oauth_client_secret_encrypted, ...apiSafe } = api as any;
+        const accountStats = accountCountMap[api.id] ?? { total: 0, active: 0 };
         return {
           ...apiSafe,
           has_oauth_credentials: !!(oauth_client_id_encrypted && oauth_client_secret_encrypted),
           health: (api as any).health || healthMap[api.id] || null,
+          account_count: accountStats.total,
+          active_account_count: accountStats.active,
           enabled_user_count: enabledCountMap[api.id] || 0,
           enabled_companies: enabledCompaniesByApi[api.id] || [],
           company_limits,
@@ -350,6 +373,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             success_count: successCount,
             failure_count: failureCount,
             signals_generated: signalsGenerated,
+            total_usage: requestCount,
             last_used_at: lastUsedAt,
             last_failure_at: lastFailureAt,
             last_error_message: lastError.message || null,
@@ -467,13 +491,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!validation.ok) {
       return res.status(400).json({ error: validation.message || 'Invalid platform config' });
     }
+
+    // ── Category validation (SuperAdmin paths only — tenant path is forced below) ──
+    const resolvedCategory: string | null = (() => {
+      if (platformScopeRequested && !companyId) {
+        // SuperAdmin creating a platform-level API
+        if (category && !VALID_API_CATEGORIES.includes(category as any)) {
+          return null; // signals invalid — handled below
+        }
+        return category || null;
+      }
+      // Tenant-created API: always forced to 'others', never whitelisted
+      return 'others';
+    })();
+
+    if (platformScopeRequested && !companyId && category && !VALID_API_CATEGORIES.includes(category as any)) {
+      return res.status(400).json({
+        error: `Invalid category "${category}". Allowed values: ${VALID_API_CATEGORIES.join(', ')}`,
+      });
+    }
+
+    // SuperAdmin creating an 'others' API must explicitly whitelist it
+    const resolvedIsWhitelisted: boolean = (() => {
+      if (platformScopeRequested && !companyId) {
+        if (resolvedCategory === 'others') {
+          if (!(req.body?.is_whitelisted === true)) {
+            return false; // will be caught below
+          }
+          return true;
+        }
+        // Non-others preset APIs default to whitelisted
+        return req.body?.is_whitelisted ?? true;
+      }
+      // Tenant APIs: never whitelisted
+      return false;
+    })();
+
+    if (
+      platformScopeRequested && !companyId &&
+      resolvedCategory === 'others' &&
+      !resolvedIsWhitelisted
+    ) {
+      return res.status(400).json({
+        error: 'APIs with category "others" must have is_whitelisted = true to be usable. Set is_whitelisted: true or choose a different category.',
+      });
+    }
+
     const resolvedApiKeyEnv = api_key_env_name || api_key_name || null;
     if (platformScopeRequested && !companyId) {
       const api = await savePlatformConfig({
         name,
         base_url,
         purpose,
-        category: category || null,
+        category: resolvedCategory,
         is_active: is_active ?? true,
         method: method || 'GET',
         auth_type: auth_type || 'none',
@@ -493,6 +563,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         required_metadata: required_metadata || {},
         posting_constraints: posting_constraints || {},
         requires_admin: requires_admin ?? true,
+        is_whitelisted: resolvedIsWhitelisted,
+        is_enabled_global: req.body?.is_enabled_global ?? true,
         company_id: null,
         created_at: new Date().toISOString(),
       });
@@ -500,14 +572,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(201).json({ api: { ...apiSafe, has_oauth_credentials: !!(_oid && _osec) } });
     }
 
+    // Tenant-created API: force category='others', is_whitelisted=false, is_enabled_global=true
     const { data, error } = await supabase
       .from('external_api_sources')
       .insert({
         name,
         base_url,
         purpose: purpose || 'posting',
-        category: category || null,
+        category: 'others',
         is_active: is_active ?? true,
+        is_whitelisted: false,
+        is_enabled_global: true,
         method: method || 'GET',
         auth_type: auth_type || 'none',
         api_key_name: api_key_name || null,

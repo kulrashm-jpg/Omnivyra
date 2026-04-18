@@ -7,6 +7,7 @@
 import { computeContentAmplificationScore } from './contentAmplificationService';
 import { recordRepurposeTransformation } from './repurposeLearningService';
 import { isBoltExcludedContentType } from '../utils/boltTextContentConfig';
+import { normalizePlatform } from '../constants/platforms';
 
 export type RepurposeSlotInput = {
   content_type?: string;
@@ -170,11 +171,7 @@ function normalizeContentType(ct: string): string {
   return String(ct ?? 'post').trim().toLowerCase();
 }
 
-function normalizePlatform(p: string): string {
-  const s = String(p ?? '').trim().toLowerCase();
-  if (s === 'twitter') return 'x';
-  return s;
-}
+
 
 /**
  * Cap repurpose depth when campaign week has high content density.

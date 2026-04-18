@@ -5,6 +5,7 @@ import { processBlockSchedule } from './boltScheduleBlockProcessor';
 import { evaluateScheduleEligibility } from './campaignScheduleEligibilityService';
 import { getContentQueue } from '../queue/contentGenerationQueues';
 import type { BoltContentJobData } from '../queue/jobProcessors/boltContentJobProcessor';
+import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -120,7 +121,7 @@ function buildAllocationSchedule(
 
 /** Map internal content type to DB schema values (platform-specific constraints). Includes image, carousel, reel, short for activity alignment. */
 const FALLBACK_CONTENT_TYPE_MAP: Record<string, Record<string, string>> = {
-  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
+  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', poll: 'poll', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
   x:         { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
   instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', newsletter: 'feed_post', short_story: 'feed_post', white_paper: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post', blog: 'feed_post' },
   youtube:   { post: 'video', video: 'video', article: 'video', newsletter: 'video', short_story: 'video', white_paper: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video', blog: 'video' },
@@ -901,7 +902,7 @@ export async function scheduleStructuredPlan(
 
   const { data: campaign, error: campaignError } = await supabase
     .from('campaigns')
-    .select('id, user_id, start_date')
+    .select('id, user_id, company_id, start_date')
     .eq('id', campaignId)
     .single();
 
@@ -920,12 +921,35 @@ export async function scheduleStructuredPlan(
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  const companyId = (versionRow as { company_id?: string } | null)?.company_id ?? null;
+  const companyId = (versionRow as { company_id?: string } | null)?.company_id
+    ?? (campaign as any).company_id
+    ?? null;
+
+  // Resolve user_id: campaign.user_id may be null if auth fell back to dev context.
+  // In that case, look up the first user in the company's role table.
+  let effectiveUserId: string | null = (campaign as any).user_id ?? null;
+  if (!effectiveUserId && companyId) {
+    const { data: companyUser } = await supabase
+      .from('user_company_roles')
+      .select('user_id')
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    effectiveUserId = (companyUser as any)?.user_id ?? null;
+    if (effectiveUserId) {
+      // Backfill the campaign's user_id so future queries work
+      await supabase.from('campaigns').update({ user_id: effectiveUserId }).eq('id', campaignId);
+    }
+  }
+  if (!effectiveUserId) {
+    throw new Error('Campaign has no user_id and no company members found — cannot resolve social accounts');
+  }
 
   let accountsQuery = supabase
     .from('social_accounts')
     .select('id, platform')
-    .eq('user_id', campaign.user_id)
+    .eq('user_id', effectiveUserId)
     .eq('is_active', true);
   if (companyId) {
     accountsQuery = accountsQuery.or(`company_id.eq.${companyId},company_id.is.null`);
@@ -1052,7 +1076,7 @@ export async function scheduleStructuredPlan(
       const blockResult = await processBlockSchedule(
         campaignId,
         dailyPlans as DailyPlanRow[],
-        { ...campaign, company_id: companyId },
+        { ...campaign, user_id: effectiveUserId, company_id: companyId },
         accountMap,
         normalize,
         typeMapByPlatform,
@@ -1095,10 +1119,13 @@ export async function scheduleStructuredPlan(
   const hasExecutionJobs = schedulableJobs.length > 0;
   const useLegacy = isLegacyPlan(plan.weeks);
 
+  // Use effectiveUserId so legacy paths don't fail on null user_id
+  const campaignWithUser = { ...campaign, user_id: effectiveUserId };
+
   const { scheduledPosts, skippedPlatforms } = hasDailyPlans
     ? scheduleFromDailyPlans(
         dailyPlans as DailyPlanRow[],
-        campaign,
+        campaignWithUser,
         accountMap,
         campaignId,
         normalize,
@@ -1109,15 +1136,15 @@ export async function scheduleStructuredPlan(
     ? scheduleFromExecutionJobs(
         plan.weeks,
         schedulableJobs,
-        campaign,
+        campaignWithUser,
         accountMap,
         campaignId,
         normalize,
         typeMapByPlatform
       )
     : useLegacy
-    ? scheduleFromLegacy(plan.weeks, campaign, accountMap, campaignId, normalize)
-    : scheduleFromAllocation(plan.weeks, campaign, accountMap, campaignId, normalize, typeMapByPlatform, options?.eligiblePlatforms, options?.frequencyPerWeek);
+    ? scheduleFromLegacy(plan.weeks, campaignWithUser, accountMap, campaignId, normalize)
+    : scheduleFromAllocation(plan.weeks, campaignWithUser, accountMap, campaignId, normalize, typeMapByPlatform, options?.eligiblePlatforms, options?.frequencyPerWeek);
 
   if (scheduledPosts.length === 0) {
     return {
@@ -1158,9 +1185,26 @@ export async function scheduleStructuredPlan(
     };
   }
 
-  const { error: insertError } = await supabase.from('scheduled_posts').insert(postsToInsert);
+  const { data: insertedPosts, error: insertError } = await supabase
+    .from('scheduled_posts')
+    .insert(postsToInsert)
+    .select('id, user_id, social_account_id, scheduled_for');
   if (insertError) {
     throw new Error(`Failed to schedule posts: ${insertError.message}`);
+  }
+
+  for (const row of insertedPosts || []) {
+    if (!row?.id || !row?.social_account_id || !row?.scheduled_for) continue;
+    try {
+      await enqueueScheduledPostAt(
+        String(row.id),
+        String(row.user_id),
+        String(row.social_account_id),
+        String(row.scheduled_for),
+      );
+    } catch (enqueueError: any) {
+      console.warn('[structuredPlanScheduler] enqueueScheduledPostAt failed (non-fatal):', enqueueError?.message);
+    }
   }
 
   return {

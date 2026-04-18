@@ -9,6 +9,8 @@ export type OwnedLongformContentType =
 export type PlannedContentType =
   | OwnedLongformContentType
   | 'post'
+  | 'thread'
+  | 'case-study'
   | 'video_script'
   | 'carousel';
 
@@ -70,7 +72,21 @@ export const CONTENT_TYPE_FILE_RULES: Record<PlannedContentType, ContentTypeFile
     createFile: 'lib/post/runPostGeneration.ts',
     manageFile: 'lib/post/defaultPostTemplates.ts',
     improveFile: 'lib/post/postImprovementEngine.ts',
-    status: 'planned',
+    status: 'implemented',
+  },
+  thread: {
+    namespace: 'lib/thread/*',
+    createFile: 'lib/thread/runThreadGeneration.ts',
+    manageFile: 'lib/thread/defaultThreadTemplates.ts',
+    improveFile: 'lib/thread/threadImprovementEngine.ts',
+    status: 'implemented',
+  },
+  'case-study': {
+    namespace: 'lib/case-study/*',
+    createFile: 'lib/case-study/runCaseStudyGeneration.ts',
+    manageFile: 'lib/case-study/defaultCaseStudyTemplates.ts',
+    improveFile: 'lib/case-study/caseStudyImprovementEngine.ts',
+    status: 'implemented',
   },
   video_script: {
     namespace: 'lib/video-script/*',
@@ -104,4 +120,3 @@ export function isPlannedContentType(value: string): value is PlannedContentType
 export function getContentTypeFileRule(contentType: PlannedContentType): ContentTypeFileRule {
   return CONTENT_TYPE_FILE_RULES[contentType];
 }
-

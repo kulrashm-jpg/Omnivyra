@@ -94,7 +94,7 @@ export default async function handler(
     // Check company website URL
     const { data: companyData, error: companyErr } = await supabase
       .from('companies')
-      .select('website_url, id')
+      .select('website, id')
       .eq('id', companyId)
       .maybeSingle();
 
@@ -118,7 +118,7 @@ export default async function handler(
     const state: CompanySetupState = {
       hasBlogsCreated: blogData && blogData.length > 0,
       hasSocialLinked: socialAccounts && socialAccounts.length > 0,
-      hasWebsiteUrl: !!companyData?.website_url,
+      hasWebsiteUrl: !!companyData?.website,
       hasReportGenerated: !!latestReport,
       hasReportGenerating: latestReport?.status === 'generating',
       blogCount: blogData?.length ?? 0,

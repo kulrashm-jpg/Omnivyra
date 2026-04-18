@@ -1,0 +1,72 @@
+import { NextApiRequest, NextApiResponse } from 'next';
+import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
+import { supabase } from '../../../../../backend/db/supabaseClient';
+
+const CANCELLED_ERROR = 'Cancelled by user';
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const runId = typeof req.query.id === 'string' ? req.query.id : '';
+    const companyId = typeof req.body?.companyId === 'string'
+      ? req.body.companyId
+      : (typeof req.query.companyId === 'string' ? req.query.companyId : '');
+
+    if (!runId || !companyId) {
+      return res.status(400).json({ error: 'run id and companyId are required' });
+    }
+
+    const access = await resolveCompanyAccess(req, res, companyId);
+    if (!access) return;
+
+    const { data: run, error: runError } = await supabase
+      .from('market_pulse_runs')
+      .select('id, company_id, status, context_snapshot')
+      .eq('id', runId)
+      .eq('company_id', companyId)
+      .single();
+
+    if (runError || !run) {
+      return res.status(404).json({ error: 'Market Pulse run not found' });
+    }
+
+    const status = String(run.status ?? '').toLowerCase();
+    if (!['pending', 'running'].includes(status)) {
+      return res.status(400).json({ error: 'Run is already finished and cannot be cancelled' });
+    }
+
+    const legacyJobId = String(run.context_snapshot?.legacy_job_id ?? '').trim();
+    if (legacyJobId) {
+      await supabase
+        .from('market_pulse_jobs_v1')
+        .update({
+          status: 'FAILED',
+          error: CANCELLED_ERROR,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', legacyJobId)
+        .in('status', ['PENDING', 'RUNNING']);
+    }
+
+    const { error: updateError } = await supabase
+      .from('market_pulse_runs')
+      .update({
+        status: 'failed',
+        error: CANCELLED_ERROR,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', runId)
+      .eq('company_id', companyId);
+
+    if (updateError) {
+      return res.status(500).json({ error: updateError.message || 'Failed to cancel Market Pulse run' });
+    }
+
+    return res.status(200).json({ cancelled: true, status: 'failed' });
+  } catch (error) {
+    return res.status(500).json({ error: (error as Error).message || 'Failed to cancel Market Pulse run' });
+  }
+}

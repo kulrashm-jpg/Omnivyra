@@ -95,6 +95,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
   });
 
-  supabase.from('blog_analytics').insert(rows).then(() => {});
+  const { error } = await supabase.from('blog_analytics').insert(rows);
+  if (error) {
+    console.error('[track] insert error:', error);
+    return res.status(500).json({ error: 'Failed to record analytics event' });
+  }
+
   return res.status(204).end();
 }

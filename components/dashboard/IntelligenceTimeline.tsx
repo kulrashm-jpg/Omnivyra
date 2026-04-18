@@ -7,6 +7,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import EmptyState from '../shared/EmptyState';
+import ExamplePreview from '../shared/ExamplePreview';
 
 export type IntelligenceEventType =
   | 'trend_detected'
@@ -181,10 +183,16 @@ export function IntelligenceTimeline({
       <Card className={className}>
         <CardHeader>
           <CardTitle>Intelligence Timeline</CardTitle>
-          <p className="text-sm text-slate-600">
-            No intelligence events yet. Events are recorded when trends are detected, insights generated, opportunities found, campaigns launched, or engagement spikes occur.
-          </p>
         </CardHeader>
+        <CardContent>
+          <EmptyState
+            title="Build your first intelligence timeline"
+            description="This timeline becomes useful as soon as the system starts detecting trends, insights, opportunities, and campaign moves over time."
+            primaryAction={{ label: 'Generate your first insight', href: '/dashboard?tab=intelligence&intelTab=market-pulse' }}
+            secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
+            examplePreview={<ExamplePreview variant="insight" />}
+          />
+        </CardContent>
       </Card>
     );
   }

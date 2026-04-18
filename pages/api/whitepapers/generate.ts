@@ -34,6 +34,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     related_blogs,
     series_blog_ids,
     format_type,
+    template_blocks,
+    template_name,
+    target_word_count,
+    cache_version,
   } = req.body ?? {};
 
   if (!company_id || typeof company_id !== 'string')
@@ -67,6 +71,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ── 3. Route based on mode ────────────────────────────────────────────────
   const resolvedMode = mode === 'angles' || mode === 'full' ? mode : undefined;
+  const requestedTargetWords = typeof target_word_count === 'number'
+    ? target_word_count
+    : typeof target_word_count === 'string'
+      ? Number.parseInt(target_word_count, 10)
+      : undefined;
+  const shouldClampLongTemplateDraft =
+    resolvedMode === 'full'
+    && Array.isArray(template_blocks)
+    && template_blocks.length > 0
+    && typeof requestedTargetWords === 'number'
+    && Number.isFinite(requestedTargetWords)
+    && requestedTargetWords > 3000;
+  const effectiveTargetWords = shouldClampLongTemplateDraft ? 3000 : requestedTargetWords;
 
   if (resolvedMode) {
     try {
@@ -92,11 +109,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         series_blog_ids:  Array.isArray(series_blog_ids)
           ? series_blog_ids.filter((id: unknown) => typeof id === 'string')
           : undefined,
-        answers:          answers && typeof answers === 'object' ? answers as Record<string, string> : undefined,
+        answers:          (() => {
+          const a = answers && typeof answers === 'object' ? answers as Record<string, string> : {};
+          if (effectiveTargetWords && !a.target_word_count) a.target_word_count = String(effectiveTargetWords);
+          if (effectiveTargetWords && a.target_word_count) a.target_word_count = String(effectiveTargetWords);
+          return Object.keys(a).length > 0 ? a : undefined;
+        })(),
         selected_angle:   selected_angle as BlogAngle | undefined,
         tone:             typeof tone === 'string' ? tone.trim() : undefined,
         blogTable:        'blogs',
         formatType:       isValidWhitepaperFormat(format_type) ? format_type : 'research',
+        template_blocks:  Array.isArray(template_blocks) ? template_blocks : undefined,
+        template_name:    typeof template_name === 'string' ? template_name : undefined,
+        cache_version:    typeof cache_version === 'string' ? cache_version : undefined,
         companyContext: {
           audience:                 str('target_audience') || str('audience'),
           brand_voice:              str('brand_voice') || str('writing_style'),
@@ -120,7 +145,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
 
       const result = await runWhitepaperGeneration(generationRequest);
-      return res.status(200).json(result);
+      if (!result.needs_clarification && 'mode' in result && result.mode === 'full') {
+        const generated = result.result as unknown as Record<string, unknown>;
+        const blocks = Array.isArray(generated.content_blocks) ? generated.content_blocks : [];
+        const html = typeof generated.content_html === 'string' ? generated.content_html : '';
+        const excerpt = typeof generated.excerpt === 'string' ? generated.excerpt : '';
+        console.info('[whitepapers/generate] result-summary', {
+          topic: String(topic).trim().slice(0, 120),
+          formatType: generationRequest.formatType,
+          templateName: generationRequest.template_name || null,
+          usedTemplateBlocks: Array.isArray(generationRequest.template_blocks) ? generationRequest.template_blocks.length : 0,
+          targetWords: effectiveTargetWords ?? null,
+          blockCount: blocks.length,
+          htmlLength: html.length,
+          excerptLength: excerpt.length,
+          titleLength: typeof generated.title === 'string' ? generated.title.length : 0,
+        });
+      }
+      return res.status(200).json({
+        ...result,
+        ...(shouldClampLongTemplateDraft
+          ? {
+              generation_notice:
+                'Whitepaper template generation was normalized to 3000 words for a stable first-pass draft. Expand the draft further in the editor if needed.',
+              requested_target_word_count: requestedTargetWords,
+              effective_target_word_count: effectiveTargetWords,
+            }
+          : {}),
+      });
     } catch (error) {
       console.error('[whitepapers/generate] runWhitepaperGeneration error:', error);
       return res.status(500).json({

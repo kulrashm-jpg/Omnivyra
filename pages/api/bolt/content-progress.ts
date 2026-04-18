@@ -121,7 +121,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       estimatedSecondsRemaining = Math.round((avgMs * parallelBatches) / 1000);
     }
 
-    const isComplete = total === 0 || done + failed >= total;
+    // A job is complete when all have reached a terminal state (done/failed).
+    // Also detect stale runs: if jobs have been stuck in queued/pending for 3+ minutes
+    // with no active or done jobs, workers likely aren't processing — treat as complete
+    // so the UI doesn't hang indefinitely.
+    let isComplete = total === 0 || done + failed >= total;
+    if (!isComplete && total > 0 && active === 0 && done === 0 && queued > 0) {
+      const oldestCreated = jobList.reduce((oldest, j) => {
+        const t = new Date(j.created_at).getTime();
+        return t < oldest ? t : oldest;
+      }, Infinity);
+      const staleMs = Date.now() - oldestCreated;
+      if (staleMs > 3 * 60 * 1000) {
+        console.warn('[bolt/content-progress] Stale jobs detected — no worker progress after 3 min', {
+          run_id: runId, total, queued, staleMs,
+        });
+        isComplete = true;
+      }
+    }
 
     return res.status(200).json({
       run_id:    runId,

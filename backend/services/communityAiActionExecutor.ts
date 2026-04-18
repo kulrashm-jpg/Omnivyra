@@ -1,3 +1,4 @@
+import { normalizePlatform } from '../constants/platforms';
 import { notifyCommunityAi } from './communityAiNotificationService';
 import { sendCommunityAiWebhooks } from './communityAiWebhookService';
 import { supabase } from '../db/supabaseClient';
@@ -37,12 +38,6 @@ type ExecutionResult = {
 };
 
 const allowedActions = new Set(['like', 'reply', 'share', 'follow', 'schedule']);
-
-const normalizePlatform = (platform: string) => {
-  const value = (platform || '').toString().trim().toLowerCase();
-  if (value === 'x') return 'twitter';
-  return value;
-};
 
 const validateAction = (action: CommunityAiAction) => {
   if (!action?.tenant_id) return { ok: false, error: 'TENANT_ID_REQUIRED' };

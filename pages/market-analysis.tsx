@@ -27,7 +27,7 @@ import {
   Share2,
   Loader2
 } from 'lucide-react';
-import CampaignAIChat from '../components/CampaignAIChat';
+import CampaignAIChat from '../components/CampaignAIChat.dynamic';
 
 export default function MarketAnalysis() {
   const [activeTab, setActiveTab] = useState('trends');

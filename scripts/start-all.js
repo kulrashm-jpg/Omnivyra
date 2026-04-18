@@ -146,6 +146,7 @@ function cleanupStaleNextLockArtifacts() {
   const lockPaths = [
     path.join(process.cwd(), '.next', 'dev', 'lock'),
     path.join(process.cwd(), '.next', 'dev', 'trace'),
+    path.join(process.cwd(), '.next', 'dev', 'cache', 'webpack'),
   ];
 
   for (const target of lockPaths) {
@@ -290,7 +291,7 @@ async function main() {
     const workers = spawnProcess(
       'workers',
       process.execPath,
-      [tsNodeBin, '--transpile-only', 'backend/queue/startWorkers.ts'],
+      [tsNodeBin, '--transpile-only', '-r', 'tsconfig-paths/register', 'backend/queue/startWorkers.ts'],
       { stdio: ['ignore', 'pipe', 'pipe'] }
     );
     children.push(workers);
@@ -307,7 +308,7 @@ async function main() {
     const cron = spawnProcess(
       'cron',
       process.execPath,
-      [tsNodeBin, '--transpile-only', 'backend/scheduler/cron.ts'],
+      [tsNodeBin, '--transpile-only', '-r', 'tsconfig-paths/register', 'backend/scheduler/cron.ts'],
       { stdio: ['ignore', 'pipe', 'pipe'] }
     );
     children.push(cron);

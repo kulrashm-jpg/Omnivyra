@@ -58,7 +58,7 @@ import {
   SummaryBlockEditor,
   ColumnsBlockEditor,
   ImageStockSearchPopover,
-} from './blocks';
+} from '../content/blocks';
 import { isEnrichable, buildBlockContext, enrichBlock } from '../../lib/blog/blockEnrichService';
 import type {
   ParagraphBlock,

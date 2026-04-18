@@ -122,7 +122,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Persist the committed plan to twelve_week_plan so it appears in "Load committed plan" and retrieve-plan
+    // Persist the committed plan to campaign_week_plan so it appears in "Load committed plan" and retrieve-plan
     const blueprint = fromStructuredPlan({ weeks: plan.weeks, campaign_id: id });
     try {
       await saveCampaignBlueprintFromLegacy({ campaignId: id, blueprint, source: 'schedule-structured-plan' });

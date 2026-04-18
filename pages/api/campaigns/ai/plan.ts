@@ -1,5 +1,4 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { runCampaignAiPlan, CampaignAiMode } from '../../../../backend/services/campaignAiOrchestrator';
 import {
   generatePlanPreview,
   PlanningValidationError,
@@ -14,7 +13,7 @@ import {
 import { saveAiCampaignPlan, saveDraftBlueprint, getLatestDraftPlan } from '../../../../backend/db/campaignPlanStore';
 import { validateAndModerateUserMessage } from '../../../../backend/chatGovernance';
 import { getCampaignPlanningInputs, saveCampaignPlanningInputs } from '../../../../backend/services/campaignPlanningInputsService';
-import { normalizeCapacityCounts, normalizeCapacityCountsWithBreakdown } from '../../../../backend/services/campaignAiOrchestrator';
+type CampaignAiMode = 'generate_plan' | 'refine_day' | 'platform_customize';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
 import { detectCampaignConflicts, suggestAvailableDateRange } from '../../../../backend/services/schedulingService';
 import { supabase } from '../../../../backend/db/supabaseClient';
@@ -45,6 +44,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    const {
+      runCampaignAiPlan,
+      normalizeCapacityCounts,
+      normalizeCapacityCountsWithBreakdown,
+    } = await import('../../../../backend/services/campaignAiOrchestrator');
     const body = req.body || {};
     const {
       campaignId,

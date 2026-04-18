@@ -1,3 +1,5 @@
+import { normalizePlatform } from '../constants/platforms';
+
 /**
  * AI Context Compression Layer
  * Produces compact summaries for downstream LLM calls instead of full context objects.
@@ -55,9 +57,7 @@ export type CampaignContextInput = {
 const TOP_N = 3;
 const DEFAULT_TONE = 'professional';
 
-function normalizePlatform(s: string): string {
-  return String(s ?? '').trim().toLowerCase().replace(/^twitter$/, 'x') || '';
-}
+
 
 function extractThemes(input: CampaignContextInput['themes']): string[] {
   if (!input?.length) return [];

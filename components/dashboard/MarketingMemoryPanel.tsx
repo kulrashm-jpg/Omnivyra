@@ -6,6 +6,8 @@
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Brain } from 'lucide-react';
+import EmptyState from '../shared/EmptyState';
+import ExamplePreview from '../shared/ExamplePreview';
 
 export interface TopContentFormat {
   format: string;
@@ -63,10 +65,16 @@ export function MarketingMemoryPanel({
             <Brain className="h-5 w-5" />
             Marketing Memory
           </CardTitle>
-          <p className="text-sm text-slate-600">
-            No learned patterns yet. Memory builds as campaigns run and performance is analyzed.
-          </p>
         </CardHeader>
+        <CardContent>
+          <EmptyState
+            title="Build your first learned pattern"
+            description="This becomes useful after your first campaigns run, because it starts surfacing what formats and messages keep working."
+            primaryAction={{ label: 'Launch your first campaign', href: '/campaign-planner?mode=direct' }}
+            secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
+            examplePreview={<ExamplePreview variant="campaign" />}
+          />
+        </CardContent>
       </Card>
     );
   }

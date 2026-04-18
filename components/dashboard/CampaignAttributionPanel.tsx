@@ -7,6 +7,8 @@
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import EmptyState from '../shared/EmptyState';
+import ExamplePreview from '../shared/ExamplePreview';
 
 export type OriginSource = 'opportunity' | 'trend' | 'strategic_insight' | 'manual';
 
@@ -79,10 +81,16 @@ export function CampaignAttributionPanel({
       <Card className={className}>
         <CardHeader>
           <CardTitle>Campaign Attribution</CardTitle>
-          <p className="text-sm text-slate-600">
-            No campaign attribution data yet. Attribution is set when campaigns are created from opportunities, trends, or strategic insights.
-          </p>
         </CardHeader>
+        <CardContent>
+          <EmptyState
+            title="See what sparked your first campaign"
+            description="Attribution shows whether a campaign started from a trend, an opportunity, an insight, or a manual decision."
+            primaryAction={{ label: 'Launch your first campaign', href: '/campaign-planner?mode=direct' }}
+            secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
+            examplePreview={<ExamplePreview variant="campaign" />}
+          />
+        </CardContent>
       </Card>
     );
   }

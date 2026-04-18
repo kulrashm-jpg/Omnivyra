@@ -132,7 +132,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let planVersion = 1;
   try {
     const { data: existingPlan } = await supabase
-      .from('twelve_week_plan')
+      .from('campaign_week_plan')
       .select('blueprint')
       .eq('campaign_id', campaignId as string)
       .eq('source', 'v2_pipeline')

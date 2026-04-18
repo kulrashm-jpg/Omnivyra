@@ -17,8 +17,10 @@ export default function EngagementCommandCenterPage() {
       <Head>
         <title>Engagement Center</title>
       </Head>
-      <div className="flex flex-col h-[calc(100vh-4rem)]">
-        <InboxDashboard organizationId={organizationId} className="flex-1 min-h-0" />
+      <div className="min-h-[calc(100vh-4rem)] bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-6 sm:px-4 lg:px-6">
+        <div className="mx-auto h-[calc(100vh-7rem)] max-w-7xl overflow-hidden rounded-[28px] border border-white/80 bg-white/92 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm">
+          <InboxDashboard organizationId={organizationId} className="h-full min-h-0" />
+        </div>
       </div>
     </>
   );

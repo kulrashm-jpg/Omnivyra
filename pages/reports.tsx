@@ -6,101 +6,137 @@ import { useCompanyContext } from '@/components/CompanyContext';
 interface ReportHubCard {
   id: string;
   icon: string;
+  category: string;
+  effortBand: string;
+  outcome: string;
   title: string;
-  subtitle: string;
-  hook: string;
-  priceLabel: string;
-  priceTone: 'free' | 'mid' | 'high';
-  accent: string;
-  borderClass: string;
-  route: string;
+  description: string;
+  bullets: string[];
   cta: string;
-  points: Array<{ icon: string; title: string; desc: string }>;
+  route: string;
+  accentFrom: string;
+  accentTo: string;
+  borderColor: string;
+  ctaColor: string;
   hidden?: boolean;
 }
 
 const REPORT_CARDS: ReportHubCard[] = [
   {
     id: 'snapshot',
-    icon: '📊',
+    icon: 'S',
+    category: 'Starter',
+    effortBand: 'Free',
+    outcome: 'A baseline report that shows gaps, priorities, and quick wins',
     title: 'Digital Authority Snapshot',
-    subtitle: 'Free starter report',
-    hook: "See exactly what's holding your growth back",
-    priceLabel: 'FREE',
-    priceTone: 'free',
-    accent: 'Recommended',
-    borderClass: 'border-green-500 ring-2 ring-green-300 bg-gradient-to-br from-green-50 to-white',
-    route: '/reports/digital-authority-snapshot',
-    cta: 'Generate Free Report',
-    points: [
-      { icon: '🎯', title: 'Your visibility vs competitors', desc: 'Know exactly where you rank and why' },
-      { icon: '📈', title: 'Your content and authority gaps', desc: "See what's missing from your strategy" },
-      { icon: '⚡', title: 'Your biggest quick wins', desc: '5–10 changes that make real impact' },
+    description: 'Start with a focused baseline on visibility, authority, and the fastest improvements your team should prioritize first.',
+    bullets: [
+      'Best for a first baseline and quick diagnosis',
+      'Highlights visibility, authority, and content gaps',
+      'Useful for planning the next set of actions',
     ],
+    cta: 'Generate Report',
+    route: '/reports/digital-authority-snapshot',
+    accentFrom: 'from-green-50',
+    accentTo: 'to-emerald-50',
+    borderColor: 'border-green-200',
+    ctaColor: 'bg-green-600 hover:bg-green-700',
   },
   {
     id: 'performance',
-    icon: '📱',
-    title: 'Performance Intelligence Report',
-    subtitle: 'Deep dive into user behavior',
-    hook: "Understand what's actually working — and what's not",
-    priceLabel: '40–80 Credits',
-    priceTone: 'mid',
-    accent: 'After Snapshot',
-    borderClass: 'border-gray-300 bg-white',
-    route: '/reports/performance-intelligence',
-    cta: 'Explore Performance Intelligence',
-    points: [
-      { icon: '👥', title: 'Traffic quality and user behavior', desc: 'Who visits, how they engage, where they leave' },
-      { icon: '🔻', title: 'Conversion drop-offs', desc: 'Identify friction points in your funnel' },
-      { icon: '📊', title: 'Channel effectiveness', desc: 'Which channels drive real value' },
+    icon: 'P',
+    category: 'Behavior',
+    effortBand: '40-80 Credits',
+    outcome: 'A deeper view of performance, behavior, and conversion friction',
+    title: 'Performance Intelligence',
+    description: 'Go deeper into how visitors behave, where friction shows up, and which channels are actually contributing value.',
+    bullets: [
+      'Best for performance and behavior analysis',
+      'Helps surface funnel and engagement friction',
+      'Useful for sharper optimization decisions',
     ],
+    cta: 'Open Performance Report',
+    route: '/reports/performance-intelligence',
+    accentFrom: 'from-purple-50',
+    accentTo: 'to-indigo-50',
+    borderColor: 'border-purple-200',
+    ctaColor: 'bg-purple-600 hover:bg-purple-700',
   },
   {
     id: 'market',
-    icon: '🚀',
-    title: 'Market & Growth Intelligence Report',
-    subtitle: 'Enterprise-scale competitive analysis',
-    hook: 'Know where to invest, what to fix, how to outgrow competitors',
-    priceLabel: '80–150 Credits',
-    priceTone: 'high',
-    accent: 'Strategic Planning',
-    borderClass: 'border-gray-300 bg-white',
-    route: '/reports/market-growth-intelligence',
-    cta: 'Explore Market Intelligence',
-    points: [
-      { icon: '🏆', title: 'Competitive positioning', desc: 'Your exact position in the market vs all rivals' },
-      { icon: '💰', title: 'Budget and campaign direction', desc: 'Where to allocate resources for max ROI' },
-      { icon: '📍', title: 'Growth opportunities across channels', desc: 'Untapped markets and expansion paths' },
+    icon: 'M',
+    category: 'Strategic',
+    effortBand: '80-150 Credits',
+    outcome: 'A strategic report for positioning, growth direction, and investment',
+    title: 'Market & Growth Intelligence',
+    description: 'Use a more strategic report to understand positioning, market direction, competitive pressure, and growth priorities.',
+    bullets: [
+      'Best for strategic market-level planning',
+      'Highlights positioning and growth opportunities',
+      'Useful for bigger allocation decisions',
     ],
+    cta: 'Open Market Report',
+    route: '/reports/market-growth-intelligence',
+    accentFrom: 'from-red-50',
+    accentTo: 'to-orange-50',
+    borderColor: 'border-red-200',
+    ctaColor: 'bg-red-600 hover:bg-red-700',
   },
   {
     id: 'hidden-future-report',
-    icon: '🧪',
+    icon: 'H',
+    category: 'Hidden',
+    effortBand: 'Hidden',
+    outcome: 'Internal only',
     title: 'Predictive Intelligence Lab',
-    subtitle: 'Coming soon',
-    hook: 'Advanced predictive forecasting',
-    priceLabel: 'Hidden',
-    priceTone: 'mid',
-    accent: 'Internal',
-    borderClass: 'border-gray-300 bg-white',
+    description: 'Internal placeholder.',
+    bullets: [],
+    cta: 'Hidden',
     route: '/reports',
-    cta: 'Coming Soon',
-    points: [],
+    accentFrom: 'from-gray-50',
+    accentTo: 'to-white',
+    borderColor: 'border-gray-200',
+    ctaColor: 'bg-gray-600 hover:bg-gray-700',
     hidden: true,
   },
 ];
 
-function getPricePillClass(tone: ReportHubCard['priceTone']): string {
-  if (tone === 'free') return 'bg-green-500 text-white';
-  if (tone === 'mid') return 'bg-purple-500 text-white';
-  return 'bg-red-500 text-white';
-}
+const SNAPSHOT_DETAILS = [
+  {
+    title: 'Content Blind Spots',
+    desc: 'Topics your audience searches for but your site currently does not cover well.',
+  },
+  {
+    title: 'Competitive Visibility Gap',
+    desc: 'Where competitors outrank you and what themes they dominate today.',
+  },
+  {
+    title: 'Keyword Opportunity Clusters',
+    desc: 'Groups of realistic opportunities you can target in the next 60-90 days.',
+  },
+  {
+    title: 'Authority Signal Weaknesses',
+    desc: 'Areas where trust, topical depth, or consistency can be improved quickly.',
+  },
+  {
+    title: 'Quick Wins Roadmap',
+    desc: 'Top changes to prioritize first for maximum impact with minimal effort.',
+  },
+  {
+    title: 'Executive Summary',
+    desc: 'A concise summary your team can use immediately for planning and alignment.',
+  },
+];
+
+const SAMPLE_INSIGHTS = [
+  { value: '-60%', tone: 'text-red-600', desc: 'Critical topic coverage gap compared to top competitors.' },
+  { value: '2.5x', tone: 'text-orange-600', desc: 'Competitor visibility advantage in your highest-intent segments.' },
+  { value: '+340', tone: 'text-green-600', desc: 'Estimated ranking opportunities available with focused execution.' },
+];
 
 export default function ReportsHubPage() {
   const router = useRouter();
   const { selectedCompanyName } = useCompanyContext();
-
   const visibleCards = REPORT_CARDS.filter((card) => !card.hidden);
 
   return (
@@ -109,183 +145,161 @@ export default function ReportsHubPage() {
         <title>Reports Hub | Omnivyra</title>
         <meta
           name="description"
-          content="Choose your report type: free Digital Authority Snapshot, Performance Intelligence, or Market & Growth Intelligence."
+          content="Choose your report type: Digital Authority Snapshot, Performance Intelligence, or Market & Growth Intelligence."
         />
       </Head>
 
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
-        <div className="border-b border-gray-200 bg-white sticky top-0 z-40">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
-            <button
-              onClick={() => router.push('/command-center')}
-              className="inline-flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors text-sm"
-            >
-              ← Back to Command Center
-            </button>
-            <span className="text-sm text-gray-500">{selectedCompanyName || 'Omnivyra'}</span>
-          </div>
-        </div>
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">
+        <div className="mx-auto max-w-6xl">
+          <button
+            onClick={() => router.push('/command-center')}
+            className="mb-8 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-800"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+            </svg>
+            Back to Command Center
+          </button>
 
-        <section className="py-16 px-4 sm:px-6 lg:px-8">
-          <div className="max-w-6xl mx-auto">
-            <div className="text-center mb-10">
-              <p className="text-xs uppercase tracking-widest font-semibold text-gray-500 mb-3">
-                Step 1 of your growth analysis
-              </p>
-              <h1 className="text-5xl font-bold text-gray-900 mb-4">Choose Your Level of Insight</h1>
-              <p className="text-gray-600">
-                Start with your free Digital Authority Snapshot — or go deeper with premium intelligence.
+          <div className="mb-8 rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px] lg:items-end">
+              <div className="max-w-3xl">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                  Report System
+                </p>
+                <h1 className="text-3xl font-bold tracking-tight text-gray-900 md:text-4xl">
+                  Choose the report depth you need
+                </h1>
+                <p className="mt-3 text-sm leading-relaxed text-gray-600 md:text-base">
+                  Start with a focused baseline or move into deeper intelligence. Each path is designed to feel
+                  consistent, executive-ready, and useful for teams making real planning decisions.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 lg:w-[240px]">
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Report Types</p>
+                  <p className="mt-1 text-base font-semibold text-gray-900">{visibleCards.length}</p>
+                </div>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Workspace</p>
+                  <p className="mt-1 text-base font-semibold text-gray-900">{selectedCompanyName || 'Omnivyra'}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-4 md:grid-cols-3">
+              <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Designed For</p>
+                <p className="mt-1 text-sm text-gray-700">Teams moving from first baseline diagnostics into performance and strategic intelligence.</p>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Decision Quality</p>
+                <p className="mt-1 text-sm text-gray-700">Each path helps teams choose the right depth of insight before committing time or credits.</p>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Output Standard</p>
+                <p className="mt-1 text-sm text-gray-700">Professional reports built for clearer analysis, stronger planning, and executive-level review.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-5 flex items-center justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Select A Report Type</p>
+              <p className="mt-1 text-sm text-gray-600">Every card below leads into a more deliberate reporting path with stronger information hierarchy.</p>
+            </div>
+            <p className="hidden text-sm text-gray-500 md:block">{visibleCards.length} report paths</p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+            {visibleCards.map((card) => (
+              <div
+                key={card.id}
+                onClick={() => router.push(card.route)}
+                className={`group flex min-h-[500px] cursor-pointer flex-col rounded-[24px] border bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)]`}
+              >
+                <div className="mb-5 flex items-start justify-between gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/80 bg-white/85 text-lg font-semibold text-gray-900 shadow-sm">
+                    {card.icon}
+                  </div>
+                  <div className="text-right">
+                    <span className="inline-flex rounded-full bg-white/85 px-2.5 py-1 text-[11px] font-semibold text-gray-700 shadow-sm">
+                      {card.category}
+                    </span>
+                    <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.14em] text-gray-400">{card.effortBand}</p>
+                  </div>
+                </div>
+
+                <div className="flex h-[126px] flex-col">
+                  <h2 className="h-[56px] text-xl font-semibold tracking-tight text-gray-900">{card.title}</h2>
+                  <p className="mt-3 h-[56px] text-sm leading-relaxed text-gray-600">{card.description}</p>
+                </div>
+
+                <div className="mt-5 flex h-[74px] flex-col rounded-2xl border border-white/80 bg-white/75 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Primary Outcome</p>
+                  <p className="mt-1 text-sm font-medium leading-5 text-gray-800">{card.outcome}</p>
+                </div>
+
+                <ul className="mt-5 flex h-[102px] flex-col justify-start space-y-2 text-sm">
+                  {card.bullets.map((bullet, index) => (
+                    <li key={index} className="flex items-start gap-2 text-gray-700">
+                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-gray-900/70" />
+                      <span>{bullet}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <button
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    router.push(card.route);
+                  }}
+                  className={`mt-6 w-full rounded-xl py-3 text-sm font-semibold text-white shadow-sm transition-colors ${card.ctaColor}`}
+                >
+                  {card.cta}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-12 rounded-[28px] border border-green-200 bg-gradient-to-br from-green-50 to-white p-6 shadow-[0_16px_40px_rgba(15,23,42,0.05)] md:p-8">
+            <div className="mb-6">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-green-700">Free Report Breakdown</p>
+              <h2 className="mt-1 text-2xl font-semibold text-gray-900">What the Digital Authority Snapshot Covers</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-600">
+                The free report is a real baseline, not just a teaser. It gives a clear view of your content performance,
+                authority gaps, and the fastest wins your team can act on first.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-7">
-              {visibleCards.map((card) => (
-                <div
-                  key={card.id}
-                  onClick={() => router.push(card.route)}
-                  role="button"
-                  aria-label={card.title}
-                  className={`rounded-2xl border-2 p-8 transition-all transform hover:scale-[1.02] hover:shadow-2xl cursor-pointer ${card.borderClass}`}
-                >
-                  <div className="flex items-start justify-between mb-6">
-                    <div className="text-5xl">{card.icon}</div>
-                    <div className="flex flex-col items-end gap-2">
-                      <span className={`inline-block font-bold px-4 py-2 rounded-full text-sm ${getPricePillClass(card.priceTone)}`}>
-                        {card.priceLabel}
-                      </span>
-                      {card.accent && (
-                        <span className="inline-block bg-green-100 text-green-800 font-semibold px-3 py-1 rounded-full text-xs">
-                          ⭐ {card.accent}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <h2 className="text-4xl font-bold text-gray-900 mb-1 leading-tight">{card.title}</h2>
-                  <p className="text-sm text-gray-500 mb-5">{card.subtitle}</p>
-                  <p className={`text-2xl font-semibold italic mb-6 ${card.id === 'market' ? 'text-red-600' : card.id === 'performance' ? 'text-purple-600' : 'text-green-700'}`}>
-                    {card.hook}
-                  </p>
-
-                  <div className="space-y-4 mb-8">
-                    {card.points.map((point) => (
-                      <div key={point.title} className="flex items-start gap-3">
-                        <span className="text-xl mt-1">{point.icon}</span>
-                        <div>
-                          <p className="font-semibold text-gray-900">{point.title}</p>
-                          <p className="text-sm text-gray-600">{point.desc}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      router.push(card.route);
-                    }}
-                    className={`w-full py-3 px-4 rounded-lg font-bold text-white transition-all transform hover:shadow-lg ${
-                      card.id === 'market'
-                        ? 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700'
-                        : card.id === 'performance'
-                          ? 'bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700'
-                          : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
-                    }`}
-                  >
-                    {card.cta}
-                  </button>
+            <div className="grid gap-4 md:grid-cols-2">
+              {SNAPSHOT_DETAILS.map((item) => (
+                <div key={item.title} className="rounded-2xl border border-green-200 bg-white px-4 py-4">
+                  <h3 className="text-sm font-semibold text-gray-900">{item.title}</h3>
+                  <p className="mt-1 text-sm text-gray-600">{item.desc}</p>
                 </div>
               ))}
             </div>
 
-            {/* Free Snapshot Details (restored depth from earlier version) */}
-            <div className="mt-14 rounded-2xl border-2 border-green-200 bg-gradient-to-br from-green-50 to-white p-8 md:p-10">
-              <div className="text-center mb-8">
-                <p className="text-xs uppercase tracking-wider font-semibold text-green-700 mb-2">
-                  Free report breakdown
-                </p>
-                <h2 className="text-3xl font-bold text-gray-900 mb-3">What the Digital Authority Snapshot Covers</h2>
-                <p className="text-gray-600 max-w-3xl mx-auto">
-                  The free report is not a teaser. It gives a full baseline view of your content performance,
-                  authority gaps, and the fastest wins you can apply.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                {[
-                  {
-                    icon: '✓',
-                    title: 'Content Blind Spots',
-                    desc: 'Topics your audience searches for but your site currently does not cover well.',
-                  },
-                  {
-                    icon: '✓',
-                    title: 'Competitive Visibility Gap',
-                    desc: 'Where competitors outrank you and what themes they dominate today.',
-                  },
-                  {
-                    icon: '✓',
-                    title: 'Keyword Opportunity Clusters',
-                    desc: 'Groups of realistic opportunities you can target in the next 60–90 days.',
-                  },
-                  {
-                    icon: '✓',
-                    title: 'Authority Signal Weaknesses',
-                    desc: 'Areas where trust, topical depth, or consistency can be improved quickly.',
-                  },
-                  {
-                    icon: '✓',
-                    title: 'Quick Wins Roadmap',
-                    desc: 'Top changes to prioritize first for maximum impact with minimal effort.',
-                  },
-                  {
-                    icon: '✓',
-                    title: 'Executive Summary',
-                    desc: 'A concise summary your team can use immediately for planning and alignment.',
-                  },
-                ].map((item) => (
-                  <div key={item.title} className="bg-white border border-green-200 rounded-xl p-5">
-                    <div className="flex items-start gap-3">
-                      <div className="h-7 w-7 rounded-full bg-green-100 text-green-700 font-bold flex items-center justify-center flex-shrink-0">
-                        {item.icon}
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-gray-900 mb-1">{item.title}</h3>
-                        <p className="text-sm text-gray-600">{item.desc}</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-8 bg-white border border-green-300 rounded-xl p-5">
-                <p className="text-sm text-gray-700">
-                  <span className="font-bold text-green-700">Free report policy:</span> No payment required for the first Digital Authority Snapshot.
-                  Premium reports are paid and credit deduction happens only after form submission and confirmation.
-                </p>
-              </div>
-            </div>
-
-            {/* Sample insight previews */}
-            <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-5">
-              <div className="rounded-xl border border-gray-200 bg-white p-5">
-                <p className="text-xs uppercase text-gray-500 font-semibold mb-2">Sample Insight</p>
-                <p className="text-2xl font-bold text-red-600 mb-1">-60%</p>
-                <p className="text-sm text-gray-700">Critical topic coverage gap compared to top competitors.</p>
-              </div>
-              <div className="rounded-xl border border-gray-200 bg-white p-5">
-                <p className="text-xs uppercase text-gray-500 font-semibold mb-2">Sample Insight</p>
-                <p className="text-2xl font-bold text-orange-600 mb-1">2.5x</p>
-                <p className="text-sm text-gray-700">Competitor visibility advantage in your highest-intent segments.</p>
-              </div>
-              <div className="rounded-xl border border-gray-200 bg-white p-5">
-                <p className="text-xs uppercase text-gray-500 font-semibold mb-2">Sample Insight</p>
-                <p className="text-2xl font-bold text-green-600 mb-1">+340</p>
-                <p className="text-sm text-gray-700">Estimated ranking opportunities available with focused execution.</p>
-              </div>
+            <div className="mt-6 rounded-2xl border border-green-300 bg-white px-4 py-4">
+              <p className="text-sm text-gray-700">
+                <span className="font-semibold text-green-700">Free report policy:</span> Your first Digital Authority Snapshot does not require payment.
+                Premium reports use credits after submission and confirmation.
+              </p>
             </div>
           </div>
-        </section>
+
+          <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
+            {SAMPLE_INSIGHTS.map((item) => (
+              <div key={item.value} className="rounded-2xl border border-gray-200 bg-white px-4 py-4">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Sample Insight</p>
+                <p className={`mt-2 text-2xl font-semibold ${item.tone}`}>{item.value}</p>
+                <p className="mt-1 text-sm text-gray-600">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </>
   );

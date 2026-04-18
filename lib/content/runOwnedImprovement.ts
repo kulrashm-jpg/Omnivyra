@@ -22,15 +22,15 @@ export async function runOwnedImprovement(
 
   switch (contentType as OwnedLongformContentType) {
     case 'newsletter':
-      return improveNewsletterDraft(input);
+      return improveNewsletterDraft(input as any);
     case 'article':
-      return improveArticleDraft(input);
+      return improveArticleDraft(input as any);
     case 'guide':
-      return improveGuideDraft(input);
+      return improveGuideDraft(input as any);
     case 'story':
-      return improveStoryDraft(input);
+      return improveStoryDraft(input as any);
     case 'whitepaper':
-      return improveWhitepaperDraft(input);
+      return improveWhitepaperDraft(input as any);
     case 'blog':
     default:
       return improveBlogContent(input);

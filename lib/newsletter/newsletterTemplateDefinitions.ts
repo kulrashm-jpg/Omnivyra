@@ -168,6 +168,7 @@ function buildInsightSplitScreenTemplate(targetWords = 1200): ContentBlock[] {
     para('Push the idea one step further with a more surprising implication, edge case, or second-order effect. Show what becomes true once the reader accepts the deeper reality, and why that matters in practice.'),
     fixedH2('Implication', 'Implication'),
     para('Explain what this means in practical terms for operators, leaders, or the specific audience. Include one concrete shift in judgment, communication, or decision-making, not just a broad takeaway.'),
+    callout('insight', 'State the one practical-shift line the reader should carry forward after seeing the surface story and the deeper reality side by side.'),
     fixedH2('Closing', 'Closing'),
     para('End with a short, memorable closing that lands the idea with confidence.'),
     summary('Write a concise synthesis that distills the thesis, the hidden dynamic, and the practical shift the reader should carry forward.'),
@@ -181,6 +182,7 @@ function buildWeeklyRadarTemplate(targetWords = 1200): ContentBlock[] {
     callout('note', 'Open with the one-line takeaway from the week: the signal that matters most and why.'),
     fixedH2('Week Summary', 'Week Summary'),
     para('Write a 2-3 line overview of the week, focusing on what deserves attention rather than recapping everything.'),
+    quote('Add one sharp editorial line that captures the defining signal or board-level takeaway of the week. It should be quotable on its own.'),
     fixedH2('Top Signals', 'Top Signals'),
     ...Array.from({ length: signalCount }, (_, index) => ([
       cols(2, [
@@ -219,6 +221,7 @@ function buildWeeklyBoardTemplate(targetWords = 1200): ContentBlock[] {
         callout('note', 'Add a quick note on what strong teams should pay attention to next.'),
       ],
     ]),
+    quote('Add one sharp analyst line that captures the week in a way a leader could forward or repeat. Make it quotable, not decorative.'),
     fixedH2('Top Signals', 'Top Signals'),
     ...Array.from({ length: signalCount }, (_, index) => ([
       fixedH3(`Signal ${index + 1}`, `Signal ${index + 1}`),

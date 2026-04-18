@@ -25,6 +25,7 @@
 import { Job } from 'bullmq';
 import { createHash } from 'crypto';
 import { supabase } from '../../db/supabaseClient';
+import { enqueueScheduledPostAt } from '../../scheduler/schedulerService';
 import {
   generateMasterContentFromIntent,
   buildPlatformVariantsFromMaster,
@@ -572,7 +573,19 @@ export async function processBoltContentJob(job: Job): Promise<void> {
     }
 
     const scheduledPostId = (inserted as any)?.id ?? null;
-    if (scheduledPostId) scheduledPostIds.push(scheduledPostId);
+    if (scheduledPostId) {
+      scheduledPostIds.push(scheduledPostId);
+      try {
+        await enqueueScheduledPostAt(
+          String(scheduledPostId),
+          String(userId),
+          String(socialAccountId),
+          scheduledFor.toISOString(),
+        );
+      } catch (enqueueError: any) {
+        console.warn('[bolt-job] enqueueScheduledPostAt failed (non-fatal):', enqueueError?.message);
+      }
+    }
 
     // Update platform_content_slot
     if (dailyPlanId) {

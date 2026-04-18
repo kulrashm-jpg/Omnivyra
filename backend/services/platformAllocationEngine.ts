@@ -1,3 +1,5 @@
+import { normalizePlatform } from '../constants/platforms';
+
 /**
  * Platform Allocation Engine
  * BOLT: assigns platform to each content slot based on content type and campaign signals.
@@ -45,11 +47,7 @@ const CONTENT_TYPE_TO_PLATFORM: Record<string, string> = {
   feed_post: 'linkedin',
 };
 
-function normalizePlatform(p: string): string {
-  const s = String(p || '').trim().toLowerCase();
-  if (s === 'twitter') return 'x';
-  return s || DEFAULT_PLATFORM;
-}
+
 
 /**
  * Determine platform for a slot using content_type mapping, then preferences.

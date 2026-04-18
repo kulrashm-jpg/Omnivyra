@@ -8,7 +8,6 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
-import Header from '../components/Header';
 import {
   FileText,
   Sparkles,
@@ -137,7 +136,6 @@ export default function CampaignProposalsPage() {
   if (!selectedCompanyId) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <Header />
         <main className="max-w-5xl mx-auto px-4 py-12">
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 text-center">
             <AlertCircle className="w-10 h-10 text-amber-500 mx-auto mb-3" />
@@ -150,7 +148,6 @@ export default function CampaignProposalsPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <Header />
       <main className="max-w-5xl mx-auto px-4 py-8">
         <div className="flex items-start justify-between mb-8">
           <div>

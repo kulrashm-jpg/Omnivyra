@@ -1,6 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const { user, error } = await getSupabaseUserFromRequest(req);
@@ -20,7 +22,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userId = await requireUserId(req, res);
     if (!userId) return;
 
-    const { title, content, hashtags, mediaType, scheduledFor, platform, accountId } = req.body;
+    const { companyId, title, content, hashtags, mediaType, scheduledFor, platform, accountId, contentType } = req.body;
+
+    if (companyId) {
+      const access = await enforceCompanyAccess({ req, res, companyId: String(companyId) });
+      if (!access) return;
+    }
 
     if (!content || !scheduledFor || !platform) {
       return res.status(400).json({ error: 'Missing required fields: content, scheduledFor, platform' });
@@ -37,13 +44,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const insertPayload: Record<string, any> = {
       user_id: userId,
       platform,
-      content_type: 'post',
+      content_type: String(contentType || 'post').trim().toLowerCase() || 'post',
       content,
       title: title || null,
       hashtags: hashtagArray.length ? hashtagArray : null,
       media_urls: mediaType && mediaType !== 'none' ? [] : null,
       scheduled_for: scheduledFor,
-      status: 'SCHEDULED',
+      status: 'scheduled',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -61,6 +68,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (insertError || !newPost) {
       console.error('[scheduler/schedule] insert failed:', insertError);
       return res.status(500).json({ error: insertError?.message || 'Failed to schedule post' });
+    }
+
+    if (accountId && newPost?.id) {
+      try {
+        await enqueueScheduledPostAt(
+          newPost.id,
+          userId,
+          String(accountId),
+          String(scheduledFor),
+        );
+      } catch (enqueueError: any) {
+        console.warn('[scheduler/schedule] enqueueScheduledPostAt failed (non-fatal):', enqueueError?.message);
+      }
     }
 
     return res.status(201).json({

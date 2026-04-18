@@ -300,6 +300,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   useEffect(() => {
     const supabase = getSupabaseBrowser();
+    let probeInFlight = false; // Prevents race: don't mark authChecked while INITIAL_SESSION probe is pending
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session) {
@@ -310,6 +311,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         // sync-supabase-user yet — probing would race and 401.
         // TOKEN_REFRESHED is also safe to skip.
         if (event === 'INITIAL_SESSION') {
+          probeInFlight = true;
           try {
             const probe = await fetch('/api/auth/post-login-route', {
               headers: { Authorization: `Bearer ${session.access_token}` },
@@ -318,16 +320,20 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
               await supabase.auth.signOut();
               setIsAuthenticated(false);
               setAuthChecked(true);
+              probeInFlight = false;
               return;
             }
           } catch {
             // Network error: optimistically allow; refreshCompanies catches 401 later.
           }
+          probeInFlight = false;
         }
         setIsAuthenticated(true);
         setAuthChecked(true);
         return;
       }
+      // No session — but if a probe is in flight, skip this event (it's a transient null)
+      if (probeInFlight) return;
       // No session — check for content-architect cookie session
       const asArchitect = await loadContentArchitectContext();
       setIsAuthenticated(asArchitect);

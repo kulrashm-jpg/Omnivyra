@@ -6,28 +6,9 @@
  * Requires campaign access. Messages are threaded via parent_message_id.
  */
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { createMessage, listMessages } from '../../../backend/services/collaborationMessageService';
 import { processMentions } from '../../../backend/services/collaborationMentionService';
-
-type MessageRow = {
-  id: string;
-  campaign_id: string;
-  parent_message_id: string | null;
-  message_text: string;
-  created_by: string;
-  created_at: string;
-};
-
-function toResponse(row: MessageRow) {
-  return {
-    id: row.id,
-    message_text: row.message_text,
-    created_by: row.created_by,
-    created_at: row.created_at,
-    parent_message_id: row.parent_message_id,
-  };
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -47,19 +28,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!access) return;
 
   if (req.method === 'GET') {
-    const { data, error } = await supabase
-      .from('campaign_messages')
-      .select('id, campaign_id, parent_message_id, message_text, created_by, created_at')
-      .eq('campaign_id', campaignId)
-      .order('created_at', { ascending: true });
-
-    if (error) {
+    try {
+      const messages = await listMessages({
+        table: 'campaign_messages',
+        select: 'id, campaign_id, parent_message_id, message_text, created_by, created_at',
+        source: 'campaign',
+        userId: access.userId,
+        applyFilters: (query) => query.eq('campaign_id', campaignId),
+      });
+      return res.status(200).json(messages);
+    } catch (error: any) {
       console.error('[campaign/messages] GET error:', error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ error: error?.message || 'Failed to load messages' });
     }
-
-    const list = (data || []).map((r: MessageRow) => toResponse(r));
-    return res.status(200).json(list);
   }
 
   if (req.method === 'POST') {
@@ -76,23 +57,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       parent_message_id: typeof parent_message_id === 'string' && parent_message_id ? parent_message_id : null,
     };
 
-    const { data, error } = await supabase
-      .from('campaign_messages')
-      .insert(insert)
-      .select('id, campaign_id, parent_message_id, message_text, created_by, created_at')
-      .single();
+    try {
+      const message = await createMessage({
+        table: 'campaign_messages',
+        select: 'id, campaign_id, parent_message_id, message_text, created_by, created_at',
+        insert,
+      });
+      processMentions(message.id, 'campaign', text, access.companyId, access.userId).catch((e) =>
+        console.error('[campaign/messages] processMentions:', e)
+      );
 
-    if (error) {
+      return res.status(201).json(message);
+    } catch (error: any) {
       console.error('[campaign/messages] POST error:', error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ error: error?.message || 'Failed to create message' });
     }
-
-    const msg = data as MessageRow;
-    processMentions(msg.id, 'campaign', text, access.companyId, access.userId).catch((e) =>
-      console.error('[campaign/messages] processMentions:', e)
-    );
-
-    return res.status(201).json(toResponse(msg));
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

@@ -16,6 +16,7 @@ const PLATFORM_URL_KEYS: Record<string, keyof CompanyProfile> = {
   twitter: 'x_url',
   tiktok: 'tiktok_url',
   reddit: 'reddit_url',
+  pinterest: 'pinterest_url',
 };
 
 /**
@@ -67,6 +68,7 @@ const PLATFORM_PRIORITY_ORDER = [
   'x',
   'tiktok',
   'reddit',
+  'pinterest',
 ];
 
 export function sortPlatformsByPriority(platforms: string[]): string[] {

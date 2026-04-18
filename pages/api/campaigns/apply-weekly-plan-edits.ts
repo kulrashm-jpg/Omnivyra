@@ -131,7 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await saveDraftBlueprint({ campaignId, blueprint: fullBlueprint });
     } else {
       const { data: committed } = await supabase
-        .from('twelve_week_plan')
+        .from('campaign_week_plan')
         .select('id')
         .eq('campaign_id', campaignId)
         .in('status', ['committed', 'edited_committed'])

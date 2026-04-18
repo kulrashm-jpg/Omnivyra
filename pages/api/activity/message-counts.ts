@@ -5,8 +5,8 @@
  * Feature 1: Unread = messages not yet read by current user (message_reads).
  */
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { getMessageCounts } from '../../../backend/services/collaborationMessageService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -31,38 +31,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { data: msgRows, error: msgError } = await supabase
-      .from('activity_messages')
-      .select('id, activity_id')
-      .eq('campaign_id', campaignId)
-      .in('activity_id', activityIds);
-
-    if (msgError) {
-      console.error('[activity/message-counts]', msgError);
-      return res.status(500).json({ error: 'Failed to fetch counts' });
-    }
-
-    const msgIds = (msgRows || []).map((r: { id: string }) => r.id);
-    let readMsgIds = new Set<string>();
-    if (msgIds.length > 0 && access.userId) {
-      const { data: readRows } = await supabase
-        .from('message_reads')
-        .select('message_id')
-        .eq('message_source', 'activity')
-        .eq('user_id', access.userId)
-        .in('message_id', msgIds);
-      readMsgIds = new Set((readRows || []).map((r: { message_id: string }) => r.message_id));
-    }
-
-    const counts: Record<string, { total: number; unread: number }> = {};
-    for (const aid of activityIds) counts[aid] = { total: 0, unread: 0 };
-    for (const r of msgRows || []) {
-      const aid = String(r.activity_id || '');
-      if (aid && activityIds.includes(aid)) {
-        counts[aid].total += 1;
-        if (!readMsgIds.has(r.id)) counts[aid].unread += 1;
-      }
-    }
+    const counts = await getMessageCounts({
+      table: 'activity_messages',
+      select: 'id, activity_id',
+      groupField: 'activity_id',
+      groupValues: activityIds,
+      source: 'activity',
+      userId: access.userId,
+      applyFilters: (query) => query.eq('campaign_id', campaignId).in('activity_id', activityIds),
+    });
     return res.status(200).json(counts);
   } catch (err: unknown) {
     console.error('[activity/message-counts]', err);

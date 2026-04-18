@@ -176,7 +176,20 @@
       "Bash(node_modules/.bin/jest backend/tests/unit/executionModeInference.test.ts backend/tests/unit/contentGenerationPipeline.test.ts backend/tests/unit/autopilotExecutionPipeline.test.ts --no-coverage --forceExit)",
       "Bash(node_modules/.bin/jest backend/tests/unit/contentGenerationPipeline.test.ts --no-coverage --forceExit)",
       "Bash(find C:/virality/lib C:/virality/backend/lib -name *.ts)",
-      "Bash(grep -n \"\\\\->\" C:/virality/pages/reports/view/[reportId].tsx)"
+      "Bash(grep -n \"\\\\->\" C:/virality/pages/reports/view/[reportId].tsx)",
+      "Bash(awk:*)",
+      "Bash(echo \"Default TSC Exit: $?\")",
+      "Bash(echo \"Build TSC Exit: $?\")",
+      "Bash(npm ls *)",
+      "Bash(echo \"Build Exit: $?\")",
+      "Bash(echo \"Build: $?\")",
+      "Bash(echo \"Default: $?\")",
+      "mcp__supabase__execute_sql",
+      "Bash(npx --prefix c:/virality tsc --noEmit --project c:/virality/tsconfig.build.json)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(find /c/virality -type f -name \"*.ts\" -exec grep -l \"newsletter.*linkedin\\\\|linkedin.*newsletter\" {} \\\\;)",
+      "Bash(find /c/virality/backend -type f -name \"*.ts\" -exec grep -l \"Newsletter\\\\|NEWSLETTER\" {} \\\\;)",
+      "Read(//c/tmp/**)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]"
