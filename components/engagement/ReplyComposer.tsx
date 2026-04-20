@@ -13,6 +13,12 @@ export interface ReplyComposerProps {
   value?: string;
   onChange?: (value: string) => void;
   onReplySent?: () => void;
+  onExecuteReply?: (input: {
+    threadId: string;
+    messageId: string;
+    platform: string;
+    replyText: string;
+  }) => Promise<void>;
   onRequestSuggestions?: () => void;
   disabled?: boolean;
   className?: string;
@@ -26,6 +32,7 @@ export const ReplyComposer = React.memo(function ReplyComposer({
   value: controlledValue,
   onChange,
   onReplySent,
+  onExecuteReply,
   onRequestSuggestions,
   disabled = false,
   className = '',
@@ -34,12 +41,19 @@ export const ReplyComposer = React.memo(function ReplyComposer({
   const [internalValue, setInternalValue] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const handler = () => textareaRef.current?.focus();
     window.addEventListener('engagement:focus-reply', handler);
     return () => window.removeEventListener('engagement:focus-reply', handler);
   }, []);
+
+  useEffect(() => {
+    if (!successMessage) return;
+    const timer = window.setTimeout(() => setSuccessMessage(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [successMessage]);
 
   const isControlled = controlledValue !== undefined;
   const text = isControlled ? controlledValue : internalValue;
@@ -51,23 +65,33 @@ export const ReplyComposer = React.memo(function ReplyComposer({
 
     setSending(true);
     setError(null);
+    setSuccessMessage(null);
 
     try {
-      const res = await fetch('/api/engagement/reply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          organization_id: organizationId,
-          thread_id: threadId,
-          message_id: messageId,
-          reply_text: trimmed,
+      if (onExecuteReply) {
+        await onExecuteReply({
+          threadId,
+          messageId,
           platform,
-        }),
-      });
+          replyText: trimmed,
+        });
+      } else {
+        const res = await fetch('/api/engagement/reply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            organization_id: organizationId,
+            thread_id: threadId,
+            message_id: messageId,
+            reply_text: trimmed,
+            platform,
+          }),
+        });
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || res.statusText);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || res.statusText);
+      }
 
       setText('');
       if (!isControlled) setInternalValue('');
@@ -76,13 +100,14 @@ export const ReplyComposer = React.memo(function ReplyComposer({
         thread_id: threadId,
         metadata: { platform },
       });
+      setSuccessMessage('Reply submitted. LinkedIn may take a few seconds to reflect it.');
       onReplySent?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send reply');
     } finally {
       setSending(false);
     }
-  }, [text, sending, disabled, organizationId, threadId, messageId, platform, onReplySent, isControlled, setText]);
+  }, [text, sending, disabled, organizationId, threadId, messageId, platform, onReplySent, onExecuteReply, isControlled, setText]);
 
   return (
     <div className={`space-y-2 ${className}`}>
@@ -120,6 +145,11 @@ export const ReplyComposer = React.memo(function ReplyComposer({
       {error && (
         <p className="text-sm text-red-600" role="alert">
           {error}
+        </p>
+      )}
+      {successMessage && !error && (
+        <p className="text-sm text-emerald-700" role="status">
+          {successMessage}
         </p>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
 import type { NewsletterGenerationRequest, NewsletterGenerationResult } from './runNewsletterGeneration';
@@ -378,6 +379,11 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
   let best: ReturnType<typeof parseSprintSheetOutput> | null = null;
   let bestScore = -1;
 
+  const enhancedSprintSystemPrompt = await enhanceSystemPromptForNewsletter(
+    'You are an operator writing an action-letter newsletter. Return only valid JSON. Focus on sprint execution, practical checkpoints, and immediate operator clarity.',
+    input.company_id, input.companyContext,
+  );
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
       operation: 'newsletterGeneration',
@@ -387,7 +393,7 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
       response_format: { type: 'json_object' },
       max_tokens: targetWords >= 1600 ? 4400 : 3400,
       messages: [
-        { role: 'system', content: 'You are an operator writing an action-letter newsletter. Return only valid JSON. Focus on sprint execution, practical checkpoints, and immediate operator clarity.' },
+        { role: 'system', content: enhancedSprintSystemPrompt },
         { role: 'user', content: buildSprintSheetPrompt(input, targetWords, retryReason) },
       ],
     });

@@ -15,7 +15,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import { hasEnoughCredits, CREDIT_COSTS, type CreditAction } from './creditDeductionService';
+import { getCreditCost, type CreditAction } from './creditDeductionService';
 import { getEfficiencyDiscount } from './creditEfficiencyEngine';
 
 // ── Actions known to historically drive conversions (ROI-boosted) ─────────────
@@ -157,7 +157,7 @@ export async function prioritizeActions(
     for (const action of actions) {
       if (!actionsToEvaluate.includes(action)) continue;
 
-      const baseCost = CREDIT_COSTS[action];
+      const baseCost = await getCreditCost(action);
       // Apply efficiency discount to intelligence actions
       const effectiveCost = DISCOUNTABLE_ACTIONS.has(action)
         ? Math.round(baseCost * discount)

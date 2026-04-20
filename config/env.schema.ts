@@ -175,12 +175,12 @@ export const envSchema = z.object({
     .default('https://www.omnivyra.com')
     .describe('Public app URL'),
   
-  DRISHIQ_ENV: z
+  OMNIVYRA_ENV: z
     .enum(['development', 'staging', 'production'])
     .default('production')
     .describe('Deployment environment'),
   
-  DRISHIQ_AI_MODE: z
+  OMNIVYRA_AI_MODE: z
     .enum(['responses', 'planning', 'hybrid'])
     .default('responses')
     .describe('AI processing mode'),
@@ -304,8 +304,8 @@ export function validateEnv(): EnvConfig {
       
       // App config
       NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
-      DRISHIQ_ENV: process.env.DRISHIQ_ENV,
-      DRISHIQ_AI_MODE: process.env.DRISHIQ_AI_MODE,
+      OMNIVYRA_ENV: process.env.OMNIVYRA_ENV || process.env.DRISHIQ_ENV,
+      OMNIVYRA_AI_MODE: process.env.OMNIVYRA_AI_MODE || process.env.DRISHIQ_AI_MODE,
       ENABLE_AUTO_WORKERS: process.env.ENABLE_AUTO_WORKERS,
       USE_MOCK_PLATFORMS: process.env.USE_MOCK_PLATFORMS,
       Mode: process.env.Mode,

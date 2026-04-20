@@ -178,7 +178,13 @@ export default function CampaignDailyPlanPage() {
             day: dayOfWeek,
             title,
             platform: nonEmpty(plan.platform).toLowerCase() || 'linkedin',
-            content_type: String(plan.content_type ?? (plan.dailyObject as any)?.contentType ?? 'post').toLowerCase(),
+            content_type: String(
+              (plan as any).contentType
+              ?? plan.content_type
+              ?? (plan.dailyObject as any)?.content_type
+              ?? (plan.dailyObject as any)?.contentType
+              ?? 'post'
+            ).toLowerCase(),
             raw_item: raw,
             planId: plan.id,
             ...(execution_mode ? { execution_mode } : {}),

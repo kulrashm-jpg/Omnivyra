@@ -60,16 +60,17 @@ export function useDashboardState() {
     // Allow deep-linking to a specific tab via ?tab=calendar etc.
     if (typeof window !== 'undefined') {
       const p = new URLSearchParams(window.location.search).get('tab');
-      if (p === 'calendar' || p === 'campaigns' || p === 'team' || p === 'analytics' || p === 'integrations' || p === 'intelligence') return p;
+      if (p === 'calendar' || p === 'campaigns' || p === 'team' || p === 'analytics' || p === 'integrations') return p;
     }
     return 'overview';
   });
   const [intelligenceView, setIntelligenceView] = useState<IntelligenceWorkspaceView>(() => {
     if (typeof window !== 'undefined') {
       const p = new URLSearchParams(window.location.search).get('intelTab');
-      if (p === 'market-pulse' || p === 'active-leads' || p === 'intelligence') return p;
+      if (p === 'market-pulse' || p === 'active-leads') return p;
+      if (p === 'intelligence') return 'market-pulse';
     }
-    return 'intelligence';
+    return 'market-pulse';
   });
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [stats, setStats] = useState<DashboardStats>({
@@ -991,7 +992,7 @@ export function useDashboardState() {
   const getStageLabel = (stage: string, durationWeeks?: number | null) =>
     getStageLabelWithDuration(stage, durationWeeks);
 
-  const openIntelligenceTab = useCallback((view: IntelligenceWorkspaceView = 'intelligence') => {
+  const openIntelligenceTab = useCallback((view: IntelligenceWorkspaceView = 'market-pulse') => {
     setIntelligenceView(view);
     setActiveTab('intelligence');
   }, []);

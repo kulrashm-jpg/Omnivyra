@@ -7,7 +7,6 @@ export { InboxDashboard } from './InboxDashboard';
 export { PlatformTabs } from './PlatformTabs';
 export { OpportunityRadar } from './OpportunityRadar';
 export { AIEngagementAssistant } from './AIEngagementAssistant';
-export { WorkQueueSummary } from './WorkQueueSummary';
 export { ConversationMonitorHeader } from './ConversationMonitorHeader';
 export { ResponsePatternManager } from './ResponsePatternManager';
 export { NetworkExpansionPanel } from './NetworkExpansionPanel';

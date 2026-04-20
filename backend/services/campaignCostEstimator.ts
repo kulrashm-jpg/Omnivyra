@@ -14,18 +14,14 @@
  *   - One-off: pattern_detection + competitor_signals + market_positioning
  */
 
-import { CREDIT_COSTS, type CreditAction } from './creditDeductionService';
-
-// ── Types ─────────────────────────────────────────────────────────────────────
+import { getCreditCost, type CreditAction } from './creditDeductionService';
 
 export type CampaignCostPlan = {
   platforms: string[];
-  posting_frequency: Record<string, number>;  // posts per week per platform
+  posting_frequency: Record<string, number>;
   duration_weeks: number;
   content_mix?: Record<string, number>;
-  /** If true, AI generates content for every post (adds content_basic per post). */
   ai_content_generation?: boolean;
-  /** If false, skip intelligence analysis costs. Default: true */
   include_intelligence?: boolean;
 };
 
@@ -49,20 +45,35 @@ export type CampaignCostEstimate = {
   breakdown_by_action: Record<string, number>;
 };
 
-// ── Estimator ─────────────────────────────────────────────────────────────────
-
-export function estimateCampaignCost(plan: CampaignCostPlan): CampaignCostEstimate {
+export async function estimateCampaignCost(plan: CampaignCostPlan): Promise<CampaignCostEstimate> {
   const {
     platforms,
     posting_frequency,
     duration_weeks,
     ai_content_generation = true,
-    include_intelligence  = true,
+    include_intelligence = true,
   } = plan;
 
   const lineItems: CostLineItem[] = [];
-
-  // ── Execution costs ───────────────────────────────────────────────────────
+  const [
+    autoPostCost,
+    contentBasicCost,
+    predictionCost,
+    campaignOptimizationCost,
+    insightGenerationCost,
+    patternDetectionCost,
+    competitorSignalsCost,
+    marketPositioningCost,
+  ] = await Promise.all([
+    getCreditCost('auto_post'),
+    getCreditCost('content_basic'),
+    getCreditCost('prediction'),
+    getCreditCost('campaign_optimization'),
+    getCreditCost('insight_generation'),
+    getCreditCost('pattern_detection'),
+    getCreditCost('competitor_signals'),
+    getCreditCost('market_positioning'),
+  ]);
 
   let totalPosts = 0;
   for (const platform of platforms) {
@@ -71,97 +82,88 @@ export function estimateCampaignCost(plan: CampaignCostPlan): CampaignCostEstima
     totalPosts += posts;
 
     lineItems.push({
-      action:    'auto_post',
-      label:     `Auto-post: ${platform}`,
-      quantity:  posts,
-      unit_cost: CREDIT_COSTS.auto_post,
-      total:     posts * CREDIT_COSTS.auto_post,
+      action: 'auto_post',
+      label: `Auto-post: ${platform}`,
+      quantity: posts,
+      unit_cost: autoPostCost,
+      total: posts * autoPostCost,
     });
   }
 
   if (ai_content_generation && totalPosts > 0) {
     lineItems.push({
-      action:    'content_basic',
-      label:     'AI content generation (per post)',
-      quantity:  totalPosts,
-      unit_cost: CREDIT_COSTS.content_basic,
-      total:     totalPosts * CREDIT_COSTS.content_basic,
+      action: 'content_basic',
+      label: 'AI content generation (per post)',
+      quantity: totalPosts,
+      unit_cost: contentBasicCost,
+      total: totalPosts * contentBasicCost,
     });
   }
 
-  // ── Prediction cost (once at creation) ───────────────────────────────────
-
   lineItems.push({
-    action:    'prediction',
-    label:     'Campaign outcome prediction',
-    quantity:  1,
-    unit_cost: CREDIT_COSTS.prediction,
-    total:     CREDIT_COSTS.prediction,
+    action: 'prediction',
+    label: 'Campaign outcome prediction',
+    quantity: 1,
+    unit_cost: predictionCost,
+    total: predictionCost,
   });
-
-  // ── Optimization scans (every 2 weeks) ───────────────────────────────────
 
   const optimizationRounds = Math.ceil(duration_weeks / 2);
   lineItems.push({
-    action:    'campaign_optimization',
-    label:     'Optimization scans (bi-weekly)',
-    quantity:  optimizationRounds,
-    unit_cost: CREDIT_COSTS.campaign_optimization,
-    total:     optimizationRounds * CREDIT_COSTS.campaign_optimization,
+    action: 'campaign_optimization',
+    label: 'Optimization scans (bi-weekly)',
+    quantity: optimizationRounds,
+    unit_cost: campaignOptimizationCost,
+    total: optimizationRounds * campaignOptimizationCost,
   });
-
-  // ── Intelligence analysis (one-off) ──────────────────────────────────────
 
   if (include_intelligence) {
     lineItems.push({
-      action:    'insight_generation',
-      label:     'Weekly insight generation',
-      quantity:  duration_weeks,
-      unit_cost: CREDIT_COSTS.insight_generation,
-      total:     duration_weeks * CREDIT_COSTS.insight_generation,
+      action: 'insight_generation',
+      label: 'Weekly insight generation',
+      quantity: duration_weeks,
+      unit_cost: insightGenerationCost,
+      total: duration_weeks * insightGenerationCost,
     });
 
-    const oneOffIntelligence: Array<{ action: CreditAction; label: string }> = [
-      { action: 'pattern_detection',  label: 'Pattern detection scan'    },
-      { action: 'competitor_signals', label: 'Competitor intelligence'   },
-      { action: 'market_positioning', label: 'Market positioning analysis' },
+    const oneOffIntelligence: Array<{ action: CreditAction; label: string; cost: number }> = [
+      { action: 'pattern_detection', label: 'Pattern detection scan', cost: patternDetectionCost },
+      { action: 'competitor_signals', label: 'Competitor intelligence', cost: competitorSignalsCost },
+      { action: 'market_positioning', label: 'Market positioning analysis', cost: marketPositioningCost },
     ];
 
-    for (const { action, label } of oneOffIntelligence) {
+    for (const { action, label, cost } of oneOffIntelligence) {
       lineItems.push({
         action,
         label,
-        quantity:  1,
-        unit_cost: CREDIT_COSTS[action],
-        total:     CREDIT_COSTS[action],
+        quantity: 1,
+        unit_cost: cost,
+        total: cost,
       });
     }
   }
 
-  // ── Aggregate ─────────────────────────────────────────────────────────────
-
-  const executionActions  = new Set<CreditAction>(['auto_post', 'content_basic', 'prediction']);
+  const executionActions = new Set<CreditAction>(['auto_post', 'content_basic', 'prediction']);
   const optimizationActions = new Set<CreditAction>(['campaign_optimization', 'optimization_loop']);
 
   const subtotals = { execution: 0, intelligence: 0, optimization: 0 };
   const breakdownByAction: Record<string, number> = {};
 
   for (const item of lineItems) {
-    const key = item.action as string;
-    breakdownByAction[key] = (breakdownByAction[key] ?? 0) + item.total;
+    breakdownByAction[item.action] = (breakdownByAction[item.action] ?? 0) + item.total;
 
-    if (executionActions.has(item.action))    subtotals.execution    += item.total;
+    if (executionActions.has(item.action)) subtotals.execution += item.total;
     else if (optimizationActions.has(item.action)) subtotals.optimization += item.total;
-    else                                           subtotals.intelligence  += item.total;
+    else subtotals.intelligence += item.total;
   }
 
-  const totalCredits = lineItems.reduce((sum, i) => sum + i.total, 0);
+  const totalCredits = lineItems.reduce((sum, item) => sum + item.total, 0);
 
   return {
-    line_items:          lineItems,
+    line_items: lineItems,
     subtotals,
-    total_credits:       totalCredits,
-    per_week_avg:        Math.round(totalCredits / Math.max(duration_weeks, 1)),
+    total_credits: totalCredits,
+    per_week_avg: Math.round(totalCredits / Math.max(duration_weeks, 1)),
     breakdown_by_action: breakdownByAction,
   };
 }

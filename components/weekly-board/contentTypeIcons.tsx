@@ -12,6 +12,9 @@ import {
   Smartphone,
   Mic,
   List,
+  BookOpen,
+  BarChart3,
+  MessageSquare,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -28,6 +31,13 @@ const CONTENT_TYPE_ICONS: Record<string, LucideIcon> = {
   shorts: Smartphone,
   podcast: Mic,
   thread: List,
+  poll: BarChart3,
+  short_story: BookOpen,
+  shortstory: BookOpen,
+  tweet: MessageSquare,
+  newsletter: Newspaper,
+  white_paper: FileText,
+  whitepaper: FileText,
 };
 
 const CONTENT_TYPE_LABELS: Record<string, string> = {
@@ -43,6 +53,13 @@ const CONTENT_TYPE_LABELS: Record<string, string> = {
   shorts: 'Short Video',
   podcast: 'Podcast',
   thread: 'Thread',
+  poll: 'Poll Post',
+  short_story: 'Short Story',
+  shortstory: 'Short Story',
+  tweet: 'Tweet',
+  newsletter: 'Newsletter',
+  white_paper: 'White Paper',
+  whitepaper: 'White Paper',
 };
 
 export function normalizeContentTypeKey(v: string): string {

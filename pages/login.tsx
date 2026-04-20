@@ -30,6 +30,7 @@ export default function LoginPage() {
   const [loading, setLoading]   = useState<string | null>(null); // 'password' | 'magic' | 'forgot'
   const [error, setError]       = useState<string | null>(
     errorParam === 'account_deleted' ? 'This account has been removed.' :
+    errorParam === 'invalid_session' ? 'Your session is invalid or expired.' :
     errorParam === 'auth_failed'     ? 'Sign-in failed. Please try again.' :
     null,
   );
@@ -136,16 +137,7 @@ export default function LoginPage() {
       return;
     }
 
-    const { error: otpErr } = await getSupabaseBrowser().auth.signInWithOtp({
-      email: trimmed,
-      options: {
-        emailRedirectTo:  `${origin}/auth/callback?mode=passwordless`,
-        shouldCreateUser: false, // login only — don't create new accounts
-      },
-    });
-
     setLoading(null);
-    if (otpErr) { setError(otpErr.message); return; }
     setMagicSent(true);
   }
 
@@ -157,13 +149,23 @@ export default function LoginPage() {
     setLoading('forgot');
     setError(null);
 
-    const { error: resetErr } = await getSupabaseBrowser().auth.resetPasswordForEmail(trimmed, {
-      redirectTo: `${origin}/auth/set-password`,
-    });
-
-    setLoading(null);
-    if (resetErr) { setError(resetErr.message); return; }
-    setResetSent(true);
+    try {
+      const response = await fetch('/api/auth/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: trimmed }),
+      });
+      const json = await response.json().catch(() => ({}));
+      setLoading(null);
+      if (!response.ok) {
+        setError(json.error ?? 'Unable to send reset link.');
+        return;
+      }
+      setResetSent(true);
+    } catch {
+      setLoading(null);
+      setError('Network error. Please try again.');
+    }
   }
 
   // ── Magic link sent confirmation ─────────────────────────────────────────

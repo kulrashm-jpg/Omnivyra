@@ -99,9 +99,10 @@ export async function getLeadTrend(
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
   const { data, error } = await supabase
-    .from('engagement_lead_signals')
+    .from('lead_signals')
     .select('detected_at')
     .eq('organization_id', organizationId)
+    .eq('source_type', 'engagement')
     .gte('detected_at', since);
 
   if (error) {

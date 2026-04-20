@@ -24,6 +24,90 @@ import {
   CONTENT_TYPE_SYSTEM_PROMPTS,
   CONTENT_GENERATION_PROMPT_VERSION,
 } from '../prompts';
+import {
+  type CompanyIdentity,
+  extractCompanyIdentity,
+  buildCompanyContextBlock,
+  buildCompanyContextBlockShort,
+  buildIdentityLock,
+  buildAntiGenericRules,
+  buildValidationChecklist,
+  buildEnforcedAnglesSystemPrompt,
+  buildEnforcedAnglesUserPrompt,
+  scoreCompanyContext,
+} from '../../lib/content/companyContextBlock';
+import { getContentValidationMode, validateContentVariation } from '../../lib/content/contentVariationValidator';
+import { getProfile } from './companyProfileService';
+import type { StrategyProfile } from './companyProfile/types';
+
+// ── Company identity auto-fetch (5-min cache) ───────────────────────────────
+// Ensures enforcement functions receive real data even when callers don't
+// populate the extended company_profile fields.
+const _identityCache = new Map<string, { identity: CompanyIdentity; at: number }>();
+const _IDENTITY_CACHE_TTL = 5 * 60 * 1000;
+
+async function resolveCompanyIdentity(companyId: string | null | undefined): Promise<CompanyIdentity> {
+  if (!companyId) return {};
+  const cached = _identityCache.get(companyId);
+  if (cached && Date.now() - cached.at < _IDENTITY_CACHE_TTL) return cached.identity;
+  try {
+    const profile = await getProfile(companyId, { autoRefine: false });
+    const identity = extractCompanyIdentity(profile);
+    _identityCache.set(companyId, { identity, at: Date.now() });
+    return identity;
+  } catch {
+    return {};
+  }
+}
+
+function extractFirstHookLine(hook: string): string {
+  return String(hook || '')
+    .split(/\n+/)[0]
+    .split(/(?<=[.!?])\s+/)[0]
+    .trim();
+}
+
+function buildMeaningfulTokens(text: string): string[] {
+  return String(text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9%]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4);
+}
+
+function isShortFormHookSpecific(args: {
+  hook: string;
+  contentType: ContentType;
+  targetAudience?: string;
+  sourceTopic?: string;
+  keyPoints?: string[];
+}): boolean {
+  if (!['post', 'thread', 'carousel'].includes(args.contentType)) return true;
+
+  const firstLine = extractFirstHookLine(args.hook);
+  const lower = firstLine.toLowerCase();
+  const wordCount = firstLine.split(/\s+/).filter(Boolean).length;
+  const audienceTokens = buildMeaningfulTokens(args.targetAudience || '');
+  const topicTokens = buildMeaningfulTokens(args.sourceTopic || '');
+  const audienceMatches = audienceTokens.filter((token) => lower.includes(token)).length;
+  const topicMatches = topicTokens.filter((token) => lower.includes(token)).length;
+  const hasSpecificClaim =
+    /\b\d+(?:\.\d+)?%?\b/.test(firstLine) ||
+    /\b(less|more|fewer|double|half)\b/.test(lower) ||
+    /\b\d+\s+(blogs?|posts?|campaigns?|channels?|weeks?|months?)\b/.test(lower);
+  const hasSpecificContext =
+    /\b(b2b|b2c|saas|seo|ppc|crm|revops|fintech|healthcare|ecommerce|demand gen|product marketing|customer success|growth team|sales team|marketing team)\b/i.test(firstLine) ||
+    audienceMatches >= 2 ||
+    topicMatches >= 2;
+  const hasConcreteSituation =
+    /\b(publishing|posting|spending|relying|using|running|shipping|sending|scaling)\b.*\b(no|zero|without|still|but|missing)\b/i.test(lower) ||
+    /\bif your\b.+\b(still|only|without|missing)\b/i.test(lower) ||
+    /\byou'?re\b.+\bbehind\b/i.test(lower);
+
+  if (wordCount < 8) return false;
+
+  return hasSpecificClaim || hasSpecificContext || hasConcreteSituation;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DATA MODELS
@@ -74,6 +158,18 @@ export interface ContentInput {
     brand_voice?: string;
     tone_preference?: string;
     industry?: string;
+    // Extended identity fields for context enforcement
+    name?: string;
+    ideal_customer_profile?: string;
+    core_problem_statement?: string;
+    pain_symptoms?: string[];
+    unique_value?: string;
+    products_services?: string;
+    desired_transformation?: string;
+    competitive_advantages?: string;
+    authority_domains?: string[];
+    key_messages?: string;
+    strategyProfile?: StrategyProfile;
   };
 }
 
@@ -97,7 +193,16 @@ export interface ContentBlueprint {
     selected_angle?: ContentAngle;
     tone_applied?: string;
     narrative_role?: string;
+    company_context?: {
+      companyName?: string;
+      targetAudience?: string;
+      industry?: string;
+      uniqueValue?: string;
+      competitiveAdvantages?: string;
+      strategyProfile?: StrategyProfile;
+    };
     decision_trace?: {
+      source_topic?: string;
       why_angle?: string;
       why_tone?: string;
       signals_used?: string[];
@@ -300,21 +405,8 @@ Return ONLY valid JSON — no markdown, no prose:
 }
 
 export function buildAnglesUserPrompt(input: ContentInput): string {
-  const currentYear = new Date().getFullYear();
-  const lines: string[] = [
-    `CURRENT YEAR: ${currentYear} — all angles must reflect present-day or forward-looking market reality.`,
-    `TOPIC: ${input.topic}`,
-  ];
-
-  if (input.intent) lines.push(`INTENT: ${input.intent}`);
-  if (input.audience) lines.push(`AUDIENCE: ${input.audience}`);
-
-  if (input.company_profile?.brand_voice) {
-    lines.push(`COMPANY VOICE: ${input.company_profile.brand_voice}`);
-  }
-
-  lines.push('\nGenerate 3 distinct editorial angles for this topic.');
-  return lines.join('\n');
+  const identity = extractCompanyIdentityFromInput(input);
+  return buildEnforcedAnglesUserPrompt(input.topic, identity, input.intent);
 }
 
 function validateAnglesOutput(raw: unknown): ContentAngle[] | null {
@@ -376,10 +468,40 @@ function buildFallbackAngles(topic: string): ContentAngle[] {
 // ANGLE SELECTION
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Extract CompanyIdentity from ContentInput.company_profile */
+function extractCompanyIdentityFromInput(input: ContentInput): CompanyIdentity {
+  const p = input.company_profile;
+  if (!p) return {};
+  return {
+    companyName: p.name,
+    industry: p.industry,
+    targetAudience: p.target_audience || input.audience,
+    idealCustomerProfile: p.ideal_customer_profile,
+    coreProblem: p.core_problem_statement,
+    painPoints: p.pain_symptoms,
+    uniqueValue: p.unique_value,
+    productsServices: p.products_services,
+    desiredTransformation: p.desired_transformation,
+    competitiveAdvantages: p.competitive_advantages,
+    authorityDomains: p.authority_domains,
+    keyMessages: p.key_messages,
+    brandVoice: p.brand_voice,
+    strategyProfile: p.strategyProfile,
+  };
+}
+
 export async function generateAngles(input: ContentInput): Promise<ContentAngle[]> {
   try {
-    const systemPrompt = buildAnglesSystemPrompt();
-    const userPrompt = buildAnglesUserPrompt(input);
+    // Auto-fetch profile if caller didn't populate extended fields
+    let identity = extractCompanyIdentityFromInput(input);
+    if (!identity.companyName && input.company_id) {
+      identity = await resolveCompanyIdentity(input.company_id);
+    }
+    const hasIdentity = !!(identity.companyName || identity.industry || identity.coreProblem);
+    const systemPrompt = hasIdentity
+      ? buildEnforcedAnglesSystemPrompt(identity)
+      : buildAnglesSystemPrompt();
+    const userPrompt = buildEnforcedAnglesUserPrompt(input.topic, identity, input.intent);
 
     const result = await runCompletionWithOperation({
       companyId: input.company_id || null,
@@ -436,12 +558,24 @@ export async function selectOptimalAngle(
 export function buildPromptForType(
   content_type: ContentType,
   tone: string,
-  intent?: string
+  intent?: string,
+  identity?: CompanyIdentity,
 ): string {
   const typeConfig = CONTENT_TYPE_CONFIG[content_type];
   const targetWords = typeConfig.target_words || 500;
+  const isShortForm = ['post', 'thread', 'carousel', 'video_script', 'engagement_response'].includes(content_type);
 
-  let basePrompt = `You are a professional content writer creating ${content_type} content.
+  // Identity lock — model writes AS the company, not about it
+  const identityBlock = identity && (identity.companyName || identity.industry)
+    ? buildIdentityLock(identity, content_type)
+    : `You are a professional content writer creating ${content_type} content.`;
+
+  // Anti-generic enforcement
+  const enforcementBlock = identity && (identity.companyName || identity.coreProblem)
+    ? buildAntiGenericRules(identity)
+    : '';
+
+  let basePrompt = `${identityBlock}
 
 ## CONSTRAINTS
 - Target length: approximately ${targetWords} words (±10%)
@@ -458,7 +592,7 @@ export function buildPromptForType(
 - Active voice preferred
 - Punchy, scannable formatting where possible
 - End with clear next steps or CTA
-
+${enforcementBlock}
 ${intent ? `## INTENT\nWrite to achieve: ${intent}` : ''}
 
 Return valid JSON with: { hook: string, key_points: string[], cta: string }`;
@@ -478,11 +612,24 @@ export async function generateMasterContent(
   const config = CONTENT_TYPE_CONFIG[input.content_type];
   const targetWords = input.target_word_count || config.target_words || 500;
 
+  // Auto-fetch profile if caller didn't populate extended fields
+  let identity = extractCompanyIdentityFromInput(input);
+  if (!identity.companyName && input.company_id) {
+    identity = await resolveCompanyIdentity(input.company_id);
+  }
+  const isShortForm = ['post', 'thread', 'carousel', 'video_script', 'engagement_response'].includes(input.content_type);
+  const contextBlock = isShortForm
+    ? buildCompanyContextBlockShort(identity)
+    : buildCompanyContextBlock(identity);
+
+  // Validation checklist goes in system prompt (binding), not user prompt (ignorable)
+  const validationChecklist = buildValidationChecklist(identity, input.content_type);
   const systemPrompt = buildPromptForType(
     input.content_type,
     input.company_profile?.tone_preference || 'professional',
-    input.intent
-  );
+    input.intent,
+    identity,
+  ) + `\n${validationChecklist}`;
 
   const userPrompt = `
 TOPIC: ${input.topic}
@@ -492,8 +639,9 @@ ANGLE: ${angle.label} — ${angle.angle_summary}
 HOOK TO USE: "${angle.hook}"
 
 ${input.audience ? `AUDIENCE: ${input.audience}` : ''}
+${contextBlock ? `\nCOMPANY CONTEXT:\n${contextBlock}` : ''}
 ${input.writing_style_instructions ? `\nWRITING STYLE:\n${input.writing_style_instructions}` : ''}
-${input.context_payload ? `\nCONTEXT:\n${JSON.stringify(input.context_payload, null, 2)}` : ''}
+${input.context_payload ? `\nADDITIONAL CONTEXT:\n${JSON.stringify(input.context_payload, null, 2)}` : ''}
 
 TARGET LENGTH: ${targetWords} words
 
@@ -533,7 +681,16 @@ Generate the complete content now. Return only the JSON object with hook, key_po
         selected_angle: angle,
         tone_applied: input.company_profile?.tone_preference || 'professional',
         narrative_role: 'primary',
+        company_context: {
+          companyName: identity.companyName,
+          targetAudience: identity.idealCustomerProfile || identity.targetAudience,
+          industry: identity.industry,
+          uniqueValue: identity.uniqueValue,
+          competitiveAdvantages: identity.competitiveAdvantages,
+          strategyProfile: identity.strategyProfile,
+        },
         decision_trace: {
+          source_topic: input.topic,
           why_angle: `Selected ${angle.type} angle for ${input.intent || 'engagement'}`,
           why_tone: 'Matched to company profile',
           signals_used: Object.keys(input.feedback_signals || {}),
@@ -576,6 +733,7 @@ Generate the complete content now. Return only the JSON object with hook, key_po
 export function validateContentQuality(bp: ContentBlueprint, contentType: ContentType): ValidationResult {
   const config = CONTENT_TYPE_CONFIG[contentType];
   const issues: string[] = [];
+  const validationMode = getContentValidationMode(contentType);
 
   if (config.requires_hook && !bp.hook?.trim()) {
     issues.push('Missing hook');
@@ -595,9 +753,90 @@ export function validateContentQuality(bp: ContentBlueprint, contentType: Conten
     issues.push('Hook too short (< 3 words)');
   }
 
+  const variationValidation = validateContentVariation([
+    { id: 'hook', text: bp.hook || '' },
+    ...(Array.isArray(bp.key_points)
+      ? bp.key_points.map((point, index) => ({ id: `key_point_${index + 1}`, text: point || '' }))
+      : []),
+    { id: 'cta', text: bp.cta || '' },
+  ], { contentType });
+
+  const fullText = [bp.hook, ...(bp.key_points || []), bp.cta].filter(Boolean).join('\n\n');
+  const companyContext = bp.metadata?.company_context || {};
+  const contextScore = scoreCompanyContext(fullText, {
+    companyName: companyContext.companyName,
+    targetAudience: companyContext.targetAudience,
+    industry: companyContext.industry,
+    uniqueValue: companyContext.uniqueValue,
+    competitiveAdvantages: companyContext.competitiveAdvantages,
+    strategyProfile: companyContext.strategyProfile,
+  }, { contentType });
+  const sourceTopic = bp.metadata?.decision_trace?.source_topic || '';
+  const genericHook = !isShortFormHookSpecific({
+    hook: bp.hook || '',
+    contentType,
+    targetAudience: companyContext.targetAudience,
+    sourceTopic,
+    keyPoints: bp.key_points || [],
+  });
+
+  if (validationMode === 'long_form') {
+    if (variationValidation.duplicateContentDetected) {
+      issues.push(
+        `Duplicate sections detected across blueprint segments (${variationValidation.duplicateSectionPairs.length} pair(s))`,
+      );
+    }
+    if (variationValidation.lowVariationDetected) {
+      issues.push(
+        `${variationValidation.lowVariationSections.length} blueprint segment(s) add little or no new information`,
+      );
+    }
+  } else if (validationMode === 'mid_form') {
+    if (variationValidation.duplicateContentDetected) {
+      issues.push(
+        `Duplicate sections detected across blueprint segments (${variationValidation.duplicateSectionPairs.length} pair(s))`,
+      );
+    }
+    if (!contextScore.scenarioPresent) {
+      issues.push('Missing concrete scenario or workflow signal');
+    }
+    if (companyContext.companyName && contextScore.companyMentions === 0) {
+      issues.push('Missing company context');
+    }
+    if (contextScore.perspectiveMismatch) {
+      issues.push('Missing strategic perspective');
+    }
+  } else {
+    if (contextScore.genericPhraseCount >= 1) {
+      issues.push('Short-form content is still too generic');
+    }
+    if (companyContext.companyName && contextScore.companyMentions === 0) {
+      issues.push('Missing company context');
+    }
+    if (companyContext.targetAudience && contextScore.icpReferences === 0) {
+      issues.push('Missing ICP signal');
+    }
+    if (genericHook) {
+      issues.push('Hook is too generic for short-form content');
+    }
+    if (contextScore.perspectiveMismatch) {
+      issues.push('Missing strategic perspective');
+    }
+  }
+
+  const noCompanyContext =
+    (companyContext.companyName ? contextScore.companyMentions === 0 : false) &&
+    (companyContext.targetAudience ? contextScore.icpReferences === 0 : true);
+  const hasBlockingVariationFailure =
+    validationMode === 'long_form'
+      ? variationValidation.duplicateContentDetected || variationValidation.lowVariationDetected
+      : validationMode === 'mid_form'
+        ? variationValidation.duplicateContentDetected || !contextScore.scenarioPresent || (companyContext.companyName ? contextScore.companyMentions === 0 : false) || contextScore.perspectiveMismatch
+        : contextScore.genericPhraseCount >= 1 || noCompanyContext || contextScore.perspectiveMismatch;
+
   return {
     pass: issues.length === 0,
-    severity: issues.length === 0 ? 'info' : 'warning',
+    severity: issues.length === 0 ? 'info' : hasBlockingVariationFailure ? 'blocking' : 'warning',
     issues: issues.length > 0 ? issues : undefined,
   };
 }

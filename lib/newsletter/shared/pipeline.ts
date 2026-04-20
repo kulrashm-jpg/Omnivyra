@@ -16,6 +16,42 @@ import {
 import type { NewsletterGenerationRequest, NewsletterGenerationResult } from '../runNewsletterGeneration';
 import type { ContentBlock } from '../../content/blockTypes';
 import { stripHtml } from './blockHelpers';
+import { enhanceNewsletterSystemPrompt } from './promptHelpers';
+import type { CompanyContext } from '../../blog/blogRunnerTypes';
+import { getProfile } from '../../../backend/services/companyProfileService';
+import { extractStrategyProfile } from '../../content/companyStrategyPerspective';
+
+// ── Newsletter company context cache (5-min TTL) ────────────────────────────
+// Auto-fetches company profile so all newsletter AI calls get enforcement
+// even when callers don't explicitly pass companyContext.
+const _nlContextCache = new Map<string, { ctx: CompanyContext | undefined; at: number }>();
+
+async function resolveNewsletterCompanyContext(companyId: string | undefined): Promise<CompanyContext | undefined> {
+  if (!companyId) return undefined;
+  const cached = _nlContextCache.get(companyId);
+  if (cached && Date.now() - cached.at < 5 * 60 * 1000) return cached.ctx;
+  try {
+    const profile = await getProfile(companyId, { autoRefine: false });
+    if (!profile) { _nlContextCache.set(companyId, { ctx: undefined, at: Date.now() }); return undefined; }
+    const ctx: CompanyContext = {
+      companyName: profile.name || undefined,
+      industry: profile.industry || undefined,
+      audience: profile.target_audience || undefined,
+      brand_voice: profile.brand_voice || undefined,
+      uniqueValue: profile.unique_value || undefined,
+      coreProblemStatement: profile.core_problem_statement || undefined,
+      painSymptoms: profile.pain_symptoms?.filter(Boolean) || undefined,
+      authorityDomains: profile.authority_domains?.filter(Boolean) || undefined,
+      productsServices: profile.products_services || undefined,
+      desiredTransformation: profile.desired_transformation || undefined,
+      strategyProfile: extractStrategyProfile(profile),
+    };
+    _nlContextCache.set(companyId, { ctx, at: Date.now() });
+    return ctx;
+  } catch {
+    return undefined;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Target-word resolution
@@ -141,9 +177,19 @@ export interface AiCallOptions {
   maxTokens: number;
   systemPrompt: string;
   userPrompt: string;
+  /** When provided, system prompt is auto-enhanced with identity lock + anti-generic rules. */
+  companyContext?: CompanyContext;
 }
 
 export async function callAI(opts: AiCallOptions): Promise<any | null> {
+  // Auto-enhance system prompt with identity lock + anti-generic rules.
+  // If caller provided companyContext, use it. Otherwise auto-fetch from DB.
+  const companyCtx = opts.companyContext
+    ?? await resolveNewsletterCompanyContext(opts.companyId);
+  const effectiveSystemPrompt = companyCtx
+    ? enhanceNewsletterSystemPrompt(opts.systemPrompt, companyCtx)
+    : opts.systemPrompt;
+
   const completion = await runCompletionWithOperation({
     operation: opts.operation,
     companyId: opts.companyId,
@@ -153,7 +199,7 @@ export async function callAI(opts: AiCallOptions): Promise<any | null> {
     response_format: { type: 'json_object' },
     max_tokens: opts.maxTokens,
     messages: [
-      { role: 'system', content: opts.systemPrompt },
+      { role: 'system', content: effectiveSystemPrompt },
       { role: 'user', content: opts.userPrompt },
     ],
   });
@@ -172,4 +218,25 @@ export async function callRepairAI(opts: AiCallOptions): Promise<any | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Enhance a system prompt with identity lock + anti-generic rules for a newsletter.
+ * Use this in generators that call runCompletionWithOperation directly (not via callAI).
+ *
+ * Usage:
+ *   const systemPrompt = await enhanceSystemPromptForNewsletter(
+ *     'You are a market map strategist...',
+ *     input.company_id,
+ *     input.companyContext,
+ *   );
+ */
+export async function enhanceSystemPromptForNewsletter(
+  basePrompt: string,
+  companyId: string | undefined,
+  companyContext?: CompanyContext,
+): Promise<string> {
+  const ctx = companyContext ?? await resolveNewsletterCompanyContext(companyId);
+  if (!ctx) return basePrompt;
+  return enhanceNewsletterSystemPrompt(basePrompt, ctx);
 }

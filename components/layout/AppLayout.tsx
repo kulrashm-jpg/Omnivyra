@@ -42,11 +42,11 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   }, []);
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50">
+    <div className="flex min-h-screen flex-col bg-gray-50">
       <GlobalHeader onOpenCommandPalette={() => setIsCommandPaletteOpen(true)} />
       <CommandPalette open={isCommandPaletteOpen} onClose={() => setIsCommandPaletteOpen(false)} />
       {!isCommandCenterHome ? (
-        <div className="border-b border-slate-200 bg-white/90 backdrop-blur">
+        <div className="relative z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
           <div className="mx-auto flex max-w-screen-xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
             <div className="min-w-0">
               <Breadcrumbs />
@@ -55,7 +55,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           </div>
         </div>
       ) : null}
-      <main className="flex-1">
+      <main className="relative z-0 flex-1">
         {children}
       </main>
       <GlobalFooter />

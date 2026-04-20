@@ -2,6 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 import ChatVoiceButton from '../components/ChatVoiceButton';
 import AIGenerationProgress from '../components/AIGenerationProgress';
+import CompanyStrategyProfileCard from '../components/company/CompanyStrategyProfileCard';
 import type { useCompanyProfileState } from '../hooks/useCompanyProfileState';
 import { joinList, splitToList } from './company-profile.types';
 
@@ -686,6 +687,17 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 Extracted: {joinList(activeProfile.content_themes_list, activeProfile.content_themes)}
               </div>
             </div>
+
+            <CompanyStrategyProfileCard
+              companyId={companyId || activeProfile.company_id}
+              profile={activeProfile}
+              latestRefinement={latestRefinement}
+              fetchWithAuth={fetchWithAuth}
+              onProfileUpdated={updateActiveProfile}
+              onNotifyUpdated={notifyCompanyProfileUpdated}
+              onSuccess={setSuccessMessage}
+              onError={setErrorMessage}
+            />
 
             <div className="border-t pt-6 mt-6">
               {isRefining ? (

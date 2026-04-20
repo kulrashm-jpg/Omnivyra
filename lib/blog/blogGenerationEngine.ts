@@ -502,6 +502,8 @@ This is the #1 constraint. The finished article MUST be between ${Math.round(tw 
 1. **No hallucination**: Never invent statistics, company names, or study results. If you reference data, it must be real or clearly reasoned from first principles.
 2. **No filler**: Every sentence must earn its place. Meet the word count through depth of analysis, examples, and evidence — not padding or repetition.
 3. **Narrative construction**: Build an argument progressively. Each section must logically lead to the next.
+3a. **Must-include contract**: The draft is INVALID unless all must_include_points are materially covered in the body. Mentioning them is not sufficient â€” they must be explained, demonstrated, or applied.
+3b. **Strategic perspective contract**: STRATEGIC PERSPECTIVE (MANDATORY): You must reflect the company's perspective, beliefs, and differentiation in every section.
 ${toneRule}
 5. **Write for NOW**: The current year is ${currentYear}. All content must reflect the current state of the market or what is emerging in ${currentYear}–${nextYear}. Do NOT write about past trends, past years, or historical recaps.
 6. **No year-anchored titles**: Never put a past year (e.g., 2023, 2024) in the title or H2 headings. If a year is needed, use ${currentYear} or ${nextYear}.
@@ -611,6 +613,7 @@ export function buildGenerationUserPrompt(input: BlogGenerationInput): string {
       uniqueness_directive: 'Uniqueness directive',
       must_include_points: 'Must-include points',
       campaign_objective: 'Campaign objective',
+      strategy_perspective: 'Strategic perspective',
       trend_context: 'Trend context',
       company_context: 'Company context',
       current_content: 'Current content coverage',
@@ -1095,11 +1098,22 @@ export function buildTemplateAwareUserPrompt(
   }
 
   if (input.answers) {
+    const companyLines: string[] = [];
+    if (input.answers.companyName) companyLines.push(`Company: ${input.answers.companyName}`);
+    if (input.answers.industry) companyLines.push(`Industry: ${input.answers.industry}`);
+    if (input.answers.audience || input.answers.target_audience) companyLines.push(`Target audience: ${input.answers.audience || input.answers.target_audience}`);
+    if (input.answers.company_context) companyLines.push(`Context: ${input.answers.company_context}`);
+    if (companyLines.length > 0) {
+      lines.push(`\n## COMPANY CONTEXT\n${companyLines.join('\n')}`);
+    }
     if (input.answers.uniqueness_directive) {
       lines.push(`\n## UNIQUENESS DIRECTIVE: ${input.answers.uniqueness_directive}`);
     }
     if (input.answers.must_include_points) {
       lines.push(`\n## MUST-INCLUDE POINTS: ${input.answers.must_include_points}`);
+    }
+    if (input.answers.strategy_perspective) {
+      lines.push(`\n## STRATEGIC PERSPECTIVE\n${input.answers.strategy_perspective}`);
     }
     if (input.answers.campaign_objective) {
       lines.push(`\n## CAMPAIGN OBJECTIVE: ${input.answers.campaign_objective}`);
@@ -1195,6 +1209,8 @@ ${structure}
 - Treat ${minWordsPerBlock} words per paragraph block as the practical minimum unless the block is clearly just a short transition.
 - A single paragraph block may contain ${paragraphTagGuidance} when needed. Do not assume one block means one short paragraph.
 - For body sections, use layered depth: explanation + example + implication + action step where relevant.
+- The draft is INVALID unless all must_include_points are materially covered in the body. Mentioning them is not sufficient - they must be explained, demonstrated, or applied.
+- STRATEGIC PERSPECTIVE (MANDATORY): You must reflect the company's perspective, beliefs, and differentiation in every section.
 - Paragraph HTML must use only <p>, <strong>, <em>, and <a> tags. No other HTML elements.
 - Headings must be concise (3-8 words) and descriptive.
 - Key insights must be complete sentences, each expressing a standalone takeaway.

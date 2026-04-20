@@ -13,9 +13,9 @@ import { qualifyLead } from './leadQualifier';
 import { qualifyPredictiveLead } from './leadPredictiveQualifier';
 import { shouldRejectPost } from './leadNoiseFilter';
 import { generateIntentClusters } from './leadClusterService';
+import { writeLeadSignal } from './canonicalLeadSignalService';
 
 const QUALIFIED_THRESHOLD = 0.6;
-const TOP_SLOTS_PER_COMPANY = 15;
 const QUALITY_WEIGHT = 0.7;
 const ENGAGEMENT_WEIGHT = 0.3;
 
@@ -150,72 +150,41 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
             post.snippet ?? ''
           );
 
+          const canonicalSourceId =
+            (post.source_url ?? '').toString().trim() || dedupeHash;
+
           const { data: existingDedupe } = await supabase
-            .from('lead_signals_v1')
+            .from('lead_signals')
             .select('id')
-            .eq('dedupe_hash', dedupeHash)
+            .eq('organization_id', companyId)
+            .eq('source_type', 'listening')
+            .eq('source_id', canonicalSourceId)
             .limit(1)
             .maybeSingle();
 
           if (existingDedupe) continue;
 
           const authorHandle = (post.author_handle ?? '').trim();
-          if (authorHandle) {
-            const { data: existingAuthor } = await supabase
-              .from('lead_signals_v1')
-              .select('id')
-              .eq('job_id', jobId)
-              .eq('author_handle', authorHandle)
-              .eq('status', 'ACTIVE')
-              .limit(1)
-              .maybeSingle();
-            if (existingAuthor) continue;
-          }
 
           const contentHash = computeContentHash(post.platform, post.raw_text);
           const postedAt = post.posted_at ?? null;
-
-          const postCreatedAt = post.posted_at ?? postedAt;
-          const insertPayload = {
-            job_id: jobId,
-            company_id: companyId,
-            platform: post.platform,
+          const postCreatedAt = post.posted_at ?? postedAt ?? new Date().toISOString();
+          let canonicalIntentScore = 0;
+          let canonicalUrgencyScore = 0;
+          let canonicalIcpScore = 0;
+          let canonicalConfidenceScore = 0;
+          let canonicalTotalScore = 0;
+          let canonicalMetadata: Record<string, unknown> = {
             region: post.region ?? region,
-            raw_text: post.raw_text,
-            snippet: post.snippet,
             source_url: post.source_url,
-            author_handle: authorHandle || null,
             language: post.language ?? null,
             content_hash: contentHash,
             dedupe_hash: dedupeHash,
             posted_at: postedAt,
             post_created_at: postCreatedAt,
-            status: 'ACTIVE',
+            job_id: jobId,
+            mode,
           };
-
-          const { data: signal, error: insertErr } = await supabase
-            .from('lead_signals_v1')
-            .insert(insertPayload)
-            .select('id')
-            .single();
-
-          if (insertErr) {
-            if ((insertErr as { code?: string }).code === '23505') continue;
-            continue;
-          }
-          if (!signal) continue;
-
-          totalFound++;
-          platformFound++;
-          try {
-            await supabase.rpc('lead_platform_increment_signals', {
-              p_company_id: companyId,
-              p_platform: (post.platform ?? platform).toString().toLowerCase(),
-            });
-          } catch {
-            // platform stats are non-critical
-          }
-          regionsWithSignals.add((post.region ?? region) as string);
 
           if (mode === 'REACTIVE') {
             const qual = await qualifyLead(post, profile, null, unifiedContextBlock);
@@ -233,20 +202,18 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
               qualifiedScores.push(total_score);
               scoresByPlatform[platform].push(total_score);
             }
-
-            await supabase
-              .from('lead_signals_v1')
-              .update({
-                icp_score: qual.icp_score,
-                urgency_score: qual.urgency_score,
-                intent_score: qual.intent_score,
-                total_score,
-                engagement_potential: engagement,
-                risk_flag: qual.risk_flag,
-                signal_type: 'EXPLICIT',
-                problem_domain: qual.problem_domain ?? null,
-              })
-              .eq('id', signal.id);
+            canonicalIntentScore = qual.intent_score;
+            canonicalUrgencyScore = qual.urgency_score;
+            canonicalIcpScore = qual.icp_score;
+            canonicalConfidenceScore = total_score;
+            canonicalTotalScore = total_score;
+            canonicalMetadata = {
+              ...canonicalMetadata,
+              engagement_potential: engagement,
+              risk_flag: qual.risk_flag,
+              signal_type: 'EXPLICIT',
+              problem_domain: qual.problem_domain ?? null,
+            };
           } else {
             const qual = await qualifyPredictiveLead(post, profile, null, unifiedContextBlock);
             const total_score = qual.total_score;
@@ -260,23 +227,54 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
               predictiveTrendVelocities.push(qual.trend_velocity);
               predictiveConversionWindows.push(qual.conversion_window_days);
             }
-
-            await supabase
-              .from('lead_signals_v1')
-              .update({
-                icp_score: qual.icp_score,
-                urgency_score: qual.urgency_score,
-                intent_score: qual.intent_score,
-                total_score,
-                engagement_potential: 0,
-                risk_flag: qual.risk_flag,
-                signal_type: 'LATENT',
-                trend_velocity: qual.trend_velocity,
-                conversion_window_days: qual.conversion_window_days,
-                problem_domain: qual.problem_domain ?? null,
-              })
-              .eq('id', signal.id);
+            canonicalIntentScore = qual.intent_score;
+            canonicalUrgencyScore = qual.urgency_score;
+            canonicalIcpScore = qual.icp_score;
+            canonicalConfidenceScore = total_score;
+            canonicalTotalScore = total_score;
+            canonicalMetadata = {
+              ...canonicalMetadata,
+              engagement_potential: 0,
+              risk_flag: qual.risk_flag,
+              signal_type: 'LATENT',
+              trend_velocity: qual.trend_velocity,
+              conversion_window_days: qual.conversion_window_days,
+              problem_domain: qual.problem_domain ?? null,
+            };
           }
+
+          await writeLeadSignal({
+            debugContext: 'leadJobProcessor.processLeadJobV1',
+            canonical: {
+              organization_id: companyId,
+              source_type: 'listening',
+              source_id: canonicalSourceId,
+              thread_id: null,
+              platform: post.platform,
+              platform_user_id: authorHandle || null,
+              content_text: post.raw_text,
+              intent_score: canonicalIntentScore,
+              urgency_score: canonicalUrgencyScore,
+              icp_score: canonicalIcpScore,
+              confidence_score: canonicalConfidenceScore,
+              total_score: canonicalTotalScore,
+              detected_at: postCreatedAt,
+              migration_source: 'native',
+              metadata: canonicalMetadata,
+            },
+          });
+
+          totalFound++;
+          platformFound++;
+          try {
+            await supabase.rpc('lead_platform_increment_signals', {
+              p_company_id: companyId,
+              p_platform: (post.platform ?? platform).toString().toLowerCase(),
+            });
+          } catch {
+            // platform stats are non-critical
+          }
+          regionsWithSignals.add((post.region ?? region) as string);
         }
       }
 
@@ -341,19 +339,6 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
       if (avgConversionWindow < 21) confidence_index += 20;
     }
     confidence_index = Math.min(100, confidence_index);
-  }
-
-  const { data: allActive } = await supabase
-    .from('lead_signals_v1')
-    .select('id, created_at')
-    .eq('company_id', companyId)
-    .eq('status', 'ACTIVE')
-    .order('created_at', { ascending: false });
-
-  const list = (allActive ?? []) as { id: string; created_at: string }[];
-  const toArchive = list.slice(TOP_SLOTS_PER_COMPANY);
-  for (const { id } of toArchive) {
-    await supabase.from('lead_signals_v1').update({ status: 'ARCHIVED' }).eq('id', id);
   }
 
   console.info({ jobId, finalStatus, phase: 'COMPLETING' });

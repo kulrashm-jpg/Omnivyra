@@ -28,10 +28,11 @@ export async function computeThreadLeadScoresBatch(
   if (threadIds.length === 0) return result;
 
   const { data: signals } = await supabase
-    .from('engagement_lead_signals')
-    .select('thread_id, lead_score, confidence_score, lead_intent')
+    .from('lead_signals')
+    .select('thread_id, total_score, confidence_score, metadata')
     .in('thread_id', threadIds)
-    .eq('organization_id', organizationId);
+    .eq('organization_id', organizationId)
+    .eq('source_type', 'engagement');
 
   const { data: messages } = await supabase
     .from('engagement_messages')
@@ -68,10 +69,11 @@ export async function computeThreadLeadScoresBatch(
   for (const s of signals ?? []) {
     const tid = (s as { thread_id: string }).thread_id;
     const list = signalsByThread.get(tid) ?? [];
+    const metadata = ((s as { metadata?: Record<string, unknown> }).metadata ?? {}) as Record<string, unknown>;
     list.push({
-      lead_score: (s as { lead_score: number }).lead_score ?? 0,
+      lead_score: Math.round((((s as { total_score?: number }).total_score ?? 0) as number) * 100),
       confidence_score: (s as { confidence_score?: number }).confidence_score,
-      lead_intent: (s as { lead_intent: string }).lead_intent ?? '',
+      lead_intent: typeof metadata.lead_intent === 'string' ? metadata.lead_intent : '',
     });
     signalsByThread.set(tid, list);
   }

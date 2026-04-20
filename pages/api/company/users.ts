@@ -9,6 +9,9 @@ import {
   isSuperAdmin,
   Role,
 } from '../../../backend/services/rbacService';
+import { createAndSendInvitation } from '../../../backend/services/invitationService';
+import { withIdempotency } from '../../../backend/middleware/withIdempotency';
+import { logger } from '../../../backend/services/logger';
 
 const mapAppRoleToRbac = (role: string): Role | null => {
   const normalized = role.toUpperCase();
@@ -77,7 +80,12 @@ const ensureCompanyAdminAccess = async (
         created_at: new Date().toISOString(),
       });
     } catch (error) {
-      console.warn('AUDIT_LOG_FAILED', error);
+      logger.error('company_users_permission_denied_audit_failed', {
+        actorUserId: access.userId,
+        companyId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
     res.status(403).json({ error: 'PERMISSION_DENIED' });
     return null;
@@ -221,17 +229,17 @@ const insertAuditLog = async (input: {
   companyId?: string | null;
   metadata?: Record<string, any>;
 }) => {
-  try {
-    await supabase.from('audit_logs').insert({
-      actor_user_id: input.actorUserId,
-      action: input.action,
-      target_user_id: input.targetUserId || null,
-      company_id: input.companyId || null,
-      metadata: input.metadata || null,
-      created_at: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.warn('AUDIT_LOG_FAILED', error);
+  const { error } = await supabase.from('audit_logs').insert({
+    actor_user_id: input.actorUserId,
+    action: input.action,
+    target_user_id: input.targetUserId || null,
+    company_id: input.companyId || null,
+    metadata: input.metadata || null,
+    created_at: new Date().toISOString(),
+  });
+  if (error) {
+    logger.error('company_users_audit_log_failed', { actorUserId: input.actorUserId, action: input.action, companyId: input.companyId, message: error.message });
+    throw new Error(`AUDIT_LOG_FAILED:${error.message}`);
   }
 };
 
@@ -273,7 +281,7 @@ const addExistingUserToCompany = async (input: {
   return { error: null };
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const rawCompanyId =
     (req.query.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined);
@@ -311,7 +319,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ;
 
     if (error) {
-      console.warn('FAILED_TO_LIST_USERS', error.message);
+      logger.error('company_users_list_failed', { companyId, message: error.message });
       return res.status(500).json({ error: 'FAILED_TO_LIST_USERS', details: error.message });
     }
 
@@ -427,33 +435,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(500).json({ error: 'FAILED_TO_ASSIGN_ROLE', details: upsertError });
       }
 
-      // 4. Issue invitation token and send email
-      const { randomBytes, createHash } = await import('crypto');
-      const rawToken = randomBytes(32).toString('hex');
-      const tokenHash = createHash('sha256').update(rawToken).digest('hex');
-      const expiresAt = new Date(Date.now() + 7 * 86_400 * 1_000).toISOString();
-
-      await supabase.from('invitations').upsert(
-        { email: normalizedEmail, company_id: companyId, role: desiredRole, token_hash: tokenHash,
-          invited_by: access.userId, expires_at: expiresAt, accepted_at: null, revoked_at: null },
-        { onConflict: 'token_hash' }
-      );
-
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? '';
-      const inviteLink = `${baseUrl}/auth/accept-invite?token=${rawToken}`;
-      // TODO: send email via your mailer (Resend / SendGrid / SES)
-      if (process.env.NODE_ENV !== 'production') {
-        console.log(`[DEV] Invite link for ${normalizedEmail}: ${inviteLink}`);
-      }
+      const invitation = await createAndSendInvitation({
+        email: normalizedEmail,
+        companyId,
+        role: desiredRole,
+        invitedBy: access.userId,
+        idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+      });
 
       await insertAuditLog({
         actorUserId: access.userId,
         action: 'INVITE_USER',
         targetUserId: invitedUserId,
         companyId,
+        metadata: { invitationId: invitation.id },
       });
 
-      return res.status(201).json({ success: true });
+      return res.status(201).json({ success: true, invitationId: invitation.id });
     } catch (error: any) {
       await insertAuditLog({
         actorUserId: access.userId,
@@ -571,3 +569,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default withIdempotency(handler, { scope: 'company-users', methods: ['POST', 'PUT', 'DELETE'] });

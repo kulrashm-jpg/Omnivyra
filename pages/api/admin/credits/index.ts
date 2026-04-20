@@ -12,7 +12,6 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin, isSuperAdmin, getUserRole } from '../../../../backend/services/rbacService';
 import {
   getOrgCreditSummary,
@@ -20,12 +19,15 @@ import {
   adjustCredits,
   updateOrgCreditRate,
 } from '../../../../backend/services/consumptionAnalyticsService';
+import { requireAdminRateLimit, requireAuthenticatedInternalUser } from '../../../../backend/services/requestAccessService';
+import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
+import { logger } from '../../../../backend/services/logger';
+import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 
 async function assertSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
-  if (req.cookies?.super_admin_session === '1') return 'super_admin_session';
-  const auth = await getSupabaseUserFromRequest(req);
-  if (auth.error || !auth.user) { res.status(401).json({ error: 'UNAUTHORIZED' }); return null; }
-  const userId = auth.user.id;
+  const user = await requireAuthenticatedInternalUser(req, res);
+  if (!user) return null;
+  const userId = user.id;
   if ((await isPlatformSuperAdmin(userId)) || (await isSuperAdmin(userId))) return userId;
   res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
   return null;
@@ -36,18 +38,18 @@ async function assertCompanyAccess(
   res: NextApiResponse,
   companyId: string
 ): Promise<{ userId: string; isSA: boolean } | null> {
-  if (req.cookies?.super_admin_session === '1') return { userId: 'super_admin_session', isSA: true };
-  const auth = await getSupabaseUserFromRequest(req);
-  if (auth.error || !auth.user) { res.status(401).json({ error: 'UNAUTHORIZED' }); return null; }
-  const userId = auth.user.id;
+  const user = await requireAuthenticatedInternalUser(req, res);
+  if (!user) return null;
+  const userId = user.id;
   if ((await isPlatformSuperAdmin(userId)) || (await isSuperAdmin(userId))) return { userId, isSA: true };
   const { role } = await getUserRole(userId, companyId);
   if (!role) { res.status(403).json({ error: 'FORBIDDEN' }); return null; }
   return { userId, isSA: false };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    if (!(await requireAdminRateLimit(req, res, 'rl:admin:credits', 40, 60))) return;
     if (req.method === 'GET') {
       const companyId = req.query.companyId as string | undefined;
       if (!companyId) return res.status(400).json({ error: 'companyId required' });
@@ -80,6 +82,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         const result = await grantCredits({ organizationId: companyId, credits, usdEquivalent, note, performedBy: userId });
         if (!result.ok) return res.status(500).json({ error: result.error });
+        await recordAdminAudit({
+          actorUserId: userId,
+          action: 'ADMIN_CREDITS_GRANT',
+          targetType: 'organization',
+          targetId: companyId,
+          metadata: { credits, usdEquivalent: usdEquivalent ?? null, note: note ?? null },
+          idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+        });
         return res.status(200).json({ ok: true, action: 'grant', credits });
       }
 
@@ -88,6 +98,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!note) return res.status(400).json({ error: 'note required for adjustments' });
         const result = await adjustCredits({ organizationId: companyId, credits, note, performedBy: userId });
         if (!result.ok) return res.status(500).json({ error: result.error });
+        await recordAdminAudit({
+          actorUserId: userId,
+          action: 'ADMIN_CREDITS_ADJUST',
+          targetType: 'organization',
+          targetId: companyId,
+          metadata: { credits, note },
+          idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+        });
         return res.status(200).json({ ok: true, action: 'adjust', credits });
       }
 
@@ -97,6 +115,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         const result = await updateOrgCreditRate({ organizationId: companyId, creditRateUsd, performedBy: userId });
         if (!result.ok) return res.status(500).json({ error: result.error });
+        await recordAdminAudit({
+          actorUserId: userId,
+          action: 'ADMIN_CREDITS_SET_RATE',
+          targetType: 'organization',
+          targetId: companyId,
+          metadata: { creditRateUsd },
+          idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+        });
         return res.status(200).json({ ok: true, action: 'set_rate', creditRateUsd });
       }
 
@@ -105,7 +131,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (err: any) {
-    console.error('[api/admin/credits]', err?.message);
+    logger.error('admin_credits_failed', { message: err?.message ?? 'unknown' });
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default withIdempotency(handler, { scope: 'admin-credits', methods: ['POST'] });

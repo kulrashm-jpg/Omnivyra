@@ -60,12 +60,19 @@ async function loadThreadContext(
   const memory = (await getThreadMemory(threadId)) ?? '';
 
   const { data: leadSignals } = await supabase
-    .from('engagement_lead_signals')
-    .select('lead_intent, lead_score')
+    .from('lead_signals')
+    .select('metadata, total_score')
     .eq('thread_id', threadId)
-    .eq('organization_id', organizationId);
+    .eq('organization_id', organizationId)
+    .eq('source_type', 'engagement');
   const leadText =
-    (leadSignals ?? []).map((s: { lead_intent?: string; lead_score?: number }) => `${s.lead_intent} (score: ${s.lead_score ?? 0})`).join('; ') || 'None';
+    (leadSignals ?? [])
+      .map((s: { metadata?: { lead_intent?: string }; total_score?: number }) => {
+        const leadIntent = s.metadata?.lead_intent ?? 'lead_interest';
+        const leadScore = Math.round(Number(s.total_score ?? 0) * 100);
+        return `${leadIntent} (score: ${leadScore})`;
+      })
+      .join('; ') || 'None';
 
   const { data: opps } = await supabase
     .from('engagement_opportunities')

@@ -2,6 +2,7 @@ import { runCompletionWithOperation } from '../../backend/services/aiGateway';
 import { flattenBlocks } from './blockUtils';
 import type { ContentBlock } from './blockTypes';
 import type { BlogGenerationInput } from './blogGenerationEngine';
+import { buildSectionEnforcementPrompt, type CompanyIdentity } from '../content/companyContextBlock';
 
 type ClassicDraft = {
   title: string;
@@ -245,6 +246,20 @@ export async function runClassicBlogGeneration(args: {
     a.trend_context ? `Market context: ${a.trend_context}` : null,
   ].filter(Boolean).join('\n');
 
+  // Build identity for section enforcement in repair prompts
+  const _sectionIdentity: CompanyIdentity = {
+    companyName: a.companyName || undefined,
+    industry: a.industry || undefined,
+    targetAudience: a.audience || a.target_audience || undefined,
+    coreProblem: a.campaign_objective || undefined,
+    painPoints: a.must_include_points
+      ? a.must_include_points.split(';').map(s => s.trim()).filter(s => s.length > 10).slice(0, 4)
+      : undefined,
+    uniqueValue: a.uniqueness_directive || undefined,
+    productsServices: undefined, // not available from answers
+    desiredTransformation: undefined,
+  };
+
   let best: ClassicDraft | null = null;
   let bestWordCount = 0;
 
@@ -372,7 +387,8 @@ export async function runClassicBlogGeneration(args: {
                 `- Add explanation, examples, implications, and practitioner-useful detail\n` +
                 `- Reference the company context below — do not write generic content\n` +
                 `- Include at least one specific scenario or real-world example\n` +
-                `- Do not use bullets, headings, or placeholders\n`,
+                `- Do not use bullets, headings, or placeholders\n` +
+                buildSectionEnforcementPrompt(_sectionIdentity, blueprint.index - 1),
             },
             {
               role: 'user',

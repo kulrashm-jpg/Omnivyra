@@ -13,8 +13,16 @@ export interface ThreadViewProps {
   messages: EngagementMessage[];
   loading?: boolean;
   organizationId: string;
+  emptyStateTitle?: string;
+  emptyStateDescription?: string;
   onRefresh?: () => void;
   onReplySent?: () => void;
+  onExecuteReply?: (input: {
+    threadId: string;
+    messageId: string;
+    platform: string;
+    replyText: string;
+  }) => Promise<void>;
   onLike?: (messageId: string, platform: string) => void;
   onIgnore?: (threadId: string) => void;
   onMarkResolved?: () => void;
@@ -26,8 +34,11 @@ export const ThreadView = React.memo(function ThreadView({
   messages,
   loading = false,
   organizationId,
+  emptyStateTitle,
+  emptyStateDescription,
   onRefresh,
   onReplySent,
+  onExecuteReply,
   onLike,
   onIgnore,
   onMarkResolved,
@@ -39,8 +50,11 @@ export const ThreadView = React.memo(function ThreadView({
       messages={messages}
       loading={loading}
       organizationId={organizationId}
+      emptyStateTitle={emptyStateTitle}
+      emptyStateDescription={emptyStateDescription}
       onRefresh={onRefresh}
       onReplySent={onReplySent}
+      onExecuteReply={onExecuteReply}
       onLike={onLike}
       onIgnore={onIgnore}
       onMarkResolved={onMarkResolved}

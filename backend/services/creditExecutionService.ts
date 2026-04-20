@@ -26,17 +26,18 @@ import {
   type DeductOptions,
   type DeductResult,
   getCreditCost,
+  getSmartModeDedupSeconds,
   wasRecentlyRun,
-  SMART_MODE_DEDUP_SECONDS,
 } from './creditDeductionService';
-import { resolveDeduction, type CategorySplit } from './creditPriorityService';
+import { getTotalAvailable, resolveDeduction, type CategorySplit } from './creditPriorityService';
 import { trackUsage } from './usageTrackingService';
 import { checkCreditAlerts } from './creditAlertService';
+import { logger } from './logger';
 
 /** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
 function fireAlerts(orgId: string): void {
   checkCreditAlerts(orgId).catch(err =>
-    console.warn('[creditExecution] alert check failed (non-fatal):', err?.message),
+    logger.warn('credit_alert_check_failed', { orgId, message: err?.message ?? 'unknown' }),
   );
 }
 
@@ -217,11 +218,11 @@ export async function executeWithCredits<T>(
   ]);
 
   if (existingConfirm) {
-    console.info(`[creditExecution] already_confirmed: ${baseKey}`);
+    logger.info('credit_already_confirmed', { idempotencyKey: baseKey });
     return { status: 'already_confirmed' };
   }
   if (existingRelease) {
-    console.info(`[creditExecution] already_released: ${baseKey}`);
+    logger.info('credit_already_released', { idempotencyKey: baseKey });
     return { status: 'already_released' };
   }
 
@@ -234,7 +235,7 @@ export async function executeWithCredits<T>(
   if (existingHold) {
     // Resume from existing HOLD
     holdId = existingHold.id;
-    console.info(`[creditExecution] reusing hold ${holdId} for ${baseKey}`);
+    logger.info('credit_reusing_hold', { holdId, idempotencyKey: baseKey });
     const loadedSplit = await loadHoldSplit(holdId);
     if (!loadedSplit) {
       // Corrupted hold — treat as fresh
@@ -248,12 +249,12 @@ export async function executeWithCredits<T>(
     const { wallet, available, split } = await resolveDeduction(orgId, credits);
 
     if (!wallet) {
-      console.warn(`[creditExecution] no_credit_account: ${orgId}`);
+      logger.warn('credit_no_account', { orgId, action });
       return { status: 'no_credit_account' };
     }
 
     if (!split || !available) {
-      console.warn(`[creditExecution] insufficient_credits: need ${credits}, have ${available?.total ?? 0} for ${orgId}`);
+      logger.warn('credit_insufficient', { orgId, action, required: credits, available: available?.total ?? 0 });
       fireAlerts(orgId);
       return {
         status: 'insufficient_credits',
@@ -284,11 +285,18 @@ export async function executeWithCredits<T>(
       if (msg.includes('no_credit_account')) {
         return { status: 'no_credit_account' };
       }
-      // Non-fatal hold failure — proceed, CONFIRM will do the balance check
-      console.error(`[creditExecution] hold failed for ${baseKey}:`, msg);
+      logger.error('credit_hold_failed', { orgId, action, idempotencyKey: baseKey, message: msg });
+      throw new Error(`[creditExecution] hold failed: ${msg}`);
     } else {
       holdId = transactionId;
-      console.info(`[creditExecution] hold created: ${holdId} (${credits}cr — free:${usedSplit.free} inc:${usedSplit.incentive} paid:${usedSplit.paid})`);
+      logger.info('credit_hold_created', {
+        orgId,
+        holdId,
+        credits,
+        free: usedSplit.free,
+        incentive: usedSplit.incentive,
+        paid: usedSplit.paid,
+      });
     }
   }
 
@@ -298,9 +306,9 @@ export async function executeWithCredits<T>(
     executorResult = await executor();
   } catch (execErr: any) {
     // ── 4b. RELEASE — executor failed, restore reserved credits ──────────────
-    console.error(`[creditExecution] executor failed for ${baseKey}:`, execErr?.message);
+    logger.error('credit_executor_failed', { orgId, action, idempotencyKey: baseKey, message: execErr?.message ?? 'unknown' });
 
-    await callReservation({
+    const releaseResult = await callReservation({
       orgId,
       phase:          'release',
       split:          usedSplit,
@@ -311,6 +319,10 @@ export async function executeWithCredits<T>(
       performedBy:    userId,
       parentId:       holdId ?? undefined,
     });
+
+    if (releaseResult.error) {
+      throw new Error(`[creditExecution] release failed after executor error: ${(releaseResult.error as any).message ?? 'unknown'}`);
+    }
 
     throw execErr;
   }
@@ -330,10 +342,24 @@ export async function executeWithCredits<T>(
 
   if (confirmErr) {
     const msg = (confirmErr as any).message ?? '';
-    console.error(`[creditExecution] confirm failed for ${baseKey} (work complete):`, msg);
-    // Even if confirm fails, work is done — log and continue
+    logger.error('credit_confirm_failed', { orgId, action, idempotencyKey: baseKey, message: msg });
+    const releaseResult = await callReservation({
+      orgId,
+      phase:          'release',
+      split:          usedSplit,
+      idempotencyKey: releaseKey,
+      referenceType,
+      referenceId,
+      note:           `[RELEASE] ${note ?? action} — confirm failed`,
+      performedBy:    userId,
+      parentId:       holdId ?? undefined,
+    });
+    if (releaseResult.error) {
+      throw new Error(`[creditExecution] confirm failed and release failed: ${msg} | release=${(releaseResult.error as any).message ?? 'unknown'}`);
+    }
+    throw new Error(`[creditExecution] confirm failed: ${msg}`);
   } else {
-    console.info(`[creditExecution] confirmed: ${credits}cr for ${orgId} — txn:${confirmId}`);
+    logger.info('credit_confirmed', { orgId, action, credits, confirmId });
 
     // ── 5a. Couple usage tracking to confirm (enforces NO confirm without usage)
     if (confirmId) {
@@ -420,6 +446,7 @@ function buildBestEffortKey(
   orgId:  string,
   action: CreditAction,
   opts:   DeductOptions,
+  windowSec: number,
 ): { idempotencyKey: string; referenceId: string } {
   const actorId    = opts.userId ?? orgId;
   const refId      = opts.referenceId ?? opts.campaignId;
@@ -432,7 +459,6 @@ function buildBestEffortKey(
   }
 
   // No referenceId — bucket by the action's dedup window (or 1 h default)
-  const windowSec  = SMART_MODE_DEDUP_SECONDS[action] ?? 3_600;
   const bucketMs   = windowSec * 1000;
   const bucket     = Math.floor(Date.now() / bucketMs).toString();
 
@@ -461,14 +487,15 @@ export async function deductCreditsAwaited(
   try {
     // Smart Mode dedup — skip charge if same action ran recently
     if (smartMode) {
-      const dedupWindow = SMART_MODE_DEDUP_SECONDS[action];
+      const dedupWindow = await getSmartModeDedupSeconds(action);
       if (dedupWindow && await wasRecentlyRun(orgId, action, dedupWindow)) {
         return { success: true, skipped: true, reason: 'smart_mode_dedup' };
       }
     }
 
     const credits = Math.round((await getCreditCost(action)) * (opts.multiplier ?? 1));
-    const { idempotencyKey, referenceId } = buildBestEffortKey(orgId, action, opts);
+    const dedupWindow = await getSmartModeDedupSeconds(action);
+    const { idempotencyKey, referenceId } = buildBestEffortKey(orgId, action, opts, dedupWindow ?? 3_600);
 
     const result = await executeWithCredits({
       userId:         opts.userId ?? orgId,
@@ -483,7 +510,8 @@ export async function deductCreditsAwaited(
     });
 
     if (result.status === 'executed' || result.status === 'already_confirmed') {
-      return { success: true, creditsCharged: credits, balanceAfter: 0 };
+      const balanceAfter = await getTotalAvailable(orgId);
+      return { success: true, creditsCharged: credits, balanceAfter: balanceAfter ?? 0 };
     }
     if (result.status === 'already_released') {
       return { success: true, skipped: true, reason: 'smart_mode_dedup' };
@@ -500,7 +528,11 @@ export async function deductCreditsAwaited(
     }
     return { success: false, reason: 'error' };
   } catch (err: unknown) {
-    console.error('[creditExecution] deductCreditsAwaited unexpected error', err);
+    logger.error('credit_deduct_unexpected_error', {
+      orgId,
+      action,
+      message: err instanceof Error ? err.message : String(err),
+    });
     return {
       success: false,
       reason:  'error',
@@ -529,13 +561,21 @@ export async function deductCreditsIfValueAwaited(
     if (!result.success) {
       const reason = result.reason ?? 'unknown';
       const detail = result.detail ? ` detail=${result.detail}` : '';
-      console.warn(
-        `[creditExecution] deductCreditsIfValueAwaited: org=${orgId} action=${action} valueFound=${valueFound} reason=${reason}` + detail,
-      );
+      logger.warn('credit_deduct_if_value_failed', {
+        orgId,
+        action,
+        valueFound,
+        reason,
+        detail,
+      });
     }
     return { ...result, valueFound: true };
   } catch (err: unknown) {
-    console.error('[creditExecution] deductCreditsIfValueAwaited unexpected error', err);
+    logger.error('credit_deduct_if_value_unexpected_error', {
+      orgId,
+      action,
+      message: err instanceof Error ? err.message : String(err),
+    });
     return {
       success: false,
       reason:  'error',

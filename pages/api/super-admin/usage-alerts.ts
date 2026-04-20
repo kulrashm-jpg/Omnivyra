@@ -1,30 +1,19 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 
 function currentYearMonth(): { year: number; month: number } {
   const now = new Date();
   return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
 }
 
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:usage-alerts', 30, 60))) return;
 
-  if (!(await requireSuperAdmin(req, res))) return;
+  if (!(await requireSuperAdminUser(req, res))) return;
 
   const { year: defaultYear, month: defaultMonth } = currentYearMonth();
   const organizationId = req.query.organization_id as string | undefined;

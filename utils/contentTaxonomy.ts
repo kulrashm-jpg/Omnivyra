@@ -128,9 +128,17 @@ const CREATOR_DEPENDENT_IDS = new Set([
  * Returns true if the content type requires creator/human input (video, carousel, reel, etc.).
  * Use in content creation UI to show only creator-dependent options.
  */
+// Text-based types that must NEVER be flagged as creator-dependent,
+// even if their normalized form contains a substring match (e.g. 'shortstory' contains 'short').
+const TEXT_ONLY_OVERRIDES = new Set([
+  'shortstory', 'whitepaper',
+  'newsletter', 'article', 'blog', 'post', 'tweet', 'poll', 'thread',
+]);
+
 export function isCreatorDependentContentType(contentType?: string | null): boolean {
   const key = (contentType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
   if (!key) return false;
+  if (TEXT_ONLY_OVERRIDES.has(key)) return false;
   if (CREATOR_DEPENDENT_IDS.has(key)) return true;
   for (const id of CREATOR_DEPENDENT_IDS) {
     if (key.includes(id) || id.includes(key)) return true;

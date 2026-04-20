@@ -58,19 +58,29 @@ Output plain text with clear section breaks. Match the format to the exact conte
 7/ [closing with CTA]
 Each tweet: max 270 characters. Output plain text.`;
     case 'poll':
-      return `You are a social media engagement specialist. Create a poll post that sparks conversation. Output plain text structured as:
-QUESTION: [A thought-provoking, debatable question related to the topic — max 140 characters]
-OPTION 1: [First answer choice — max 25 characters]
-OPTION 2: [Second answer choice — max 25 characters]
-OPTION 3: [Third answer choice — max 25 characters]
-OPTION 4: [Fourth answer choice — max 25 characters]
-CONTEXT: [1-2 sentences of engaging context to post alongside the poll — encourage people to vote and explain their choice]
+      return `You are a social media engagement specialist. Create a "poll post" — a text-based engagement post that asks a question and lists numbered options, inviting the audience to comment with their choice. This is NOT a native platform poll — it's a regular text post designed to drive comments and discussion.
+
+Output format (plain text, ready to publish):
+1. Start with a bold hook question that's genuinely debatable
+2. List 3-4 options using emoji numbers (1️⃣ 2️⃣ 3️⃣ 4️⃣)
+3. End with a CTA asking people to drop their number or explain their choice
+
+Example structure:
+**What's your biggest challenge with [topic]?**
+
+1️⃣ [Option A]
+2️⃣ [Option B]
+3️⃣ [Option C]
+4️⃣ [Option D]
+
+Drop your number below — bonus points if you share why! 👇
 
 Rules:
 - The question must be genuinely debatable — no obvious "right" answer
-- Options should be distinct, not overlapping
-- Make it relevant to the target audience's daily work
-- Keep it professional but conversational`;
+- Options should be distinct, specific, and relevant to the audience's work
+- Keep it under 150 words total
+- Professional but conversational tone
+- The CTA must encourage commenting (not just reading)`;
     default:
       return `Write publish-ready social media post content from the provided JSON context.
 
@@ -96,7 +106,9 @@ export function getContentTypeMaxWords(category: 'video' | 'carousel' | 'article
       const t = (exactType ?? '').toLowerCase();
       if (t === 'white_paper') return 1000;
       if (t === 'newsletter') return 600;
-      if (t === 'short_story') return 500;
+      // Short stories target ~400 words (~2400 chars) to stay well under
+      // LinkedIn's 3000-char content constraint with a safety margin.
+      if (t === 'short_story') return 400;
       return 700;
     }
     case 'thread': return 350;

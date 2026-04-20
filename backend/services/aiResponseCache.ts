@@ -46,6 +46,14 @@ const NO_CACHE_OPS = new Set([
   'profileEnrichment',
   'profileExtraction',
   'refineProblemTransformation',
+  // Master content and platform variants must NEVER be cached — each activity
+  // card has a unique topic and must get its own fresh AI-generated content.
+  // Near-match caching (80% Jaccard) was returning the SAME content for similar
+  // topics (e.g. "Brand Awareness for B2B Marketers" x 3), making all posts
+  // identical. Also caching can serve stale/empty content from failed runs.
+  'generateMasterContent',
+  'generatePlatformVariants',
+  'generateContentVariant',
 ]);
 
 // ── Cache TTL (seconds) per operation ────────────────────────────────────────

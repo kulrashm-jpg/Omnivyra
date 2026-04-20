@@ -240,7 +240,7 @@ export function getNextActionForPath(pathname: string): NextAction | null {
     return {
       label: 'Review active leads',
       description: 'Go straight to the people and conversations that need action.',
-      href: '/engagement/leads',
+      href: '/dashboard/intelligence?intelTab=active-leads',
       icon: Users,
     };
   }

@@ -1,7 +1,7 @@
 /**
  * Market Pulse aggregation from DB sources.
  * Aggregates from: signal_clusters, signal_intelligence, campaign_opportunities,
- * influencer_intelligence, lead_signals_v1 (BUYING_INTENT). Does NOT fetch raw APIs.
+ * influencer_intelligence, lead_signals (BUYING_INTENT). Does NOT fetch raw APIs.
  * Feed limits: max 10 per category, max 40 total.
  * Deterministic hash ensures identical signals (same topic + category) collapse across sources.
  * Time-decay scoring: older signals lose priority via computeRecencyScore; sort by final_score DESC.
@@ -29,7 +29,6 @@ export type AggregatedPulseSignal = {
   confidence_score: number;
   recency: string;
   hash: string;
-  /** Internal only; not persisted. Used for time-decay ranking. */
   final_score?: number;
   spike_reason?: string;
   shelf_life_days?: number;
@@ -61,11 +60,9 @@ function mergeOrKeepHigherMomentum(
   uniqueSignals: Map<string, AggregatedPulseSignal>,
   sig: AggregatedPulseSignal
 ): void {
-  const h = sig.hash;
-  if (!h) return;
-  const existing = uniqueSignals.get(h);
+  const existing = uniqueSignals.get(sig.hash);
   if (!existing || sig.momentum_score > existing.momentum_score) {
-    uniqueSignals.set(h, sig);
+    uniqueSignals.set(sig.hash, sig);
   }
 }
 
@@ -73,8 +70,9 @@ export async function aggregateMarketPulseFromDb(
   companyId: string,
   regions?: string[]
 ): Promise<AggregatedPulseSignal[]> {
-  const uniqueSignals = new Map<string, AggregatedPulseSignal>();
+  void regions;
 
+  const uniqueSignals = new Map<string, AggregatedPulseSignal>();
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const [
@@ -110,10 +108,10 @@ export async function aggregateMarketPulseFromDb(
       .order('influence_score', { ascending: false })
       .limit(20),
     supabase
-      .from('lead_signals_v1')
-      .select('id, snippet, intent_score, total_score, region, created_at')
-      .eq('company_id', companyId)
-      .eq('status', 'ACTIVE')
+      .from('lead_signals')
+      .select('id, content_text, intent_score, total_score, detected_at, metadata')
+      .eq('organization_id', companyId)
+      .eq('source_type', 'listening')
       .gte('intent_score', BUYING_INTENT_INTENT_THRESHOLD)
       .order('total_score', { ascending: false })
       .limit(20),
@@ -126,24 +124,24 @@ export async function aggregateMarketPulseFromDb(
     created_at: string;
   }>;
 
-  for (const r of clusterData) {
-    const momentum = Math.min(1, (r.signal_count ?? 0) / 15);
-    const confidence = Math.min(1, (r.signal_count ?? 0) / 10);
+  for (const row of clusterData) {
+    const momentum = Math.min(1, (row.signal_count ?? 0) / 15);
+    const confidence = Math.min(1, (row.signal_count ?? 0) / 10);
     const primary_category = 'MARKET_TREND';
     mergeOrKeepHigherMomentum(uniqueSignals, {
-      id: r.cluster_id,
-      topic: r.cluster_topic,
+      id: row.cluster_id,
+      topic: row.cluster_topic,
       primary_category,
       secondary_tags: ['cluster_detected'],
       momentum_score: momentum || 0.3,
       confidence_score: confidence || 0.3,
-      recency: r.created_at,
+      recency: row.created_at,
       source: 'signal_clusters',
-      hash: generateSignalHash(r.cluster_topic, primary_category),
+      hash: generateSignalHash(row.cluster_topic, primary_category),
     });
   }
 
-  const siRows = (signalIntelligence.data ?? []) as Array<{
+  const intelligenceRows = (signalIntelligence.data ?? []) as Array<{
     id: string;
     topic: string;
     momentum_score: number | null;
@@ -152,54 +150,54 @@ export async function aggregateMarketPulseFromDb(
     last_detected_at: string | null;
   }>;
 
-  for (const r of siRows) {
+  for (const row of intelligenceRows) {
     const input: RawSignalInput = {
-      topic: r.topic,
+      topic: row.topic,
       source: 'signal_intelligence',
-      normalizedPayload: { signal_count: r.signal_count },
+      normalizedPayload: { signal_count: row.signal_count },
     };
     const { primary_category, secondary_tags } = classifyMarketPulseSignal(input);
     mergeOrKeepHigherMomentum(uniqueSignals, {
-      id: r.id,
-      topic: r.topic,
+      id: row.id,
+      topic: row.topic,
       primary_category,
       secondary_tags,
-      momentum_score: r.momentum_score ?? 0.5,
-      confidence_score: Math.min(1, (r.signal_count ?? 0) / 10),
-      recency: r.last_detected_at ?? r.first_detected_at ?? new Date().toISOString(),
+      momentum_score: row.momentum_score ?? 0.5,
+      confidence_score: Math.min(1, (row.signal_count ?? 0) / 10),
+      recency: row.last_detected_at ?? row.first_detected_at ?? new Date().toISOString(),
       source: 'signal_intelligence',
-      hash: generateSignalHash(r.topic, primary_category),
+      hash: generateSignalHash(row.topic, primary_category),
     });
   }
 
-  const coRows = (campaignOpportunities.data ?? []) as Array<{
+  const campaignRows = (campaignOpportunities.data ?? []) as Array<{
     id: string;
     opportunity_title: string;
     momentum_score: number | null;
     created_at: string;
   }>;
 
-  for (const r of coRows) {
+  for (const row of campaignRows) {
     const input: RawSignalInput = {
-      topic: r.opportunity_title,
+      topic: row.opportunity_title,
       source: 'campaign_opportunities',
       normalizedPayload: {},
     };
     const { primary_category, secondary_tags } = classifyMarketPulseSignal(input);
     mergeOrKeepHigherMomentum(uniqueSignals, {
-      id: r.id,
-      topic: r.opportunity_title,
+      id: row.id,
+      topic: row.opportunity_title,
       primary_category,
       secondary_tags,
-      momentum_score: r.momentum_score ?? 0.5,
+      momentum_score: row.momentum_score ?? 0.5,
       confidence_score: 0.7,
-      recency: r.created_at,
+      recency: row.created_at,
       source: 'campaign_opportunities',
-      hash: generateSignalHash(r.opportunity_title, primary_category),
+      hash: generateSignalHash(row.opportunity_title, primary_category),
     });
   }
 
-  const infRows = (influencerRows.data ?? []) as Array<{
+  const influencerData = (influencerRows.data ?? []) as Array<{
     id: string;
     author_name: string | null;
     platform: string;
@@ -207,17 +205,17 @@ export async function aggregateMarketPulseFromDb(
     last_active_at: string | null;
   }>;
 
-  for (const r of infRows) {
-    const topic = `${r.author_name ?? 'Influencer'} (${r.platform})`;
+  for (const row of influencerData) {
+    const topic = `${row.author_name ?? 'Influencer'} (${row.platform})`;
     const primary_category = 'INFLUENCER_ACTIVITY';
     mergeOrKeepHigherMomentum(uniqueSignals, {
-      id: r.id,
+      id: row.id,
       topic,
       primary_category,
       secondary_tags: [],
-      momentum_score: Math.min(1, (r.influence_score ?? 0) / 100),
+      momentum_score: Math.min(1, (row.influence_score ?? 0) / 100),
       confidence_score: 0.6,
-      recency: r.last_active_at ?? new Date().toISOString(),
+      recency: row.last_active_at ?? new Date().toISOString(),
       source: 'influencer_intelligence',
       hash: generateSignalHash(topic, primary_category),
     });
@@ -225,60 +223,60 @@ export async function aggregateMarketPulseFromDb(
 
   const leadRows = (leadSignals.data ?? []) as Array<{
     id: string;
-    snippet: string;
+    content_text: string;
     intent_score: number;
     total_score: number;
-    region: string | null;
-    created_at: string;
+    detected_at: string;
+    metadata?: Record<string, unknown> | null;
   }>;
 
-  for (const r of leadRows) {
-    const topic = r.snippet.slice(0, 120) + (r.snippet.length > 120 ? '…' : '');
+  for (const row of leadRows) {
+    const contentText = row.content_text ?? '';
+    const topic = contentText.slice(0, 120) + (contentText.length > 120 ? '...' : '');
+    const metadata = (row.metadata ?? {}) as Record<string, unknown>;
     const primary_category = 'BUYING_INTENT';
     mergeOrKeepHigherMomentum(uniqueSignals, {
-      id: r.id,
+      id: row.id,
       topic,
       primary_category,
       secondary_tags: [],
-      momentum_score: r.intent_score ?? 0.5,
-      confidence_score: r.total_score ?? 0.5,
-      recency: r.created_at,
+      momentum_score: row.intent_score ?? 0.5,
+      confidence_score: row.total_score ?? 0.5,
+      recency: row.detected_at,
       source: 'lead_signals',
-      region: r.region,
+      region: typeof metadata.region === 'string' ? metadata.region : null,
       hash: generateSignalHash(topic, primary_category),
     });
   }
 
   const allSignals = Array.from(uniqueSignals.values());
-
-  for (const sig of allSignals) {
-    const recencyScore = computeRecencyScore(sig.recency);
-    sig.final_score =
-      sig.momentum_score * 0.6 + sig.confidence_score * 0.3 + recencyScore * 0.1;
+  for (const signal of allSignals) {
+    const recencyScore = computeRecencyScore(signal.recency);
+    signal.final_score =
+      signal.momentum_score * 0.6 + signal.confidence_score * 0.3 + recencyScore * 0.1;
   }
 
-  allSignals.sort((a, b) => {
-    const scoreA = a.final_score ?? 0;
-    const scoreB = b.final_score ?? 0;
-    if (scoreB !== scoreA) return scoreB - scoreA;
-    return new Date(b.recency).getTime() - new Date(a.recency).getTime();
+  allSignals.sort((left, right) => {
+    const scoreDelta = (right.final_score ?? 0) - (left.final_score ?? 0);
+    if (scoreDelta !== 0) return scoreDelta;
+    return new Date(right.recency).getTime() - new Date(left.recency).getTime();
   });
 
   const byCategory = new Map<MarketPulseCategory, AggregatedPulseSignal[]>();
-  for (const sig of allSignals) {
-    const list = byCategory.get(sig.primary_category) ?? [];
-    if (list.length < MAX_SIGNALS_PER_CATEGORY) {
-      list.push(sig);
-      byCategory.set(sig.primary_category, list);
+  for (const signal of allSignals) {
+    const categoryList = byCategory.get(signal.primary_category) ?? [];
+    if (categoryList.length < MAX_SIGNALS_PER_CATEGORY) {
+      categoryList.push(signal);
+      byCategory.set(signal.primary_category, categoryList);
     }
   }
-  const all = Array.from(byCategory.values()).flat();
-  all.sort((a, b) => {
-    const scoreA = a.final_score ?? 0;
-    const scoreB = b.final_score ?? 0;
-    if (scoreB !== scoreA) return scoreB - scoreA;
-    return new Date(b.recency).getTime() - new Date(a.recency).getTime();
+
+  const collapsed = Array.from(byCategory.values()).flat();
+  collapsed.sort((left, right) => {
+    const scoreDelta = (right.final_score ?? 0) - (left.final_score ?? 0);
+    if (scoreDelta !== 0) return scoreDelta;
+    return new Date(right.recency).getTime() - new Date(left.recency).getTime();
   });
 
-  return all.slice(0, MAX_TOTAL_SIGNALS);
+  return collapsed.slice(0, MAX_TOTAL_SIGNALS);
 }

@@ -15,6 +15,7 @@ export default function WorkspaceContentPanels({ d }: { d: WorkspaceState }) {
     addVariantPlatform,
     allContentTypesForAdd,
     getAddablePlatformsForContentType,
+    handleGenerateMasterContent,
     handleRepurposeAll,
     hasMasterGenerated,
     isGeneratingMaster,
@@ -69,8 +70,17 @@ export default function WorkspaceContentPanels({ d }: { d: WorkspaceState }) {
             {masterText ? (
               <ContentRenderer content={masterText} renderMode="rich" />
             ) : (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                The master content has not been generated yet.
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center">
+                <p className="text-sm text-slate-500 mb-3">The master content has not been generated yet.</p>
+                <button
+                  type="button"
+                  onClick={() => handleGenerateMasterContent?.()}
+                  disabled={isGeneratingMaster}
+                  className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {isGeneratingMaster ? 'Generating...' : 'Generate Master Content'}
+                </button>
               </div>
             )}
           </div>

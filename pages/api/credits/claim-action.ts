@@ -22,6 +22,8 @@ import { supabase as serviceSb } from '@/backend/db/supabaseClient';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
+import { withIdempotency } from '../../../backend/middleware/withIdempotency';
+import { logger } from '../../../backend/services/logger';
 
 // Fallback rewards used when free_credit_config DB rows are missing or inactive
 const CREDIT_REWARDS_DEFAULT: Record<string, number> = {
@@ -32,7 +34,7 @@ const CREDIT_REWARDS_DEFAULT: Record<string, number> = {
   first_campaign: 200,
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
@@ -105,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           idempotencyKey: makeIdempotencyKey(user.id, `earn:${category}`, orgId),
         });
       } catch (creditErr: any) {
-        console.error('[credits/claim-action] credit grant failed:', creditErr.message);
+        logger.error('credits_claim_action_grant_failed', { userId: user.id, orgId, category, message: creditErr.message });
         // Roll back the claim so the user can retry
         await serviceSb.from('free_credit_claims').delete()
           .eq('user_id', user.id).eq('category', category);
@@ -115,7 +117,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ success: true, category, credits });
   } catch (err: any) {
-    console.error('[credits/claim-action]', err);
+    logger.error('credits_claim_action_failed', { userId: user.id, category, message: err?.message ?? 'Internal server error' });
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
+
+export default withIdempotency(handler, { scope: 'credits-claim-action' });

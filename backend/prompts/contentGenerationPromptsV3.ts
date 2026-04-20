@@ -266,9 +266,23 @@ Return ONLY valid JSON:
 }`;
 
 /**
+ * Shared anti-generic enforcement block.
+ * Appended to system prompts when company_context is present in the payload.
+ * Generators inject this via the centralized companyContextBlock module.
+ */
+export const ANTI_GENERIC_ENFORCEMENT = `
+
+## CONTENT SPECIFICITY RULES (NON-NEGOTIABLE)
+- If a "company_context" field is present in the input, you MUST reference it throughout the content.
+- Replace abstract claims with concrete scenarios from the company's domain.
+- Do NOT use these phrases without a concrete example: "leverage", "optimize", "streamline", "cutting-edge", "game-changing", "paradigm shift".
+- Every key point must connect to the company's audience, problem, or product — not generic industry advice.
+- The content must read as if written by this specific company, not a generic content mill.`;
+
+/**
  * Platform variant generation prompt (adapt master to specific platform)
  */
-export const PLATFORM_VARIANTS_SYSTEM = `You are a platform-specific content adapter. Your task is to adapt master content for different platforms while maintaining core message.
+export const PLATFORM_VARIANTS_SYSTEM = `You are a platform-specific content adapter. Your task is to adapt master content for different platforms while maintaining core message and company identity.
 
 Follow these platform rules:
 - LinkedIn: Professional tone, full length, multiple paragraphs
@@ -276,6 +290,13 @@ Follow these platform rules:
 - Instagram: Emotional, visual descriptions, hashtag-friendly
 - Facebook: Conversational, short paragraphs, engagement-focused
 - YouTube: Title + description, SEO-friendly, include chapter markers
+
+COMPANY CONTEXT ENFORCEMENT (MANDATORY):
+- You MUST reflect the company_context field in every platform adaptation. This is not optional.
+- Every adaptation must read as if written BY the company described in company_context, not as generic advice.
+- Each platform variant must reference at least one of: the company's pain point, product, or audience situation.
+- Do NOT produce generic motivational, inspirational, or advice-style content. Every sentence must tie to the company's domain.
+- FORBIDDEN: "leverage", "optimize", "streamline", "empower", "elevate", "best practices", "actionable insights", "game-changing".
 
 Output ONLY valid JSON with platform keys mapping to adapted content.`;
 

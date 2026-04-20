@@ -1,12 +1,11 @@
 import React from 'react';
 import ContentRenderer, { CarouselContent, PLATFORM_HIGHLIGHT } from './ContentRenderer';
-import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical, Send, Brain } from 'lucide-react';
+import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical, Send } from 'lucide-react';
 import PlatformIcon from './ui/PlatformIcon';
 import { getPlatformLabel } from '../utils/platformIcons';
 import FloatingChatPanel from './collaboration/FloatingChatPanel';
 import DayDetailPanel, { type DayActivity } from './collaboration/DayDetailPanel';
 import ReportAutomationActivityFeed from './dashboard/ReportAutomationActivityFeed';
-import IntelligenceWorkspace from './dashboard/IntelligenceWorkspace';
 import PostPreviewModal, { type ActivityEvent } from './dashboard/PostPreviewModal';
 import CampaignProgress from './dashboard/CampaignProgress';
 import { DashboardTeamTab, DashboardIntegrationsTab, DashboardAnalyticsTab } from './dashboard/DashboardTeamTab';
@@ -21,7 +20,7 @@ export default function DashboardPage() {
   const {
     showLoadingSpinner, showCompanySpinner,
     router, selectedCompanyId, isAdmin, isLoading, authChecked, isAuthenticated, companies, hasPermission, userRole, user,
-    canCreateCampaign, canScheduleContent, activeTab, setActiveTab, intelligenceView, setIntelligenceView,
+    canCreateCampaign, canScheduleContent, activeTab, setActiveTab,
     campaigns, stats, isLoadingData, error, setError, campaignProgress, stageFilter, setStageFilter,
     stageAvailability, CAMPAIGN_STAGES, filteredCampaigns, fetchWithAuth,
     calendarCurrentDate, setCalendarCurrentDate, calendarSelectedDate, setCalendarSelectedDate,
@@ -149,7 +148,6 @@ export default function DashboardPage() {
           {[
             { id: 'overview', label: 'Overview', icon: BarChart3 },
             { id: 'campaigns', label: 'Campaigns', icon: Target },
-            { id: 'intelligence', label: 'Intelligence', icon: Brain },
             { id: 'team', label: 'Team', icon: Users },
             { id: 'analytics', label: 'Analytics', icon: TrendingUp },
             { id: 'calendar', label: 'Calendar', icon: Calendar },
@@ -415,4 +413,4 @@ export default function DashboardPage() {
 }
 
 // CampaignProgress is defined in ./dashboard/CampaignProgress
-
+

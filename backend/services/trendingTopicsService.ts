@@ -90,9 +90,10 @@ export async function getTrendingTopics(
   const msgList = (messages ?? []) as Array<{ id: string; thread_id: string; content: string | null }>;
 
   const { data: leads } = await supabase
-    .from('engagement_lead_signals')
+    .from('lead_signals')
     .select('thread_id')
     .eq('organization_id', organizationId)
+    .eq('source_type', 'engagement')
     .in('thread_id', threadIds);
   const leadCountByThread = new Map<string, number>();
   (leads ?? []).forEach((r: { thread_id: string }) => {

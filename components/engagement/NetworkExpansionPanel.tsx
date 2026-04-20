@@ -20,7 +20,7 @@ export const NetworkExpansionPanel = React.memo(function NetworkExpansionPanel({
   onViewConversation,
   className = '',
 }: NetworkExpansionPanelProps) {
-  const { influencers, activeDiscussions, potentialLeads, highEngagement } = useMemo(() => {
+  const { influencers, activeDiscussions, leadFlaggedThreads, highEngagement } = useMemo(() => {
     const sortedByMessageCount = [...items].sort(
       (a, b) => (b.message_count ?? 0) - (a.message_count ?? 0)
     );
@@ -33,15 +33,16 @@ export const NetworkExpansionPanel = React.memo(function NetworkExpansionPanel({
     });
     const activeDiscussions = sortedByRecency.slice(0, MAX_ITEMS);
 
-    const leads = items.filter((t) => t.lead_detected || (t.lead_score ?? 0) > 0);
-    const potentialLeads = leads.slice(0, MAX_ITEMS);
+    const leadFlaggedThreads = items
+      .filter((t) => t.lead_detected || (t.lead_score ?? 0) > 0)
+      .slice(0, MAX_ITEMS);
 
     const highEng = items.filter((t) => (t.priority_score ?? 0) >= HIGH_ENGAGEMENT_THRESHOLD);
     const highEngagement = highEng
       .sort((a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0))
       .slice(0, MAX_ITEMS);
 
-    return { influencers, activeDiscussions, potentialLeads, highEngagement };
+    return { influencers, activeDiscussions, leadFlaggedThreads, highEngagement };
   }, [items]);
 
   const ThreadCard = ({ thread }: { thread: InboxThread }) => (
@@ -98,13 +99,13 @@ export const NetworkExpansionPanel = React.memo(function NetworkExpansionPanel({
 
       <div>
         <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">
-          Potential Leads
+          Lead-flagged Threads
         </h4>
         <div className="space-y-2">
-          {potentialLeads.length === 0 ? (
-            <div className="text-sm text-slate-500">No potential leads detected.</div>
+          {leadFlaggedThreads.length === 0 ? (
+            <div className="text-sm text-slate-500">No lead-flagged threads detected.</div>
           ) : (
-            potentialLeads.map((t) => (
+            leadFlaggedThreads.map((t) => (
               <ThreadCard key={t.thread_id} thread={t} />
             ))
           )}

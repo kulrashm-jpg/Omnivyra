@@ -7,6 +7,26 @@ import type { ContentBlueprint } from '../contentBlueprintCache';
 import { nonEmpty, asObject, sanitizeIdPart, toPositiveNumber } from './contentTypeHelpers';
 import { isMediaDependentContentType, resolvePlatformTargets, resolveMediaStatus, buildExecutionReadiness, buildExecutionJobsFromItem } from './executionHelpers';
 import { optimizeDiscoverabilityForPlatform, buildMediaSearchIntent, normalizeLegacyMediaSearchIntent } from './discoverabilityHelpers';
+import { getProfile } from '../companyProfileService';
+import { extractCompanyIdentity, buildCompanyContextBlockShort, buildIdentityLock, buildAntiGenericRules, type CompanyIdentity } from '../../../lib/content/companyContextBlock';
+
+// ── Company context cache for variant generation ─────────────────────────────
+const _variantContextCache = new Map<string, { block: string; identity: CompanyIdentity; at: number }>();
+
+async function resolveCompanyContextBlock(companyId: string | null | undefined): Promise<{ block: string; identity: CompanyIdentity }> {
+  if (!companyId) return { block: '', identity: {} };
+  const cached = _variantContextCache.get(companyId);
+  if (cached && Date.now() - cached.at < 5 * 60 * 1000) return { block: cached.block, identity: cached.identity };
+  try {
+    const profile = await getProfile(companyId, { autoRefine: false });
+    const identity = extractCompanyIdentity(profile);
+    const block = buildCompanyContextBlockShort(identity);
+    _variantContextCache.set(companyId, { block, identity, at: Date.now() });
+    return { block, identity };
+  } catch {
+    return { block: '', identity: {} };
+  }
+}
 import {
   blueprintToFullText,
   renderDeterministicVariant,
@@ -46,6 +66,15 @@ async function generatePlatformVariantsInOneCall(
     ? (blueprints as ContentBlueprint[]).map((bp) => blueprintToFullText(bp)).join('\n\n---\n\n')
     : (masterContentOrBlueprints as string);
   if (targets.length === 0) return isBatch ? [] : {};
+  // Resolve company context for platform variant specificity
+  const { block: companyBlock, identity: variantIdentity } = await resolveCompanyContextBlock(context.company_id);
+
+  // Enhance system prompt with identity lock + anti-generic rules when company is known
+  const hasVariantIdentity = !!(variantIdentity.companyName || variantIdentity.industry);
+  const effectiveVariantSystemPrompt = hasVariantIdentity
+    ? `${buildIdentityLock(variantIdentity, 'platform variant')}\n\n${PLATFORM_VARIANTS_SYSTEM}\n${buildAntiGenericRules(variantIdentity)}`
+    : PLATFORM_VARIANTS_SYSTEM;
+
   const platformConfig = targets.map((t) => ({
     key: `${t.platform}_${t.content_type}`,
     platform: t.platform,
@@ -66,7 +95,7 @@ async function generatePlatformVariantsInOneCall(
     messages: [
       {
         role: 'system',
-        content: PLATFORM_VARIANTS_SYSTEM,
+        content: effectiveVariantSystemPrompt,
       },
       {
         role: 'user',
@@ -78,6 +107,7 @@ async function generatePlatformVariantsInOneCall(
                 platform_config: platformConfig,
                 writer_brief: context.writer_content_brief ?? null,
                 intent: context.intent ?? null,
+                ...(companyBlock ? { company_context: companyBlock } : {}),
                 output_format: 'Object with keys "0","1",... — each value is { "platform_contenttype": "content" } per platform_config keys.',
               }
             : {
@@ -85,6 +115,7 @@ async function generatePlatformVariantsInOneCall(
                 platform_config: platformConfig,
                 writer_brief: context.writer_content_brief ?? null,
                 intent: context.intent ?? null,
+                ...(companyBlock ? { company_context: companyBlock } : {}),
                 output_format: Object.fromEntries(platformConfig.map((p) => [p.key, '<adapted content for this platform>'])),
               }
         ),
@@ -444,6 +475,7 @@ export async function generatePlatformVariantFromMaster(
       post:        'Format as a single social post. Punchy, direct, max 3 paragraphs.',
       story:       'Format as quick visual story text overlay — very short, max 2 lines per frame.',
       carousel:    'Keep format as slide text (each slide: bold headline + 1-2 support lines).',
+      poll:        'Format as a POLL POST — a text-based engagement post (NOT a native poll). Start with a bold hook question. List 3-4 options using emoji numbers (1️⃣ 2️⃣ 3️⃣ 4️⃣). End with a CTA asking readers to comment their number and explain why. Keep under 150 words. The question must be debatable with no obvious right answer.',
     };
     const formatGuide = contentTypeFormatGuide[contentType] ?? '';
     const aiContent = await requestVariant(

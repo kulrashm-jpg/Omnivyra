@@ -63,43 +63,89 @@ export default function AuthCallback() {
         }
       }
 
-      if (!accessToken) {
-        router.replace('/login');
-        return;
-      }
+        if (!accessToken) {
+          router.replace('/login');
+          return;
+        }
 
-      // Verify email & get routing decision from backend
-      setStatusMsg('Setting up your account…');
+      setStatusMsg('Syncing your account…');
       const mode = params.get('mode') ?? '';
+      const authHeaders = {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      };
+
       try {
-        const verifyRes = await fetch('/api/auth/verify-email', {
-          method:  'POST',
-          headers: {
-            Authorization:  `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ mode }),
+        const syncRes = await fetch('/api/auth/sync-supabase-user', {
+          method: 'POST',
+          headers: authHeaders,
         });
 
-        if (verifyRes.status === 401) {
+        if (syncRes.status === 403) {
           await supabase.auth.signOut();
           router.replace('/login?error=account_deleted');
           return;
         }
 
-        if (verifyRes.ok) {
-          const { route } = await verifyRes.json() as { route: string };
-          const dest   = route ?? '/command-center';
-          const pinned = localStorage.getItem('pin_home') === 'true';
-          setStatusMsg('Redirecting…');
-          router.replace(dest === '/command-center' && pinned ? '/home' : dest);
+        if (!syncRes.ok) {
+          throw new Error('sync_failed');
+        }
+
+        setStatusMsg('Verifying your account…');
+        const verifyRes = await fetch('/api/auth/verify-email', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ mode }),
+        });
+
+        if (verifyRes.status === 403) {
+          await supabase.auth.signOut();
+          router.replace('/login?error=account_deleted');
           return;
         }
+
+        if (verifyRes.status === 401) {
+          await supabase.auth.signOut();
+          router.replace('/login?error=invalid_session');
+          return;
+        }
+
+        if (!verifyRes.ok) {
+          throw new Error('verify_failed');
+        }
+
+        setStatusMsg('Loading your workspace…');
+        const routeRes = await fetch('/api/auth/post-login-route', {
+          method: 'GET',
+          headers: authHeaders,
+        });
+
+        if (routeRes.status === 403) {
+          await supabase.auth.signOut();
+          router.replace('/login?error=account_deleted');
+          return;
+        }
+
+        if (routeRes.status === 401) {
+          await supabase.auth.signOut();
+          router.replace('/login?error=invalid_session');
+          return;
+        }
+
+        if (!routeRes.ok) {
+          throw new Error('route_failed');
+        }
+
+        const { route } = await routeRes.json() as { route: string };
+        const dest = route ?? '/command-center';
+        const pinned = localStorage.getItem('pin_home') === 'true';
+        setStatusMsg('Redirecting…');
+        router.replace(dest === '/command-center' && pinned ? '/home' : dest);
+        return;
       } catch (e) {
-        console.error('[auth/callback] verify-email error:', e);
+        console.error('[auth/callback] auth bootstrap error:', e);
       }
 
-      // verify-email failed — redirect to login
       router.replace('/login?error=auth_failed');
     }
 

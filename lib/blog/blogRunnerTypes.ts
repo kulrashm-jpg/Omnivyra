@@ -19,6 +19,7 @@ import type {
   StoryFormatType,
   GuideFormatType,
 } from './blogStructureTemplates';
+import type { StrategyProfile } from '../../backend/services/companyProfile/types';
 
 // ── Injectable data-access signatures ────────────────────────────────────────
 
@@ -53,6 +54,7 @@ export interface CompanyContext {
   keyMessages?:            string;
   goals?:                  string;
   geography?:              string;
+  strategyProfile?:        StrategyProfile;
   /**
    * Pre-formatted writing style instructions block from WritingStyleEngine.
    */

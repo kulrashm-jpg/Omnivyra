@@ -24,6 +24,63 @@ export type LeadCluster = {
   latest_post_at?: string | null;
 };
 
+type CanonicalListeningSignalRow = {
+  id: string;
+  platform: string | null;
+  total_score: number | null;
+  intent_score: number | null;
+  urgency_score: number | null;
+  icp_score: number | null;
+  detected_at: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+type ClusterInputRow = {
+  id: string;
+  problem_domain: string;
+  icp_score: number;
+  urgency_score: number;
+  intent_score: number;
+  trend_velocity: number;
+  region: string | null;
+  platform: string;
+  post_created_at: string | null;
+  created_at: string;
+};
+
+function normalizeListeningSignalRows(rows: CanonicalListeningSignalRow[]): ClusterInputRow[] {
+  return rows
+    .filter((row) => Number(row.total_score ?? 0) >= 0.6)
+    .filter((row) => {
+      const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+      return metadata.risk_flag !== true;
+    })
+    .map((row) => {
+      const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+      return {
+        id: row.id,
+        problem_domain:
+          typeof metadata.problem_domain === 'string' && metadata.problem_domain.trim()
+            ? metadata.problem_domain.trim()
+            : 'General',
+        icp_score: Number(row.icp_score ?? 0),
+        urgency_score: Number(row.urgency_score ?? 0),
+        intent_score: Number(row.intent_score ?? 0),
+        trend_velocity: Number(metadata.trend_velocity ?? 0),
+        region:
+          typeof metadata.region === 'string' && metadata.region.trim()
+            ? metadata.region.trim()
+            : 'GLOBAL',
+        platform: row.platform?.trim() || 'unknown',
+        post_created_at:
+          typeof metadata.post_created_at === 'string'
+            ? metadata.post_created_at
+            : row.detected_at,
+        created_at: row.detected_at ?? new Date().toISOString(),
+      };
+    });
+}
+
 function computeClusterHash(companyId: string, problemDomain: string): string {
   const payload = companyId + (problemDomain || '').trim().toLowerCase();
   return createHash('sha1').update(payload).digest('hex');
@@ -34,26 +91,15 @@ export async function generateIntentClusters(companyId: string): Promise<void> {
   const twentyOneDaysAgo = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString();
 
   const { data: signals } = await supabase
-    .from('lead_signals_v1')
-    .select('id, problem_domain, icp_score, urgency_score, intent_score, trend_velocity, region, platform, post_created_at, created_at')
-    .eq('company_id', companyId)
-    .in('status', ['ACTIVE', 'WATCHLIST', 'OUTREACH_PLANNED', 'OUTREACH_SENT', 'ENGAGED'])
-    .gte('total_score', 0.6)
-    .eq('risk_flag', false)
-    .gte('post_created_at', fourteenDaysAgo);
+    .from('lead_signals')
+    .select('id, platform, total_score, icp_score, urgency_score, intent_score, detected_at, metadata')
+    .eq('organization_id', companyId)
+    .eq('source_type', 'listening')
+    .gte('detected_at', fourteenDaysAgo);
 
-  const rows = (signals ?? []) as Array<{
-    id: string;
-    problem_domain: string | null;
-    icp_score: number;
-    urgency_score: number;
-    intent_score: number;
-    trend_velocity: number;
-    region: string | null;
-    platform: string;
-    post_created_at: string | null;
-    created_at: string;
-  }>;
+  const rows = normalizeListeningSignalRows((signals ?? []) as CanonicalListeningSignalRow[]).filter(
+    (row) => (row.post_created_at ?? row.created_at) >= fourteenDaysAgo
+  );
 
   const byDomain = new Map<string, typeof rows>();
   for (const r of rows) {
@@ -113,16 +159,20 @@ export async function generateIntentClusters(companyId: string): Promise<void> {
     });
   }
 
-  const { data: recentDomains } = await supabase
-    .from('lead_signals_v1')
-    .select('problem_domain')
-    .eq('company_id', companyId)
-    .in('status', ['ACTIVE', 'WATCHLIST', 'OUTREACH_PLANNED', 'OUTREACH_SENT', 'ENGAGED'])
-    .gte('post_created_at', twentyOneDaysAgo);
+  const { data: recentSignals } = await supabase
+    .from('lead_signals')
+    .select('metadata')
+    .eq('organization_id', companyId)
+    .eq('source_type', 'listening')
+    .gte('detected_at', twentyOneDaysAgo);
 
   const domainsWithSignals = new Set(
-    (recentDomains ?? [])
-      .map((r) => ((r as { problem_domain: string | null }).problem_domain ?? 'General').trim().toLowerCase())
+    ((recentSignals ?? []) as Array<{ metadata?: Record<string, unknown> | null }>)
+      .map((row) => {
+        const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+        const domain = typeof metadata.problem_domain === 'string' ? metadata.problem_domain : 'General';
+        return domain.trim().toLowerCase();
+      })
       .filter(Boolean)
   );
 

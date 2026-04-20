@@ -34,7 +34,7 @@ const CONTENT_FORMATS: { value: ContentFormat; label: string; icon: string }[] =
   { value: 'tweet',       label: 'Tweet',       icon: '💬' },
   { value: 'short_story', label: 'Short Story', icon: '📖' },
   { value: 'article',     label: 'Article',     icon: '🗞️' },
-  { value: 'poll',        label: 'Poll',        icon: '📊' },
+  { value: 'poll',        label: 'Poll Post',   icon: '📊' },
 ];
 
 const DURATION_OPTIONS = [

@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
 import type { NewsletterGenerationRequest, NewsletterGenerationResult } from './runNewsletterGeneration';
@@ -387,6 +388,11 @@ export async function runStrategyMemoGeneration(
   let best: ReturnType<typeof parseStrategyMemoOutput> | null = null;
   let bestScore = -1;
 
+  const enhancedMemoSystemPrompt = await enhanceSystemPromptForNewsletter(
+    'You are a strategy consultant writing a strategy memo newsletter. Return only valid JSON. Focus on deep strategic logic, leverage, and clear market positioning.',
+    input.company_id, input.companyContext,
+  );
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
       operation: 'newsletterGeneration',
@@ -399,7 +405,7 @@ export async function runStrategyMemoGeneration(
       messages: [
         {
           role: 'system',
-          content: 'You are a strategy consultant writing a strategy memo newsletter. Return only valid JSON. Focus on deep strategic logic, leverage, and clear market positioning.',
+          content: enhancedMemoSystemPrompt,
         },
         {
           role: 'user',

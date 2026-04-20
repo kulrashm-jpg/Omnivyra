@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
 import type { NewsletterGenerationRequest, NewsletterGenerationResult } from './runNewsletterGeneration';
@@ -562,6 +563,12 @@ export async function runWeeklyRadarGeneration(
   let best: ReturnType<typeof parseWeeklyRadarOutput> | null = null;
   let bestScore = -1;
 
+  // Enhance system prompt with identity lock + anti-generic rules
+  const enhancedRadarSystemPrompt = await enhanceSystemPromptForNewsletter(
+    'You are a senior newsletter editor writing a weekly brief. Return only valid JSON. Prioritize signal over noise and always interpret what matters.',
+    input.company_id, input.companyContext,
+  );
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
       operation: 'newsletterGeneration',
@@ -574,7 +581,7 @@ export async function runWeeklyRadarGeneration(
       messages: [
         {
           role: 'system',
-          content: 'You are a senior newsletter editor writing a weekly brief. Return only valid JSON. Prioritize signal over noise and always interpret what matters.',
+          content: enhancedRadarSystemPrompt,
         },
         {
           role: 'user',

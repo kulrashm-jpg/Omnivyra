@@ -35,8 +35,16 @@ export interface ConversationViewProps {
   messages: EngagementMessage[];
   loading?: boolean;
   organizationId: string;
+  emptyStateTitle?: string;
+  emptyStateDescription?: string;
   onRefresh?: () => void;
   onReplySent?: () => void;
+  onExecuteReply?: (input: {
+    threadId: string;
+    messageId: string;
+    platform: string;
+    replyText: string;
+  }) => Promise<void>;
   onLike?: (messageId: string, platform: string) => void;
   onIgnore?: (threadId: string) => void;
   onMarkResolved?: () => void;
@@ -48,8 +56,11 @@ export const ConversationView = React.memo(function ConversationView({
   messages,
   loading = false,
   organizationId,
+  emptyStateTitle = 'Select a conversation to start',
+  emptyStateDescription = 'Choose a thread from the queue to review context and respond.',
   onRefresh,
   onReplySent,
+  onExecuteReply,
   onLike,
   onIgnore,
   onMarkResolved,
@@ -262,8 +273,11 @@ export const ConversationView = React.memo(function ConversationView({
 
   if (!thread) {
     return (
-      <div className={`flex flex-col h-full items-center justify-center p-8 text-slate-500 ${className}`}>
-        Select a thread to view the conversation.
+      <div className={`flex flex-col h-full items-center justify-center p-8 text-center text-slate-500 ${className}`}>
+        <div className="max-w-sm space-y-2">
+          <p className="text-base font-medium text-slate-700">{emptyStateTitle}</p>
+          <p className="text-sm leading-6 text-slate-500">{emptyStateDescription}</p>
+        </div>
       </div>
     );
   }
@@ -286,9 +300,25 @@ export const ConversationView = React.memo(function ConversationView({
   return (
     <div className={`flex flex-col h-full ${className}`}>
       <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h3 className="font-medium text-slate-800">{thread.author_name || 'Thread'}</h3>
-          <PlatformIcon platform={thread.platform} size={16} />
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <h3 className="font-medium text-slate-800">{thread.author_name || 'Thread'}</h3>
+            <PlatformIcon platform={thread.platform} size={16} />
+          </div>
+          {thread.lead_detected ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 font-medium text-amber-900">
+                Lead signal detected
+              </span>
+              <button
+                type="button"
+                onClick={() => router.push('/dashboard/intelligence?intelTab=active-leads')}
+                className="font-medium text-indigo-600 hover:text-indigo-800"
+              >
+                View in Active Leads
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           {onRefresh && (
@@ -334,6 +364,7 @@ export const ConversationView = React.memo(function ConversationView({
             organizationId={organizationId}
             value={replyText}
             onChange={setReplyText}
+            onExecuteReply={onExecuteReply}
             onReplySent={() => {
               setReplyingTo(null);
               setReplyText('');

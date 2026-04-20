@@ -6,6 +6,9 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import {
+  writeLeadSignal,
+} from './canonicalLeadSignalService';
 
 export type SignalType =
   | 'buying_intent'
@@ -119,35 +122,53 @@ export async function storeOpportunity(input: {
 }
 
 /**
- * Store lead signal in engagement_lead_signals.
+ * Store a lead signal through the shared write path.
  */
 export async function storeLeadSignal(input: {
   organization_id: string;
   message_id: string;
   thread_id: string;
+  platform: string;
+  platform_user_id?: string | null;
+  content_text?: string | null;
   author_id?: string | null;
   lead_intent: string;
   lead_score: number;
   confidence_score?: number | null;
 }): Promise<string | null> {
-  const { error, data } = await supabase
-    .from('engagement_lead_signals')
-    .insert({
-      organization_id: input.organization_id,
-      message_id: input.message_id,
-      thread_id: input.thread_id,
-      author_id: input.author_id ?? null,
-      lead_intent: input.lead_intent,
-      lead_score: input.lead_score,
-      confidence_score: input.confidence_score ?? null,
-    })
-    .select('id')
-    .single();
-  if (error) {
-    console.warn('[communitySignalService] storeLeadSignal error:', error.message);
-    return null;
+  try {
+    const result = await writeLeadSignal({
+      debugContext: 'communitySignalService.storeLeadSignal',
+      canonical: {
+        organization_id: input.organization_id,
+        source_type: 'engagement',
+        source_id: input.message_id,
+        thread_id: input.thread_id,
+        platform: input.platform,
+        platform_user_id: input.platform_user_id ?? null,
+        content_text: input.content_text ?? null,
+        intent_score: input.lead_score / 100,
+        urgency_score: null,
+        icp_score: null,
+        confidence_score: input.confidence_score ?? null,
+        total_score: input.lead_score / 100,
+        detected_at: new Date().toISOString(),
+        migration_source: 'native',
+        metadata: {
+          lead_intent: input.lead_intent,
+          author_id: input.author_id ?? null,
+        },
+      },
+    });
+
+    return result.canonical.id ?? null;
+  } catch (error) {
+    console.error(
+      '[communitySignalService] storeLeadSignal error:',
+      error instanceof Error ? error.message : String(error)
+    );
+    throw error;
   }
-  return data?.id ?? null;
 }
 
 /**
@@ -217,6 +238,8 @@ export async function analyzeAndStoreSignals(input: {
       organization_id,
       message_id,
       thread_id,
+      platform,
+      content_text: text.slice(0, 2000),
       author_id,
       lead_intent: 'competitor_mention',
       lead_score: 60,

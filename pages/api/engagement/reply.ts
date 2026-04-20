@@ -12,7 +12,6 @@ import { enforceRole } from '../../../backend/services/rbacService';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/communityAiCapabilities';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { executeAction } from '../../../backend/services/communityAiActionExecutor';
-import { listPlaybooks } from '../../../backend/services/playbooks/playbookService';
 import { recordReplyPerformance } from '../../../backend/services/responsePerformanceService';
 import { resolveOpportunityByReply } from '../../../backend/services/engagementOpportunityResolutionService';
 
@@ -100,16 +99,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    const playbooks = (await listPlaybooks(organizationId, organizationId)).filter(
-      (p: { status?: string }) => p.status === 'active'
-    );
-    const playbookId = playbooks[0]?.id ?? null;
-    if (!playbookId) {
-      return res.status(400).json({
-        error: 'No active playbook found for organization. Create an active playbook to execute replies.',
-      });
-    }
-
     const actionId = crypto.randomUUID();
     const result = await executeAction(
       {
@@ -120,7 +109,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         action_type: 'reply',
         target_id: message.platform_message_id ?? messageId,
         suggested_text: replyText,
-        playbook_id: playbookId,
+        playbook_id: null,
         execution_mode: 'manual',
       },
       true,

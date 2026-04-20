@@ -1,18 +1,21 @@
 /**
- * EngagementCopilot — action-first assistant for the selected conversation.
+ * EngagementCopilot - triage assistant for the selected conversation.
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 import type { EngagementMessage } from '@/hooks/useEngagementMessages';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface AIEngagementAssistantProps {
   thread: InboxThread | null;
   messages: EngagementMessage[];
   organizationId: string | null;
-  items?: InboxThread[];
+  recommendedThread?: InboxThread | null;
   onSelectThread?: (threadId: string) => void;
   onFilterByAuthor?: (authorName: string, platform: string) => void;
+  onUseSuggestedReply?: (replyText: string) => void;
+  onSendSuggestedReply?: (replyText: string) => Promise<void>;
   className?: string;
 }
 
@@ -21,14 +24,6 @@ type Opportunity = {
   opportunity_type: string;
   confidence_score: number;
   priority_score: number;
-};
-
-type Lead = {
-  thread_id: string;
-  author_name: string | null;
-  lead_intent: string;
-  lead_score: number;
-  confidence_score: number | null;
 };
 
 type Strategy = {
@@ -40,375 +35,413 @@ type Strategy = {
 type ReplyIntelligence = {
   sample_reply: string;
   engagement_score: number;
-  reply_category?: string;
 };
 
-const QUESTION_PATTERNS = /\b(how|what|when|where|why|which|who|can you|does it|is there)\b|\?/i;
-const THEME_WORDS = /\b(problem|issue|question|help|recommend|suggest|best|comparison|compare|versus|vs)\b/gi;
+type Suggestion = {
+  id: string;
+  text: string;
+  explanation_tag?: string;
+};
 
-function extractContentOpportunities(messages: EngagementMessage[]): string[] {
-  const opportunities: string[] = [];
-  const themes = new Map<string, number>();
+const ACTIVE_LEADS_ROUTE = '/dashboard/intelligence?intelTab=active-leads';
 
-  for (const msg of messages) {
-    const content = (msg.content ?? '').toString().trim();
-    if (!content || content.length < 10) continue;
+function toActionLabel(opportunityType: string | undefined): string {
+  if (!opportunityType) return 'Reply with a clear next step';
+  return opportunityType.replace(/_/g, ' ');
+}
 
-    if (QUESTION_PATTERNS.test(content)) {
-      const q = content.slice(0, 120).trim();
-      if (q && !opportunities.includes(q)) opportunities.push(q);
-    }
-
-    const matches = content.match(THEME_WORDS);
-    if (matches) {
-      for (const match of matches) {
-        const key = match.toLowerCase();
-        themes.set(key, (themes.get(key) ?? 0) + 1);
-      }
-    }
+function buildWhyThisMatters(args: {
+  thread: InboxThread;
+  opportunity?: Opportunity | null;
+  strategy?: Strategy | null;
+  messages: EngagementMessage[];
+}): string {
+  if (args.thread.customer_question) {
+    return 'This thread includes a direct question, so speed and clarity matter more than a long response.';
   }
-
-  const repeatedThemes = [...themes.entries()]
-    .filter(([, count]) => count >= 2)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([word]) => `Theme: "${word}" mentioned multiple times`);
-
-  return [...opportunities, ...repeatedThemes];
+  if (args.thread.lead_detected) {
+    return 'Buyer-intent signals are present here, so the reply can influence whether this turns into a stronger follow-up.';
+  }
+  if (args.thread.negative_feedback) {
+    return 'Negative sentiment is visible, so the response should reduce friction before the conversation escalates.';
+  }
+  if (args.opportunity) {
+    return `AI detected a ${toActionLabel(args.opportunity.opportunity_type)} moment in this thread.`;
+  }
+  if (args.strategy) {
+    return `The best-fit response style right now is ${args.strategy.strategy_type.replace(/_/g, ' ')}.`;
+  }
+  if (args.messages.length > 1) {
+    return 'There is enough thread context here to give a specific reply instead of a generic one.';
+  }
+  return 'Start with a short reply that acknowledges the conversation and moves it forward.';
 }
 
 export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
   thread,
   messages,
   organizationId,
+  recommendedThread = null,
+  onSelectThread,
+  onUseSuggestedReply,
+  onSendSuggestedReply,
   className = '',
 }: AIEngagementAssistantProps) {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
-  const [opportunitiesLoading, setOpportunitiesLoading] = useState(false);
-  const [opportunitiesError, setOpportunitiesError] = useState<string | null>(null);
-
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [leadsLoading, setLeadsLoading] = useState(false);
-  const [leadsError, setLeadsError] = useState<string | null>(null);
-
-  const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [strategiesLoading, setStrategiesLoading] = useState(false);
-  const [strategiesError, setStrategiesError] = useState<string | null>(null);
-
   const [replies, setReplies] = useState<ReplyIntelligence[]>([]);
-  const [repliesLoading, setRepliesLoading] = useState(false);
-  const [repliesError, setRepliesError] = useState<string | null>(null);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [refinePrompt, setRefinePrompt] = useState('');
+  const [refinedReply, setRefinedReply] = useState<string | null>(null);
+  const [refining, setRefining] = useState(false);
+  const [sendingSuggestedReply, setSendingSuggestedReply] = useState(false);
+  const [suggestedReplyStatus, setSuggestedReplyStatus] = useState<string | null>(null);
 
-  const contentOpportunities = useMemo(() => extractContentOpportunities(messages), [messages]);
+  const targetMessageId = useMemo(() => {
+    const sorted = [...messages].sort((a, b) => {
+      const ta = new Date(a.platform_created_at ?? a.created_at ?? 0).getTime();
+      const tb = new Date(b.platform_created_at ?? b.created_at ?? 0).getTime();
+      return tb - ta;
+    });
 
-  const fetchOpportunities = useCallback(async () => {
+    const inbound = sorted.find((message) => {
+      const content = (message.content ?? '').trim();
+      if (!content) return false;
+      return !/^you\s*:/i.test(content);
+    });
+
+    return inbound?.id ?? thread?.latest_message_id ?? sorted[0]?.id ?? null;
+  }, [messages, thread?.latest_message_id]);
+
+  const fetchSignals = useCallback(async () => {
     if (!organizationId || !thread?.thread_id) {
-      setOpportunitiesLoading(false);
-      return;
-    }
-    setOpportunitiesLoading(true);
-    setOpportunitiesError(null);
-    try {
-      const res = await fetch(
-        `/api/engagement/opportunities?thread_id=${encodeURIComponent(thread.thread_id)}&organization_id=${encodeURIComponent(organizationId)}`,
-        { credentials: 'include' }
-      );
-      if (!res.ok) throw new Error(res.statusText);
-      const json = await res.json();
-      setOpportunities(json.opportunities ?? []);
-    } catch (e) {
-      setOpportunitiesError((e as Error).message);
       setOpportunities([]);
-    } finally {
-      setOpportunitiesLoading(false);
-    }
-  }, [organizationId, thread?.thread_id]);
-
-  const fetchLeads = useCallback(async () => {
-    if (!organizationId) {
-      setLeadsLoading(false);
-      return;
-    }
-    setLeadsLoading(true);
-    setLeadsError(null);
-    try {
-      const res = await fetch(
-        `/api/engagement/leads?organization_id=${encodeURIComponent(organizationId)}`,
-        { credentials: 'include' }
-      );
-      if (!res.ok) throw new Error(res.statusText);
-      const json = await res.json();
-      const allLeads = json.leads ?? [];
-      const threadLeads = thread?.thread_id
-        ? allLeads.filter((lead: { thread_id: string }) => lead.thread_id === thread.thread_id)
-        : [];
-      setLeads(
-        threadLeads.map(
-          (lead: {
-            author_name?: string;
-            lead_intent?: string;
-            lead_score?: number;
-            confidence_score?: number;
-          }) => ({
-            thread_id: thread!.thread_id,
-            author_name: lead.author_name ?? null,
-            lead_intent: lead.lead_intent ?? 'unknown',
-            lead_score: lead.lead_score ?? 0,
-            confidence_score: lead.confidence_score ?? null,
-          })
-        )
-      );
-    } catch (e) {
-      setLeadsError((e as Error).message);
-      setLeads([]);
-    } finally {
-      setLeadsLoading(false);
-    }
-  }, [organizationId, thread?.thread_id]);
-
-  const fetchStrategies = useCallback(async () => {
-    if (!organizationId || !thread?.classification_category) {
-      setStrategiesLoading(false);
-      setStrategies([]);
-      return;
-    }
-    setStrategiesLoading(true);
-    setStrategiesError(null);
-    try {
-      const params = new URLSearchParams({
-        organization_id: organizationId,
-        classification: thread.classification_category,
-        sentiment: (thread.sentiment ?? 'neutral').toString(),
-      });
-      const res = await fetch(`/api/engagement/strategies?${params.toString()}`, {
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(res.statusText);
-      const json = await res.json();
-      setStrategies(json.strategies ?? []);
-    } catch (e) {
-      setStrategiesError((e as Error).message);
-      setStrategies([]);
-    } finally {
-      setStrategiesLoading(false);
-    }
-  }, [organizationId, thread?.classification_category, thread?.sentiment]);
-
-  const fetchReplies = useCallback(async () => {
-    if (!organizationId) {
-      setRepliesLoading(false);
-      return;
-    }
-    setRepliesLoading(true);
-    setRepliesError(null);
-    try {
-      let url = `/api/engagement/reply-intelligence?organization_id=${encodeURIComponent(organizationId)}`;
-      if (thread?.classification_category) {
-        url += `&classification_category=${encodeURIComponent(thread.classification_category)}`;
-      }
-      const res = await fetch(url, { credentials: 'include' });
-      if (!res.ok) throw new Error(res.statusText);
-      const json = await res.json();
-      setReplies(json.replies ?? []);
-    } catch (e) {
-      setRepliesError((e as Error).message);
       setReplies([]);
-    } finally {
-      setRepliesLoading(false);
+      setStrategies([]);
+      setSuggestions([]);
+      setLoading(false);
+      return;
     }
-  }, [organizationId, thread?.classification_category]);
 
-  const [sectionOpen, setSectionOpen] = useState<Record<string, boolean>>({
-    opportunity: true,
-    leads: true,
-    strategy: true,
-    replies: true,
-    content: true,
-  });
+    setLoading(true);
+    setError(null);
+    try {
+      const opportunityUrl = `/api/engagement/opportunities?thread_id=${encodeURIComponent(thread.thread_id)}&organization_id=${encodeURIComponent(organizationId)}`;
+      let strategyUrl = '';
+      if (thread.classification_category) {
+        const params = new URLSearchParams({
+          organization_id: organizationId,
+          classification: thread.classification_category,
+          sentiment: (thread.sentiment ?? 'neutral').toString(),
+        });
+        strategyUrl = `/api/engagement/strategies?${params.toString()}`;
+      }
+      let replyUrl = `/api/engagement/reply-intelligence?organization_id=${encodeURIComponent(organizationId)}`;
+      if (thread.classification_category) {
+        replyUrl += `&classification_category=${encodeURIComponent(thread.classification_category)}`;
+      }
+      const suggestionUrl = targetMessageId
+        ? `/api/engagement/suggestions?${new URLSearchParams({
+            message_id: targetMessageId,
+            organization_id: organizationId,
+            organizationId: organizationId,
+          }).toString()}`
+        : null;
+
+      const requests = [
+        apiFetch(opportunityUrl),
+        apiFetch(replyUrl),
+      ];
+      if (strategyUrl) {
+        requests.push(apiFetch(strategyUrl));
+      }
+      if (suggestionUrl) {
+        requests.push(apiFetch(suggestionUrl));
+      }
+
+      const responses = await Promise.all(requests);
+      const firstFailure = responses.find((response) => !response.ok);
+      if (firstFailure) {
+        throw new Error(firstFailure.statusText || 'Failed to load engagement signals');
+      }
+
+      const payloads = await Promise.all(responses.map((response) => response.json()));
+      setOpportunities(payloads[0]?.opportunities ?? []);
+      setReplies(payloads[1]?.replies ?? []);
+      const strategyPayloadIndex = strategyUrl ? 2 : -1;
+      const suggestionPayloadIndex = suggestionUrl ? (strategyUrl ? 3 : 2) : -1;
+      setStrategies(strategyPayloadIndex >= 0 ? payloads[strategyPayloadIndex]?.strategies ?? [] : []);
+      setSuggestions(
+        suggestionPayloadIndex >= 0 && Array.isArray(payloads[suggestionPayloadIndex]?.suggestions)
+          ? payloads[suggestionPayloadIndex].suggestions
+          : []
+      );
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : 'Failed to load engagement copilot');
+      setOpportunities([]);
+      setReplies([]);
+      setStrategies([]);
+      setSuggestions([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    organizationId,
+    targetMessageId,
+    thread?.thread_id,
+    thread?.classification_category,
+    thread?.sentiment,
+  ]);
 
   useEffect(() => {
-    if (!thread || !organizationId) {
-      setOpportunities([]);
-      setLeads([]);
-      setStrategies([]);
-      setReplies([]);
+    void fetchSignals();
+  }, [fetchSignals]);
+
+  const topOpportunity = opportunities[0] ?? null;
+  const topReply = replies[0] ?? null;
+  const topStrategy = strategies[0] ?? null;
+  const topSuggestion = suggestions[0] ?? null;
+  const displayedReply = refinedReply ?? topSuggestion?.text ?? topReply?.sample_reply ?? null;
+
+  useEffect(() => {
+    setRefinedReply(null);
+    setRefinePrompt('');
+    setSuggestedReplyStatus(null);
+  }, [thread?.thread_id, topSuggestion?.text, topReply?.sample_reply]);
+
+  useEffect(() => {
+    if (!suggestedReplyStatus) return;
+    const timer = window.setTimeout(() => setSuggestedReplyStatus(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [suggestedReplyStatus]);
+
+  const handleRefineReply = useCallback(async () => {
+    if (!organizationId || !thread?.thread_id || !displayedReply || !refinePrompt.trim()) {
       return;
     }
-    void fetchOpportunities();
-    void fetchLeads();
-    void fetchStrategies();
-    void fetchReplies();
-  }, [thread?.thread_id, organizationId, fetchOpportunities, fetchLeads, fetchStrategies, fetchReplies]);
 
-  const toggleSection = useCallback((key: string) => {
-    setSectionOpen((prev) => ({ ...prev, [key]: !prev[key] }));
-  }, []);
+    setRefining(true);
+    setError(null);
+    try {
+      const response = await apiFetch('/api/engagement/refine-suggestion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organization_id: organizationId,
+          thread_id: thread.thread_id,
+          draft: displayedReply,
+          instruction: refinePrompt.trim(),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.error || body.message || 'Failed to refine reply');
+      }
+      setRefinedReply(String(body.refined || '').trim());
+    } catch (refineError) {
+      setError(refineError instanceof Error ? refineError.message : 'Failed to refine reply');
+    } finally {
+      setRefining(false);
+    }
+  }, [displayedReply, organizationId, refinePrompt, thread?.thread_id]);
+
+  const handleSendSuggestedReply = useCallback(async () => {
+    if (!displayedReply || !onSendSuggestedReply || sendingSuggestedReply) {
+      return;
+    }
+
+    setSendingSuggestedReply(true);
+    setError(null);
+    setSuggestedReplyStatus(null);
+    try {
+      await onSendSuggestedReply(displayedReply);
+      setSuggestedReplyStatus('Suggested reply submitted. LinkedIn may take a few seconds to reflect it.');
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : 'Failed to send suggested reply');
+    } finally {
+      setSendingSuggestedReply(false);
+    }
+  }, [displayedReply, onSendSuggestedReply, sendingSuggestedReply]);
+
+  const nextAction = useMemo(() => {
+    if (!thread) return 'Select a thread to see the next action.';
+    if (thread.customer_question) return 'Reply with a direct answer and one concrete next step.';
+    if (thread.negative_feedback) return 'Acknowledge the concern and de-escalate before offering help.';
+    if (topOpportunity) return `Act on: ${toActionLabel(topOpportunity.opportunity_type)}.`;
+    if (thread.lead_detected) return 'Reply clearly, then review the thread in Active Leads for follow-up.';
+    return 'Send a short reply that keeps the conversation moving.';
+  }, [thread, topOpportunity]);
+
+  const whyThisMatters = useMemo(() => {
+    if (!thread) return 'Select a thread to see why it matters.';
+    return buildWhyThisMatters({
+      thread,
+      opportunity: topOpportunity,
+      strategy: topStrategy,
+      messages,
+    });
+  }, [messages, thread, topOpportunity, topStrategy]);
 
   if (!thread) {
     return (
-      <div
-        className={`flex h-full flex-col items-center justify-center border-l border-slate-200 bg-slate-50 p-6 text-slate-500 ${className}`}
-      >
-        <p className="text-center text-sm">Select a conversation to open the engagement copilot.</p>
+      <div className={`flex h-full flex-col items-center justify-center border-l border-slate-200 bg-slate-50 p-6 text-slate-500 ${className}`}>
+        <div className="max-w-xs text-center">
+          <p className="text-sm font-medium text-slate-700">AI assistant will help once you select a conversation</p>
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            Open a thread from the queue to get reply guidance, next actions, and context.
+          </p>
+        </div>
       </div>
     );
   }
 
-  const MAX_ITEMS = 5;
-
-  const SectionCard = ({
-    id,
-    title,
-    count,
-    loading,
-    error,
-    empty,
-    children,
-  }: {
-    id: string;
-    title: string;
-    count: number;
-    loading?: boolean;
-    error?: string | null;
-    empty?: boolean;
-    children: React.ReactNode;
-  }) => {
-    const isOpen = sectionOpen[id] ?? true;
-    return (
-      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <button
-          type="button"
-          onClick={() => toggleSection(id)}
-          className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-50"
-        >
-          <span className="text-sm font-medium text-slate-800">{title}</span>
-          <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-700">
-            {count}
-          </span>
-        </button>
-        {isOpen && (
-          <div className="border-t border-slate-100 p-3">
-            {loading && <div className="text-sm text-slate-500">Loading...</div>}
-            {!loading && error && <div className="text-sm text-amber-700">{error}</div>}
-            {!loading && !error && empty && (
-              <div className="text-sm text-slate-500">No signals detected for this conversation.</div>
-            )}
-            {!loading && !error && !empty && children}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   return (
     <div className={`flex h-full flex-col overflow-hidden border-l border-slate-200 bg-slate-50 ${className}`}>
       <div className="shrink-0 border-b border-slate-200 bg-white p-4">
-        <h3 className="text-sm font-semibold text-slate-800">Engagement Copilot</h3>
+        <h3 className="text-sm font-semibold text-slate-800">AI Triage Copilot</h3>
+        <p className="mt-1 text-xs text-slate-500">Suggested reply, next action, and why this thread matters.</p>
       </div>
-      <div className="flex-1 space-y-3 overflow-y-auto p-4">
-        <SectionCard
-          id="opportunity"
-          title="Next Best Opportunities"
-          count={opportunities.length}
-          loading={opportunitiesLoading}
-          error={opportunitiesError}
-          empty={opportunities.length === 0}
-        >
-          <div className="space-y-2">
-            {opportunities.slice(0, MAX_ITEMS).map((opportunity) => (
-              <div key={opportunity.id} className="rounded border border-slate-100 bg-slate-50 p-2 text-sm">
-                <div className="font-medium text-slate-700">
-                  {opportunity.opportunity_type.replace(/_/g, ' ')}
-                </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  Confidence {Math.round(opportunity.confidence_score * 100)}% · Priority{' '}
-                  {opportunity.priority_score.toFixed(1)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
 
-        <SectionCard
-          id="leads"
-          title="Lead Signals"
-          count={leads.length}
-          loading={leadsLoading}
-          error={leadsError}
-          empty={leads.length === 0}
-        >
-          <div className="space-y-2">
-            {leads.slice(0, MAX_ITEMS).map((lead, index) => (
-              <div key={`${lead.thread_id}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-2 text-sm">
-                <div className="font-medium text-slate-700">{lead.author_name ?? 'Unknown'}</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  {lead.lead_intent} ·{' '}
-                  {lead.confidence_score != null
-                    ? `${Math.round(lead.confidence_score * 100)}% confidence`
-                    : `Score ${lead.lead_score}`}
-                </div>
-              </div>
-            ))}
+      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        {thread.lead_detected ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="font-medium">Lead signal detected</div>
+            <p className="mt-1 text-xs text-amber-900/80">
+              Keep the conversation moving here, then use Active Leads for qualification and follow-up planning.
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.assign(ACTIVE_LEADS_ROUTE)}
+              className="mt-3 text-xs font-medium text-indigo-700 hover:text-indigo-900"
+            >
+              View in Active Leads
+            </button>
           </div>
-        </SectionCard>
+        ) : null}
 
-        <SectionCard
-          id="strategy"
-          title="Recommended Strategy"
-          count={strategies.length}
-          loading={strategiesLoading}
-          error={strategiesError}
-          empty={strategies.length === 0}
-        >
-          <div className="space-y-2">
-            {strategies.slice(0, MAX_ITEMS).map((strategy, index) => (
-              <div key={`${strategy.strategy_type}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-2 text-sm">
-                <div className="font-medium text-slate-700">
-                  {strategy.strategy_type.replace(/_/g, ' ')}
-                </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  Engagement {strategy.engagement_score.toFixed(1)} · Confidence{' '}
-                  {strategy.confidence_score.toFixed(1)}
-                </div>
-              </div>
-            ))}
+        {recommendedThread && recommendedThread.thread_id !== thread.thread_id ? (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900">
+            <div className="font-medium">Recommended next thread</div>
+            <p className="mt-1 text-xs text-indigo-900/80">
+              If you finish this conversation, the next best item is {recommendedThread.author_name || recommendedThread.author_username || 'the recommended thread'}.
+            </p>
+            {onSelectThread ? (
+              <button
+                type="button"
+                onClick={() => onSelectThread(recommendedThread.thread_id)}
+                className="mt-3 text-xs font-medium text-indigo-700 hover:text-indigo-900"
+              >
+                Jump to recommended thread
+              </button>
+            ) : null}
           </div>
-        </SectionCard>
+        ) : null}
 
-        <SectionCard
-          id="replies"
-          title="High-Performing Replies"
-          count={replies.length}
-          loading={repliesLoading}
-          error={repliesError}
-          empty={replies.length === 0}
-        >
-          <div className="space-y-2">
-            {replies.slice(0, MAX_ITEMS).map((reply, index) => (
-              <div key={`${reply.reply_category ?? 'reply'}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-2 text-sm">
-                <div className="line-clamp-3 text-slate-700">{(reply.sample_reply ?? '').slice(0, 180)}</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  Score {reply.engagement_score.toFixed(1)}
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested Reply</div>
+          {loading ? (
+            <p className="mt-3 text-sm text-slate-500">Loading reply guidance...</p>
+          ) : displayedReply ? (
+            <>
+              <p className="mt-3 text-sm leading-6 text-slate-700">{displayedReply}</p>
+              {refinedReply ? (
+                <p className="mt-2 text-xs text-indigo-600">Refined with AI chat</p>
+              ) : topSuggestion?.explanation_tag ? (
+                <p className="mt-2 text-xs text-slate-500">{topSuggestion.explanation_tag.trim()}</p>
+              ) : topReply?.engagement_score ? (
+                <p className="mt-2 text-xs text-slate-500">Engagement score {topReply.engagement_score.toFixed(1)}</p>
+              ) : null}
+              <div className="mt-4 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {onUseSuggestedReply ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onUseSuggestedReply(displayedReply);
+                        setSuggestedReplyStatus('Suggested reply inserted into the composer.');
+                      }}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                    >
+                      Use reply
+                    </button>
+                  ) : null}
+                  {onSendSuggestedReply ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleSendSuggestedReply()}
+                      disabled={sendingSuggestedReply}
+                      className="rounded-full bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {sendingSuggestedReply ? 'Sending...' : 'Send now'}
+                    </button>
+                  ) : null}
+                </div>
+                {suggestedReplyStatus ? (
+                  <p className="text-xs text-emerald-700">{suggestedReplyStatus}</p>
+                ) : null}
+                <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Refine With AI
+                </label>
+                <textarea
+                  value={refinePrompt}
+                  onChange={(event) => setRefinePrompt(event.target.value)}
+                  placeholder="Example: make this sharper, shorter, more consultative"
+                  rows={2}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleRefineReply()}
+                    disabled={refining || !refinePrompt.trim()}
+                    className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {refining ? 'Refining...' : 'Refine reply'}
+                  </button>
+                  {refinedReply ? (
+                    <button
+                      type="button"
+                      onClick={() => setRefinedReply(null)}
+                      className="text-xs font-medium text-slate-600 hover:text-slate-800"
+                    >
+                      Reset
+                    </button>
+                  ) : null}
                 </div>
               </div>
-            ))}
-          </div>
-        </SectionCard>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-slate-500">No suggested reply yet. Open the reply composer to generate one.</p>
+          )}
+        </div>
 
-        <SectionCard
-          id="content"
-          title="Conversation-Derived Content Ideas"
-          count={contentOpportunities.length}
-          empty={contentOpportunities.length === 0}
-        >
-          <div className="space-y-2">
-            {contentOpportunities.slice(0, MAX_ITEMS).map((item, index) => (
-              <div key={`${item}-${index}`} className="rounded border border-slate-100 bg-slate-50 p-2 text-sm text-slate-700">
-                {item}
-              </div>
-            ))}
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Next Action</div>
+          <p className="mt-3 text-sm leading-6 text-slate-700">{nextAction}</p>
+          {topOpportunity ? (
+            <p className="mt-2 text-xs text-slate-500">
+              Priority {topOpportunity.priority_score.toFixed(1)} · Confidence {Math.round(topOpportunity.confidence_score * 100)}%
+            </p>
+          ) : null}
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Why This Matters</div>
+          <p className="mt-3 text-sm leading-6 text-slate-700">{whyThisMatters}</p>
+          {topStrategy ? (
+            <p className="mt-2 text-xs text-slate-500">
+              Suggested tone: {topStrategy.strategy_type.replace(/_/g, ' ')}
+            </p>
+          ) : null}
+        </div>
+
+        {error ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            {error}
           </div>
-        </SectionCard>
+        ) : null}
       </div>
     </div>
   );

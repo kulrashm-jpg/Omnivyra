@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
 import type { NewsletterGenerationRequest, NewsletterGenerationResult } from './runNewsletterGeneration';
@@ -586,6 +587,11 @@ export async function runWeeklyBoardGeneration(
   let best: ReturnType<typeof parseAnalystBoardOutput> | null = null;
   let bestScore = -1;
 
+  const enhancedBoardSystemPrompt = await enhanceSystemPromptForNewsletter(
+    'You are a senior analyst editor writing an intelligent weekly brief. Return only valid JSON. Be specific, interpretive, and decision-useful.',
+    input.company_id, input.companyContext,
+  );
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
       operation: 'newsletterGeneration',
@@ -598,7 +604,7 @@ export async function runWeeklyBoardGeneration(
       messages: [
         {
           role: 'system',
-          content: 'You are a senior analyst editor writing an intelligent weekly brief. Return only valid JSON. Be specific, interpretive, and decision-useful.',
+          content: enhancedBoardSystemPrompt,
         },
         {
           role: 'user',

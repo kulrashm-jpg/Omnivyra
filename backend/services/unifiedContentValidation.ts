@@ -11,6 +11,56 @@
 
 import { ContentBlueprint, ContentType, AngleType } from '../services/unifiedContentGenerationEngine';
 import { getValidationRules, VALIDATION_RULES } from '../prompts/contentGenerationPromptsV3';
+import { scoreCompanyContext } from '../../lib/content/companyContextBlock';
+import { getContentValidationMode, validateContentVariation } from '../../lib/content/contentVariationValidator';
+
+function extractFirstHookLine(hook: string): string {
+  return String(hook || '')
+    .split(/\n+/)[0]
+    .split(/(?<=[.!?])\s+/)[0]
+    .trim();
+}
+
+function buildMeaningfulTokens(text: string): string[] {
+  return String(text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9%]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4);
+}
+
+function isShortFormHookSpecific(args: {
+  hook: string;
+  contentType: ContentType;
+  targetAudience?: string;
+  sourceTopic?: string;
+}): boolean {
+  if (!['post', 'thread', 'carousel'].includes(args.contentType)) return true;
+
+  const firstLine = extractFirstHookLine(args.hook);
+  const lower = firstLine.toLowerCase();
+  const wordCount = firstLine.split(/\s+/).filter(Boolean).length;
+  const audienceTokens = buildMeaningfulTokens(args.targetAudience || '');
+  const topicTokens = buildMeaningfulTokens(args.sourceTopic || '');
+  const audienceMatches = audienceTokens.filter((token) => lower.includes(token)).length;
+  const topicMatches = topicTokens.filter((token) => lower.includes(token)).length;
+  const hasSpecificClaim =
+    /\b\d+(?:\.\d+)?%?\b/.test(firstLine) ||
+    /\b(less|more|fewer|double|half)\b/.test(lower) ||
+    /\b\d+\s+(blogs?|posts?|campaigns?|channels?|weeks?|months?)\b/.test(lower);
+  const hasSpecificContext =
+    /\b(b2b|b2c|saas|seo|ppc|crm|revops|fintech|healthcare|ecommerce|demand gen|product marketing|customer success|growth team|sales team|marketing team)\b/i.test(firstLine) ||
+    audienceMatches >= 2 ||
+    topicMatches >= 2;
+  const hasConcreteSituation =
+    /\b(publishing|posting|spending|relying|using|running|shipping|sending|scaling)\b.*\b(no|zero|without|still|but|missing)\b/i.test(lower) ||
+    /\bif your\b.+\b(still|only|without|missing)\b/i.test(lower) ||
+    /\byou'?re\b.+\bbehind\b/i.test(lower);
+
+  if (wordCount < 8) return false;
+
+  return hasSpecificClaim || hasSpecificContext || hasConcreteSituation;
+}
 
 export interface ValidationResult {
   pass: boolean;
@@ -39,6 +89,7 @@ export function validateContentQuality(
   const rules = getValidationRules(contentType);
   const issues: string[] = [];
   const autoRepairs: string[] = [];
+  const validationMode = getContentValidationMode(contentType);
 
   // Check hook
   if (rules.required_hook && !blueprint.hook?.trim()) {
@@ -99,6 +150,69 @@ export function validateContentQuality(
     }
   }
 
+  const variationValidation = validateContentVariation([
+    { id: 'hook', text: blueprint.hook || '' },
+    ...(Array.isArray(blueprint.key_points)
+      ? blueprint.key_points.map((point, index) => ({ id: `key_point_${index + 1}`, text: point || '' }))
+      : []),
+    { id: 'cta', text: blueprint.cta || '' },
+  ], { contentType });
+
+  const companyContext = blueprint.metadata?.company_context || {};
+  const contextScore = scoreCompanyContext(fullText, {
+    companyName: companyContext.companyName,
+    targetAudience: companyContext.targetAudience,
+    industry: companyContext.industry,
+    uniqueValue: companyContext.uniqueValue,
+    competitiveAdvantages: companyContext.competitiveAdvantages,
+    strategyProfile: companyContext.strategyProfile,
+  }, { contentType });
+  const sourceTopic = blueprint.metadata?.decision_trace?.source_topic || '';
+  const genericHook = !isShortFormHookSpecific({
+    hook: blueprint.hook || '',
+    contentType,
+    targetAudience: companyContext.targetAudience,
+    sourceTopic,
+  });
+
+  if (validationMode === 'long_form') {
+    if (variationValidation.duplicateContentDetected) {
+      issues.push(`Duplicate sections detected across blueprint segments (${variationValidation.duplicateSectionPairs.length} pair(s))`);
+    }
+    if (variationValidation.lowVariationDetected) {
+      issues.push(`${variationValidation.lowVariationSections.length} blueprint segment(s) add little or no new information`);
+    }
+  } else if (validationMode === 'mid_form') {
+    if (variationValidation.duplicateContentDetected) {
+      issues.push(`Duplicate sections detected across blueprint segments (${variationValidation.duplicateSectionPairs.length} pair(s))`);
+    }
+    if (!contextScore.scenarioPresent) {
+      issues.push('Missing concrete scenario or workflow signal');
+    }
+    if (companyContext.companyName && contextScore.companyMentions === 0) {
+      issues.push('Missing company context');
+    }
+    if (contextScore.perspectiveMismatch) {
+      issues.push('Missing strategic perspective');
+    }
+  } else {
+    if (contextScore.genericPhraseCount >= 1) {
+      issues.push('Short-form content is still too generic');
+    }
+    if (companyContext.companyName && contextScore.companyMentions === 0) {
+      issues.push('Missing company context');
+    }
+    if (companyContext.targetAudience && contextScore.icpReferences === 0) {
+      issues.push('Missing ICP signal');
+    }
+    if (genericHook) {
+      issues.push('Hook is too generic for short-form content');
+    }
+    if (contextScore.perspectiveMismatch) {
+      issues.push('Missing strategic perspective');
+    }
+  }
+
   // Attempt auto-repairs for common issues
   if (!blueprint.hook?.trim() && rules.required_hook) {
     blueprint.hook = generateDefaultHook(blueprint, contentType);
@@ -114,7 +228,17 @@ export function validateContentQuality(
   let severity: 'info' | 'warning' | 'blocking' = 'info';
   if (issues.length > 0) {
     // Blocking if missing required elements
-    if (issues.some((i) => i.includes('Missing'))) {
+    const noCompanyContext =
+      (companyContext.companyName ? contextScore.companyMentions === 0 : false) &&
+      (companyContext.targetAudience ? contextScore.icpReferences === 0 : true);
+    const shouldBlock =
+      validationMode === 'long_form'
+      ? variationValidation.duplicateContentDetected || variationValidation.lowVariationDetected || issues.some((i) => i.includes('Missing'))
+      : validationMode === 'mid_form'
+        ? variationValidation.duplicateContentDetected || !contextScore.scenarioPresent || issues.some((i) => i.includes('Missing company context')) || contextScore.perspectiveMismatch
+        : contextScore.genericPhraseCount >= 1 || noCompanyContext || contextScore.perspectiveMismatch;
+
+    if (shouldBlock) {
       severity = 'blocking';
     } else if (issues.some((i) => i.includes('short'))) {
       severity = 'warning';
@@ -318,4 +442,3 @@ export function validateToneAppropriate(
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────
-

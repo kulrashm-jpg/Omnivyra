@@ -492,7 +492,7 @@ export default function TeamManagement() {
                   value={inviteForm.email}
                   onChange={(e) => setInviteForm((prev) => ({ ...prev, email: e.target.value }))}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                  placeholder="colleague@drishiq.com"
+                  placeholder="colleague@omnivyra.com"
                 />
               </div>
 

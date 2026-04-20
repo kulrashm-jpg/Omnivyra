@@ -1,36 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
-
-const requireSuperAdminAccess = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
-    return true;
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      return false;
-    }
-    return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:community-ai-metrics', 20, 60))) return;
 
-  if (!(await requireSuperAdminAccess(req, res))) return;
+  if (!(await requireSuperAdminUser(req, res))) return;
 
   try {
     const [actionsCount, executedCount, playbooksCount, autoRulesCount, tenantRows] =

@@ -1,24 +1,16 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { hasUsageAccess } from '../../../backend/services/usageAccessService';
+import { requireAdminRateLimit, requireAuthenticatedInternalUser } from '../../../backend/services/requestAccessService';
 
 const requireAuth = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<{ userId: string | null; isSuperAdmin: boolean } | null> => {
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    return { userId: null, isSuperAdmin: true };
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    return { userId: user.id, isSuperAdmin: isAdmin };
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return null;
+  const user = await requireAuthenticatedInternalUser(req, res);
+  if (!user) return null;
+  return { userId: user.id, isSuperAdmin: await isPlatformSuperAdmin(user.id) };
 };
 
 function maskCostInTotals(totals: Record<string, unknown>): Record<string, unknown> {
@@ -57,6 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:usage-report', 30, 60))) return;
 
   const auth = await requireAuth(req, res);
   if (!auth) return;

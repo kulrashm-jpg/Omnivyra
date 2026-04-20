@@ -108,6 +108,20 @@ interface Snapshot {
     portfolio_avg_score: number;
     decision_summary: { continue: number; optimize: number; pivot: number };
   };
+  knowledge_graph_summary: {
+    status: 'shallow' | 'emerging' | 'imbalanced' | 'maturing';
+    topic_cluster_count: number;
+    dominant_cluster: string | null;
+    supporting_cluster_count: number;
+    format_diversity: number;
+    stage_coverage: {
+      awareness: number;
+      consideration: number;
+      decision: number;
+    };
+    weakest_stage: 'awareness' | 'consideration' | 'decision' | null;
+    report_depth: 'baseline' | 'operational' | 'growth';
+  };
   next_actions: NextAction[];
   reports_summary: {
     total_reports: number;
@@ -301,7 +315,7 @@ function generateExecutiveSummary(snapshot: Snapshot): string | null {
 }
 
 function generateExecutiveSummaryV2(snapshot: Snapshot): string | null {
-  const { system_snapshot: ss, strategic_intelligence, next_actions, audience_response, intelligence_settings, lead_summary } = snapshot;
+  const { system_snapshot: ss, strategic_intelligence, next_actions, audience_response, intelligence_settings, lead_summary, timing_summary, knowledge_graph_summary } = snapshot;
   if (ss.evaluated_campaigns === 0) return null;
 
   const sentences: string[] = [];
@@ -334,7 +348,15 @@ function generateExecutiveSummaryV2(snapshot: Snapshot): string | null {
     );
   }
 
-  if (lead_summary.qualified_active_leads > 0 && tracking.metricLabel?.includes('lead')) {
+  if (timing_summary.rhythm_state === 'thin') {
+    sentences.push(
+      'The operating rhythm is still too thin, so promising signals are not compounding into a dependable system yet.'
+    );
+  } else if (knowledge_graph_summary.status === 'imbalanced' && knowledge_graph_summary.weakest_stage) {
+    sentences.push(
+      `The authority graph is still imbalanced because the ${knowledge_graph_summary.weakest_stage} stage remains underweight, which is limiting smoother progression into stronger outcomes.`
+    );
+  } else if (lead_summary.qualified_active_leads > 0 && tracking.metricLabel?.includes('lead')) {
     sentences.push(
       `${lead_summary.qualified_active_leads} qualified lead${lead_summary.qualified_active_leads === 1 ? '' : 's'} already give the system real commercial proof, not just engagement noise.`
     );
@@ -364,19 +386,19 @@ function generateExecutiveSummaryV2(snapshot: Snapshot): string | null {
 
   if (tracking.progressRatio != null && tracking.progressRatio >= 0.6 && (ss.campaigns_ready_to_scale > 0 || lead_summary.qualified_active_leads > 0)) {
     sentences.push(
-      'The opportunity now is not only to hit the target, but to push beyond it by activating the next commercial motion while signal quality is favorable.'
+      'The operating call now is not only to hit the target, but to push beyond it by activating the next commercial motion while signal quality is favorable.'
     );
   } else if (highPriority.length > 0) {
     sentences.push(
-      `Immediate priority: ${highPriority.length} action${highPriority.length !== 1 ? 's' : ''} require${highPriority.length === 1 ? 's' : ''} urgent attention${pivots.length > 0 ? ', especially where direction changes are already clear.' : '.'}`
+      `Immediate operating priority: ${highPriority.length} action${highPriority.length !== 1 ? 's' : ''} require${highPriority.length === 1 ? 's' : ''} urgent attention${pivots.length > 0 ? ', especially where direction changes are already clear.' : '.'}`
     );
   } else if (scales.length > 0 && scales.length >= pivots.length) {
     sentences.push(
-      'Strategic direction is clear: scale what is working while making incremental refinements to the weaker parts of the system.'
+      'The system is ready for controlled acceleration: scale what is working while tightening the weaker parts of execution.'
     );
   } else {
     sentences.push(
-      'The next step is to deepen signal quality so future recommendations can move from guidance into stronger commercial action.'
+      'The next operating step is to deepen signal quality so future recommendations can move from guidance into stronger commercial action.'
     );
   }
 
@@ -527,6 +549,13 @@ const REPORT_READINESS_LABELS: Record<string, string> = {
   ready_now: 'Ready now',
 };
 
+const KNOWLEDGE_GRAPH_LABELS: Record<Snapshot['knowledge_graph_summary']['status'], string> = {
+  shallow: 'Shallow',
+  emerging: 'Emerging',
+  imbalanced: 'Imbalanced',
+  maturing: 'Maturing',
+};
+
 const INTELLIGENCE_OBJECTIVE_LABELS: Record<string, string> = {
   authority_growth: 'Authority growth',
   engagement_growth: 'Engagement growth',
@@ -624,6 +653,38 @@ function formatPlatformLabel(value: string | null | undefined) {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function getContentRoute(contentType: string | null | undefined) {
+  const normalized = String(contentType || '').trim().toLowerCase();
+  const routeMap: Record<string, string> = {
+    blog: '/blogs/create',
+    article: '/articles/create',
+    post: '/posts/create',
+    story: '/stories/create',
+    whitepaper: '/whitepapers/create',
+    'case-study': '/case-studies/create',
+    case_study: '/case-studies/create',
+    guide: '/guides/create',
+    thread: '/threads/create',
+    newsletter: '/newsletters/create',
+  };
+  return routeMap[normalized] ?? '/content';
+}
+
+function getCampaignPathRoute(path: Snapshot['campaign_mix_summary']['dominant_path'] | string | null | undefined) {
+  switch (path) {
+    case 'bolt_text':
+      return '/command-center/bolt-text';
+    case 'bolt_creator':
+      return '/command-center/bolt-creator-strategy';
+    case 'intelligent_mix':
+      return '/command-center/intelligent-mix-strategy';
+    case 'strategy_mix':
+      return '/command-center/bolt-combined-strategy';
+    default:
+      return '/command-center/campaigns';
+  }
+}
+
 function shouldRefreshCurrentReport(snapshot: Snapshot) {
   const latestReportAgeDays = snapshot.reports_summary.latest_report_age_days;
   if (latestReportAgeDays == null || latestReportAgeDays < 90) return false;
@@ -687,8 +748,8 @@ interface SectionCardProps {
 function SectionCard({ sectionKey, title, badge, children, footer, className = '' }: SectionCardProps) {
   const description = sectionKey ? SECTION_DESCRIPTION[sectionKey] : undefined;
   return (
-    <div className={`rounded-2xl border border-gray-100 bg-white shadow-sm ${className}`}>
-      <div className="px-6 py-4 border-b border-gray-100">
+    <div className={`rounded-2xl border border-gray-100/80 bg-white shadow-sm ${className}`}>
+      <div className="px-6 py-4 border-b border-gray-100/80">
         <div className="flex items-center gap-2">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{title}</p>
           {badge && <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-500">{badge}</span>}
@@ -702,11 +763,19 @@ function SectionCard({ sectionKey, title, badge, children, footer, className = '
 }
 
 // Part 5 — CTA helper
-function SectionCta({ href, label }: { href: string; label: string }) {
+function SectionCta({ href, label, variant = 'default' }: { href: string; label: string; variant?: 'default' | 'primary' | 'critical' | 'secondary' }) {
+  const classes =
+    variant === 'critical'
+      ? 'border-transparent bg-[#DC2626] text-white hover:bg-[#B91C1C] hover:border-transparent shadow-sm'
+      : variant === 'secondary'
+        ? 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 hover:border-slate-300'
+      : variant === 'primary'
+        ? 'border-amber-500 bg-transparent text-amber-700 hover:bg-amber-50 hover:border-amber-600'
+        : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-[#0A66C2] hover:border-[#0A66C2] hover:text-white';
   return (
     <Link
       href={href}
-      className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-3.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-[#0A66C2] hover:border-[#0A66C2] hover:text-white transition-colors"
+      className={`inline-flex items-center gap-1.5 rounded-[8px] border px-4 py-2 text-xs font-semibold tracking-[0.2px] transition-all duration-150 ease-out hover:-translate-y-[1px] ${classes}`}
     >
       {label}
       <ArrowRight className="h-3 w-3" />
@@ -725,6 +794,44 @@ function ExecutiveSummary({ snapshot }: { snapshot: Snapshot }) {
   const ss = snapshot.system_snapshot;
   const objectiveLabel = getIntelligenceObjectiveLabel(snapshot);
   const tracking = deriveTargetTracking(snapshot);
+  const bottleneck = derivePrimaryBottleneck(snapshot);
+  const cta = deriveExecutiveSummaryCta(snapshot);
+  const target = deriveTargetPotential(snapshot);
+  const healthTone = ss.health === 'strong' ? toneClasses('strong') : ss.health === 'moderate' ? toneClasses('moderate') : toneClasses('watch');
+  const summaryCards = [
+    {
+      label: 'Health',
+      value: ss.health === 'strong' ? 'Compounding' : ss.health === 'moderate' ? 'Not stable yet' : 'Not compounding',
+      detail: ss.health === 'strong'
+        ? 'Signal is consistent enough to support stronger moves.'
+        : ss.health === 'moderate'
+          ? 'Activity exists, but it is not stable enough to trust at scale.'
+          : 'Current activity is not stable enough to create compounding signal.',
+      tone: healthTone,
+      badgeText: ss.health === 'strong' ? 'Strong' : ss.health === 'moderate' ? 'Moderate' : 'Weak',
+    },
+    {
+      label: 'Primary constraint',
+      value: 'Inconsistent publishing + distribution',
+      detail: 'The system is too uneven to create repeatable learning.',
+      tone: toneClasses(bottleneck.tone),
+      badgeText: 'Constraint',
+    },
+    {
+      label: 'Risk',
+      value: 'False signals -> poor scaling decisions',
+      detail: target.delayCost ?? 'If this continues, the team will scale on noise instead of reliable signal.',
+      tone: toneClasses('watch'),
+      badgeText: 'Risk',
+    },
+    {
+      label: 'Immediate action',
+      value: 'Increase cadence and expand distribution before scaling',
+      detail: cta ? 'Fix rhythm first, then trust the next layer of campaign and commercial decisions.' : 'The next move is still being inferred from current operating signal.',
+      tone: toneClasses('moderate'),
+      badgeText: 'Action',
+    },
+  ];
   const TrendIcon =
     ss.trend_signal === 'improving' ? TrendingUp :
     ss.trend_signal === 'declining' ? TrendingDown : Minus;
@@ -740,15 +847,41 @@ function ExecutiveSummary({ snapshot }: { snapshot: Snapshot }) {
         </div>
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Executive Summary</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Marketing System Status</p>
             <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">{objectiveLabel}</span>
             {tracking.metricLabel && snapshot.intelligence_settings.target_value && (
               <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-semibold text-gray-600">
                 {snapshot.intelligence_settings.target_value} {tracking.metricLabel}
               </span>
             )}
+            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+              Main constraint: {bottleneck.title}
+            </span>
           </div>
-          <p className="text-sm text-gray-700 leading-relaxed max-w-4xl">{text}</p>
+          <p className="text-sm text-gray-700 leading-relaxed max-w-4xl">
+            {ss.health === 'weak'
+              ? 'The system is active, but it is not yet producing reliable signal.'
+              : ss.health === 'moderate'
+                ? 'The system is moving, but signal quality is not stable enough to trust at scale.'
+                : 'The system is producing stable enough signal to support stronger moves.'}
+          </p>
+          <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
+            {summaryCards.map((card) => (
+              <div key={card.label} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{card.label}</p>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${card.tone.badge}`}>{card.badgeText}</span>
+                </div>
+                <p className={`mt-3 text-sm font-semibold ${card.tone.text}`}>{card.value}</p>
+                <p className="mt-2 text-xs leading-relaxed text-gray-600">{card.detail}</p>
+              </div>
+            ))}
+          </div>
+          {cta && (
+            <div className="mt-3">
+              <SectionCta href={cta.href} label={cta.label} />
+            </div>
+          )}
           <p className="mt-2 text-[10px] text-gray-400">
             Based on {ss.evaluated_campaigns} evaluated campaign{ss.evaluated_campaigns !== 1 ? 's' : ''} · last {snapshot.time_range_days} days
           </p>
@@ -767,15 +900,15 @@ function ObjectiveSetupNotice({ snapshot }: { snapshot: Snapshot }) {
     <div className="rounded-2xl border border-amber-100 bg-amber-50/80 px-6 py-4">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Operating target needed</p>
-          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-amber-900/85">
-            Intelligence is now able to track pace against a declared objective, but this company still needs a clearer operating target.
-            Add the primary objective, target metric, target value, and time horizon in company profile so this page can judge whether performance is behind, on track, or capable of surpassing the goal.
+          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Target not set</p>
+          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-amber-900/75">
+            No target is set yet, so pacing cannot be evaluated properly.
+            Add the primary objective, target metric, target value, and time horizon so this page can judge whether the system is behind, on track, or capable of surpassing the goal.
           </p>
         </div>
         <Link
           href="/company-profile"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-200 bg-white px-3.5 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-200 bg-white px-3.5 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50"
         >
           Set target
           <ArrowRight className="h-3 w-3" />
@@ -791,27 +924,349 @@ type DerivedInsight = {
   tone: 'strong' | 'moderate' | 'watch';
 };
 
+type RoutedSystemAction = {
+  text: string;
+  href: string;
+  label: string;
+};
+
+type ActionStatus = 'not_started' | 'in_progress' | 'completed';
+type ConstraintConfidence = 'Low' | 'Medium' | 'High';
+type ConfidenceDirection = 'up' | 'flat' | 'down';
+type ActionProgressEntry = {
+  status: ActionStatus;
+  updatedAt: string;
+  completedAt?: string;
+};
+type OutcomeSignalSnapshot = {
+  publishingCount: number;
+  activeChannels: number;
+  publishedPosts: number;
+  engagementSignals: number;
+  activeLeads: number;
+  qualifiedLeads: number;
+};
+type ActionOutcomeBaseline = {
+  capturedAt: string;
+  signals: OutcomeSignalSnapshot;
+};
+
+const MARKETING_INTEL_PROGRESS_STORAGE_KEY = 'marketing-intel-progress';
+const MARKETING_INTEL_CONFIDENCE_STORAGE_KEY = 'marketing-intel-constraint-confidence';
+const MARKETING_INTEL_OUTCOME_STORAGE_KEY = 'marketing-intel-outcomes';
+const STALE_ACTION_MS = 48 * 60 * 60 * 1000;
+const EARLY_OUTCOME_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+function normalizeActionProgress(raw: unknown): Record<string, ActionProgressEntry> {
+  if (!raw || typeof raw !== 'object') return {};
+
+  const now = new Date().toISOString();
+  return Object.entries(raw as Record<string, unknown>).reduce<Record<string, ActionProgressEntry>>((acc, [key, value]) => {
+    if (typeof value === 'string' && ['not_started', 'in_progress', 'completed'].includes(value)) {
+      acc[key] = { status: value as ActionStatus, updatedAt: now };
+      return acc;
+    }
+
+    if (
+      value &&
+      typeof value === 'object' &&
+      'status' in value &&
+      typeof (value as { status?: unknown }).status === 'string' &&
+      ['not_started', 'in_progress', 'completed'].includes((value as { status: string }).status)
+    ) {
+      const candidate = value as Partial<ActionProgressEntry>;
+      acc[key] = {
+        status: candidate.status as ActionStatus,
+        updatedAt: candidate.updatedAt ?? now,
+        completedAt: candidate.completedAt,
+      };
+    }
+
+    return acc;
+  }, {});
+}
+
+function buildActionProgressEntry(status: ActionStatus, previous?: ActionProgressEntry): ActionProgressEntry {
+  const now = new Date().toISOString();
+  if (status === 'completed') {
+    return {
+      status,
+      updatedAt: now,
+      completedAt: now,
+    };
+  }
+
+  return {
+    status,
+    updatedAt: now,
+    completedAt: previous?.completedAt,
+  };
+}
+
+function deriveOutcomeSignals(snapshot: Snapshot): OutcomeSignalSnapshot {
+  return {
+    publishingCount: snapshot.content_summary.recent_blogs,
+    activeChannels: snapshot.distribution_summary.active_platforms,
+    publishedPosts: snapshot.distribution_summary.published_posts,
+    engagementSignals: snapshot.lead_summary.engagement_signals,
+    activeLeads: snapshot.lead_summary.active_leads,
+    qualifiedLeads: snapshot.lead_summary.qualified_active_leads,
+  };
+}
+
+function normalizeOutcomeBaselines(raw: unknown): Record<string, ActionOutcomeBaseline> {
+  if (!raw || typeof raw !== 'object') return {};
+
+  return Object.entries(raw as Record<string, unknown>).reduce<Record<string, ActionOutcomeBaseline>>((acc, [key, value]) => {
+    if (
+      value &&
+      typeof value === 'object' &&
+      'capturedAt' in value &&
+      'signals' in value &&
+      typeof (value as { capturedAt?: unknown }).capturedAt === 'string'
+    ) {
+      const candidate = value as Partial<ActionOutcomeBaseline> & { signals?: Partial<OutcomeSignalSnapshot> };
+      acc[key] = {
+        capturedAt: candidate.capturedAt as string,
+        signals: {
+          publishingCount: candidate.signals?.publishingCount ?? 0,
+          activeChannels: candidate.signals?.activeChannels ?? 0,
+          publishedPosts: candidate.signals?.publishedPosts ?? 0,
+          engagementSignals: candidate.signals?.engagementSignals ?? 0,
+          activeLeads: candidate.signals?.activeLeads ?? 0,
+          qualifiedLeads: candidate.signals?.qualifiedLeads ?? 0,
+        },
+      };
+    }
+    return acc;
+  }, {});
+}
+
+function countImprovingOutcomes(snapshot: Snapshot, baselines: Record<string, ActionOutcomeBaseline>): number {
+  return deriveCurrentDoNowItems(snapshot).reduce((count, item) => {
+    const baseline = baselines[item.id];
+    if (!baseline) return count;
+
+    const current = deriveOutcomeSignals(snapshot);
+    const previous = baseline.signals;
+    const improved =
+      current.publishingCount > previous.publishingCount ||
+      current.activeChannels > previous.activeChannels ||
+      current.engagementSignals > previous.engagementSignals ||
+      current.activeLeads > previous.activeLeads ||
+      current.qualifiedLeads > previous.qualifiedLeads;
+
+    return improved ? count + 1 : count;
+  }, 0);
+}
+
+function getActionCompletionFeedback(item: { id: string; label: string }): string {
+  const normalized = `${item.id} ${item.label}`.toLowerCase();
+  if (normalized.includes('publish') || normalized.includes('content') || normalized.includes('cadence') || normalized.includes('rhythm')) {
+    return 'Good — this will improve signal consistency over the next cycle.';
+  }
+  if (normalized.includes('distribution') || normalized.includes('channel') || normalized.includes('platform')) {
+    return 'Good — this will improve signal reliability across channels.';
+  }
+  if (normalized.includes('stage') || normalized.includes('journey')) {
+    return 'Good — this will strengthen progression through the buyer journey.';
+  }
+  if (normalized.includes('lead') || normalized.includes('prospect') || normalized.includes('qualified')) {
+    return 'Good — this will sharpen the path from demand into commercial action.';
+  }
+  return 'Good — this will make the next decision cycle more reliable.';
+}
+
+function getRecommendedActionReason(item: { id: string; label: string }): string {
+  const normalized = `${item.id} ${item.label}`.toLowerCase();
+  if (normalized.includes('publish') || normalized.includes('content') || normalized.includes('cadence') || normalized.includes('rhythm')) {
+    return 'This will improve signal consistency and unlock clearer performance patterns.';
+  }
+  if (normalized.includes('distribution') || normalized.includes('channel') || normalized.includes('platform')) {
+    return 'This will reduce channel bias and make traction signals more reliable.';
+  }
+  if (normalized.includes('stage') || normalized.includes('journey')) {
+    return 'This will strengthen buyer progression and make weak journey gaps measurable.';
+  }
+  if (normalized.includes('lead') || normalized.includes('prospect') || normalized.includes('qualified')) {
+    return 'This will turn warm demand into clearer commercial signal faster.';
+  }
+  return 'This will make the next decision cycle clearer and easier to trust.';
+}
+
+function deriveOutcomeMessages(
+  item: { id: string; label: string },
+  baseline: ActionOutcomeBaseline | undefined,
+  snapshot: Snapshot
+): string[] {
+  if (!baseline) return ['\u2192 No measurable impact yet'];
+
+  const current = deriveOutcomeSignals(snapshot);
+  const previous = baseline.signals;
+  const normalized = `${item.id} ${item.label}`.toLowerCase();
+  const lines: string[] = [];
+  const ageMs = Date.now() - new Date(baseline.capturedAt).getTime();
+  const pushIfMeaningful = (line: string | null) => {
+    if (line && lines.length < 3) lines.push(line);
+  };
+
+  if (normalized.includes('publish') || normalized.includes('content') || normalized.includes('cadence') || normalized.includes('rhythm')) {
+    const publishingDelta = current.publishingCount - previous.publishingCount;
+    const engagementDelta = current.engagementSignals - previous.engagementSignals;
+    pushIfMeaningful(
+      publishingDelta > 0
+        ? `\u2191 Publishing increased (+${publishingDelta} piece${publishingDelta === 1 ? '' : 's'})`
+        : publishingDelta < 0
+          ? `\u2193 Publishing slowed (${Math.abs(publishingDelta)} fewer piece${Math.abs(publishingDelta) === 1 ? '' : 's'})`
+          : null
+    );
+    pushIfMeaningful(
+      engagementDelta > 0
+        ? `\u2191 Engagement signals improving (+${engagementDelta})`
+        : engagementDelta < 0
+          ? `\u2193 Engagement signals softer (${Math.abs(engagementDelta)} lower)`
+          : null
+    );
+  }
+
+  if (normalized.includes('distribution') || normalized.includes('channel') || normalized.includes('platform')) {
+    const channelDelta = current.activeChannels - previous.activeChannels;
+    const postsDelta = current.publishedPosts - previous.publishedPosts;
+    pushIfMeaningful(
+      channelDelta > 0
+        ? `\u2191 Distribution broader (+${channelDelta} active channel${channelDelta === 1 ? '' : 's'})`
+        : channelDelta < 0
+          ? `\u2193 Distribution narrowed (${Math.abs(channelDelta)} fewer active channel${Math.abs(channelDelta) === 1 ? '' : 's'})`
+          : '\u2192 Distribution unchanged'
+    );
+    pushIfMeaningful(
+      postsDelta > 0
+        ? `\u2191 More delivery signal visible (+${postsDelta} published post${postsDelta === 1 ? '' : 's'})`
+        : postsDelta < 0
+          ? `\u2193 Published output slipped (${Math.abs(postsDelta)} fewer post${Math.abs(postsDelta) === 1 ? '' : 's'})`
+          : null
+    );
+  }
+
+  if (normalized.includes('lead') || normalized.includes('prospect') || normalized.includes('qualified')) {
+    const qualifiedDelta = current.qualifiedLeads - previous.qualifiedLeads;
+    const leadDelta = current.activeLeads - previous.activeLeads;
+    pushIfMeaningful(
+      qualifiedDelta > 0
+        ? `\u2191 Qualified demand increased (+${qualifiedDelta})`
+        : qualifiedDelta < 0
+          ? `\u2193 Qualified demand slipped (${Math.abs(qualifiedDelta)} lower)`
+          : null
+    );
+    pushIfMeaningful(
+      leadDelta > 0
+        ? `\u2191 Active leads increased (+${leadDelta})`
+        : leadDelta < 0
+          ? `\u2193 Active leads decreased (${Math.abs(leadDelta)} lower)`
+          : null
+    );
+  }
+
+  if (lines.length === 0) {
+    const engagementDelta = current.engagementSignals - previous.engagementSignals;
+    const publishingDelta = current.publishingCount - previous.publishingCount;
+    if (engagementDelta > 0) {
+      lines.push(`\u2191 Engagement signals improving (+${engagementDelta})`);
+    } else if (publishingDelta > 0) {
+      lines.push(`\u2191 Publishing increased (+${publishingDelta} piece${publishingDelta === 1 ? '' : 's'})`);
+    }
+  }
+
+  if (lines.length > 0) return lines.slice(0, 3);
+  return [ageMs < EARLY_OUTCOME_WINDOW_MS ? '\u2192 Too early to measure impact — check back next cycle' : '\u2192 No measurable impact yet'];
+}
+
+function deriveCurrentDoNowItems(snapshot: Snapshot) {
+  return deriveSystemActionLines(snapshot).doNow.slice(0, 2).map((item) => ({
+    id: item.label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    label: item.text,
+    href: item.href,
+    ctaLabel: item.label,
+  }));
+}
+
+function classifyInsightBucket(title: string): string {
+  const normalized = title.toLowerCase();
+  if (normalized.includes('report')) return 'report';
+  if (normalized.includes('knowledge graph') || normalized.includes('authority-graph') || normalized.includes('authority cluster')) return 'knowledge_graph';
+  if (normalized.includes('distribution')) return 'distribution';
+  if (normalized.includes('rhythm') || normalized.includes('timing')) return 'timing';
+  if (normalized.includes('commercial') || normalized.includes('lead') || normalized.includes('pipeline')) return 'commercial';
+  if (normalized.includes('campaign')) return 'campaign';
+  if (normalized.includes('content')) return 'content';
+  if (normalized.includes('engagement')) return 'engagement';
+  if (normalized.includes('audience')) return 'audience';
+  if (normalized.includes('growth maturity') || normalized.includes('commercial-system')) return 'growth_maturity';
+  return normalized;
+}
+
+function insightWeight(insight: DerivedInsight): number {
+  const toneWeight = insight.tone === 'strong' ? 3 : insight.tone === 'watch' ? 2 : 1;
+  const bucket = classifyInsightBucket(insight.title);
+  const bucketWeight =
+    bucket === 'report' ? 5 :
+    bucket === 'knowledge_graph' ? 4 :
+    bucket === 'commercial' ? 4 :
+    bucket === 'distribution' ? 3 :
+    bucket === 'timing' ? 3 :
+    bucket === 'content' ? 3 :
+    bucket === 'campaign' ? 3 :
+    bucket === 'engagement' ? 2 :
+    bucket === 'audience' ? 2 :
+    bucket === 'growth_maturity' ? 2 : 1;
+  return bucketWeight * 10 + toneWeight;
+}
+
+function selectTopInsights(insights: DerivedInsight[], limit: number): DerivedInsight[] {
+  const chosen: DerivedInsight[] = [];
+  const usedBuckets = new Set<string>();
+
+  const sorted = [...insights].sort((left, right) => insightWeight(right) - insightWeight(left));
+  for (const insight of sorted) {
+    const bucket = classifyInsightBucket(insight.title);
+    if (!usedBuckets.has(bucket)) {
+      chosen.push(insight);
+      usedBuckets.add(bucket);
+    }
+    if (chosen.length >= limit) return chosen;
+  }
+
+  for (const insight of sorted) {
+    if (!chosen.includes(insight)) {
+      chosen.push(insight);
+    }
+    if (chosen.length >= limit) return chosen;
+  }
+
+  return chosen;
+}
+
 function toneClasses(tone: DerivedInsight['tone']) {
   if (tone === 'strong') {
     return {
-      badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-      text: 'text-emerald-600',
+      badge: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+      text: 'text-emerald-700',
     };
   }
   if (tone === 'watch') {
     return {
-      badge: 'bg-amber-50 text-amber-700 border-amber-200',
-      text: 'text-amber-600',
+      badge: 'bg-amber-100 text-amber-800 border-amber-300',
+      text: 'text-amber-700',
     };
   }
   return {
-    badge: 'bg-blue-50 text-blue-700 border-blue-200',
-    text: 'text-blue-600',
+    badge: 'bg-blue-100 text-blue-800 border-blue-300',
+    text: 'text-blue-700',
   };
 }
 
 function deriveOperatingOverview(snapshot: Snapshot): Array<{ label: string; value: string; helper: string; tone: DerivedInsight['tone'] }> {
-  const { system_snapshot: ss, audience_response, strategic_memory, lead_summary, reports_summary, intelligence_settings, timing_summary } = snapshot;
+  const { system_snapshot: ss, audience_response, strategic_memory, knowledge_graph_summary, lead_summary, reports_summary, intelligence_settings, timing_summary } = snapshot;
   const objectiveLabel = getIntelligenceObjectiveLabel(snapshot);
   const horizonLabel = intelligence_settings?.time_horizon ? TIME_HORIZON_LABELS[intelligence_settings.time_horizon] : 'monthly';
   const momentumTone: DerivedInsight['tone'] =
@@ -871,10 +1326,10 @@ function deriveOperatingOverview(snapshot: Snapshot): Array<{ label: string; val
     },
     {
       label: 'Knowledge graph',
-      value: strategic_memory.dominant_topic_cluster ? 'Building' : 'Shallow',
-      helper: strategic_memory.dominant_topic_cluster
-        ? `${strategic_memory.dominant_topic_cluster} is becoming the strongest authority cluster`
-        : 'Topic depth is still too thin to show a dominant authority cluster',
+      value: KNOWLEDGE_GRAPH_LABELS[knowledge_graph_summary.status],
+      helper: knowledge_graph_summary.dominant_cluster
+        ? `${knowledge_graph_summary.dominant_cluster} is the strongest cluster, with ${knowledge_graph_summary.supporting_cluster_count} supporting cluster${knowledge_graph_summary.supporting_cluster_count === 1 ? '' : 's'} and ${knowledge_graph_summary.format_diversity} active format${knowledge_graph_summary.format_diversity === 1 ? '' : 's'} in the graph`
+        : 'Topic depth is still too thin to show a meaningful authority graph yet',
       tone: graphTone,
     },
   ];
@@ -910,9 +1365,38 @@ function deriveTargetPotential(snapshot: Snapshot) {
       : strategic_intelligence.best_performing_goal
         ? `${GOAL_LABELS[strategic_intelligence.best_performing_goal] ?? strategic_intelligence.best_performing_goal} is the strongest goal pattern so far`
         : 'The current system still needs more evidence before pushing harder';
+  const hasUpsideSignal =
+    ss.campaigns_ready_to_scale > 0 || lead_summary.qualified_active_leads > 0 || (topMetric && topMetric.avg_pct_of_target >= 95);
+  const targetState =
+    !intelligence_settings?.target_metric && !targetValue
+      ? 'missing'
+      : targetNumber == null
+        ? 'soft'
+        : progressRatio != null && progressRatio >= 1 && hasUpsideSignal
+          ? 'under_ambitious'
+          : 'hard';
+  const targetStateLabel =
+    targetState === 'missing'
+      ? 'No explicit target'
+      : targetState === 'soft'
+        ? 'Soft target'
+        : targetState === 'under_ambitious'
+          ? 'Target likely too low'
+          : 'Hard target';
+  const targetStateDetail =
+    targetState === 'missing'
+      ? 'The company has not set a measurable operating target yet, so the page can judge direction but not true attainment.'
+      : targetState === 'soft'
+        ? 'The company has declared an objective and metric, but the target is still too loose to measure real attainment cleanly.'
+        : targetState === 'under_ambitious'
+          ? 'The declared target is already being met, and current signal quality suggests the real ceiling is higher if the next motion is activated now.'
+          : 'The target is specific enough for the page to judge present attainment, shortfall, and upside against a real benchmark.';
 
   return {
     objectiveLabel,
+    targetState,
+    targetStateLabel,
+    targetStateDetail,
     targetLabel: metricLabel && targetValue
       ? `${targetValue} ${metricLabel} ${intelligence_settings?.time_horizon ? `this ${TIME_HORIZON_LABELS[intelligence_settings.time_horizon]}` : ''}`.trim()
       : metricLabel
@@ -941,16 +1425,22 @@ function deriveTargetPotential(snapshot: Snapshot) {
             ? 'The system is moving, but it still needs tighter execution to create consistent upside.'
             : 'Current momentum is not strong enough yet to justify aggressive scaling.',
     potential:
-      ss.campaigns_ready_to_scale > 0 || lead_summary.qualified_active_leads > 0 || (topMetric && topMetric.avg_pct_of_target >= 95)
-        ? 'Upside available'
-        : 'Limited upside',
+      targetState === 'under_ambitious'
+        ? 'Target can be surpassed'
+        : hasUpsideSignal
+          ? 'Upside available'
+          : 'Limited upside',
     potentialDetail: lead_summary.qualified_active_leads > 0
       ? `${lead_summary.qualified_active_leads} qualified lead${lead_summary.qualified_active_leads === 1 ? '' : 's'} can be moved into a stronger conversion motion now`
       : upsideDriver,
     targetNote: intelligence_settings?.target_note ?? null,
     targetGap,
     upsideProjection:
-      targetNumber && currentValue != null && metricLabel
+      targetState === 'missing'
+        ? 'Set a measurable target so the page can judge whether current momentum is enough for the declared objective.'
+        : targetState === 'soft'
+          ? 'Tighten the target value so the page can tell the difference between healthy momentum and true attainment.'
+        : targetNumber && currentValue != null && metricLabel
         ? progressRatio != null && progressRatio >= 1 && (ss.campaigns_ready_to_scale > 0 || lead_summary.qualified_active_leads > 0)
           ? `Current signals suggest the team can exceed the declared target if the next motion is activated quickly.`
           : progressRatio != null && progressRatio >= 0.6 && targetGap != null
@@ -960,7 +1450,9 @@ function deriveTargetPotential(snapshot: Snapshot) {
               : null
         : null,
     delayCost:
-      progressRatio != null && progressRatio >= 0.6 && (ss.campaigns_ready_to_scale > 0 || lead_summary.qualified_active_leads > 0)
+      targetState === 'under_ambitious'
+        ? 'If the target is not revised upward soon, the team may under-activate a bigger opportunity that is already visible.'
+        : progressRatio != null && progressRatio >= 0.6 && (ss.campaigns_ready_to_scale > 0 || lead_summary.qualified_active_leads > 0)
         ? 'If the next motion is delayed, warm demand may cool off and the current upside window will narrow.'
         : timing_summary.rhythm_state === 'thin'
           ? 'If the operating rhythm stays thin, even good ideas will keep arriving too slowly to compound into reliable traction.'
@@ -984,6 +1476,7 @@ function deriveLearnedSignals(snapshot: Snapshot): DerivedInsight[] {
     content_performance,
     audience_response,
     strategic_memory,
+    knowledge_graph_summary,
     reports_summary,
     content_summary,
     campaign_mix_summary,
@@ -1090,16 +1583,16 @@ function deriveLearnedSignals(snapshot: Snapshot): DerivedInsight[] {
       tone: campaignPathCounts.length >= 3 ? 'moderate' : 'watch',
     });
   }
-  if (distributionSummary.connected_platforms > 0) {
+  if (distribution_summary.connected_platforms > 0) {
     learned.push({
       title: 'Distribution quality is now visible, not just content output',
-      detail: distributionSummary.active_platforms > 0
+      detail: distribution_summary.active_platforms > 0
         ? topPlatform
-          ? `${distributionSummary.published_posts} post${distributionSummary.published_posts === 1 ? '' : 's'} have been published across ${distributionSummary.active_platforms} active platform${distributionSummary.active_platforms === 1 ? '' : 's'} in the current window. ${formatPlatformLabel(topPlatform.platform)} currently carries ${topPlatform.share_pct}% of visible distribution${secondPlatform ? `, followed by ${formatPlatformLabel(secondPlatform.platform)} at ${secondPlatform.share_pct}%` : ''}, which helps the page separate weak traction caused by content from weak traction caused by channel concentration.`
-          : `${distributionSummary.published_posts} post${distributionSummary.published_posts === 1 ? '' : 's'} have been published across ${distributionSummary.active_platforms} active platform${distributionSummary.active_platforms === 1 ? '' : 's'} in the current window. This helps the page separate weak traction caused by content from weak traction caused by thin distribution.`
-        : `${distributionSummary.connected_platforms} social platform${distributionSummary.connected_platforms === 1 ? '' : 's'} are connected, but no meaningful active publishing breadth is visible yet. That means timing and distribution may still be too thin to support compounding traction.`,
+          ? `${distribution_summary.published_posts} post${distribution_summary.published_posts === 1 ? '' : 's'} have been published across ${distribution_summary.active_platforms} active platform${distribution_summary.active_platforms === 1 ? '' : 's'} in the current window. ${formatPlatformLabel(topPlatform.platform)} currently carries ${topPlatform.share_pct}% of visible distribution${secondPlatform ? `, followed by ${formatPlatformLabel(secondPlatform.platform)} at ${secondPlatform.share_pct}%` : ''}, which helps the page separate weak traction caused by content from weak traction caused by channel concentration.`
+          : `${distribution_summary.published_posts} post${distribution_summary.published_posts === 1 ? '' : 's'} have been published across ${distribution_summary.active_platforms} active platform${distribution_summary.active_platforms === 1 ? '' : 's'} in the current window. This helps the page separate weak traction caused by content from weak traction caused by thin distribution.`
+        : `${distribution_summary.connected_platforms} social platform${distribution_summary.connected_platforms === 1 ? '' : 's'} are connected, but no meaningful active publishing breadth is visible yet. That means timing and distribution may still be too thin to support compounding traction.`,
       tone:
-        distributionSummary.active_platforms >= 2 && distributionSummary.publish_success_rate >= 80
+        distribution_summary.active_platforms >= 2 && distribution_summary.publish_success_rate >= 80
           ? 'moderate'
           : 'watch',
     });
@@ -1134,9 +1627,9 @@ function deriveLearnedSignals(snapshot: Snapshot): DerivedInsight[] {
   }
   if (strategic_memory.dominant_topic_cluster) {
     learned.push({
-      title: 'The broader ecosystem is starting to organize around one authority cluster',
-      detail: `${strategic_memory.dominant_topic_cluster} is becoming the anchor for strategic memory, which is useful but also a signal to widen adjacent supporting clusters next.`,
-      tone: 'moderate',
+      title: 'The broader ecosystem is starting to show authority-graph shape',
+      detail: `${strategic_memory.dominant_topic_cluster} is becoming the anchor for strategic memory. The current graph is ${KNOWLEDGE_GRAPH_LABELS[knowledge_graph_summary.status].toLowerCase()}, with ${knowledge_graph_summary.topic_cluster_count} topic cluster${knowledge_graph_summary.topic_cluster_count === 1 ? '' : 's'} and ${knowledge_graph_summary.format_diversity} active format${knowledge_graph_summary.format_diversity === 1 ? '' : 's'} contributing to that shape.`,
+      tone: knowledge_graph_summary.status === 'maturing' ? 'strong' : 'moderate',
     });
   }
   if (market_pulse_summary.completed_runs > 0) {
@@ -1154,18 +1647,26 @@ function deriveLearnedSignals(snapshot: Snapshot): DerivedInsight[] {
     });
   }
 
-  return learned.slice(0, 6);
+  return selectTopInsights(learned, 6);
 }
 
 function derivePrimaryBottleneck(snapshot: Snapshot): DerivedInsight {
-  const { system_snapshot: ss, strategic_intelligence, audience_response, timing_summary } = snapshot;
+  const { system_snapshot: ss, strategic_intelligence, audience_response, knowledge_graph_summary, timing_summary } = snapshot;
   const volatility = strategic_intelligence.patterns.find((p) => p.type === 'volatility');
   const weakestMetric = audience_response.metric_rankings[audience_response.metric_rankings.length - 1];
 
   if (timing_summary.rhythm_state === 'thin') {
     return {
-      title: 'Operating rhythm is the primary bottleneck',
-      detail: `The system is not running frequently enough in the last ${snapshot.time_range_days} days to let strong ideas compound. Until content and distribution happen more consistently, traction and conversion will keep looking more random than repeatable.`,
+      title: 'Operating rhythm is inconsistent',
+      detail: 'Without steady publishing and steady distribution, performance stays noisy, channels cannot be evaluated, and scaling decisions remain weak. Fix rhythm first and everything else becomes measurable.',
+      tone: 'watch',
+    };
+  }
+
+  if (knowledge_graph_summary.status === 'imbalanced' && knowledge_graph_summary.weakest_stage) {
+    return {
+      title: `${knowledge_graph_summary.weakest_stage[0].toUpperCase() + knowledge_graph_summary.weakest_stage.slice(1)}-stage depth is the primary bottleneck`,
+      detail: `The authority system is still over-weighted toward one part of the journey. Until the ${knowledge_graph_summary.weakest_stage} stage is strengthened, the graph will not carry attention forward cleanly into stronger commercial outcomes.`,
       tone: 'watch',
     };
   }
@@ -1173,7 +1674,7 @@ function derivePrimaryBottleneck(snapshot: Snapshot): DerivedInsight {
   if (volatility) {
     return {
       title: 'Strategic consistency is the primary bottleneck',
-      detail: 'Campaign execution is generating activity, but the variance across results suggests the system does not yet have a repeatable playbook. Tightening the message, topic, and campaign mix will unlock cleaner scaling.',
+      detail: 'Campaign execution is generating activity, but the variance across results suggests the system does not yet have a repeatable playbook. Tightening the message, topic, and campaign mix is the fastest way to make scaling more dependable.',
       tone: 'watch',
     };
   }
@@ -1181,7 +1682,7 @@ function derivePrimaryBottleneck(snapshot: Snapshot): DerivedInsight {
   if (weakestMetric && weakestMetric.avg_pct_of_target < 85) {
     return {
       title: `${weakestMetric.label} is the main limiting factor right now`,
-      detail: `Topline activity is not converting strongly enough through ${weakestMetric.label.toLowerCase()}. Until that weak link improves, more content or more campaigns alone will not create the full upside available.`,
+      detail: `Topline activity is not converting strongly enough through ${weakestMetric.label.toLowerCase()}. Until that link improves, adding more content or more campaigns will create more motion, but not enough additional outcome.`,
       tone: 'watch',
     };
   }
@@ -1189,14 +1690,14 @@ function derivePrimaryBottleneck(snapshot: Snapshot): DerivedInsight {
   if (ss.evaluated_campaigns < 3) {
     return {
       title: 'Evidence depth is still too thin',
-      detail: 'The system needs more evaluated activity before it can make stronger future-facing recommendations. Right now, the main job is to build signal quality, not force a larger commercial move.',
+      detail: 'The system needs more evaluated activity before it can make stronger future-facing recommendations. Right now, the operating job is to build cleaner signal, not force a larger commercial move too early.',
       tone: 'moderate',
     };
   }
 
   return {
-    title: 'The main bottleneck is portfolio depth',
-    detail: 'The system has some positive signals, but it still depends on too few successful patterns. Broadening what is working into adjacent formats, audiences, or campaign types is the next unlock.',
+    title: 'Portfolio depth is now the main bottleneck',
+    detail: 'The system has enough signal to guide the next move, but it still depends on too few successful patterns. Broadening what is already working into adjacent formats, audiences, or campaign types is the next unlock.',
     tone: 'moderate',
   };
 }
@@ -1215,8 +1716,11 @@ function splitActionBuckets(actions: NextAction[]) {
 }
 
 function deriveSystemActionLines(snapshot: Snapshot) {
-  const { reports_summary, content_summary, campaign_mix_summary, distribution_summary, timing_summary, engagement_summary, lead_summary, market_pulse_summary, system_snapshot, intelligence_settings } = snapshot;
-  const actions = { doNow: [] as string[], doNext: [] as string[], monitor: [] as string[] };
+  const { reports_summary, content_summary, campaign_mix_summary, distribution_summary, timing_summary, engagement_summary, lead_summary, market_pulse_summary, knowledge_graph_summary, system_snapshot, intelligence_settings } = snapshot;
+  const actions = { doNow: [] as RoutedSystemAction[], doNext: [] as RoutedSystemAction[], monitor: [] as RoutedSystemAction[] };
+  const pushAction = (bucket: keyof typeof actions, text: string, href: string, label: string) => {
+    actions[bucket].push({ text, href, label });
+  };
   const objective = intelligence_settings.objective;
   const topContentType = content_summary.content_type_mix[0];
   const contentTypeCount = content_summary.content_type_mix.length;
@@ -1243,186 +1747,204 @@ function deriveSystemActionLines(snapshot: Snapshot) {
   ].filter((count) => count > 0);
 
   if (reports_summary.total_reports === 0) {
-    actions.doNow.push('Run the first report so the system can move from surface activity into evidence-backed guidance.');
+    pushAction('doNow', 'Run the first report so the system can move from surface activity into evidence-backed guidance.', '/reports/digital-authority-snapshot', 'Run first report');
   } else if (refreshCurrentReport && reports_summary.latest_report_type) {
-    actions.doNow.push(`Redo ${formatReportTypeLabel(reports_summary.latest_report_type)} before moving to the next report level. The current diagnostic is stale enough that a fresh baseline will create better decisions.`);
+    const reportHref =
+      reports_summary.latest_report_type === 'performance' ? '/reports/performance-intelligence'
+      : reports_summary.latest_report_type === 'growth' ? '/reports/market-growth-intelligence'
+      : '/reports/digital-authority-snapshot';
+    pushAction('doNow', `Redo ${formatReportTypeLabel(reports_summary.latest_report_type)} before moving to the next report level. The current diagnostic is stale enough that a fresh baseline will create better decisions.`, reportHref, 'Redo report');
   } else if (reports_summary.total_reports === 1) {
-    actions.doNext.push('Run the next report tier to deepen the operating picture before scaling further.');
+    pushAction('doNext', 'Run the next report tier to deepen the operating picture before scaling further.', '/reports', 'Open reports');
   }
 
   if (!refreshCurrentReport && reports_summary.analytics_reports === 0 && reports_summary.structured_reports > 0) {
     if (performanceReadiness.state === 'ready_now') {
-      actions.doNext.push('Performance Intelligence is now justified because the core instrumentation and operating signal are both in place.');
+      pushAction('doNext', 'Performance Intelligence is now justified because the core instrumentation and operating signal are both in place.', '/reports/performance-intelligence', 'Run Performance Intelligence');
     } else if (performanceReadiness.state === 'collecting_baseline') {
-      actions.monitor.push('Performance Intelligence prerequisites are connected, but the system is still collecting enough live baseline data to make that report genuinely useful.');
+      pushAction('monitor', 'Performance Intelligence prerequisites are connected, but the system is still collecting enough live baseline data to make that report genuinely useful.', '/company-profile', 'Review setup');
     } else {
-      actions.doNext.push(`Before moving to Performance Intelligence, close the readiness gaps first: ${performanceReadiness.missing_requirements.slice(0, 2).join('; ')}.`);
+      pushAction('doNext', `Before moving to Performance Intelligence, close the readiness gaps first: ${performanceReadiness.missing_requirements.slice(0, 2).join('; ')}.`, '/company-profile', 'Close readiness gaps');
     }
   } else if (!refreshCurrentReport && reports_summary.structured_reports === 0 && reports_summary.analytics_reports > 0) {
-    actions.doNext.push('Add a structured diagnostic report next so the system can explain what is missing, not only what is moving.');
+    pushAction('doNext', 'Add a structured diagnostic report next so the system can explain what is missing, not only what is moving.', '/reports/digital-authority-snapshot', 'Add diagnostic report');
   } else if (!refreshCurrentReport && reports_summary.total_reports >= 2) {
-    actions.monitor.push('The report layer is broad enough for now, so the bigger gain likely comes from acting on the findings rather than collecting another report immediately.');
+    pushAction('monitor', 'The report layer is broad enough for now, so the bigger gain likely comes from acting on the findings rather than collecting another report immediately.', '/intelligence', 'Stay on intelligence');
   }
 
   if (!refreshCurrentReport && topReportType === 'snapshot' && reports_summary.report_type_mix.length === 1) {
     if (performanceReadiness.state === 'ready_now') {
-      actions.doNext.push('The current report layer is dominated by Digital Authority Snapshot, and the company is now mature enough for Performance Intelligence to create real execution guidance.');
+      pushAction('doNext', 'The current report layer is dominated by Digital Authority Snapshot, and the company is now mature enough for Performance Intelligence to create real execution guidance.', '/reports/performance-intelligence', 'Go to next report');
     } else if (performanceReadiness.state === 'collecting_baseline') {
-      actions.monitor.push('The company is instrumented enough for Performance Intelligence, but it still needs a little more tracked activity before that report will be worth the credits.');
+      pushAction('monitor', 'The company is instrumented enough for Performance Intelligence, but it still needs a little more tracked activity before that report will be worth the credits.', '/engagement', 'Build more signal');
     } else if (growthReadiness.state === 'ready_now') {
-      actions.doNext.push('Market & Growth Intelligence is now viable, but only because the company appears growth-mature enough to support it. Use it only if downstream commercial context is the real next decision.');
+      pushAction('doNext', 'Market & Growth Intelligence is now viable, but only because the company appears growth-mature enough to support it. Use it only if downstream commercial context is the real next decision.', '/reports/market-growth-intelligence', 'Open growth report');
     } else {
-      actions.doNext.push(`Do not jump beyond Digital Authority Snapshot yet. First close the missing readiness items for the next report: ${performanceReadiness.missing_requirements.slice(0, 2).join('; ')}.`);
+      pushAction('doNext', `Do not jump beyond Digital Authority Snapshot yet. First close the missing readiness items for the next report: ${performanceReadiness.missing_requirements.slice(0, 2).join('; ')}.`, '/company-profile', 'Review readiness');
     }
   } else if (!refreshCurrentReport && topReportType === 'performance' && reports_summary.report_type_mix.length === 1) {
     if (growthReadiness.state === 'ready_now') {
-      actions.doNext.push('The company now looks mature enough for Market & Growth Intelligence because broader growth instrumentation and commercial context are available.');
+      pushAction('doNext', 'The company now looks mature enough for Market & Growth Intelligence because broader growth instrumentation and commercial context are available.', '/reports/market-growth-intelligence', 'Run growth report');
     } else if (growthReadiness.state === 'collecting_baseline') {
-      actions.monitor.push('Growth instrumentation is largely in place, but the system still needs more accumulated commercial signal before Market & Growth Intelligence becomes decision-grade.');
+      pushAction('monitor', 'Growth instrumentation is largely in place, but the system still needs more accumulated commercial signal before Market & Growth Intelligence becomes decision-grade.', '/engagement', 'Keep collecting signal');
     } else {
-      actions.doNext.push(`Do not push into Market & Growth Intelligence yet. First close the readiness gaps: ${growthReadiness.missing_requirements.slice(0, 2).join('; ')}.`);
+      pushAction('doNext', `Do not push into Market & Growth Intelligence yet. First close the readiness gaps: ${growthReadiness.missing_requirements.slice(0, 2).join('; ')}.`, '/company-profile', 'Close growth gaps');
     }
   } else if (!refreshCurrentReport && topReportType === 'growth' && reports_summary.report_type_mix.length === 1) {
-    actions.monitor.push('Market & Growth Intelligence is already the dominant report path, so the better move now is likely acting on that guidance rather than climbing further.');
+    pushAction('monitor', 'Market & Growth Intelligence is already the dominant report path, so the better move now is likely acting on that guidance rather than climbing further.', '/intelligence', 'Act on guidance');
   } else if (!refreshCurrentReport && topReportType === 'strategic' && reports_summary.report_type_mix.length === 1) {
-    actions.doNext.push('The current report layer is dominated by Strategic Intelligence. Add a more concrete diagnostic or performance report next so recommendations stay grounded in operating evidence.');
+    pushAction('doNext', 'The current report layer is dominated by Strategic Intelligence. Add a more concrete diagnostic or performance report next so recommendations stay grounded in operating evidence.', '/reports', 'Review report options');
   }
 
   if (!refreshCurrentReport && growthReadiness.state !== 'ready_now' && connectedGrowthSystems.length < 2) {
-    actions.doNext.push(`Market & Growth Intelligence should wait until at least two broader commercial systems are connected. Right now the system only sees ${connectedGrowthSystems.length > 0 ? connectedGrowthSystems.join(' + ') : 'too little commercial infrastructure'} from a growth-readiness standpoint.`);
+    pushAction('doNext', `Market & Growth Intelligence should wait until at least two broader commercial systems are connected. Right now the system only sees ${connectedGrowthSystems.length > 0 ? connectedGrowthSystems.join(' + ') : 'too little commercial infrastructure'} from a growth-readiness standpoint.`, '/company-profile', 'Connect growth systems');
   }
 
   if (content_summary.recent_blogs === 0) {
-    actions.doNow.push('Add fresh content in the current window so the system has more than static historical evidence to work from.');
+    pushAction('doNow', 'Publish new content this week so the system has fresh signal to learn from.', '/blogs/create', 'Publish content this week');
   } else if (content_summary.total_blogs < 3) {
-    actions.doNext.push('Broaden the content mix slightly so one successful piece does not carry the whole authority story.');
+    pushAction('doNext', 'Broaden the content mix slightly so one successful piece does not carry the whole authority story.', '/command-center/content', 'Broaden content mix');
   }
 
   if (topContentType && contentTypeCount <= 1) {
-    actions.doNext.push(`Right now the content system leans almost entirely on ${formatContentTypeLabel(topContentType.type)}. Add one adjacent format so the intelligence layer can compare what actually creates stronger traction.`);
+    pushAction('doNext', `Right now the content system leans almost entirely on ${formatContentTypeLabel(topContentType.type)}. Add one adjacent format so the intelligence layer can compare what actually creates stronger traction.`, '/command-center/content', 'Add another format');
   } else if (topContentType && contentTypeCount === 2) {
-    actions.monitor.push(`The current mix still leans heavily on ${formatContentTypeLabel(topContentType.type)}. Keep watching whether the second format is creating enough distinct value to justify scaling it.`);
+    pushAction('monitor', `The current mix still leans heavily on ${formatContentTypeLabel(topContentType.type)}. Keep watching whether the second format is creating enough distinct value to justify scaling it.`, '/command-center/content', 'Review content mix');
   }
 
   if (campaign_mix_summary.total_versions > 0 && dominantCampaignPathLabel && campaignPathCounts.length <= 1) {
-    actions.doNext.push(`Campaign execution currently leans almost entirely on ${dominantCampaignPathLabel}. Add one adjacent campaign path so the system can learn whether a different execution style creates stronger traction or conversion.`);
+    pushAction('doNext', `Campaign execution currently leans almost entirely on ${dominantCampaignPathLabel}. Add one adjacent campaign path so the system can learn whether a different execution style creates stronger traction or conversion.`, '/command-center/campaigns', 'Add campaign path');
   } else if (campaign_mix_summary.total_versions > 0 && dominantCampaignPathLabel && campaignPathCounts.length === 2) {
-    actions.monitor.push(`${dominantCampaignPathLabel} is still the dominant campaign path. Keep watching whether the second path is creating a distinct enough lift to justify scaling the mix further.`);
+    pushAction('monitor', `${dominantCampaignPathLabel} is still the dominant campaign path. Keep watching whether the second path is creating a distinct enough lift to justify scaling the mix further.`, getCampaignPathRoute(dominantCampaignPath), 'Review campaign mix');
   }
 
-  if (distributionSummary.connected_platforms === 0) {
-    actions.doNow.push('Connect publishing platforms because the system still cannot judge whether traction is weak due to content or due to thin distribution.');
-  } else if (distributionSummary.active_platforms === 0) {
-    actions.doNow.push('Start publishing consistently on the connected platforms so timing and distribution intelligence can begin to compound.');
-  } else if (distributionSummary.active_platforms === 1 && distributionSummary.connected_platforms > 1) {
-    actions.doNext.push('Distribution is still too narrow for the current setup. Use at least one more connected platform so traction does not depend on a single channel.');
+  if (distribution_summary.connected_platforms === 0) {
+    pushAction('doNow', 'Connect publishing platforms because the system still cannot judge whether traction is weak due to content or due to thin distribution.', '/engagement', 'Connect platforms');
+  } else if (distribution_summary.active_platforms === 0) {
+    pushAction('doNow', 'Move to a fixed weekly publishing cadence on the connected platforms so the system can start compounding signal.', '/engagement', 'Move to weekly cadence');
+  } else if (distribution_summary.active_platforms === 1 && distribution_summary.connected_platforms > 1) {
+    pushAction('doNow', 'Distribute every content cycle across at least two active channels so traction does not depend on a single platform.', '/engagement', 'Expand distribution');
   }
 
-  if (topPlatform && topPlatform.share_pct >= 70 && distributionSummary.active_platforms > 1) {
-    actions.doNext.push(`${formatPlatformLabel(topPlatform.platform)} is carrying ${topPlatform.share_pct}% of visible distribution right now. Rebalance the mix slightly so growth does not depend too heavily on one platform.`);
+  if (topPlatform && topPlatform.share_pct >= 70 && distribution_summary.active_platforms > 1) {
+    pushAction('doNext', `${formatPlatformLabel(topPlatform.platform)} is carrying ${topPlatform.share_pct}% of visible distribution right now. Rebalance the mix slightly so growth does not depend too heavily on one platform.`, '/engagement', 'Rebalance channels');
   }
 
   if (topPlatform && topPlatform.success_rate > 0 && topPlatform.success_rate < 80) {
-    actions.doNow.push(`${formatPlatformLabel(topPlatform.platform)} is only delivering at a ${topPlatform.success_rate}% success rate. Fix that channel before relying on it as the main distribution path.`);
+    pushAction('doNow', `${formatPlatformLabel(topPlatform.platform)} is only delivering at a ${topPlatform.success_rate}% success rate. Fix that channel before relying on it as the main distribution path.`, '/engagement', 'Fix channel delivery');
   }
 
-  if (distributionSummary.publish_success_rate > 0 && distributionSummary.publish_success_rate < 85) {
-    actions.doNow.push(`Publishing reliability is only ${distributionSummary.publish_success_rate}%. Fix delivery failures before scaling content volume or campaign complexity.`);
+  if (distribution_summary.publish_success_rate > 0 && distribution_summary.publish_success_rate < 85) {
+    pushAction('doNow', `Publishing reliability is only ${distribution_summary.publish_success_rate}%. Fix delivery failures before scaling content volume or campaign complexity.`, '/engagement', 'Fix publishing reliability');
   }
 
   if (timing_summary.rhythm_state === 'thin') {
-    actions.doNow.push(`Operating rhythm is still too thin with only ${timing_summary.active_days} active day${timing_summary.active_days === 1 ? '' : 's'} in the last ${snapshot.time_range_days} days. Increase content and distribution consistency before expecting compounding traction.`);
+    pushAction('doNow', `Move to a fixed weekly publishing cadence now. The system only has ${timing_summary.active_days} active day${timing_summary.active_days === 1 ? '' : 's'} in the last ${snapshot.time_range_days} days, which is not enough to create compounding signal.`, topContentType ? getContentRoute(topContentType.type) : '/blogs/create', 'Move to weekly cadence');
   } else if (timing_summary.rhythm_state === 'steady' && timing_summary.avg_gap_days != null && timing_summary.avg_gap_days > 5) {
-    actions.doNext.push(`The system is active, but the average ${timing_summary.avg_gap_days}-day gap between visible events is still slowing compounding momentum. Tighten the publishing rhythm a little further.`);
+    pushAction('doNext', `The system is active, but the average ${timing_summary.avg_gap_days}-day gap between visible events is still slowing compounding momentum. Tighten the publishing rhythm a little further.`, topContentType ? getContentRoute(topContentType.type) : '/command-center/content', 'Tighten rhythm');
+  }
+
+  if (knowledge_graph_summary.status === 'shallow') {
+    pushAction('doNow', 'Fill the weakest buyer-journey stage next instead of producing more top-of-funnel content only.', '/command-center/content', 'Fill weak stage');
+  } else if (knowledge_graph_summary.status === 'imbalanced' && knowledge_graph_summary.weakest_stage) {
+    const weakestStageRoute =
+      knowledge_graph_summary.weakest_stage === 'awareness'
+        ? '/posts/create'
+        : knowledge_graph_summary.weakest_stage === 'decision'
+          ? '/case-studies/create'
+          : '/blogs/create';
+    pushAction('doNow', `Fill the ${knowledge_graph_summary.weakest_stage} stage next so the system stops over-relying on one part of the buyer journey.`, weakestStageRoute, 'Fill weak stage');
+  } else if (knowledge_graph_summary.status === 'maturing') {
+    pushAction('monitor', 'The knowledge graph is maturing well enough that the next move should focus on exploiting the strongest clusters rather than rebuilding the foundation.', '/command-center/content', 'Use strong clusters');
   }
 
   if (engagement_summary.connected_social_accounts === 0) {
-    actions.doNow.push('Connect at least one active social account because engagement and distribution intelligence are still underpowered.');
+    pushAction('doNow', 'Connect at least one active social account because engagement and distribution intelligence are still underpowered.', '/engagement', 'Connect social account');
   } else if (engagement_summary.threads === 0) {
-    actions.doNext.push('Publish and ingest more live interactions so engagement intelligence can influence the next move.');
+    pushAction('doNext', 'Publish and ingest more live interactions so engagement intelligence can influence the next move.', '/engagement', 'Build live engagement');
   }
 
   if (lead_summary.qualified_active_leads > 0) {
-    actions.doNow.push(`Move the ${lead_summary.qualified_active_leads} qualified lead${lead_summary.qualified_active_leads === 1 ? '' : 's'} into a stronger follow-up or outreach motion now.`);
+    pushAction('doNow', `Move the ${lead_summary.qualified_active_leads} qualified lead${lead_summary.qualified_active_leads === 1 ? '' : 's'} into a stronger follow-up or outreach motion now.`, '/dashboard/intelligence?intelTab=active-leads', 'Open active leads');
   } else if (lead_summary.prospect_active_leads > 0) {
-    actions.doNow.push(`Review the ${lead_summary.prospect_active_leads} prospect${lead_summary.prospect_active_leads === 1 ? '' : 's'} now and tighten the next motion around role, segment, and urgency before they cool off.`);
+    pushAction('doNow', `Review the ${lead_summary.prospect_active_leads} prospect${lead_summary.prospect_active_leads === 1 ? '' : 's'} now and tighten the next motion around role, segment, and urgency before they cool off.`, '/dashboard/intelligence?intelTab=active-leads', 'Review prospects');
   } else if (lead_summary.active_leads > 0) {
-    actions.doNext.push('Review active leads and decide which ones should be nurtured into stronger commercial follow-up.');
+    pushAction('doNext', 'Review active leads and decide which ones should be nurtured into stronger commercial follow-up.', '/dashboard/intelligence?intelTab=active-leads', 'Review active leads');
   }
 
   if (market_pulse_summary.completed_runs === 0) {
-    actions.monitor.push('Run Market Pulse to add external context before making the next bigger commercial bet.');
+    pushAction('monitor', 'Run Market Pulse to add external context before making the next bigger commercial bet.', '/dashboard/intelligence?intelTab=market-pulse', 'Run Market Pulse');
   } else if (market_pulse_summary.latest_findings > 0) {
-    actions.doNext.push('Use the latest Market Pulse findings to refine where timing, partnerships, or expansion signals can strengthen execution.');
+    pushAction('doNext', 'Use the latest Market Pulse findings to refine where timing, partnerships, or expansion signals can strengthen execution.', '/dashboard/intelligence?intelTab=market-pulse', 'Review Market Pulse');
   }
 
   if (system_snapshot.campaigns_ready_to_scale > 1) {
-    actions.doNow.push('More than one campaign is ready to scale, so the next move should focus on amplification rather than just more experimentation.');
+    pushAction('doNow', 'More than one campaign is ready to scale, so the next move should focus on amplification rather than just more experimentation.', '/command-center/campaigns', 'Scale campaigns');
   }
 
   if (dominantCampaignPath === 'bolt_text') {
-    actions.doNext.push('Current campaigns rely heavily on BOLT Text. Test BOLT Creator or Intelligent Mix next so the system can judge whether creative-led execution unlocks more traction or stronger conversion.');
+    pushAction('doNext', 'Current campaigns rely heavily on BOLT Text. Test BOLT Creator or Intelligent Mix next so the system can judge whether creative-led execution unlocks more traction or stronger conversion.', '/command-center/campaigns', 'Try another campaign path');
   } else if (dominantCampaignPath === 'bolt_creator') {
-    actions.doNext.push('Current campaigns rely heavily on BOLT Creator. Add a stronger text-led or mixed path next so the system can compare whether strategic text depth improves repeatability.');
+    pushAction('doNext', 'Current campaigns rely heavily on BOLT Creator. Add a stronger text-led or mixed path next so the system can compare whether strategic text depth improves repeatability.', '/command-center/campaigns', 'Balance campaign path');
   } else if (dominantCampaignPath === 'strategy_mix') {
-    actions.monitor.push('Strategy Mix is carrying most of the campaign load right now. Watch whether that flexibility is creating clarity or whether a more opinionated BOLT path would tighten execution.');
+    pushAction('monitor', 'Strategy Mix is carrying most of the campaign load right now. Watch whether that flexibility is creating clarity or whether a more opinionated BOLT path would tighten execution.', '/command-center/campaigns', 'Review campaign strategy');
   }
 
   if (objective === 'authority_growth') {
     if (content_summary.recent_blogs === 0) {
-      actions.doNow.unshift('Publish a fresh authority asset now because authority growth stalls quickly when the content graph goes quiet.');
+      actions.doNow.unshift({ text: 'Publish a fresh authority asset now because authority growth stalls quickly when the content graph goes quiet.', href: '/blogs/create', label: 'Publish authority asset' });
     }
     if (topContentType?.type === 'post' || topContentType?.type === 'story') {
-      actions.doNext.push('Authority growth should not rely only on short-form. Add at least one deeper format like blog, article, guide, or whitepaper to build stronger depth.');
+      pushAction('doNext', 'Authority growth should not rely only on short-form. Add at least one deeper format like blog, article, guide, or whitepaper to build stronger depth.', '/blogs/create', 'Add deeper format');
     }
     if (dominantCampaignPath === 'bolt_text') {
-      actions.doNext.push('Authority growth may now need a richer campaign mix than BOLT Text alone. Try Intelligent Mix or a creator-supported path if strong topics already exist.');
+      pushAction('doNext', 'Authority growth may now need a richer campaign mix than BOLT Text alone. Try Intelligent Mix or a creator-supported path if strong topics already exist.', '/command-center/intelligent-mix-strategy', 'Enrich campaign mix');
     }
-    actions.doNext.push('Extend the strongest topic cluster into adjacent supporting formats so authority depth does not remain too narrow.');
+    pushAction('doNext', 'Extend the strongest topic cluster into adjacent supporting formats so authority depth does not remain too narrow.', '/command-center/content', 'Extend strong topic');
   } else if (objective === 'engagement_growth') {
     if (engagement_summary.connected_social_accounts > 0 && engagement_summary.threads === 0) {
-      actions.doNow.unshift('Push more live distribution now because engagement growth needs active conversations, not only content inventory.');
+      actions.doNow.unshift({ text: 'Push more live distribution now because engagement growth needs active conversations, not only content inventory.', href: '/engagement', label: 'Increase live distribution' });
     }
     if (topContentType?.type === 'blog' || topContentType?.type === 'whitepaper') {
-      actions.doNext.push('Engagement growth may be too weighted toward long-form depth. Add faster-response formats like posts, stories, or threads to increase interaction velocity.');
+      pushAction('doNext', 'Engagement growth may be too weighted toward long-form depth. Add faster-response formats like posts, stories, or threads to increase interaction velocity.', '/posts/create', 'Add faster formats');
     }
     if (dominantCampaignPath === 'bolt_text' || dominantCampaignPath === 'strategy_mix') {
-      actions.doNext.push('Engagement growth may benefit from a more creative campaign path. Test BOLT Creator or Intelligent Mix to increase visual pull and shareability.');
+      pushAction('doNext', 'Engagement growth may benefit from a more creative campaign path. Test BOLT Creator or Intelligent Mix to increase visual pull and shareability.', dominantCampaignPath === 'strategy_mix' ? '/command-center/bolt-combined-strategy' : '/command-center/bolt-creator-strategy', 'Test creative path');
     }
-    actions.doNext.push('Review timing, shareability, and creative variation because engagement growth depends on resonance, not just output volume.');
+    pushAction('doNext', 'Review timing, shareability, and creative variation because engagement growth depends on resonance, not just output volume.', '/engagement', 'Review engagement quality');
   } else if (objective === 'lead_generation') {
     if (lead_summary.active_leads === 0) {
-      actions.doNow.unshift('Tighten campaigns around clearer buyer intent so activity starts turning into identifiable active leads.');
+      actions.doNow.unshift({ text: 'Tighten campaigns around clearer buyer intent so activity starts turning into identifiable active leads.', href: '/command-center/campaigns', label: 'Tighten buyer intent' });
     }
     if (topContentType?.type === 'post' || topContentType?.type === 'thread') {
-      actions.doNext.push('Lead generation may need stronger conversion support than short-form alone. Add a deeper asset such as blog, article, case study, or newsletter to capture more serious demand.');
+      pushAction('doNext', 'Lead generation may need stronger conversion support than short-form alone. Add a deeper asset such as blog, article, case study, or newsletter to capture more serious demand.', '/case-studies/create', 'Add conversion asset');
     }
     if (dominantCampaignPath === 'bolt_creator') {
-      actions.doNext.push('Lead generation should not rely only on creator-led campaigns. Add a text-led or mixed campaign path so stronger offer clarity and buyer education can support qualification.');
+      pushAction('doNext', 'Lead generation should not rely only on creator-led campaigns. Add a text-led or mixed campaign path so stronger offer clarity and buyer education can support qualification.', '/command-center/bolt-text', 'Adjust campaign path');
     }
     if (lead_summary.qualified_active_leads > 0) {
-      actions.doNow.unshift(`Convert the ${lead_summary.qualified_active_leads} qualified lead${lead_summary.qualified_active_leads === 1 ? '' : 's'} now before that demand cools off.`);
+      actions.doNow.unshift({ text: `Convert the ${lead_summary.qualified_active_leads} qualified lead${lead_summary.qualified_active_leads === 1 ? '' : 's'} now before that demand cools off.`, href: '/dashboard/intelligence?intelTab=active-leads', label: 'Convert qualified leads' });
     } else if (lead_summary.prospect_active_leads > 0) {
-      actions.doNow.unshift(`Push the ${lead_summary.prospect_active_leads} prospect${lead_summary.prospect_active_leads === 1 ? '' : 's'} through a sharper qualification step now so the next commercial move is based on evidence, not guesswork.`);
+      actions.doNow.unshift({ text: `Push the ${lead_summary.prospect_active_leads} prospect${lead_summary.prospect_active_leads === 1 ? '' : 's'} through a sharper qualification step now so the next commercial move is based on evidence, not guesswork.`, href: '/dashboard/intelligence?intelTab=active-leads', label: 'Qualify prospects' });
     }
-    actions.doNext.push('Use campaign and engagement signals to separate suspects, prospects, and qualified leads before scaling volume.');
+    pushAction('doNext', 'Use campaign and engagement signals to separate suspects, prospects, and qualified leads before scaling volume.', '/dashboard/intelligence?intelTab=active-leads', 'Open lead stages');
   } else if (objective === 'pipeline_growth') {
-    actions.doNow.push('Prioritize actions that move warm demand into a stronger pipeline motion instead of only expanding top-of-funnel activity.');
+    pushAction('doNow', 'Prioritize actions that move warm demand into a stronger pipeline motion instead of only expanding top-of-funnel activity.', '/dashboard/intelligence?intelTab=active-leads', 'Move demand into pipeline');
     if (lead_summary.qualified_active_leads > 0) {
-      actions.doNow.push('Segment qualified demand by role, business type, or deal potential before routing the next outreach motion.');
+      pushAction('doNow', 'Segment qualified demand by role, business type, or deal potential before routing the next outreach motion.', '/dashboard/intelligence?intelTab=active-leads', 'Segment qualified demand');
     } else if (lead_summary.prospect_active_leads > 0) {
-      actions.doNext.push('Prospect-stage demand exists, but it still needs stronger qualification before the team treats it like true pipeline.');
+      pushAction('doNext', 'Prospect-stage demand exists, but it still needs stronger qualification before the team treats it like true pipeline.', '/dashboard/intelligence?intelTab=active-leads', 'Tighten qualification');
     }
     if (intelligence_settings.target_customer_segment) {
-      actions.doNext.push(`Pressure-test pipeline actions against the target segment: ${intelligence_settings.target_customer_segment}.`);
+      pushAction('doNext', `Pressure-test pipeline actions against the target segment: ${intelligence_settings.target_customer_segment}.`, '/company-profile', 'Review target segment');
     }
   } else if (objective === 'revenue_acceleration') {
-    actions.doNow.push('Bias the next move toward commercial conversion, not only engagement uplift, because revenue acceleration depends on turning warm demand into action quickly.');
+    pushAction('doNow', 'Bias the next move toward commercial conversion, not only engagement uplift, because revenue acceleration depends on turning warm demand into action quickly.', '/dashboard/intelligence?intelTab=active-leads', 'Push commercial conversion');
     if (intelligence_settings.sales_motion) {
-      actions.doNext.push(`Align the next commercial step to the ${intelligence_settings.sales_motion} sales motion so the path from demand to revenue stays realistic.`);
+      pushAction('doNext', `Align the next commercial step to the ${intelligence_settings.sales_motion} sales motion so the path from demand to revenue stays realistic.`, '/company-profile', 'Review sales motion');
     }
     if (intelligence_settings.avg_deal_size) {
-      actions.doNext.push(`Use the ${intelligence_settings.avg_deal_size} average deal context when deciding whether to pursue volume, qualification, or deeper nurture.`);
+      pushAction('doNext', `Use the ${intelligence_settings.avg_deal_size} average deal context when deciding whether to pursue volume, qualification, or deeper nurture.`, '/company-profile', 'Review deal context');
     }
   }
 
@@ -1451,14 +1973,14 @@ function deriveCommercialReadiness(snapshot: Snapshot): DerivedInsight[] {
     tone: lead_summary.qualified_active_leads > 0 || ss.campaigns_ready_to_scale > 0 ? 'strong' : lead_summary.prospect_active_leads > 0 ? 'moderate' : 'moderate',
   });
 
-  if (distributionSummary.connected_platforms > 0) {
+  if (distribution_summary.connected_platforms > 0) {
     insights.push({
       title: 'Commercial readiness depends on distribution reliability too',
-      detail: distributionSummary.active_platforms > 0
-        ? `Current publishing breadth spans ${distributionSummary.active_platforms} active platform${distributionSummary.active_platforms === 1 ? '' : 's'} with a ${distributionSummary.publish_success_rate}% publish success rate${topPlatform ? `, and ${formatPlatformLabel(topPlatform.platform)} is carrying ${topPlatform.share_pct}% of that visible load` : ''}. Commercial escalation should stay realistic if delivery reliability or channel balance is still weak.`
+      detail: distribution_summary.active_platforms > 0
+        ? `Current publishing breadth spans ${distribution_summary.active_platforms} active platform${distribution_summary.active_platforms === 1 ? '' : 's'} with a ${distribution_summary.publish_success_rate}% publish success rate${topPlatform ? `, and ${formatPlatformLabel(topPlatform.platform)} is carrying ${topPlatform.share_pct}% of that visible load` : ''}. Commercial escalation should stay realistic if delivery reliability or channel balance is still weak.`
         : 'Platforms are connected, but live publishing breadth is still too thin to assume the current signal is fully representative.',
       tone:
-        distributionSummary.active_platforms >= 2 && distributionSummary.publish_success_rate >= 85
+        distribution_summary.active_platforms >= 2 && distribution_summary.publish_success_rate >= 85
           ? 'moderate'
           : 'watch',
     });
@@ -1566,14 +2088,372 @@ function deriveCommercialReadiness(snapshot: Snapshot): DerivedInsight[] {
     });
   }
 
-  return insights.slice(0, 5);
+  return selectTopInsights(insights, 5);
+}
+
+function deriveLearnedSignalsCta(snapshot: Snapshot): { href: string; label: string } {
+  if (shouldRefreshCurrentReport(snapshot) && snapshot.reports_summary.latest_report_type) {
+    return {
+      href:
+        snapshot.reports_summary.latest_report_type === 'performance'
+          ? '/reports/performance-intelligence'
+          : snapshot.reports_summary.latest_report_type === 'growth'
+            ? '/reports/market-growth-intelligence'
+            : '/reports/digital-authority-snapshot',
+      label: 'Refresh report lens',
+    };
+  }
+
+  if (snapshot.report_readiness_summary.performance.state === 'ready_now' && snapshot.reports_summary.report_type_mix[0]?.type === 'snapshot') {
+    return { href: '/reports/performance-intelligence', label: 'Open next report' };
+  }
+
+  if (snapshot.report_readiness_summary.growth.state === 'ready_now' && snapshot.reports_summary.report_type_mix[0]?.type === 'performance') {
+    return { href: '/reports/market-growth-intelligence', label: 'Open growth report' };
+  }
+
+  if (snapshot.knowledge_graph_summary.status === 'imbalanced' && snapshot.knowledge_graph_summary.weakest_stage) {
+    return {
+      href:
+        snapshot.knowledge_graph_summary.weakest_stage === 'awareness'
+          ? '/posts/create'
+          : snapshot.knowledge_graph_summary.weakest_stage === 'decision'
+            ? '/case-studies/create'
+            : '/blogs/create',
+      label: 'Strengthen weak stage',
+    };
+  }
+
+  if (snapshot.distribution_summary.active_platforms <= 1) {
+    return { href: '/engagement', label: 'Improve distribution' };
+  }
+
+  return { href: '/command-center/content', label: 'Act on content insights' };
+}
+
+function deriveEcosystemProgressCta(snapshot: Snapshot): { href: string; label: string } {
+  if (snapshot.knowledge_graph_summary.status === 'shallow') {
+    return { href: '/command-center/content', label: 'Expand knowledge graph' };
+  }
+  if (snapshot.knowledge_graph_summary.status === 'imbalanced' && snapshot.knowledge_graph_summary.weakest_stage) {
+    return {
+      href:
+        snapshot.knowledge_graph_summary.weakest_stage === 'awareness'
+          ? '/posts/create'
+          : snapshot.knowledge_graph_summary.weakest_stage === 'decision'
+            ? '/case-studies/create'
+            : '/blogs/create',
+      label: 'Fix graph imbalance',
+    };
+  }
+  if (snapshot.timing_summary.rhythm_state === 'thin') {
+    return { href: '/blogs/create', label: 'Tighten operating rhythm' };
+  }
+  if (snapshot.distribution_summary.active_platforms <= 1 || snapshot.distribution_summary.publish_success_rate < 85) {
+    return { href: '/engagement', label: 'Strengthen distribution' };
+  }
+  return { href: '/intelligence', label: 'Monitor ecosystem health' };
+}
+
+function deriveCommercialReadinessCta(snapshot: Snapshot): { href: string; label: string } {
+  if (snapshot.lead_summary.qualified_active_leads > 0) {
+    return { href: '/dashboard/intelligence?intelTab=active-leads', label: 'Review qualified demand' };
+  }
+  if (snapshot.report_readiness_summary.growth.state === 'ready_now') {
+    return { href: '/reports/market-growth-intelligence', label: 'Open growth intelligence' };
+  }
+  if (snapshot.distribution_summary.active_platforms <= 1 || snapshot.distribution_summary.publish_success_rate < 85) {
+    return { href: '/engagement', label: 'Strengthen commercial distribution' };
+  }
+  if (snapshot.timing_summary.rhythm_state === 'thin') {
+    return { href: '/command-center/campaigns', label: 'Increase operating cadence' };
+  }
+  if (snapshot.lead_summary.prospect_active_leads > 0 || snapshot.lead_summary.suspect_active_leads > 0) {
+    return { href: '/dashboard/intelligence?intelTab=active-leads', label: 'Review lead progression' };
+  }
+  return { href: '/command-center/campaigns', label: 'Tighten commercial motion' };
+}
+
+function deriveDiagnosis(snapshot: Snapshot): Array<{
+  label: string;
+  explanation: string;
+  tone: DerivedInsight['tone'];
+}> {
+  const { timing_summary, distribution_summary, knowledge_graph_summary, content_summary, reports_summary, report_readiness_summary, lead_summary, engagement_summary } = snapshot;
+  const topContentType = content_summary.content_type_mix[0];
+  const topPlatform = distribution_summary.platform_mix[0];
+  const evidenceInputs = [
+    reports_summary.total_reports > 0 ? `${reports_summary.total_reports} report${reports_summary.total_reports === 1 ? '' : 's'}` : null,
+    content_summary.total_blogs > 0 ? `${content_summary.total_blogs} content asset${content_summary.total_blogs === 1 ? '' : 's'}` : null,
+    engagement_summary.threads > 0 ? `${engagement_summary.threads} thread${engagement_summary.threads === 1 ? '' : 's'}` : null,
+    lead_summary.active_leads > 0 ? `${lead_summary.active_leads} active lead${lead_summary.active_leads === 1 ? '' : 's'}` : null,
+  ].filter(Boolean) as string[];
+
+  return [
+    {
+      label: 'Rhythm',
+      explanation:
+        timing_summary.rhythm_state === 'thin'
+          ? 'Publishing too infrequent -> no compounding signal.'
+        : timing_summary.rhythm_state === 'steady'
+            ? 'Publishing is happening, but not steadily enough to compound.'
+            : 'Publishing cadence is steady enough to support compounding.',
+      tone: timing_summary.rhythm_state === 'strong' ? 'strong' : timing_summary.rhythm_state === 'steady' ? 'moderate' : 'watch',
+    },
+    {
+      label: 'Distribution',
+      explanation:
+        distribution_summary.connected_platforms === 0
+          ? 'Distribution not connected tightly enough -> weak traction may still be an access problem.'
+          : distribution_summary.active_platforms === 0
+            ? 'Distribution not active enough -> current performance cannot be trusted.'
+            : distribution_summary.active_platforms === 1 && distribution_summary.connected_platforms > 1
+              ? 'Distribution too narrow -> performance is biased, not reliable.'
+              : topPlatform && topPlatform.share_pct >= 70
+                ? `${formatPlatformLabel(topPlatform.platform)} is carrying ${topPlatform.share_pct}% of visible distribution -> reach is still too dependent on one channel.`
+                : 'Distribution broad enough -> channel comparisons are now more reliable.',
+      tone:
+        distribution_summary.connected_platforms === 0 || distribution_summary.active_platforms === 0
+          ? 'watch'
+          : distribution_summary.active_platforms >= 2 && distribution_summary.publish_success_rate >= 85
+            ? 'strong'
+            : 'moderate',
+    },
+    {
+      label: 'Content depth',
+      explanation:
+        knowledge_graph_summary.status === 'shallow'
+          ? 'Content too shallow -> cannot move users across the journey.'
+        : knowledge_graph_summary.status === 'imbalanced' && knowledge_graph_summary.weakest_stage
+            ? `Content depth uneven -> ${knowledge_graph_summary.weakest_stage} stage is too weak.`
+            : topContentType
+              ? `${formatContentTypeLabel(topContentType.type)} dominates the mix -> the journey still lacks enough adjacent depth.`
+              : 'Content depth is still emerging -> not enough range to trust the authority pattern fully.',
+      tone:
+        knowledge_graph_summary.status === 'maturing'
+          ? 'strong'
+          : knowledge_graph_summary.status === 'emerging'
+            ? 'moderate'
+            : 'watch',
+    },
+    {
+      label: 'Evidence strength',
+      explanation:
+        evidenceInputs.length === 0
+          ? 'Evidence too early -> not decision-grade yet.'
+          : report_readiness_summary.performance.state === 'collecting_baseline'
+            ? 'Evidence exists, but it is still too early to trust fully.'
+          : report_readiness_summary.growth.state === 'ready_now'
+              ? 'Evidence broad enough -> deeper commercial decisions are now justified.'
+              : 'Signals exist, but they are not decision-grade yet.',
+      tone:
+        report_readiness_summary.growth.state === 'ready_now'
+          ? 'strong'
+          : report_readiness_summary.performance.state === 'ready_now' || report_readiness_summary.performance.state === 'ready_soon'
+            ? 'moderate'
+            : 'watch',
+    },
+  ];
+}
+
+function deriveSupportingSignals(snapshot: Snapshot): Array<{
+  title: string;
+  summary: string;
+  href: string;
+  label: string;
+}> {
+  const topMetric = snapshot.audience_response.metric_rankings[0];
+  const weakestMetric = snapshot.audience_response.metric_rankings[snapshot.audience_response.metric_rankings.length - 1];
+  const dominantCampaignPath = formatCampaignPathLabel(snapshot.campaign_mix_summary.dominant_path);
+
+  return [
+    {
+      title: 'Campaigns',
+      summary: dominantCampaignPath
+        ? `${snapshot.system_snapshot.total_campaigns} campaigns are visible, with ${dominantCampaignPath} currently acting as the main execution path.`
+        : `${snapshot.system_snapshot.total_campaigns} campaigns are visible, but the system still needs cleaner execution history before a dominant path is obvious.`,
+      href: '/command-center/campaigns',
+      label: 'Open campaigns',
+    },
+    {
+      title: 'Knowledge graph',
+      summary: `${KNOWLEDGE_GRAPH_LABELS[snapshot.knowledge_graph_summary.status]} graph with ${snapshot.knowledge_graph_summary.topic_cluster_count} topic cluster${snapshot.knowledge_graph_summary.topic_cluster_count === 1 ? '' : 's'}${snapshot.knowledge_graph_summary.weakest_stage ? `; weakest stage is ${snapshot.knowledge_graph_summary.weakest_stage}` : ''}.`,
+      href: '/command-center/content',
+      label: 'Open content system',
+    },
+    {
+      title: 'Metrics',
+      summary: topMetric
+        ? `${topMetric.label} is strongest right now${weakestMetric ? `, while ${weakestMetric.label.toLowerCase()} remains the main drag` : ''}.`
+        : 'The system does not have enough metric depth yet to separate the strongest and weakest signal cleanly.',
+      href: '/engagement',
+      label: 'Open engagement',
+    },
+    {
+      title: 'History',
+      summary: snapshot.reports_summary.total_reports > 0
+        ? `${snapshot.reports_summary.total_reports} reports and ${snapshot.market_pulse_summary.completed_runs} Market Pulse run${snapshot.market_pulse_summary.completed_runs === 1 ? '' : 's'} are available as historical context for current decisions.`
+        : 'Historical context is still light, so current recommendations depend more on live operating signal than long-term pattern memory.',
+      href: '/reports',
+      label: 'Open reports',
+    },
+  ];
+}
+
+function deriveBottomLine(snapshot: Snapshot): { text: string; cta: { href: string; label: string } | null } {
+  const bottleneck = derivePrimaryBottleneck(snapshot);
+  const action = deriveExecutiveSummaryCta(snapshot);
+
+  return {
+    text:
+      snapshot.system_snapshot.health === 'weak'
+        ? 'Do not scale noise. Build signal first. Fix publishing rhythm and distribution. Scale only when signal is consistent.'
+        : `Do not scale noise. Build signal first. Fix ${bottleneck.title.toLowerCase()}. Scale only when signal is consistent.`,
+    cta: action ? { href: action.href, label: action.label } : null,
+  };
+}
+
+function deriveConstraintConfidence(snapshot: Snapshot): ConstraintConfidence {
+  return snapshot.system_snapshot.evaluated_campaigns >= 6 && snapshot.lead_summary.engagement_signals > 0
+    ? 'High'
+    : snapshot.system_snapshot.evaluated_campaigns >= 3
+      ? 'Medium'
+      : 'Low';
+}
+
+function getConfidenceRank(confidence: ConstraintConfidence): number {
+  return confidence === 'High' ? 3 : confidence === 'Medium' ? 2 : 1;
+}
+
+function deriveConstraintConfidenceDirection(snapshot: Snapshot): ConfidenceDirection {
+  if (typeof window === 'undefined') return 'flat';
+
+  try {
+    const saved = window.localStorage.getItem(MARKETING_INTEL_CONFIDENCE_STORAGE_KEY);
+    const outcomeSaved = window.localStorage.getItem(MARKETING_INTEL_OUTCOME_STORAGE_KEY);
+    const improvingOutcomes = outcomeSaved ? countImprovingOutcomes(snapshot, normalizeOutcomeBaselines(JSON.parse(outcomeSaved))) : 0;
+    const current = {
+      confidence: deriveConstraintConfidence(snapshot),
+      evaluatedCampaigns: snapshot.system_snapshot.evaluated_campaigns,
+      engagementSignals: snapshot.lead_summary.engagement_signals,
+      improvingOutcomes,
+    };
+
+    window.localStorage.setItem(MARKETING_INTEL_CONFIDENCE_STORAGE_KEY, JSON.stringify(current));
+
+    if (!saved) return 'flat';
+
+    const previous = JSON.parse(saved) as Partial<{
+      confidence: ConstraintConfidence;
+      evaluatedCampaigns: number;
+      engagementSignals: number;
+      improvingOutcomes: number;
+    }>;
+
+    if (!previous.confidence) return 'flat';
+
+    const currentRank = getConfidenceRank(current.confidence);
+    const previousRank = getConfidenceRank(previous.confidence);
+    if (currentRank > previousRank) return 'up';
+    if (currentRank < previousRank) return 'down';
+
+    const currentSupport = current.evaluatedCampaigns + current.engagementSignals;
+    const previousSupport = (previous.evaluatedCampaigns ?? 0) + (previous.engagementSignals ?? 0);
+    if (currentSupport > previousSupport) return 'up';
+    if (currentSupport < previousSupport) return 'down';
+
+    if (current.improvingOutcomes > (previous.improvingOutcomes ?? 0)) return 'up';
+    if (current.improvingOutcomes < (previous.improvingOutcomes ?? 0)) return 'down';
+  } catch {}
+
+  return 'flat';
+}
+
+function deriveSystemMemory(snapshot: Snapshot): Array<{ direction: 'up' | 'flat' | 'down'; text: string }> {
+  const items: Array<{ direction: 'up' | 'flat' | 'down'; text: string }> = [];
+
+  if (snapshot.content_summary.recent_blogs > 0) {
+    items.push({
+      direction: 'up',
+      text: `Publishing activity increased (+${snapshot.content_summary.recent_blogs} piece${snapshot.content_summary.recent_blogs === 1 ? '' : 's'})`,
+    });
+  } else {
+    items.push({
+      direction: 'down',
+      text: 'No new content published (rhythm still weak)',
+    });
+  }
+
+  if (snapshot.distribution_summary.active_platforms <= 1) {
+    items.push({
+      direction: 'flat',
+      text: `Distribution unchanged (still limited to ${snapshot.distribution_summary.active_platforms || 1} channel)`,
+    });
+  } else {
+    items.push({
+      direction: 'up',
+      text: `Distribution broader (${snapshot.distribution_summary.active_platforms} active channels)`,
+    });
+  }
+
+  if (snapshot.lead_summary.engagement_signals > 0 || snapshot.engagement_summary.threads > 0) {
+    items.push({
+      direction: 'up',
+      text: 'Evidence slightly stronger (more engagement signals)',
+    });
+  }
+
+  if (snapshot.report_readiness_summary.performance.state === 'collecting_baseline') {
+    items.push({
+      direction: 'flat',
+      text: 'Evidence still building (not decision-grade yet)',
+    });
+  }
+
+  return items.slice(0, 4);
+}
+
+function deriveExecutiveSummaryCta(snapshot: Snapshot): RoutedSystemAction | null {
+  const actions = deriveSystemActionLines(snapshot);
+  return actions.doNow[0] ?? actions.doNext[0] ?? actions.monitor[0] ?? null;
+}
+
+function derivePrimaryBottleneckCta(snapshot: Snapshot): { href: string; label: string } | null {
+  const bottleneck = derivePrimaryBottleneck(snapshot);
+  const title = bottleneck.title.toLowerCase();
+
+  if (title.includes('rhythm')) {
+    return { href: '/blogs/create', label: 'Tighten operating rhythm' };
+  }
+  if (title.includes('stage depth')) {
+    const weakestStage = snapshot.knowledge_graph_summary.weakest_stage;
+    return {
+      href:
+        weakestStage === 'awareness'
+          ? '/posts/create'
+          : weakestStage === 'decision'
+            ? '/case-studies/create'
+            : '/blogs/create',
+      label: 'Strengthen weak stage',
+    };
+  }
+  if (title.includes('strategic consistency')) {
+    return { href: '/command-center/campaigns', label: 'Tighten campaign strategy' };
+  }
+  if (title.includes('limiting factor')) {
+    return { href: '/engagement', label: 'Fix conversion drag' };
+  }
+  if (title.includes('evidence depth')) {
+    return { href: '/command-center/content', label: 'Build more signal' };
+  }
+  return { href: '/command-center/content', label: 'Broaden portfolio depth' };
 }
 
 function OperatingOverviewSection({ snapshot }: { snapshot: Snapshot }) {
   const cards = deriveOperatingOverview(snapshot);
 
   return (
-    <SectionCard title="Operating Overview" badge="Present state">
+    <SectionCard title="Operating Overview" badge="Current system" className="h-full">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
         {cards.map((card) => {
           const tone = toneClasses(card.tone);
@@ -1595,9 +2475,28 @@ function OperatingOverviewSection({ snapshot }: { snapshot: Snapshot }) {
 
 function TargetPotentialSection({ snapshot }: { snapshot: Snapshot }) {
   const derived = deriveTargetPotential(snapshot);
+  const targetStateTone =
+    derived.targetState === 'missing'
+      ? toneClasses('watch')
+      : derived.targetState === 'soft'
+        ? toneClasses('moderate')
+        : derived.targetState === 'under_ambitious'
+          ? toneClasses('strong')
+          : toneClasses('moderate');
+  const targetCta =
+    derived.targetState === 'missing' || derived.targetState === 'soft'
+      ? { href: '/company-profile', label: 'Tighten operating target' }
+      : derived.targetState === 'under_ambitious'
+        ? { href: '/company-profile', label: 'Review target ambition' }
+        : null;
 
   return (
-    <SectionCard title="Target vs Pace vs Potential" badge="Present + future">
+    <SectionCard
+      title="Target vs Pace vs Potential"
+      badge="Target + upside"
+      className="h-full"
+      footer={targetCta ? <SectionCta href={targetCta.href} label={targetCta.label} /> : undefined}
+    >
       <div className="mb-4 rounded-xl border border-gray-100 bg-gray-50 p-4">
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Operating target</p>
@@ -1605,7 +2504,9 @@ function TargetPotentialSection({ snapshot }: { snapshot: Snapshot }) {
           {derived.targetLabel && (
             <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-gray-600">{derived.targetLabel}</span>
           )}
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${targetStateTone.badge}`}>{derived.targetStateLabel}</span>
         </div>
+        <p className="mt-2 text-xs leading-relaxed text-gray-600">{derived.targetStateDetail}</p>
         {derived.targetNote && (
           <p className="mt-2 text-xs leading-relaxed text-gray-600">{derived.targetNote}</p>
         )}
@@ -1642,11 +2543,16 @@ function TargetPotentialSection({ snapshot }: { snapshot: Snapshot }) {
 
 function LearnedSignalsSection({ snapshot }: { snapshot: Snapshot }) {
   const learned = deriveLearnedSignals(snapshot);
+  const cta = deriveLearnedSignalsCta(snapshot);
 
   if (learned.length === 0) return null;
 
   return (
-    <SectionCard title="What We Have Learned" badge={`${learned.length} signals`}>
+    <SectionCard
+      title="What We Have Learned"
+      badge="Top signals"
+      footer={<SectionCta href={cta.href} label={cta.label} />}
+    >
       <div className="space-y-3">
         {learned.map((item) => {
           const tone = toneClasses(item.tone);
@@ -1667,18 +2573,67 @@ function LearnedSignalsSection({ snapshot }: { snapshot: Snapshot }) {
 
 function PrimaryBottleneckSection({ snapshot }: { snapshot: Snapshot }) {
   const bottleneck = derivePrimaryBottleneck(snapshot);
-  const tone = toneClasses(bottleneck.tone);
+  const confidence = deriveConstraintConfidence(snapshot);
+  const [confidenceDirection, setConfidenceDirection] = React.useState<ConfidenceDirection>('flat');
+  const [confidenceReason, setConfidenceReason] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setConfidenceDirection(deriveConstraintConfidenceDirection(snapshot));
+    if (typeof window === 'undefined') {
+      setConfidenceReason(null);
+      return;
+    }
+
+    try {
+      const saved = window.localStorage.getItem(MARKETING_INTEL_OUTCOME_STORAGE_KEY);
+      if (!saved) {
+        setConfidenceReason(null);
+        return;
+      }
+
+      const improvingOutcomes = countImprovingOutcomes(snapshot, normalizeOutcomeBaselines(JSON.parse(saved)));
+      setConfidenceReason(improvingOutcomes > 0 ? 'Improving signal after recent actions' : null);
+    } catch {
+      setConfidenceReason(null);
+    }
+  }, [snapshot]);
+
+  const confidenceTone =
+    confidence === 'High'
+      ? 'bg-emerald-50 text-emerald-700'
+      : confidence === 'Medium'
+          ? 'bg-blue-50 text-blue-700'
+          : 'bg-gray-100 text-gray-600';
+  const confidenceGlyph = confidenceDirection === 'up' ? '\u2191' : confidenceDirection === 'down' ? '\u2193' : '\u2192';
 
   return (
-    <SectionCard title="Primary Bottleneck" badge="Main constraint">
-      <div className="rounded-2xl border border-amber-100 bg-gradient-to-r from-amber-50 to-white p-5">
+    <SectionCard
+      title="Primary Constraint"
+      badge="Main blocker"
+      className="h-full"
+    >
+      <div className="rounded-2xl border border-amber-300 bg-amber-50 py-7 px-6 shadow-md">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 rounded-full bg-amber-100 p-2">
-            <AlertCircle className="h-4 w-4 text-amber-600" />
+          <div className="mt-0.5 rounded-full bg-amber-200 p-2.5">
+            <AlertCircle className="h-5 w-5 text-amber-800" />
           </div>
-          <div>
-            <p className={`text-base font-bold ${tone.text}`}>{bottleneck.title}</p>
-            <p className="mt-2 max-w-4xl text-sm leading-relaxed text-gray-600">{bottleneck.detail}</p>
+            <div className="border-l-[6px] border-amber-500 pl-4">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <p className="text-lg font-bold text-slate-950">{bottleneck.title}</p>
+                <span className={`rounded px-2 py-0.5 text-xs font-medium ${confidenceTone}`}>
+                  Confidence: {confidence} {confidenceGlyph}
+                </span>
+              </div>
+            {confidenceReason && (
+              <p className="mb-2 text-[11px] font-medium text-slate-500">{confidenceReason}</p>
+            )}
+            <p className="mt-2 max-w-4xl text-sm leading-[1.6] text-slate-600">{bottleneck.detail}</p>
+            <p className="mt-3 text-xs font-medium text-amber-800/90">
+              If this is not fixed, the team will keep making scaling decisions on unreliable signal.
+            </p>
+            <p className="mt-2 text-xs font-semibold text-amber-800">
+              Fix rhythm. Then measure. Then scale.
+            </p>
           </div>
         </div>
       </div>
@@ -1690,14 +2645,95 @@ function ActionBucketsSection({ snapshot }: { snapshot: Snapshot }) {
   const actions = snapshot.next_actions;
   const buckets = splitActionBuckets(actions);
   const systemLines = deriveSystemActionLines(snapshot);
+  const bottleneck = derivePrimaryBottleneck(snapshot);
+  const constraintLabel = bottleneck.title.toLowerCase().includes('operating rhythm')
+    ? 'inconsistent operating rhythm'
+    : bottleneck.title.toLowerCase();
+  const doNowItems = React.useMemo(() => deriveCurrentDoNowItems(snapshot), [snapshot]);
+  const [actionProgress, setActionProgress] = React.useState<Record<string, ActionProgressEntry>>({});
+  const [outcomeBaselines, setOutcomeBaselines] = React.useState<Record<string, ActionOutcomeBaseline>>({});
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = window.localStorage.getItem(MARKETING_INTEL_PROGRESS_STORAGE_KEY);
+      if (saved) {
+        setActionProgress(normalizeActionProgress(JSON.parse(saved)));
+      }
+    } catch {}
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = window.localStorage.getItem(MARKETING_INTEL_OUTCOME_STORAGE_KEY);
+      if (saved) {
+        setOutcomeBaselines(normalizeOutcomeBaselines(JSON.parse(saved)));
+      }
+    } catch {}
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(MARKETING_INTEL_PROGRESS_STORAGE_KEY, JSON.stringify(actionProgress));
+    } catch {}
+  }, [actionProgress]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(MARKETING_INTEL_OUTCOME_STORAGE_KEY, JSON.stringify(outcomeBaselines));
+    } catch {}
+  }, [outcomeBaselines]);
+
+  React.useEffect(() => {
+    setActionProgress((prev) => {
+      const next: Record<string, ActionProgressEntry> = {};
+      doNowItems.forEach((item) => {
+        next[item.id] = prev[item.id] ?? buildActionProgressEntry('not_started');
+      });
+      return next;
+    });
+  }, [doNowItems]);
+
+  const completedCount = doNowItems.filter((item) => actionProgress[item.id]?.status === 'completed').length;
+  const recommendedNextAction =
+    doNowItems.find((item) => actionProgress[item.id]?.status !== 'completed') ??
+    doNowItems[0] ??
+    (systemLines.doNext[0]
+      ? {
+          id: systemLines.doNext[0].label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+          label: systemLines.doNext[0].text,
+          href: systemLines.doNext[0].href,
+          ctaLabel: systemLines.doNext[0].label,
+        }
+      : null);
+  const markActionCompleted = (itemId: string, previous?: ActionProgressEntry) => {
+    setActionProgress((prev) => ({
+      ...prev,
+      [itemId]: buildActionProgressEntry('completed', previous ?? prev[itemId]),
+    }));
+
+    setOutcomeBaselines((prev) => {
+      if (prev[itemId]) return prev;
+      return {
+        ...prev,
+        [itemId]: {
+          capturedAt: new Date().toISOString(),
+          signals: deriveOutcomeSignals(snapshot),
+        },
+      };
+    });
+  };
   const groups = [
     {
       key: 'do-now',
       title: 'Do now',
       items: buckets.doNow,
       systemItems: systemLines.doNow,
-      tone: 'border-red-100 bg-red-50/70',
-      text: 'text-red-700',
+      tone: 'border-[#FECACA] bg-[#FEF2F2]',
+      text: 'text-red-800',
       empty: 'No urgent action is blocking progress right now.',
     },
     {
@@ -1705,38 +2741,128 @@ function ActionBucketsSection({ snapshot }: { snapshot: Snapshot }) {
       title: 'Do next',
       items: buckets.doNext,
       systemItems: systemLines.doNext,
-      tone: 'border-blue-100 bg-blue-50/70',
-      text: 'text-blue-700',
+      tone: 'border-[#E2E8F0] bg-[#F8FAFC]/95',
+      text: 'text-blue-600',
       empty: 'No medium-priority follow-up actions are waiting.',
-    },
-    {
-      key: 'monitor',
-      title: 'Monitor',
-      items: buckets.monitor,
-      systemItems: systemLines.monitor,
-      tone: 'border-emerald-100 bg-emerald-50/70',
-      text: 'text-emerald-700',
-      empty: 'No lower-priority opportunities are being tracked yet.',
     },
   ] as const;
 
   return (
-    <SectionCard title="Action Priorities" badge={`${actions.length} recommendations`}>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+    <SectionCard title="Action Plan" badge="Do now + do next">
+      <div className="mb-4 rounded-xl border border-gray-100 bg-gray-50 p-4">
+        <p className="text-sm leading-relaxed text-gray-700">
+          To fix <span className="font-semibold text-gray-900">{constraintLabel}</span>:
+        </p>
+      </div>
+      {recommendedNextAction && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50/70 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-red-700">Recommended next action</p>
+          <p className="mt-1 text-xs font-medium text-red-700/80">
+            {completedCount} of {doNowItems.length} actions completed — next: {recommendedNextAction.ctaLabel}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-red-950">{recommendedNextAction.label}</p>
+              <p className="mt-1 text-xs leading-relaxed text-red-700/70">
+                → {getRecommendedActionReason(recommendedNextAction).charAt(0).toLowerCase() + getRecommendedActionReason(recommendedNextAction).slice(1)}
+              </p>
+            </div>
+            <SectionCta href={recommendedNextAction.href} label={recommendedNextAction.ctaLabel} variant="critical" />
+          </div>
+        </div>
+      )}
+      <div className="mb-4 text-xs font-medium text-gray-600">
+        Progress: {completedCount} / {doNowItems.length} actions completed
+      </div>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         {groups.map((group) => (
           <div key={group.key} className={`rounded-xl border p-4 ${group.tone}`}>
-            <p className={`text-[10px] font-bold uppercase tracking-widest ${group.text}`}>{group.title}</p>
-            <div className="mt-3 space-y-2.5">
-              {group.systemItems.length > 0 && (
-                group.systemItems.slice(0, 2).map((line) => (
-                  <div key={`${group.key}-${line}`} className="rounded-lg border border-white/70 bg-white/80 p-3">
-                    <p className="text-xs font-semibold text-gray-800">{line}</p>
+            <p className={`${group.key === 'do-now' ? 'text-[10px]' : 'text-[9px]'} font-bold uppercase tracking-widest ${group.text}`}>{group.title}</p>
+            <div className="mt-3 space-y-3">
+              {group.key === 'do-now' ? (
+                doNowItems.length > 0 ? (
+                  doNowItems.map((item) => {
+                    const progress = actionProgress[item.id] ?? buildActionProgressEntry('not_started');
+                    const status = progress.status;
+                    const isCompleted = status === 'completed';
+                    const isInProgress = status === 'in_progress';
+                    const isStale = !isCompleted && Date.now() - new Date(progress.updatedAt).getTime() > STALE_ACTION_MS;
+
+                    return (
+                      <div key={item.id} className={`space-y-2.5 py-1 transition-opacity ${isCompleted ? 'opacity-70' : 'opacity-100'}`}>
+                        <p className="text-sm font-semibold text-red-950">{item.label}</p>
+                        {isStale && (
+                          <p className="text-xs font-medium text-red-700">
+                            {isInProgress ? 'This action is still pending.' : 'No progress made on this critical action yet.'}
+                          </p>
+                        )}
+                        {isInProgress && !isCompleted && (
+                          <p className="text-xs font-medium text-blue-700">In progress...</p>
+                        )}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {isCompleted ? (
+                            <>
+                              <span className="inline-flex items-center rounded-[8px] bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                                &#10003; Completed
+                              </span>
+                              <span className="text-xs font-medium text-emerald-700/90">
+                                {getActionCompletionFeedback(item)}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <Link
+                                href={item.href}
+                                onClick={() =>
+                                  setActionProgress((prev) => ({
+                                    ...prev,
+                                    [item.id]: buildActionProgressEntry('in_progress', prev[item.id]),
+                                  }))
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-[8px] border border-transparent bg-[#DC2626] px-4 py-2 text-xs font-semibold tracking-[0.2px] text-white shadow-sm transition-all duration-150 ease-out hover:-translate-y-[1px] hover:bg-[#B91C1C]"
+                              >
+                                {item.ctaLabel}
+                                <ArrowRight className="h-3 w-3" />
+                              </Link>
+                              <button
+                                type="button"
+                                onClick={() => markActionCompleted(item.id, progress)}
+                                className="inline-flex items-center rounded-[8px] border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition-all duration-150 ease-out hover:-translate-y-[1px] hover:border-red-300 hover:bg-red-50"
+                              >
+                                Mark as done &#10003;
+                              </button>
+                            </>
+                          )}
+                        </div>
+                        {isCompleted && (
+                          <div className="space-y-1 rounded-lg bg-white/50 px-3 py-2">
+                            <p className="text-[11px] font-semibold text-gray-600">After this action:</p>
+                            {deriveOutcomeMessages(item, outcomeBaselines[item.id], snapshot).map((line) => (
+                              <p key={`${item.id}-${line}`} className="text-xs text-gray-600">
+                                {line}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-xs text-gray-500">{group.empty}</p>
+                )
+              ) : group.systemItems.length > 0 ? (
+                group.systemItems.slice(0, 2).map((item) => (
+                  <div key={`${group.key}-${item.text}`} className="rounded-lg bg-white/80 p-3">
+                    <p className="text-xs font-semibold text-gray-800">{item.text}</p>
+                    <div className="mt-2">
+                      <SectionCta href={item.href} label={item.label} variant="secondary" />
+                    </div>
                   </div>
                 ))
-              )}
-              {group.items.length > 0 ? (
+              ) : null}
+              {group.key !== 'do-now' && group.items.length > 0 ? (
                 group.items.slice(0, 3).map((action) => (
-                  <div key={`${group.key}-${action.campaign_id}`} className="rounded-lg border border-white/70 bg-white/80 p-3">
+                  <div key={`${group.key}-${action.campaign_id}`} className="rounded-lg bg-white/80 p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-xs font-semibold text-gray-800">{action.campaign_name}</p>
@@ -1762,11 +2888,155 @@ function ActionBucketsSection({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
-function CommercialReadinessSection({ snapshot }: { snapshot: Snapshot }) {
-  const insights = deriveCommercialReadiness(snapshot);
+function SystemDiagnosisSection({ snapshot }: { snapshot: Snapshot }) {
+  const diagnosis = deriveDiagnosis(snapshot);
 
   return (
-    <SectionCard title="Commercial Readiness" badge="Activation guidance">
+    <SectionCard title="Why This Is Happening" badge="Diagnosis">
+      <div className="mb-4 rounded-xl border border-gray-100 bg-gray-50 p-4">
+        <p className="text-sm leading-relaxed text-gray-700">
+          The system is active, but not consistent enough to generate reliable learning. Content, distribution, and evidence are fragmented, so patterns appear, but cannot be trusted.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {diagnosis.map((item) => {
+          const tone = toneClasses(item.tone);
+          const accent =
+            item.label === 'Evidence strength'
+              ? 'border-l-blue-400'
+              : 'border-l-amber-400';
+          return (
+            <div key={item.label} className={`rounded-xl border border-gray-100 border-l-4 bg-gray-50 p-4 ${accent}`}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{item.label}</p>
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tone.badge}`}>
+                  {item.tone === 'strong' ? 'Healthy' : item.tone === 'moderate' ? 'Mixed' : 'Weak'}
+                </span>
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-gray-700">{item.explanation}</p>
+            </div>
+          );
+        })}
+      </div>
+    </SectionCard>
+  );
+}
+
+function SystemMemorySection({ snapshot }: { snapshot: Snapshot }) {
+  const items = deriveSystemMemory(snapshot);
+  if (items.length === 0) return null;
+
+  const indicatorTone = {
+    up: 'text-emerald-600',
+    flat: 'text-slate-500',
+    down: 'text-amber-600',
+  } as const;
+
+  const indicatorGlyph = {
+    up: '\u2191',
+    flat: '\u2192',
+    down: '\u2193',
+  } as const;
+
+  return (
+    <div className="px-1">
+      <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Since last check</p>
+      <ul className="mt-2 space-y-1 text-sm text-gray-600">
+        {items.map((item) => (
+          <li key={`${item.direction}-${item.text}`} className="flex items-start gap-2">
+            <span className={indicatorTone[item.direction]}>{indicatorGlyph[item.direction]}</span>
+            <span>{item.text}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SessionAwarenessSection({ snapshot }: { snapshot: Snapshot }) {
+  const [message, setMessage] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const doNowItems = deriveCurrentDoNowItems(snapshot);
+
+    try {
+      const saved = window.localStorage.getItem(MARKETING_INTEL_PROGRESS_STORAGE_KEY);
+      if (!saved) {
+        setMessage(doNowItems.length > 0 ? 'System just initialized. Start with Do Now.' : null);
+        return;
+      }
+
+      const progress = normalizeActionProgress(JSON.parse(saved));
+      const pendingCount = doNowItems.filter((item) => progress[item.id]?.status !== 'completed').length;
+
+      if (pendingCount > 0) {
+        setMessage(`You have ${pendingCount} pending action${pendingCount === 1 ? '' : 's'} from last session.`);
+      } else {
+        setMessage('Last session’s urgent actions are complete. Move to the next system step.');
+      }
+    } catch {
+      setMessage(doNowItems.length > 0 ? 'System just initialized. Start with Do Now.' : null);
+    }
+  }, [snapshot]);
+
+  if (!message) return null;
+
+  return (
+    <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+      <p className="text-sm font-medium text-gray-700">{message}</p>
+    </div>
+  );
+}
+
+function SupportingSignalsSection({ snapshot }: { snapshot: Snapshot }) {
+  const cards = deriveSupportingSignals(snapshot);
+
+  return (
+    <SectionCard title="Supporting Signals" badge="Optional drill-down">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-4">
+        {cards.map((card) => (
+          <div key={card.title} className="rounded-xl border border-gray-200 bg-gray-50 p-4 shadow-sm transition-all duration-150 ease-out hover:-translate-y-0.5 hover:shadow-md">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{card.title}</p>
+            <p className="mt-3 text-sm leading-relaxed text-gray-700">{card.summary}</p>
+            <div className="mt-3">
+              <SectionCta href={card.href} label={card.label} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}
+
+function BottomLineSection({ snapshot }: { snapshot: Snapshot }) {
+  const bottomLine = deriveBottomLine(snapshot);
+
+  return (
+    <SectionCard
+      title="Bottom Line"
+      badge="Decision"
+    >
+      <div className="rounded-xl border border-slate-300 bg-slate-100 p-6 shadow-md">
+        <p className="text-lg font-bold text-slate-950">Do not scale noise. Build signal first.</p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-700">{bottomLine.text}</p>
+      </div>
+    </SectionCard>
+  );
+}
+
+function CommercialReadinessSection({ snapshot }: { snapshot: Snapshot }) {
+  const insights = deriveCommercialReadiness(snapshot);
+  const cta = deriveCommercialReadinessCta(snapshot);
+
+  return (
+    <SectionCard
+      title="Commercial Readiness"
+      badge="Next commercial move"
+      className="h-full"
+      footer={<SectionCta href={cta.href} label={cta.label} />}
+    >
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {insights.map((item) => {
           const tone = toneClasses(item.tone);
@@ -1777,6 +3047,82 @@ function CommercialReadinessSection({ snapshot }: { snapshot: Snapshot }) {
             </div>
           );
         })}
+      </div>
+    </SectionCard>
+  );
+}
+
+function EcosystemProgressSection({ snapshot }: { snapshot: Snapshot }) {
+  const graph = snapshot.knowledge_graph_summary;
+  const timing = snapshot.timing_summary;
+  const distribution = snapshot.distribution_summary;
+  const topPlatform = distribution.platform_mix[0];
+  const cta = deriveEcosystemProgressCta(snapshot);
+
+  const graphTone =
+    graph.status === 'maturing' ? toneClasses('strong') :
+    graph.status === 'imbalanced' ? toneClasses('watch') :
+    toneClasses('moderate');
+  const rhythmTone =
+    timing.rhythm_state === 'strong' ? toneClasses('strong') :
+    timing.rhythm_state === 'thin' ? toneClasses('watch') :
+    toneClasses('moderate');
+  const distributionTone =
+    distribution.active_platforms >= 2 && distribution.publish_success_rate >= 85
+      ? toneClasses('strong')
+      : distribution.active_platforms === 0 || distribution.publish_success_rate < 80
+        ? toneClasses('watch')
+        : toneClasses('moderate');
+
+  return (
+    <SectionCard
+      title="Ecosystem Progress"
+      badge="Compounding health"
+      footer={<SectionCta href={cta.href} label={cta.label} />}
+    >
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Knowledge graph</p>
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${graphTone.badge}`}>{KNOWLEDGE_GRAPH_LABELS[graph.status]}</span>
+          </div>
+          <p className={`mt-3 text-sm font-semibold ${graphTone.text}`}>
+            {graph.dominant_cluster ?? 'No dominant cluster yet'}
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-gray-600">
+            {graph.topic_cluster_count} topic cluster{graph.topic_cluster_count === 1 ? '' : 's'}, {graph.format_diversity} active format{graph.format_diversity === 1 ? '' : 's'}, and stage coverage of {graph.stage_coverage.awareness} awareness, {graph.stage_coverage.consideration} consideration, and {graph.stage_coverage.decision} decision assets.
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Operating rhythm</p>
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${rhythmTone.badge}`}>{timing.rhythm_state === 'strong' ? 'Strong' : timing.rhythm_state === 'steady' ? 'Steady' : 'Thin'}</span>
+          </div>
+          <p className={`mt-3 text-sm font-semibold ${rhythmTone.text}`}>
+            {timing.active_days} active day{timing.active_days === 1 ? '' : 's'} in the current window
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-gray-600">
+            {timing.latest_activity_at
+              ? `The latest visible activity landed on ${new Date(timing.latest_activity_at).toLocaleDateString()}, and the average gap between visible events is ${timing.avg_gap_days ?? '—'} days.`
+              : 'No recent content or distribution rhythm is visible yet, so momentum is still being inferred from isolated activity.'}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Distribution shape</p>
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${distributionTone.badge}`}>{distribution.active_platforms === 0 ? 'Inactive' : distribution.active_platforms === 1 ? 'Narrow' : 'Broadening'}</span>
+          </div>
+          <p className={`mt-3 text-sm font-semibold ${distributionTone.text}`}>
+            {distribution.active_platforms} active platform{distribution.active_platforms === 1 ? '' : 's'} with {distribution.publish_success_rate}% reliability
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-gray-600">
+            {topPlatform
+              ? `${formatPlatformLabel(topPlatform.platform)} is carrying ${topPlatform.share_pct}% of visible distribution right now${distribution.platform_mix[1] ? `, followed by ${formatPlatformLabel(distribution.platform_mix[1].platform)}.` : '.'}`
+              : 'Connected publishing channels exist, but there is still too little live distribution data to describe channel concentration.'}
+          </p>
+        </div>
       </div>
     </SectionCard>
   );
@@ -2352,8 +3698,13 @@ function ConfigurePanel({ visible, onChange, onClose }: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { useMarketingIntel } from '../hooks/useMarketingIntel';
-type S = ReturnType<typeof useMarketingIntel>;
-export default function MarketingIntelView({ d }: { d: S }) {
+type MarketingIntelHookState = ReturnType<typeof useMarketingIntel>;
+type MarketingIntelState = Omit<MarketingIntelHookState, 'snapshot' | 'setSnapshot'> & {
+  snapshot: Snapshot | null;
+  setSnapshot: React.Dispatch<React.SetStateAction<Snapshot | null>>;
+};
+
+export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
   const {
     _ef1,
     _ef2,
@@ -2462,56 +3813,80 @@ export default function MarketingIntelView({ d }: { d: S }) {
         {snapshot ? (
           <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
 
-            {/* Part 1: Executive summary — always at top, no toggle */}
-            <ObjectiveSetupNotice snapshot={snapshot} />
-
             <ExecutiveSummary snapshot={snapshot} />
 
-            <OperatingOverviewSection snapshot={snapshot} />
+            <SessionAwarenessSection snapshot={snapshot} />
 
-            <TargetPotentialSection snapshot={snapshot} />
+            <SystemDiagnosisSection snapshot={snapshot} />
+
+            <SystemMemorySection snapshot={snapshot} />
 
             <PrimaryBottleneckSection snapshot={snapshot} />
 
-            <LearnedSignalsSection snapshot={snapshot} />
-
             <ActionBucketsSection snapshot={snapshot} />
 
-            <CommercialReadinessSection snapshot={snapshot} />
+            <SupportingSignalsSection snapshot={snapshot} />
 
-            {/* System Snapshot */}
-            {isVisible('system_snapshot') && (
-              <SystemSnapshotSection data={snapshot.system_snapshot} />
-            )}
+            <BottomLineSection snapshot={snapshot} />
 
-            {/* Next Actions */}
-            {isVisible('next_actions') && (
-              <NextActionsSection actions={snapshot.next_actions} />
-            )}
+            <ObjectiveSetupNotice snapshot={snapshot} />
 
-            {/* Strategic Intelligence + Campaign DNA */}
-            {(isVisible('strategic_intelligence') || isVisible('campaign_dna')) && (
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                {isVisible('strategic_intelligence') && (
-                  <StrategicIntelligenceSection data={snapshot.strategic_intelligence} />
+            <details className="group rounded-2xl border border-gray-100 bg-white shadow-sm">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-6 py-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Supporting Signals</p>
+                  <p className="mt-1 text-sm text-gray-600">Open this only when you want campaigns, knowledge graph, metrics, and history.</p>
+                </div>
+                <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600 group-open:bg-blue-50 group-open:border-blue-200 group-open:text-blue-700">
+                  Open drill-down
+                </span>
+              </summary>
+              <div className="border-t border-gray-100 px-6 py-6 space-y-6">
+                <OperatingOverviewSection snapshot={snapshot} />
+
+                <TargetPotentialSection snapshot={snapshot} />
+
+                <LearnedSignalsSection snapshot={snapshot} />
+
+                <CommercialReadinessSection snapshot={snapshot} />
+
+                <EcosystemProgressSection snapshot={snapshot} />
+
+                {/* System Snapshot */}
+                {isVisible('system_snapshot') && (
+                  <SystemSnapshotSection data={snapshot.system_snapshot} />
                 )}
-                {isVisible('campaign_dna') && (
-                  <CampaignDnaSection data={snapshot.campaign_dna} />
+
+                {/* Next Actions */}
+                {isVisible('next_actions') && (
+                  <NextActionsSection actions={snapshot.next_actions} />
+                )}
+
+                {/* Strategic Intelligence + Campaign DNA */}
+                {(isVisible('strategic_intelligence') || isVisible('campaign_dna')) && (
+                  <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                    {isVisible('strategic_intelligence') && (
+                      <StrategicIntelligenceSection data={snapshot.strategic_intelligence} />
+                    )}
+                    {isVisible('campaign_dna') && (
+                      <CampaignDnaSection data={snapshot.campaign_dna} />
+                    )}
+                  </div>
+                )}
+
+                {/* Audience Response + Strategic Memory */}
+                {(isVisible('audience_response') || isVisible('strategic_memory')) && (
+                  <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                    {isVisible('audience_response') && (
+                      <AudienceResponseSection data={snapshot.audience_response} />
+                    )}
+                    {isVisible('strategic_memory') && (
+                      <StrategicMemorySection data={snapshot.strategic_memory} />
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-
-            {/* Audience Response + Strategic Memory */}
-            {(isVisible('audience_response') || isVisible('strategic_memory')) && (
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                {isVisible('audience_response') && (
-                  <AudienceResponseSection data={snapshot.audience_response} />
-                )}
-                {isVisible('strategic_memory') && (
-                  <StrategicMemorySection data={snapshot.strategic_memory} />
-                )}
-              </div>
-            )}
+            </details>
 
             {/* Content Performance */}
             {isVisible('content_performance') && (

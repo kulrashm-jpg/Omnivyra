@@ -434,7 +434,23 @@ export async function insertMessage(input: NormalizedMessageInput): Promise<stri
 
   if (error) {
     console.warn('[engagementNormalization] insertMessage error', error.message);
-    return null;
+    const { data: existing, error: existingError } = await supabase
+      .from('engagement_messages')
+      .select('id')
+      .eq('thread_id', thread_id)
+      .eq('platform_message_id', platform_message_id)
+      .maybeSingle();
+
+    if (existingError) {
+      console.warn('[engagementNormalization] insertMessage existing lookup error', existingError.message);
+      return null;
+    }
+
+    if (!existing?.id) {
+      return null;
+    }
+
+    return existing.id;
   }
 
   const messageId = inserted?.id ?? null;

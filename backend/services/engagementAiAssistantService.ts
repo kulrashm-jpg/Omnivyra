@@ -22,6 +22,91 @@ export type GenerateReplySuggestionsResult = {
   tone_variants: Partial<Record<ToneVariant, string>>;
 };
 
+function buildContextualFallbackReplies(args: {
+  platform: string;
+  targetMessage: string;
+  authorName?: string | null;
+}): GenerateReplySuggestionsResult {
+  const platform = (args.platform || '').toLowerCase();
+  const rawMessage = (args.targetMessage || '').trim();
+  const normalized = rawMessage.toLowerCase();
+  const firstName = (args.authorName || '').trim().split(/\s+/)[0] || '';
+  const greeting = firstName ? `Thanks for reaching out, ${firstName}.` : 'Thanks for reaching out.';
+
+  const suggested_replies: ReplySuggestion[] = [];
+
+  if (platform === 'linkedin' && /\bopportunit(y|ies)\b/.test(normalized)) {
+    suggested_replies.push(
+      {
+        text: `${greeting} Happy to understand the opportunity better. Could you share a bit more about the product and what kind of collaboration or discussion you have in mind?`,
+        tone: 'professional',
+      },
+      {
+        text: `${greeting} This sounds interesting. Please send a short overview of the opportunity and the expected fit, and I will take a proper look.`,
+        tone: 'friendly',
+      },
+      {
+        text: `${greeting} I would be open to learning more. If you share the objective and a few key details, I can respond more meaningfully.`,
+        tone: 'educational',
+      }
+    );
+  } else if (/\bcall|meeting|discuss|talk|connect\b/.test(normalized)) {
+    suggested_replies.push(
+      {
+        text: `${greeting} Happy to continue the conversation. Please share a little more context first, and then we can decide the best next step for a discussion.`,
+        tone: 'professional',
+      },
+      {
+        text: `${greeting} I am open to a conversation. Could you send a quick summary of what you would like to discuss so I can come prepared?`,
+        tone: 'friendly',
+      },
+      {
+        text: `${greeting} Before we schedule time, please share the objective and a few relevant details so I can assess how best to move this forward.`,
+        tone: 'educational',
+      }
+    );
+  } else if (/\?$/.test(rawMessage) || /\bhow|what|why|when|where|can you|could you|would you\b/.test(normalized)) {
+    suggested_replies.push(
+      {
+        text: `${greeting} Happy to help. Could you share a little more detail so I can give you a useful and accurate response?`,
+        tone: 'professional',
+      },
+      {
+        text: `${greeting} I would be glad to help with this. A bit more context from your side would help me respond properly.`,
+        tone: 'friendly',
+      },
+      {
+        text: `${greeting} Let us clarify the context first so I can give you a more specific answer.`,
+        tone: 'educational',
+      }
+    );
+  } else {
+    suggested_replies.push(
+      {
+        text: `${greeting} Thanks for sharing this. Could you give me a little more context so I can respond in a way that is actually useful?`,
+        tone: 'professional',
+      },
+      {
+        text: `${greeting} I appreciate the note. Please share a little more detail on what you have in mind, and I will take it from there.`,
+        tone: 'friendly',
+      },
+      {
+        text: `${greeting} Understood. If you expand a bit on the context or objective, I can give you a more relevant response.`,
+        tone: 'educational',
+      }
+    );
+  }
+
+  const tone_variants: Partial<Record<ToneVariant, string>> = {};
+  for (const reply of suggested_replies) {
+    if (reply.tone && reply.text) {
+      tone_variants[reply.tone] = reply.text;
+    }
+  }
+
+  return { suggested_replies, tone_variants };
+}
+
 export async function generateReplySuggestions(
   message_id: string,
   organization_id: string,
@@ -38,32 +123,30 @@ export async function generateReplySuggestions(
   }
 
   const messages = await getThreadMessages(message.thread_id);
+  const matchedMessage =
+    messages.find((entry) => entry.message_id === message_id) ??
+    messages.find((entry) => (entry.content ?? '').trim() === (message.content ?? '').trim()) ??
+    null;
   const threadContext = messages
-    .map((m) => `${m.author?.display_name ?? m.author?.username ?? 'User'}: ${m.content ?? ''}`)
+    .map((entry) => `${entry.author?.display_name ?? entry.author?.username ?? 'User'}: ${entry.content ?? ''}`)
     .join('\n');
 
   const voice =
     brand_voice ??
-    (await getProfile(organization_id, { autoRefine: false, languageRefine: true }).then((p) => {
-      const entry = Array.isArray(p?.brand_voice_list) ? p.brand_voice_list[0] : null;
-      return (entry || p?.brand_voice || 'professional').toString().trim();
+    (await getProfile(organization_id, { autoRefine: false, languageRefine: true }).then((profile) => {
+      const entry = Array.isArray(profile?.brand_voice_list) ? profile.brand_voice_list[0] : null;
+      return (entry || profile?.brand_voice || 'professional').toString().trim();
     }));
 
+  const fallback = () =>
+    buildContextualFallbackReplies({
+      platform: message.platform ?? '',
+      targetMessage: message.content ?? '',
+      authorName: matchedMessage?.author?.display_name ?? matchedMessage?.author?.username ?? null,
+    });
+
   if (!isOmniVyraEnabled()) {
-    return {
-      suggested_replies: [
-        { text: 'Thank you for your message. We appreciate your feedback.', tone: 'professional' },
-        { text: 'Thanks for reaching out! Happy to help.', tone: 'friendly' },
-        { text: 'Great question. Here’s some context that might help.', tone: 'educational' },
-        { text: 'We’ve been thinking about this too. Here’s our perspective.', tone: 'thought_leadership' },
-      ],
-      tone_variants: {
-        professional: 'Thank you for your message. We appreciate your feedback.',
-        friendly: 'Thanks for reaching out! Happy to help.',
-        educational: 'Great question. Here’s some context that might help.',
-        thought_leadership: 'We’ve been thinking about this too. Here’s our perspective.',
-      },
-    };
+    return fallback();
   }
 
   try {
@@ -72,9 +155,9 @@ export async function generateReplySuggestions(
       organization_id,
       platform: message.platform ?? undefined,
       post_data: {
-        thread_messages: messages.map((m) => ({
-          author: m.author?.display_name ?? m.author?.username,
-          content: m.content,
+        thread_messages: messages.map((entry) => ({
+          author: entry.author?.display_name ?? entry.author?.username,
+          content: entry.content,
         })),
         target_message: message.content,
       },
@@ -86,39 +169,31 @@ export async function generateReplySuggestions(
     const suggested_actions =
       (response?.status === 'ok' && response?.data?.suggested_actions) ?? [];
     const replyActions = suggested_actions.filter(
-      (a: any) => a?.action_type === 'reply' && a?.suggested_text
+      (action: any) => action?.action_type === 'reply' && action?.suggested_text
     );
 
-    const suggested_replies: ReplySuggestion[] = replyActions.slice(0, 4).map((a: any) => ({
-      text: (a.suggested_text ?? '').toString().trim(),
-      tone: (a.tone as ToneVariant) ?? 'professional',
+    const suggested_replies: ReplySuggestion[] = replyActions.slice(0, 4).map((action: any) => ({
+      text: (action.suggested_text ?? '').toString().trim(),
+      tone: (action.tone as ToneVariant) ?? 'professional',
     }));
 
     const tone_variants: Partial<Record<ToneVariant, string>> = {};
-    for (const r of suggested_replies) {
-      if (r.tone && r.text) tone_variants[r.tone] = r.text;
+    for (const reply of suggested_replies) {
+      if (reply.tone && reply.text) {
+        tone_variants[reply.tone] = reply.text;
+      }
     }
     if (suggested_replies.length > 0 && Object.keys(tone_variants).length === 0) {
       tone_variants.professional = suggested_replies[0].text;
     }
 
     if (suggested_replies.length === 0) {
-      return {
-        suggested_replies: [
-          { text: 'Thank you for your message. We appreciate your feedback.', tone: 'professional' },
-        ],
-        tone_variants: { professional: 'Thank you for your message. We appreciate your feedback.' },
-      };
+      return fallback();
     }
 
     return { suggested_replies, tone_variants };
   } catch (err) {
     console.warn('[engagementAiAssistantService] OmniVyra error:', (err as Error)?.message);
-    return {
-      suggested_replies: [
-        { text: 'Thank you for your message. We appreciate your feedback.', tone: 'professional' },
-      ],
-      tone_variants: { professional: 'Thank you for your message. We appreciate your feedback.' },
-    };
+    return fallback();
   }
 }

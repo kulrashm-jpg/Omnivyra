@@ -32,6 +32,7 @@ export default function SetPasswordPage() {
   const [showPw, setShowPw]       = useState(false);
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState<string | null>(null);
+  const [flow, setFlow]           = useState<'signup' | 'recovery'>('signup');
 
   const attempted = useRef(false);
 
@@ -42,6 +43,8 @@ export default function SetPasswordPage() {
     const supabase = getSupabaseBrowser();
     const params   = new URLSearchParams(window.location.search);
     const code     = params.get('code');
+    const flowParam = params.get('flow');
+    if (flowParam === 'recovery') setFlow('recovery');
 
     async function init() {
       // ── 1. Check for hash-fragment tokens (implicit flow: #access_token=…) ──
@@ -94,24 +97,29 @@ export default function SetPasswordPage() {
     setLoading(true);
     setError(null);
 
-    const { error: updateErr } = await getSupabaseBrowser().auth.updateUser({ password });
-    if (updateErr) { setError(updateErr.message); setLoading(false); return; }
-
-    // Notify backend so it marks has_password, handles invitation acceptance, etc.
     let route = '/onboarding/profile';
     try {
       const { data } = await getSupabaseBrowser().auth.getSession();
       if (data.session?.access_token) {
         const spRes = await fetch('/api/auth/set-password', {
           method:  'POST',
-          headers: { Authorization: `Bearer ${data.session.access_token}` },
+          headers: {
+            Authorization: `Bearer ${data.session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ password, flow }),
         });
-        if (spRes.ok) {
-          const json = await spRes.json() as { route: string };
-          route = json.route ?? '/onboarding/profile';
+        const json = await spRes.json().catch(() => ({})) as { route?: string; error?: string };
+        if (!spRes.ok) {
+          throw new Error(json.error || 'Failed to set password');
         }
+        route = json.route ?? '/onboarding/profile';
       }
-    } catch { /* fall through to default route */ }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set password');
+      setLoading(false);
+      return;
+    }
 
     setStage('success');
     setTimeout(() => router.replace(route), 1200);

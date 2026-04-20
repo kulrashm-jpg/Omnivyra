@@ -1,5 +1,5 @@
 {
-  "name": "drishiq-db-utils",
+  "name": "omnivyra-db-utils",
   "version": "1.0.0",
   "description": "Database inspection utilities for DrishiQ project",
   "main": "db-inspector.js",
@@ -21,5 +21,4 @@
   "author": "DrishiQ",
   "license": "MIT"
 }
-
 

@@ -15,6 +15,7 @@ import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
+import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 
 const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
 
@@ -27,6 +28,7 @@ type PrefillPayload = {
 export default function WhitepaperNewPage() {
   const router = useRouter();
   const { selectedCompanyId } = useCompanyContext();
+  const companyIdentity = useCompanyIdentity(selectedCompanyId);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveState, setLiveState] = useState<BlogFormState | null>(null);
@@ -449,6 +451,7 @@ export default function WhitepaperNewPage() {
                   onAutoImprove={autoImproveArea}
                   improvingArea={improvingArea}
                   onCreateCampaign={handleCreateCampaign}
+                  companyIdentity={companyIdentity}
                 />
               )}
             </div>

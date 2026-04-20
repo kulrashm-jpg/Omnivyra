@@ -2,6 +2,7 @@ import { supabase } from '../db/supabaseClient';
 import { runCampaignAiPlan } from './campaignAiOrchestrator';
 import { getProfile } from './companyProfileService';
 import { getCampaignPlanningInputs } from './campaignPlanningInputsService';
+import { buildStrategyInstructions, extractStrategyProfile } from '../../lib/content/companyStrategyPerspective';
 
 type RecommendationSnapshot = {
   id: string;
@@ -16,6 +17,7 @@ type RecommendationSnapshot = {
 };
 
 const stringifyContext = (snapshot: RecommendationSnapshot, profile: any) => {
+  const strategyProfile = extractStrategyProfile(profile);
   const context = {
     trend_topic: snapshot.trend_topic,
     category: snapshot.category ?? null,
@@ -41,6 +43,8 @@ const stringifyContext = (snapshot: RecommendationSnapshot, profile: any) => {
       brand_voice: profile?.brand_voice ?? null,
       goals: profile?.goals ?? null,
       content_themes: profile?.content_themes ?? null,
+      strategy_profile: strategyProfile ?? null,
+      strategy_instructions: buildStrategyInstructions(strategyProfile),
     },
   };
   console.debug('Recommendation enrichment context attached');

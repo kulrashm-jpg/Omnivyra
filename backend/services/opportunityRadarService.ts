@@ -43,7 +43,7 @@ export async function getOpportunityRadarStats(
     competitorResult,
     recommendationResult,
     comparisonResult,
-    buyingIntentResult,
+    buyingIntentSignalsResult,
   ] = await Promise.all([
     supabase
       .from('engagement_opportunities')
@@ -67,10 +67,10 @@ export async function getOpportunityRadarStats(
       .eq('resolved', false)
       .gte('detected_at', windowStart),
     supabase
-      .from('engagement_lead_signals')
-      .select('id', { count: 'exact', head: true })
+      .from('lead_signals')
+      .select('id, metadata')
       .eq('organization_id', organizationId)
-      .in('lead_intent', [...BUYING_INTENT_LEAD_INTENTS])
+      .eq('source_type', 'engagement')
       .gte('detected_at', windowStart),
   ]);
 
@@ -83,15 +83,21 @@ export async function getOpportunityRadarStats(
   if (comparisonResult.error) {
     console.warn('[opportunityRadar] product_comparison count error', comparisonResult.error.message);
   }
-  if (buyingIntentResult.error) {
-    console.warn('[opportunityRadar] buying_intent count error', buyingIntentResult.error.message);
+  if (buyingIntentSignalsResult.error) {
+    console.warn('[opportunityRadar] buying_intent count error', buyingIntentSignalsResult.error.message);
   }
+
+  const buying_intent = (buyingIntentSignalsResult.data ?? []).filter((row: { metadata?: Record<string, unknown> }) => {
+    const metadata = row.metadata ?? {};
+    const leadIntent = typeof metadata.lead_intent === 'string' ? metadata.lead_intent : null;
+    return leadIntent ? BUYING_INTENT_LEAD_INTENTS.includes(leadIntent as (typeof BUYING_INTENT_LEAD_INTENTS)[number]) : false;
+  }).length;
 
   return {
     competitor_complaints: competitorResult.count ?? 0,
     recommendation_requests: recommendationResult.count ?? 0,
     product_comparisons: comparisonResult.count ?? 0,
-    buying_intent: buyingIntentResult.count ?? 0,
+    buying_intent,
     window_hours: windowHours,
   };
 }

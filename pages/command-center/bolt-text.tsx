@@ -17,7 +17,7 @@ const CONTENT_FORMATS: { value: ContentFormat; label: string; description: strin
   { value: 'tweet', label: 'Tweet', description: 'Single punchy statement' },
   { value: 'short_story', label: 'Short Story', description: 'Narrative-driven content' },
   { value: 'article', label: 'Article', description: 'Thought leadership pieces' },
-  { value: 'poll', label: 'Poll', description: 'Interactive engagement content' },
+  { value: 'poll', label: 'Poll Post', description: 'Text-based engagement with numbered options' },
 ];
 
 const DURATION_OPTIONS: { value: number; label: string }[] = [

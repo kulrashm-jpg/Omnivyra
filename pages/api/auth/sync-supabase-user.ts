@@ -13,6 +13,8 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { verifySupabaseAuthHeader, validateWorkEmail } from '../../../lib/auth/serverValidation';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 import { recordAnomalyEvent } from '../../../lib/auth/anomalyDetector';
+import { logger } from '../../../backend/services/logger';
+import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
 type SuccessResponse = { ok: true };
 type ErrorResponse   = { error: string; code?: string };
@@ -22,6 +24,7 @@ export default async function handler(
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  seedRequestContextFromRequest(req);
 
   // ── 1. Verify Supabase token ──────────────────────────────────────────────
   let supabaseUid: string;
@@ -30,6 +33,7 @@ export default async function handler(
     const verified = await verifySupabaseAuthHeader(req.headers.authorization);
     supabaseUid = verified.id;
     email       = verified.email;
+    seedRequestContextFromRequest(req, { userId: supabaseUid });
   } catch {
     return res.status(401).json({ error: 'Invalid or expired session' });
   }
@@ -139,7 +143,7 @@ export default async function handler(
   });
 
   if (insertError) {
-    console.error('[sync-supabase-user] insert error:', insertError);
+    logger.error('auth_sync_insert_failed', { email: normalizedEmail, message: insertError.message });
     return res.status(500).json({ error: 'Failed to sync user to database' });
   }
 

@@ -6,12 +6,16 @@ import type { ContentBlock } from '../../lib/content/blockTypes';
 import {
   calculateContentQualityScore,
   getContentPublishBlockers,
+  calculateCompanyAlignment,
   type ContentFormMeta,
+  type CompanyIdentity,
+  type CompanyAlignmentResult,
 } from '../../lib/content/qualityScoringCore';
 import {
   calculateNewsletterQualityScore,
   getNewsletterPublishBlockers,
 } from '../../lib/newsletter/newsletterValidation';
+import { flattenBlocks } from '../../lib/blog/blockUtils';
 
 export type ImproveArea = 'structure' | 'depth' | 'geo' | 'linking' | 'seo';
 
@@ -22,6 +26,10 @@ interface ContentQualityPanelProps {
   onAutoImprove: (area: ImproveArea) => Promise<void>;
   improvingArea: ImproveArea | null;
   onCreateCampaign?: () => void;
+  /** When provided, shows Company Alignment Score section. */
+  companyIdentity?: CompanyIdentity;
+  /** Called when user clicks "Improve Alignment" (shown when score < 60). */
+  onImproveAlignment?: () => void;
 }
 
 type ScoreConfig = {
@@ -89,6 +97,8 @@ export function ContentQualityPanel({
   onAutoImprove,
   improvingArea,
   onCreateCampaign,
+  companyIdentity,
+  onImproveAlignment,
 }: ContentQualityPanelProps) {
   const scoreConfig = getScoreConfig(formState.content_type);
 
@@ -101,6 +111,28 @@ export function ContentQualityPanel({
     blocks,
     formState,
   ]);
+
+  // Company alignment scoring — extract text from blocks and score
+  const companyAlignment: CompanyAlignmentResult = useMemo(() => {
+    if (!companyIdentity) {
+      return { score: null, verdict: 'Unavailable' as const, highlights: [], issues: [], suggestions: [] };
+    }
+    const contentText = flattenBlocks(blocks)
+      .map((b) => {
+        if (b.type === 'paragraph') return (b as any).html?.replace(/<[^>]+>/g, ' ') || '';
+        if (b.type === 'summary') return (b as any).body || '';
+        if (b.type === 'key_insights') return ((b as any).items || []).join(' ');
+        if (b.type === 'callout') return `${(b as any).title || ''} ${(b as any).body || ''}`;
+        return '';
+      })
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (contentText.length < 50) {
+      return { score: null, verdict: 'Unavailable' as const, highlights: [], issues: ['Not enough content to score'], suggestions: [] };
+    }
+    return calculateCompanyAlignment(contentText, companyIdentity);
+  }, [blocks, companyIdentity]);
 
   const totalPct = Math.round((score.total / scoreConfig.total) * 100);
   const areas: ImproveArea[] = ['structure', 'depth', 'seo', 'geo', 'linking'];
@@ -194,6 +226,71 @@ export function ContentQualityPanel({
           ))}
           {warnIssues.length > 3 && (
             <p className="text-xs text-gray-400">+{warnIssues.length - 3} more suggestions</p>
+          )}
+        </div>
+      )}
+
+      {/* ── Company Alignment Score ──────────────────────────────────── */}
+      {companyIdentity && companyAlignment.score !== null && (
+        <div className="border-t border-gray-100 px-4 pb-3 pt-3">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Company Alignment</span>
+            <span className={`text-sm font-bold tabular-nums ${scoreColor(companyAlignment.score)}`}>
+              {companyAlignment.score}/100
+            </span>
+          </div>
+          <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${barColor(companyAlignment.score)}`}
+              style={{ width: `${companyAlignment.score}%` }}
+            />
+          </div>
+          {companyAlignment.highlights.length > 0 && (
+            <div className="space-y-0.5 mb-1">
+              {companyAlignment.highlights.slice(0, 3).map((h, i) => (
+                <div key={`ca-h-${i}`} className="flex gap-1.5 text-xs text-emerald-700">
+                  <span className="mt-px shrink-0">&#10003;</span>
+                  <span>{h}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {companyAlignment.issues.length > 0 && (
+            <div className="space-y-0.5">
+              {companyAlignment.issues.slice(0, 3).map((iss, i) => (
+                <div key={`ca-i-${i}`} className="flex gap-1.5 text-xs text-amber-700">
+                  <span className="mt-px shrink-0">!</span>
+                  <span>{iss}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {companyAlignment.suggestions.length > 0 && (
+            <div className="mt-1.5 space-y-0.5">
+              {companyAlignment.suggestions.map((s, i) => (
+                <div key={`ca-s-${i}`} className="flex gap-1.5 text-xs text-gray-500">
+                  <span className="mt-px shrink-0">&rarr;</span>
+                  <span>{s}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className={`mt-1 text-xs font-medium ${
+            companyAlignment.verdict === 'Strong' ? 'text-emerald-600' :
+            companyAlignment.verdict === 'Moderate' ? 'text-amber-600' :
+            'text-red-500'
+          }`}>
+            {companyAlignment.verdict} alignment with company context
+          </p>
+          {onImproveAlignment && companyAlignment.score !== null && companyAlignment.score < 60 && (
+            <button
+              type="button"
+              onClick={onImproveAlignment}
+              className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100"
+            >
+              <Zap className="h-3 w-3" />
+              Improve Alignment
+            </button>
           )}
         </div>
       )}

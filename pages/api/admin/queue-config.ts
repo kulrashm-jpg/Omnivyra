@@ -31,13 +31,14 @@ import {
   validateQueueConfig,
   type QueueAdminConfig,
 } from '../../../backend/services/adminRuntimeConfig';
+import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { recordAdminAudit } from '../../../backend/services/adminAuditService';
+import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) return res.status(403).json({ error: 'NOT_AUTHORIZED' });
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (!(await requireAdminRateLimit(req, res, 'rl:admin:queue-config', 20, 60))) return;
+  const admin = await requireSuperAdminUser(req, res);
+  if (!admin) return;
 
   if (req.method === 'GET') {
     const cfg = await getQueueAdminConfig();
@@ -53,12 +54,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...config,
       v:         1,
       updatedAt: new Date().toISOString(),
-      updatedBy: 'super_admin',
+      updatedBy: admin.id,
     };
 
     await saveQueueAdminConfig(updated);
+    await recordAdminAudit({
+      actorUserId: admin.id,
+      action: 'ADMIN_QUEUE_CONFIG_UPDATE',
+      targetType: 'queue_config',
+      metadata: { config: updated },
+      idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+    });
     return res.status(200).json({ ok: true, config: updated });
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default withIdempotency(handler, { scope: 'admin-queue-config', methods: ['POST'] });

@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
 import type { NewsletterGenerationRequest, NewsletterGenerationResult } from './runNewsletterGeneration';
@@ -443,6 +444,11 @@ export async function runOperatorPlaybookGeneration(input: NewsletterGenerationR
   let best: ReturnType<typeof parseOperatorPlaybookOutput> | null = null;
   let bestScore = -1;
 
+  const enhancedPlaybookSystemPrompt = await enhanceSystemPromptForNewsletter(
+    'You are an operator writing an action-letter newsletter. Return only valid JSON. Focus on executable steps, realistic mistakes, and immediate action clarity.',
+    input.company_id, input.companyContext,
+  );
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
       operation: 'newsletterGeneration',
@@ -453,7 +459,7 @@ export async function runOperatorPlaybookGeneration(input: NewsletterGenerationR
       response_format: { type: 'json_object' },
       max_tokens: targetWords >= 1600 ? 4600 : 3600,
       messages: [
-        { role: 'system', content: 'You are an operator writing an action-letter newsletter. Return only valid JSON. Focus on executable steps, realistic mistakes, and immediate action clarity.' },
+        { role: 'system', content: enhancedPlaybookSystemPrompt },
         { role: 'user', content: buildOperatorPlaybookPrompt(input, targetWords, retryReason) },
       ],
     });

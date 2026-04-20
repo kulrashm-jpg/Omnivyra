@@ -1,39 +1,21 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin, getRbacConfig, saveRbacConfig } from '../../../backend/services/rbacService';
+import { getRbacConfig, saveRbacConfig } from '../../../backend/services/rbacService';
+import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { recordAdminAudit } from '../../../backend/services/adminAuditService';
+import { logger } from '../../../backend/services/logger';
+import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 
-const requireSuperAdminAccess = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  // Legacy super-admin login: cookie takes precedence so RBAC works when user also has a Supabase session
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
-    return true;
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      return false;
-    }
-    return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireSuperAdminAccess(req, res))) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:rbac', 20, 60))) return;
+  const admin = await requireSuperAdminUser(req, res);
+  if (!admin) return;
 
   if (req.method === 'GET') {
     try {
       const config = await getRbacConfig();
       return res.status(200).json(config);
     } catch (err: any) {
-      console.error('RBAC config fetch failed:', err);
+      logger.error('super_admin_rbac_load_failed', { message: err?.message || 'Failed to load RBAC configuration' });
       return res.status(500).json({
         error: 'RBAC_LOAD_FAILED',
         message: err?.message || 'Failed to load RBAC configuration',
@@ -42,7 +24,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'POST') {
-    const { user } = await getSupabaseUserFromRequest(req);
     const { roles, permissions } = req.body || {};
     if (!permissions || typeof permissions !== 'object') {
       return res.status(400).json({ error: 'permissions_required' });
@@ -51,7 +32,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const updated = await saveRbacConfig({
         roles: Array.isArray(roles) ? roles : [],
         permissions,
-        updatedBy: user?.id || null,
+        updatedBy: admin.id,
+      });
+      await recordAdminAudit({
+        actorUserId: admin.id,
+        action: 'SUPER_ADMIN_RBAC_UPDATE',
+        targetType: 'rbac_config',
+        metadata: { roles: Array.isArray(roles) ? roles : [], permissions },
+        idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
       });
       return res.status(200).json(updated);
     } catch (error: any) {
@@ -61,3 +49,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default withIdempotency(handler, { scope: 'super-admin-rbac', methods: ['POST'] });

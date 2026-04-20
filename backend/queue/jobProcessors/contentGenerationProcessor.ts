@@ -180,7 +180,7 @@ async function processSingleContentJob(job: Job): Promise<GenerationOutput> {
       jobId: job.id,
       issues: validation.issues,
     });
-    // Continue anyway with warning, don't fail
+    throw new Error(`Content validation failed: ${(validation.issues || []).join('; ')}`);
   }
 
   // Step 6: Generate platform variants (if needed)
@@ -557,4 +557,3 @@ async function queueEngagementFeedbackTracking(data: Record<string, unknown>): P
   // 2. Calculate effectiveness score
   // 3. Update tone/angle effectiveness cache
 }
-

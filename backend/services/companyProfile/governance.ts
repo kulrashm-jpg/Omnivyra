@@ -188,6 +188,9 @@ const COMPANY_ADMIN_VISIBLE_PROFILE_KEYS: (keyof CompanyProfile)[] = [
   'brand_positioning',
   'competitive_advantages',
   'growth_priorities',
+  // Strategy profile
+  'strategy_profile',
+  'strategyProfile',
   // Lock/edit metadata (read-only)
   'user_locked_fields',
   'last_edited_by',
@@ -207,7 +210,7 @@ const COMPANY_ADMIN_VISIBLE_PROFILE_KEYS: (keyof CompanyProfile)[] = [
 
 /**
  * Returns a limited view of the company profile for COMPANY_ADMIN.
- * Strips strategy, problem transformation, commercial, and marketing intelligence fields.
+ * Keeps strategic/company-context fields while avoiding broader admin-only internals.
  */
 export function toLimitedCompanyProfile(profile: CompanyProfile | null): CompanyProfile | null {
   if (!profile) return null;

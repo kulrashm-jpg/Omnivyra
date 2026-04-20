@@ -12,5 +12,6 @@ import { getCreditCostTiers } from '../../../backend/services/creditDeductionSer
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
-  return res.status(200).json(getCreditCostTiers());
+  const tiers = await getCreditCostTiers();
+  return res.status(200).json(tiers);
 }

@@ -5,6 +5,20 @@
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type CompanyProfile = {
+  strategy_profile?: {
+    worldview?: string | null;
+    contrarianBeliefs?: string[] | null;
+    primaryFocus?: string[] | null;
+    differentiation?: string[] | null;
+    typicalAngles?: string[] | null;
+  } | null;
+  strategyProfile?: {
+    worldview?: string | null;
+    contrarianBeliefs?: string[] | null;
+    primaryFocus?: string[] | null;
+    differentiation?: string[] | null;
+    typicalAngles?: string[] | null;
+  } | null;
   company_id?: string;
   name?: string;
   industry?: string;
@@ -132,6 +146,8 @@ export type CompanyProfileRefinement = {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const emptyProfile: CompanyProfile = {
+  strategy_profile: null,
+  strategyProfile: null,
   name: '',
   industry: '',
   category: '',

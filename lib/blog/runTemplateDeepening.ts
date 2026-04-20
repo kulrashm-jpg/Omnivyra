@@ -13,7 +13,9 @@ import {
   collectParagraphTargets,
   applyClassicStructuredRepair,
   applyTemplateStructuredRepair,
+  describeSectionDepthNeeds,
 } from './runBlogGenerationPureHelpers';
+import { validateContentVariation } from '../content/contentVariationValidator';
 
 export async function deepenTemplateParagraphsIndividually(args: {
   blocks: ContentBlock[];
@@ -41,6 +43,18 @@ export async function deepenTemplateParagraphsIndividually(args: {
 
   for (let index = 0; index < paragraphTargets.length; index++) {
     const target = paragraphTargets[index];
+    const sectionDepthNeeds = describeSectionDepthNeeds(
+      stripHtmlForWordCount(target.currentHtml),
+      args.targetWords,
+    );
+    const previousText = index > 0 ? repairedParagraphs[index - 1]?.html || paragraphTargets[index - 1]?.currentHtml || '' : '';
+    const similarityToPrevious = previousText
+      ? validateContentVariation([
+          { id: 'previous', text: previousText },
+          { id: 'current', text: target.currentHtml },
+        ]).maxSectionSimilarity
+      : 0;
+    const mustRegenerateCompletely = similarityToPrevious >= 0.7;
     const result = await runCompletionWithOperation({
       operation: 'blogGeneration',
       companyId: args.companyId,
@@ -58,8 +72,9 @@ export async function deepenTemplateParagraphsIndividually(args: {
             `Rules:\n` +
             `- Write valid HTML using 2-3 <p> tags\n` +
             `- Write at least ${args.minParagraphWords} words\n` +
-            `- Add real explanation, examples, implications, and practical detail\n` +
+            `- Rewrite the section to include explanation, an example or scenario, and an implication or action\n` +
             `- Do not write bullets, headings, or placeholders\n` +
+            `- If this section overlaps too much with the prior section, replace the angle completely instead of paraphrasing it\n` +
             `- Do not mention word counts or writing instructions\n`,
         },
         {
@@ -71,6 +86,12 @@ export async function deepenTemplateParagraphsIndividually(args: {
             `Section heading: ${target.headingContext || 'Body section'}\n` +
             `Block hint: ${target.hint || 'Expand the current paragraph block into a complete body section.'}\n` +
             `Current paragraph depth: ${target.currentWords} words\n` +
+            (sectionDepthNeeds.length > 0
+              ? `This section is missing: ${sectionDepthNeeds.join('; ')}.\nRewrite the section to include explanation, an example or scenario, and an implication or action.\n`
+              : '') +
+            (mustRegenerateCompletely
+              ? `This section is too similar to the previous section (${Math.round(similarityToPrevious * 100)}% similarity). Regenerate it completely with a different pain point, scenario, product detail, or outcome.\n`
+              : '') +
             `Current block text:\n${stripHtmlForWordCount(target.currentHtml).trim() || '[empty]'}\n\n` +
             `Rewrite this block so it becomes a complete long-form section for the article.`,
         },

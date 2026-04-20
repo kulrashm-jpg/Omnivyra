@@ -78,6 +78,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (Number.isNaN(scheduledFor.getTime())) {
     return res.status(400).json({ error: 'Invalid scheduledDate' });
   }
+  // Only allow scheduling from today onwards (compare on date-only basis).
+  // Past DATES belong to work that missed its publish window. Within today,
+  // allow any time slot — the scheduler will fire ASAP if the time has passed.
+  {
+    const requestedDateStr = String(scheduledDate).slice(0, 10);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (requestedDateStr && requestedDateStr < todayStr) {
+      return res.status(400).json({
+        error: 'CANNOT_SCHEDULE_IN_PAST',
+        message: 'Scheduled date must be today or in the future.',
+        requestedDate: requestedDateStr,
+        today: todayStr,
+      });
+    }
+  }
 
   // Normalise 'x' → 'twitter' for DB storage (chk_platform constraint only allows 'twitter')
   const platformNorm = String(platform).toLowerCase().trim() === 'x' ? 'twitter' : String(platform).toLowerCase().trim();
@@ -141,8 +156,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     content_type: (() => {
       const ct = String(contentType || 'post').toLowerCase().trim();
       // Normalise aliases to values accepted by chk_content_type constraint
+      // LinkedIn only allows: post, article, video, audio_event
       if (ct === 'feed_post') return 'post';
       if (ct === 'tweet') return 'tweet';
+      if (ct === 'poll') return 'post'; // poll posts are text posts with engagement format
+      if (ct === 'short_story') return 'post'; // short stories publish as regular posts
       return ct;
     })(),
     title: String(title || '').trim() || null,

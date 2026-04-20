@@ -37,9 +37,10 @@ export async function generateDailyDigest(organizationId: string): Promise<Daily
       .gte('created_at', since24h),
     getHighPriorityCount(organizationId),
     supabase
-      .from('engagement_lead_signals')
+      .from('lead_signals')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', organizationId)
+      .eq('source_type', 'engagement')
       .gte('detected_at', since24h),
     supabase
       .from('engagement_opportunities')

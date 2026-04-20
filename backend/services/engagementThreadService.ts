@@ -40,8 +40,80 @@ export type ThreadSummary = {
   sentiment?: string | null;
 };
 
+async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
+  const { data: roleUsers } = await supabase
+    .from('user_company_roles')
+    .select('user_id')
+    .eq('company_id', organizationId)
+    .eq('status', 'active');
+
+  const userIds = (roleUsers ?? []).map((row: { user_id: string }) => row.user_id);
+  if (userIds.length === 0) return new Set();
+
+  const { data: accounts } = await supabase
+    .from('social_accounts')
+    .select('platform, platform_user_id')
+    .in('user_id', userIds)
+    .eq('is_active', true);
+
+  if (!accounts?.length) return new Set();
+
+  const platformUserPairs = new Set(
+    (accounts as Array<{ platform: string; platform_user_id: string }>).map(
+      (account) => `${(account.platform || '').toLowerCase()}:${account.platform_user_id || ''}`
+    )
+  );
+
+  const { data: authors } = await supabase
+    .from('engagement_authors')
+    .select('id, platform, platform_user_id')
+    .in(
+      'platform',
+      Array.from(
+        new Set(
+          (accounts as Array<{ platform: string }>).map((account) =>
+            (account.platform || '').toLowerCase()
+          )
+        )
+      )
+    );
+
+  const orgAuthorIds = new Set<string>();
+  (authors ?? []).forEach((author: { id: string; platform: string; platform_user_id: string }) => {
+    const key = `${(author.platform || '').toLowerCase()}:${author.platform_user_id || ''}`;
+    if (platformUserPairs.has(key)) {
+      orgAuthorIds.add(author.id);
+    }
+  });
+
+  return orgAuthorIds;
+}
+
+function inferInboundDmFallback(input: {
+  message_type?: string | null;
+  raw_payload?: Record<string, unknown> | null;
+  content?: string | null;
+}): boolean {
+  const originalMessageType =
+    typeof input.raw_payload?.original_message_type === 'string'
+      ? input.raw_payload.original_message_type.toLowerCase()
+      : null;
+  const messageType = (input.message_type ?? '').toLowerCase();
+  const isDm = messageType === 'dm' || originalMessageType === 'dm';
+
+  if (!isDm) return false;
+
+  const content = (input.content ?? '').trim();
+  if (!content) return false;
+
+  // LinkedIn exported self-authored message previews usually begin with "You:".
+  // Treat the rest of the DM threads as requiring attention until a richer read-state exists.
+  return !/^you\s*:/i.test(content);
+}
+
 export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSummary[]> {
   const limit = Math.min(100, Math.max(1, filters.limit ?? 50));
+  const orgAuthorIds = await getOrgAuthorIds(filters.organization_id);
 
   let query = supabase
     .from('engagement_threads')
@@ -110,11 +182,19 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
 
   const { data: messages } = await supabase
     .from('engagement_messages')
-    .select('id, thread_id, content, platform_created_at, author_id, sentiment_score')
+    .select('id, thread_id, content, platform_created_at, author_id, sentiment_score, message_type, raw_payload')
     .in('thread_id', threadIds)
     .order('platform_created_at', { ascending: false });
 
-  const latestByThread = new Map<string, { id: string; content: string; platform_created_at: string | null; sentiment_score?: number | null }>();
+  const latestByThread = new Map<string, {
+    id: string;
+    content: string;
+    platform_created_at: string | null;
+    sentiment_score?: number | null;
+    message_type?: string | null;
+    raw_payload?: Record<string, unknown> | null;
+    author_id?: string | null;
+  }>();
   const countByThread = new Map<string, number>();
   const authorIds = new Set<string>();
   (messages ?? []).forEach((m: any) => {
@@ -124,6 +204,12 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
         content: (m.content ?? '').toString().slice(0, 200),
         platform_created_at: m.platform_created_at ?? null,
         sentiment_score: m.sentiment_score ?? null,
+        message_type: m.message_type ?? null,
+        raw_payload:
+          m.raw_payload && typeof m.raw_payload === 'object'
+            ? (m.raw_payload as Record<string, unknown>)
+            : null,
+        author_id: m.author_id ?? null,
       });
     }
     countByThread.set(m.thread_id, (countByThread.get(m.thread_id) ?? 0) + 1);
@@ -157,6 +243,23 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
     const leadDetected = leadResult?.lead_detected ?? intel?.lead_detected ?? false;
     const leadScore = leadResult?.thread_lead_score ?? 0;
     const classification = classificationByThread.get(t.id);
+    const latestAuthorIsExternal = latest?.author_id ? !orgAuthorIds.has(latest.author_id) : true;
+    const inferredUnreadCount =
+      Number(t.unread_count) > 0
+        ? Number(t.unread_count)
+        : latestAuthorIsExternal
+          ? 1
+          : 0;
+    const dmFallbackUnread =
+      inferredUnreadCount > 0
+        ? inferredUnreadCount
+        : inferInboundDmFallback({
+            message_type: latest?.message_type ?? null,
+            raw_payload: latest?.raw_payload ?? null,
+            content: latest?.content ?? null,
+          })
+          ? 1
+          : 0;
 
     const scored = scoreThreadPriority({
       content: latest?.content ?? '',
@@ -180,7 +283,7 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       latest_message_time: latest?.platform_created_at ?? null,
       latest_message_id: latest?.id ?? null,
       priority_score: priorityScore,
-      unread_count: Number(t.unread_count) ?? 0,
+      unread_count: dmFallbackUnread,
       dominant_intent: intel?.dominant_intent ?? null,
       lead_detected: leadDetected,
       lead_score: leadScore,

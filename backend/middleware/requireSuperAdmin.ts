@@ -8,8 +8,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../services/rbacService';
+import { requireSuperAdminUser } from '../services/requestAccessService';
 
 /**
  * Check super admin authorization. Returns true if authorized.
@@ -19,13 +18,5 @@ export async function requireSuperAdmin(
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') {
-    return true;
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) {
-    return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+  return !!(await requireSuperAdminUser(req, res));
 }

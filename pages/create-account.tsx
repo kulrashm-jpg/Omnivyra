@@ -82,14 +82,7 @@ export default function CreateAccountPage() {
       return;
     }
 
-    // Send magic link → /auth/callback → /auth/set-password
-    const { error: otpErr } = await getSupabaseBrowser().auth.signInWithOtp({
-      email: trimmed,
-      options: { emailRedirectTo: `${origin}/auth/callback` },
-    });
-
     setLoading(false);
-    if (otpErr) { setError(otpErr.message); return; }
     setSent(true);
   }
 

@@ -1,3 +1,11 @@
+export type StrategyProfile = {
+  worldview?: string | null;
+  contrarianBeliefs?: string[] | null;
+  primaryFocus?: string[] | null;
+  differentiation?: string[] | null;
+  typicalAngles?: string[] | null;
+};
+
 export type CompanyProfile = {
   id?: string;
   company_id: string;
@@ -59,6 +67,8 @@ export type CompanyProfile = {
   brand_positioning?: string | null;
   competitive_advantages?: string | null;
   growth_priorities?: string | null;
+  strategy_profile?: StrategyProfile | null;
+  strategyProfile?: StrategyProfile | null;
   // Campaign Purpose & Strategic Intent (from Define Target Customer / Define Strategic Purpose)
   campaign_purpose_intent?: {
     primary_objective?: string | null;

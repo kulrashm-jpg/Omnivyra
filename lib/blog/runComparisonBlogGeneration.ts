@@ -2,6 +2,7 @@ import { runCompletionWithOperation } from '../../backend/services/aiGateway';
 import { flattenBlocks } from './blockUtils';
 import type { ContentBlock } from './blockTypes';
 import type { BlogGenerationInput } from './blogGenerationEngine';
+import { buildSectionEnforcementPrompt, type CompanyIdentity } from '../content/companyContextBlock';
 
 type ComparisonDraft = {
   title: string;
@@ -222,6 +223,28 @@ export async function runComparisonBlogGeneration(args: {
   targetWords: number;
   angleLabel?: string;
 }): Promise<ComparisonDraft | null> {
+  // ── Company context injection ──
+  const a = args.generationInput.answers || {};
+  const companyContextBlock = [
+    a.companyName ? `Company: ${a.companyName}` : null,
+    a.industry ? `Industry: ${a.industry}` : null,
+    a.audience || a.target_audience ? `Target audience: ${a.audience || a.target_audience}` : null,
+    a.uniqueness_directive ? `Unique positioning: ${a.uniqueness_directive}` : null,
+    a.must_include_points ? `Must-include points: ${a.must_include_points}` : null,
+    a.campaign_objective ? `Campaign objective: ${a.campaign_objective}` : null,
+    a.trend_context ? `Market context: ${a.trend_context}` : null,
+  ].filter(Boolean).join('\n');
+
+  const _sectionIdentity: CompanyIdentity = {
+    companyName: a.companyName || undefined,
+    targetAudience: a.audience || a.target_audience || undefined,
+    coreProblem: a.campaign_objective || undefined,
+    painPoints: a.must_include_points
+      ? a.must_include_points.split(';').map(s => s.trim()).filter(s => s.length > 10).slice(0, 4)
+      : undefined,
+    uniqueValue: a.uniqueness_directive || undefined,
+  };
+
   const { paragraphs, lists } = collectComparisonBlueprints(args.templateBlocks);
   const paragraphTarget = Math.max(
     args.targetWords >= 1600 ? 160 : args.targetWords >= 1200 ? 140 : 120,
@@ -244,6 +267,13 @@ export async function runComparisonBlogGeneration(args: {
         role: 'system',
         content:
           `You are writing a comparison-style B2B blog article.\n` +
+          (companyContextBlock ? `\nCOMPANY CONTEXT:\n${companyContextBlock}\n\n` : '') +
+          `CONTENT QUALITY RULES (MANDATORY):\n` +
+          `- Every section MUST reference the company context above. Do NOT write generic content.\n` +
+          `- Use specific scenarios, workflows, or real-world situations — not abstract statements.\n` +
+          `- Include at least one contrarian insight or non-obvious observation per major section.\n` +
+          `- Replace buzzwords with concrete examples.\n` +
+          `- The article must read as if written BY this specific company, not ABOUT a generic topic.\n\n` +
           `Return JSON only with this exact shape:\n` +
           `{\n` +
           `  "title": "string",\n` +
@@ -275,7 +305,8 @@ export async function runComparisonBlogGeneration(args: {
           `Topic: ${args.topic}\n` +
           `Angle: ${args.angleLabel || args.generationInput.selected_angle?.label || 'Analytical'}\n` +
           `Working title: ${args.generationInput.selected_angle?.title || args.topic}\n` +
-          `${args.generationInput.unifiedPromptContext ? `\nAdditional context:\n${args.generationInput.unifiedPromptContext}\n` : ''}` +
+          (companyContextBlock ? `\nCOMPANY CONTEXT:\n${companyContextBlock}\n` : '') +
+          `${args.generationInput.unifiedPromptContext ? `\nMARKET INTELLIGENCE:\n${args.generationInput.unifiedPromptContext}\n` : ''}` +
           `\nParagraph slots to fill in order:\n` +
           `${paragraphs.map((item) => `- Paragraph ${item.index}: section "${item.heading || 'Comparison section'}" :: ${item.hint || 'Write a full comparison section.'}`).join('\n')}\n\n` +
           `List slots to fill in order:\n` +
@@ -336,7 +367,9 @@ export async function runComparisonBlogGeneration(args: {
             content:
               `Return JSON only: { "html": "<p>...</p><p>...</p>" }\n` +
               `Write one decision-grade comparison section with at least ${paragraphTarget} words.\n` +
-              `Use 2-3 <p> tags, cover strengths, tradeoffs, and scenario fit, and do not output headings or bullets.\n`,
+              `Use 2-3 <p> tags, cover strengths, tradeoffs, and scenario fit, and do not output headings or bullets.\n` +
+              (companyContextBlock ? `Reference this company context throughout:\n${companyContextBlock}\n` : '') +
+              buildSectionEnforcementPrompt(_sectionIdentity, blueprint.index - 1),
           },
           {
             role: 'user',

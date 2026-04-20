@@ -220,7 +220,7 @@ export default function EngagementIntelligenceSection({
                   accountId: companyId,
                   context: 'engagement_intelligence',
                 });
-                window.location.href = '/engagement/leads?sample=1';
+                window.location.href = '/engagement';
               },
             }}
             examplePreview={<ExamplePreview variant="engagement" />}

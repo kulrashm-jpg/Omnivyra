@@ -17,23 +17,8 @@ function normalizeMembershipType(value: string | null | undefined): MembershipTy
 export const resolveUserContext = async (req?: NextApiRequest): Promise<UserContext> => {
   if (!req) return resolveFromLib();
 
-  const archCompanyId = getContentArchitectCompanyId(req);
-  if (archCompanyId) {
-    return {
-      userId: 'content_architect',
-      role: 'admin',
-      companyIds: [archCompanyId],
-      defaultCompanyId: archCompanyId,
-    };
-  }
-  if (isContentArchitectSession(req)) {
-    return {
-      userId: 'content_architect',
-      role: 'admin',
-      companyIds: [],
-      defaultCompanyId: '',
-    };
-  }
+  void getContentArchitectCompanyId;
+  void isContentArchitectSession;
 
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user?.id) {

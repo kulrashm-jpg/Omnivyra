@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
 import type { NewsletterGenerationRequest, NewsletterGenerationResult } from './runNewsletterGeneration';
@@ -468,6 +469,11 @@ export async function runSplitScreenInsightGeneration(
   let best: ReturnType<typeof parseSplitScreenOutput> | null = null;
   let bestScore = -1;
 
+  const enhancedSplitScreenSystemPrompt = await enhanceSystemPromptForNewsletter(
+    'You are a senior insight-letter editor. Return only valid JSON. Make the contrast between the surface story and the deeper reality feel sharp, grounded, and reusable.',
+    input.company_id, input.companyContext,
+  );
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
       operation: 'newsletterGeneration',
@@ -480,7 +486,7 @@ export async function runSplitScreenInsightGeneration(
       messages: [
         {
           role: 'system',
-          content: 'You are a senior insight-letter editor. Return only valid JSON. Make the contrast between the surface story and the deeper reality feel sharp, grounded, and reusable.',
+          content: enhancedSplitScreenSystemPrompt,
         },
         {
           role: 'user',

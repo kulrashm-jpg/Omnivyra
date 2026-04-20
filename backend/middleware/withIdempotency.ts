@@ -1,0 +1,217 @@
+import { createHash } from 'crypto';
+import type { NextApiHandler, NextApiRequest, NextApiResponse } from 'next';
+import { supabase } from '../db/supabaseClient';
+import { getOrCreateRequestId, runWithRequestContext } from '../services/requestContext';
+
+type IdempotencyRecord = {
+  id: string;
+  idempotency_key: string;
+  status: 'processing' | 'completed' | 'failed';
+  request_hash: string;
+  response_status: number | null;
+  response_body: unknown;
+};
+
+type Options = {
+  methods?: string[];
+  scope?: string;
+};
+
+function parseBody(req: NextApiRequest): unknown {
+  if (typeof req.body === 'string') {
+    try {
+      return JSON.parse(req.body || '{}');
+    } catch {
+      return req.body;
+    }
+  }
+  return req.body ?? null;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`).join(',')}}`;
+}
+
+function buildRequestHash(req: NextApiRequest, scope: string): string {
+  const payload = {
+    scope,
+    method: req.method ?? 'GET',
+    query: req.query,
+    body: parseBody(req),
+  };
+  return createHash('sha256').update(stableStringify(payload)).digest('hex');
+}
+
+async function loadExisting(scope: string, key: string): Promise<IdempotencyRecord | null> {
+  const { data, error } = await supabase
+    .from('api_idempotency_keys')
+    .select('id, idempotency_key, status, request_hash, response_status, response_body')
+    .eq('scope', scope)
+    .eq('idempotency_key', key)
+    .maybeSingle();
+
+  if (error) throw new Error(`IDEMPOTENCY_LOOKUP_FAILED:${error.message}`);
+  return (data as IdempotencyRecord | null) ?? null;
+}
+
+async function createRecord(scope: string, key: string, requestHash: string, requestId: string): Promise<void> {
+  const { error } = await supabase.from('api_idempotency_keys').insert({
+    scope,
+    idempotency_key: key,
+    request_hash: requestHash,
+    status: 'processing',
+    request_id: requestId,
+    locked_at: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  if (error) throw error;
+}
+
+async function markRecord(
+  scope: string,
+  key: string,
+  patch: Partial<{
+    status: 'processing' | 'completed' | 'failed';
+    response_status: number;
+    response_body: unknown;
+    last_error: string | null;
+  }>,
+): Promise<void> {
+  const { error } = await supabase
+    .from('api_idempotency_keys')
+    .update({
+      ...patch,
+      updated_at: new Date().toISOString(),
+      locked_at: patch.status === 'processing' ? new Date().toISOString() : null,
+    })
+    .eq('scope', scope)
+    .eq('idempotency_key', key);
+  if (error) throw new Error(`IDEMPOTENCY_UPDATE_FAILED:${error.message}`);
+}
+
+export function withIdempotency(
+  handler: NextApiHandler,
+  options: Options = {},
+): NextApiHandler {
+  const methods = new Set((options.methods ?? ['POST', 'PUT', 'PATCH', 'DELETE']).map((m) => m.toUpperCase()));
+  const scope = options.scope ?? 'default';
+
+  return async (req: NextApiRequest, res: NextApiResponse) => {
+    const method = (req.method ?? 'GET').toUpperCase();
+    if (!methods.has(method)) {
+      const requestId = getOrCreateRequestId(req);
+      res.setHeader('X-Request-Id', requestId);
+      return runWithRequestContext({ requestId, correlationId: requestId }, () => handler(req, res));
+    }
+
+    const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+    if (!idempotencyKey) {
+      return res.status(400).json({ error: 'Idempotency-Key header required', code: 'IDEMPOTENCY_KEY_REQUIRED' });
+    }
+
+    const requestId = getOrCreateRequestId(req);
+    const requestHash = buildRequestHash(req, scope);
+    res.setHeader('X-Request-Id', requestId);
+
+    const run = async () => {
+      let existing = await loadExisting(scope, idempotencyKey);
+      if (!existing) {
+        try {
+          await createRecord(scope, idempotencyKey, requestHash, requestId);
+          existing = await loadExisting(scope, idempotencyKey);
+        } catch (error: any) {
+          if (error?.code !== '23505') throw error;
+          existing = await loadExisting(scope, idempotencyKey);
+        }
+      }
+
+      if (!existing) {
+        return res.status(500).json({ error: 'Failed to initialize idempotency state' });
+      }
+
+      if (existing.request_hash !== requestHash) {
+        return res.status(409).json({ error: 'Idempotency key reused with different payload', code: 'IDEMPOTENCY_CONFLICT' });
+      }
+
+      if (existing.status === 'completed') {
+        return res
+          .status(existing.response_status ?? 200)
+          .json((existing.response_body as any) ?? { ok: true, replayed: true });
+      }
+
+      if (existing.status === 'processing') {
+        return res.status(409).json({ error: 'Request with this Idempotency-Key is already in progress', code: 'IDEMPOTENCY_IN_PROGRESS' });
+      }
+
+      if (existing.status === 'failed') {
+        const { data: updated, error } = await supabase
+          .from('api_idempotency_keys')
+          .update({
+            status: 'processing',
+            request_id: requestId,
+            locked_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('scope', scope)
+          .eq('idempotency_key', idempotencyKey)
+          .eq('status', 'failed')
+          .select('id')
+          .maybeSingle();
+        if (error) {
+          return res.status(500).json({ error: 'Failed to resume idempotent request' });
+        }
+        if (!updated) {
+          return res.status(409).json({ error: 'Request with this Idempotency-Key is already in progress', code: 'IDEMPOTENCY_IN_PROGRESS' });
+        }
+      }
+
+      const originalStatus = res.status.bind(res);
+      const originalJson = res.json.bind(res);
+
+      let statusCode = 200;
+      let capturedBody: unknown;
+
+      (res as any).status = (code: number) => {
+        statusCode = code;
+        return originalStatus(code);
+      };
+
+      (res as any).json = async (body: unknown) => {
+        capturedBody = body;
+        await markRecord(scope, idempotencyKey, {
+          status: statusCode >= 500 ? 'failed' : 'completed',
+          response_status: statusCode,
+          response_body: body,
+          last_error: statusCode >= 500 ? JSON.stringify(body) : null,
+        });
+        return originalJson(body);
+      };
+
+      try {
+        await markRecord(scope, idempotencyKey, { status: 'processing', last_error: null });
+        await handler(req, res);
+      } catch (error: any) {
+        await markRecord(scope, idempotencyKey, {
+          status: 'failed',
+          response_status: statusCode >= 400 ? statusCode : 500,
+          response_body: capturedBody ?? { error: 'Internal server error' },
+          last_error: error?.message ?? String(error),
+        });
+        throw error;
+      }
+    };
+
+    return runWithRequestContext(
+      {
+        requestId,
+        correlationId: requestId,
+        idempotencyKey,
+      },
+      run,
+    );
+  };
+}

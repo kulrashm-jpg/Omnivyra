@@ -121,7 +121,7 @@ function buildAllocationSchedule(
 
 /** Map internal content type to DB schema values (platform-specific constraints). Includes image, carousel, reel, short for activity alignment. */
 const FALLBACK_CONTENT_TYPE_MAP: Record<string, Record<string, string>> = {
-  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', poll: 'poll', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
+  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'post', white_paper: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
   x:         { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
   instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', newsletter: 'feed_post', short_story: 'feed_post', white_paper: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post', blog: 'feed_post' },
   youtube:   { post: 'video', video: 'video', article: 'video', newsletter: 'video', short_story: 'video', white_paper: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video', blog: 'video' },
@@ -907,10 +907,30 @@ export async function scheduleStructuredPlan(
     .single();
 
   if (campaignError || !campaign) {
-    throw new Error('Campaign not found');
+    console.error('[scheduleStructuredPlan] Campaign lookup failed', {
+      campaignId,
+      error: campaignError?.message,
+      errorCode: campaignError?.code,
+      errorDetails: campaignError?.details,
+      hasData: !!campaign,
+    });
+    throw new Error(`Campaign not found (id=${campaignId}, err=${campaignError?.message ?? 'no data'})`);
   }
   if (!campaign.start_date) {
     throw new Error('Campaign start date is required for scheduling');
+  }
+  // Reject scheduling for campaigns whose start_date is in the past.
+  // Compare on date-only basis (YYYY-MM-DD) so "today" is always valid,
+  // regardless of current UTC hour vs campaign midnight-UTC parsing.
+  {
+    const startDateStr = String(campaign.start_date).slice(0, 10);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (startDateStr && startDateStr < todayStr) {
+      throw new Error(
+        `Campaign start date (${startDateStr}) is in the past. ` +
+        `Scheduling only supports dates from today onwards — update the campaign start date before rescheduling.`
+      );
+    }
   }
 
   // G2.1: Resolve company_id for tenant-scoped account lookup

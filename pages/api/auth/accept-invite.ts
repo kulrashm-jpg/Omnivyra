@@ -14,6 +14,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
+import { sendMagicLink } from '../../../backend/services/emailService';
+import { logger } from '../../../backend/services/logger';
+import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
 type SuccessResponse = { ok: true; email: string };
 type ErrorResponse   = { error: string; code?: string };
@@ -25,6 +28,7 @@ export default async function handler(
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  seedRequestContextFromRequest(req);
 
   // ── 1. Rate limit by IP ───────────────────────────────────────────────────
   const ip = String(req.headers['x-forwarded-for'] ?? (req.socket as any)?.remoteAddress ?? 'unknown').split(',')[0].trim();
@@ -44,7 +48,7 @@ export default async function handler(
 
   const { data: invitation } = await supabase
     .from('invitations')
-    .select('id, email, expires_at, accepted_at, revoked_at')
+    .select('id, email, expires_at, accepted_at, revoked_at, token_consumed_at')
     .eq('token_hash', tokenHash)
     .maybeSingle();
 
@@ -61,11 +65,43 @@ export default async function handler(
     return res.status(400).json({ error: 'This invitation has been revoked', code: 'REVOKED' });
   }
 
+  if ((invitation as any).token_consumed_at) {
+    return res.status(400).json({ error: 'This invitation link has already been used', code: 'ALREADY_USED' });
+  }
+
   const expiresAt = new Date((invitation as any).expires_at);
   if (expiresAt < new Date()) {
+    await supabase.from('invitations').update({ revoked_at: new Date().toISOString() }).eq('id', (invitation as any).id);
     return res.status(400).json({ error: 'This invitation has expired', code: 'EXPIRED' });
   }
 
-  // ── 5. Return email — frontend will call signInWithOtp(email) ─────────────
+  const consumedAt = new Date().toISOString();
+  const { data: consumedRow, error: consumeError } = await supabase
+    .from('invitations')
+    .update({ token_consumed_at: consumedAt })
+    .eq('id', (invitation as any).id)
+    .is('token_consumed_at', null)
+    .select('id')
+    .maybeSingle();
+
+  if (consumeError || !consumedRow) {
+    logger.warn('invite_token_consume_failed', {
+      invitationId: (invitation as any).id,
+      error: consumeError?.message ?? 'already_consumed',
+    });
+    return res.status(409).json({ error: 'This invitation link has already been used', code: 'ALREADY_USED' });
+  }
+
+  const origin = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  try {
+    await sendMagicLink((invitation as any).email, `${origin}/auth/callback`, `invite-accept:${(invitation as any).id}`);
+  } catch (error) {
+    await supabase
+      .from('invitations')
+      .update({ token_consumed_at: null })
+      .eq('id', (invitation as any).id);
+    throw error;
+  }
+
   return res.status(200).json({ ok: true, email: (invitation as any).email });
 }

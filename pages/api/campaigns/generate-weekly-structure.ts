@@ -347,6 +347,17 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       })
       .filter((it) => it.content_type && it.selected_platforms.length > 0 && Number(it.count_per_week) > 0);
 
+    console.log('[weekly-structure][execution-items-check]', {
+      weekNumber,
+      executionItemsFromAI: executionItems.length,
+      executionItemsPreview: executionItems.slice(0, 3).map((it: any) => ({
+        content_type: it.content_type,
+        slots: it.topic_slots?.length ?? 0,
+        firstTopic: it.topic_slots?.[0]?.topic,
+      })),
+      willSynth: executionItems.length === 0,
+    });
+
     // Synthesize execution_items from blueprint data when not present (BOLT campaigns, legacy campaigns).
     // This ensures daily distribution works even when the AI plan did not produce explicit execution_items.
     if (executionItems.length === 0) {
@@ -367,6 +378,12 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           ? weekBlueprint.content_type_mix
           : ['post'])
       ).map((t) => String(t || '').trim().toLowerCase()).filter(Boolean);
+      console.log('[generate-weekly-structure] content type resolution', {
+        formatFrequency,
+        userFormats,
+        contentTypeMix: weekBlueprint.content_type_mix,
+        resolvedContentTypes: contentTypes,
+      });
       const totalCount = postsPerWeek ?? Math.max(
         2,
         Object.values(weekBlueprint.platform_allocation || {}).reduce((sum: number, n: unknown) => sum + Number(n), 0) || 3
@@ -418,6 +435,13 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       const synthTargetAudience = compressedContext?.target_audience || 'our target audience';
       // Track a global topic index so different content types don't all start at topic 0
       let globalTopicIdx = 0;
+      console.log('[weekly-structure][synth-topics]', {
+        totalCount,
+        topicsAvailable: topics.length,
+        contentTypes,
+        isRepeatedTopicTriggered: topics.length < totalCount,
+        firstFewTopics: topics.slice(0, 4),
+      });
       for (const contentType of contentTypes) {
         // Honour per-format frequency from user selection; fall back to equal distribution
         const countPerType = formatFrequency?.[contentType] != null
@@ -426,14 +450,17 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const topic_slots: Array<{ topic: string | null; global_progression_index: number; intent: any }> = [];
         for (let k = 0; k < countPerType; k++) {
           synthGlobalIdx++;
-          // Advance through topics sequentially across all content types so each slot gets a distinct topic.
-          // When the blueprint has fewer unique topics than slots (e.g. skeleton fallback with 1 theme),
-          // derive meaningful sub-topics from the week theme so each activity card has a distinct title.
+          // Each activity card must have a distinct title. When the same raw topic
+          // is used across content types (e.g. "Brand Awareness" for both poll and
+          // short_story), deriveSubTopic wraps it in a content-type-specific angle
+          // so Poll #1, Story #1 get different titles like "Poll: what's your..." vs
+          // "Short story: the day...". We ALWAYS apply deriveSubTopic since:
+          //  (a) it's designed for this — each angle template is scoped by content_type
+          //  (b) topics from the AI plan are usually theme-level, not per-card unique
+          //  (c) the prior gate (topics.length < totalCount) left duplicates unchanged
+          //      when the AI returned exactly N unique topics for N slots
           const baseTopic = topics[globalTopicIdx % topics.length]!;
-          const isRepeatedTopic = topics.length < totalCount;
-          const topic = isRepeatedTopic
-            ? deriveSubTopic(baseTopic, contentType, k, synthTargetAudience)
-            : baseTopic;
+          const topic = deriveSubTopic(baseTopic, contentType, k, synthTargetAudience);
           globalTopicIdx++;
           const isCreatorCt = ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'shorts'].includes(contentType);
           topic_slots.push({
@@ -468,6 +495,40 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           });
         }
         executionItems.push({ content_type: contentType, selected_platforms: platforms, count_per_week: countPerType, topic_slots });
+      }
+    }
+
+    // ── DEDUPE GUARD: ensure no two activity cards share the same topic ──────
+    // Whether topics came from synth or AI-provided execution_items, we must
+    // guarantee each slot has a unique, content-type-appropriate title. Walk
+    // through every (content_type × slot) and rewrite duplicates via deriveSubTopic.
+    {
+      const seenTopics = new Set<string>();
+      const synthAudience = compressedContext?.target_audience || 'our target audience';
+      for (const exec of executionItems) {
+        const ct = String((exec as any).content_type || 'post').toLowerCase();
+        const slots = Array.isArray((exec as any).topic_slots) ? (exec as any).topic_slots : [];
+        for (let idx = 0; idx < slots.length; idx++) {
+          const slot = slots[idx];
+          if (!slot) continue;
+          const currentTopic = String(slot.topic ?? '').trim();
+          if (!currentTopic) continue;
+          const key = currentTopic.toLowerCase();
+          if (seenTopics.has(key)) {
+            // Duplicate topic — rewrite with content-type-specific angle
+            const derived = deriveSubTopic(currentTopic, ct, idx, synthAudience);
+            slot.topic = derived;
+            seenTopics.add(derived.toLowerCase());
+            console.log('[weekly-structure][dedupe]', {
+              contentType: ct,
+              slotIndex: idx,
+              original: currentTopic,
+              rewrittenTo: derived,
+            });
+          } else {
+            seenTopics.add(key);
+          }
+        }
       }
     }
 
@@ -789,7 +850,11 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         });
         executionValidationItems.push(enriched);
 
-        const contentType = String((validated.dailyItem as any)?.contentType || item.contentType || 'post');
+        // Use the ORIGINAL content type from the execution item (poll, short_story, etc.)
+        // not the validator's mapped type (which maps poll→post for platform constraints).
+        // daily_content_plans.content_type must preserve the user's selected format
+        // so the block processor generates format-appropriate content.
+        const contentType = String(item.contentType || 'post');
         const execCategory = getExecutionCategoryForContentType(contentType);
         const aiGenerated = executionCategoryToAiGenerated(execCategory);
 
@@ -944,7 +1009,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const nextRow = {
           ...entry.row,
           platform: preferredPlatform,
-          content_type: String((validated.dailyItem as any)?.contentType || entry.row.content_type || 'post'),
+          content_type: entry.row.content_type || 'post', // preserve original content type, not validator's mapped type
           content: JSON.stringify(enriched),
         };
         optimizedRowsWithContent.push({ row: nextRow, contentObj: enriched });

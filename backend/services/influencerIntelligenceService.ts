@@ -2,7 +2,7 @@
  * Influencer Intelligence Service
  *
  * Detects high-impact participants across social and community platforms.
- * Uses engagement_messages, engagement_threads, engagement_opportunities, engagement_lead_signals.
+ * Uses engagement_messages, engagement_threads, engagement_opportunities, and canonical lead signals.
  */
 
 import { supabase } from '../db/supabaseClient';

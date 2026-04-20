@@ -21,6 +21,11 @@ import {
   formatStrategiesForPrompt,
 } from './responseStrategyIntelligenceService';
 import { supabase } from '../db/supabaseClient';
+import {
+  buildStrategyInstructions,
+  extractStrategyProfile,
+  validateStrategicPerspective,
+} from '../../lib/content/companyStrategyPerspective';
 
 export type GenerateInput = {
   message_id: string;
@@ -94,12 +99,34 @@ export async function generateResponse(
       : '';
 
   let brandContext = '';
+  let strategicPerspective = '';
+  let strategicProfile = undefined;
+  let uniqueValue = '';
+  let competitiveAdvantages = '';
+  let industry = '';
+  let targetAudience = '';
+  let idealCustomerProfile = '';
+  let coreProblem = '';
+  let painPoints: string[] = [];
+  let productsServices = '';
+  let authorityDomains: string[] = [];
   try {
     const profile = await getProfile(input.organization_id, { autoRefine: false, languageRefine: false });
     const voice = Array.isArray(profile?.brand_voice_list)
       ? profile.brand_voice_list[0]
       : profile?.brand_voice ?? 'professional';
     brandContext = `Brand voice: ${voice}. `;
+    strategicProfile = extractStrategyProfile(profile);
+    strategicPerspective = buildStrategyInstructions(strategicProfile);
+    uniqueValue = profile?.unique_value ?? '';
+    competitiveAdvantages = profile?.competitive_advantages ?? '';
+    industry = profile?.industry ?? '';
+    targetAudience = profile?.target_audience ?? '';
+    idealCustomerProfile = profile?.ideal_customer_profile ?? '';
+    coreProblem = profile?.core_problem_statement ?? '';
+    painPoints = Array.isArray(profile?.pain_symptoms) ? profile.pain_symptoms.filter(Boolean) : [];
+    productsServices = profile?.products_services ?? '';
+    authorityDomains = Array.isArray(profile?.authority_domains) ? profile.authority_domains.filter(Boolean) : [];
   } catch {
     brandContext = 'Brand voice: professional. ';
   }
@@ -110,6 +137,7 @@ Tone: ${input.tone}.
 Platform: ${input.platform}.
 Platform rules: ${platformRules.styleHint}
 ${input.emoji_policy === 'allowed' ? 'Emoji: Use sparingly when natural.' : 'Emoji: Avoid or minimal.'}
+${strategicPerspective ? `\n${strategicPerspective}\n` : ''}
 
 Output ONLY the reply text. No quotes, no preamble, no explanation.${strategyGuidance}${highPerformingStyles}${opportunitiesContext}`;
 
@@ -140,9 +168,43 @@ Generate the reply:`;
       ],
     });
 
-    const text = (result.output ?? '').toString().trim();
+    let text = (result.output ?? '').toString().trim();
     if (!text) {
       return { text: '', error: 'LLM returned empty response' };
+    }
+    const perspectiveCheck = validateStrategicPerspective(text, {
+      strategyProfile: strategicProfile,
+      uniqueValue,
+      competitiveAdvantages,
+      industry,
+      targetAudience,
+      idealCustomerProfile,
+      coreProblem,
+      painPoints,
+      productsServices,
+      authorityDomains,
+    });
+    if (perspectiveCheck.perspectiveMismatch && strategicPerspective) {
+      const retry = await runCompletionWithOperation({
+        companyId: input.organization_id,
+        campaignId: null,
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.35,
+        operation: 'responseGeneration',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'assistant', content: text },
+          {
+            role: 'user',
+            content:
+              `The previous reply is invalid because it does not clearly reflect the company's strategic perspective.\n` +
+              `${perspectiveCheck.issues.map((issue) => `- ${issue}`).join('\n')}\n\n` +
+              `Rewrite the reply so it reflects the company's beliefs, differentiation, or unique angle without sounding generic.`,
+          },
+        ],
+      });
+      const retried = (retry.output ?? '').toString().trim();
+      if (retried) text = retried;
     }
     return { text };
   } catch (err) {

@@ -487,6 +487,33 @@ const SUB_TOPIC_ANGLES: Record<string, Array<(theme: string, audience: string) =
     (t, a) => `Profile banner: ${t.toLowerCase()} statement`,
     (t, a) => `Event banner: ${t.toLowerCase()} launch`,
   ],
+  poll: [
+    (t, a) => `Poll: what's your biggest ${t.toLowerCase()} challenge?`,
+    (t, a) => `Vote: the #1 ${t.toLowerCase()} priority for ${a}`,
+    (t, a) => `Quick poll: how do ${a} rank ${t.toLowerCase()} tactics?`,
+    (t, a) => `Poll: which ${t.toLowerCase()} approach wins for ${a}?`,
+    (t, a) => `Tell us: ${t} — where does your team stand?`,
+    (t, a) => `Reader poll: the most underrated ${t.toLowerCase()} habit`,
+    (t, a) => `Poll: ${t.toLowerCase()} — budget, people, or tools first?`,
+  ],
+  short_story: [
+    (t, a) => `Short story: the day ${t.toLowerCase()} clicked for me`,
+    (t, a) => `A founder's tale — ${t.toLowerCase()} lessons from the trenches`,
+    (t, a) => `True story: how ${a} fixed their ${t.toLowerCase()} approach`,
+    (t, a) => `The moment ${t.toLowerCase()} changed our ${a} playbook`,
+    (t, a) => `Short story: ${t.toLowerCase()} — from confusion to clarity`,
+    (t, a) => `A coffee-shop lesson in ${t.toLowerCase()} for ${a}`,
+    (t, a) => `Narrative: the quiet turning point in ${t.toLowerCase()}`,
+  ],
+  tweet: [
+    (t, a) => `Tweet: one hot take on ${t.toLowerCase()} ${a} won't admit`,
+    (t, a) => `${t.toLowerCase()} — in one sentence for ${a}`,
+    (t, a) => `Tweet: the most counterintuitive truth about ${t.toLowerCase()}`,
+    (t, a) => `Short tweet: ${t} in plain English`,
+    (t, a) => `Tweet: ${t.toLowerCase()} — what ${a} wish they knew sooner`,
+    (t, a) => `A single tweet-sized insight on ${t.toLowerCase()}`,
+    (t, a) => `Tweet drop: ${t} — the no-fluff version`,
+  ],
 };
 
 const DEFAULT_ANGLES: Array<(theme: string, audience: string) => string> = [

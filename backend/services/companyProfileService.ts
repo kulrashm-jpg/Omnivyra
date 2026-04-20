@@ -11,6 +11,7 @@ import { supabase } from '../db/supabaseClient';
 
 // ─── Re-export everything public so existing imports continue to work ─────────
 export type {
+  StrategyProfile,
   CompanyProfile,
   NormalizedCompanyProfile,
   CompanyProfileRefinementDetails,
@@ -57,6 +58,8 @@ export {
   refineProblemTransformationAnswers,
 } from './companyProfile/problemTransformation';
 
+export { deriveStrategyProfileDraft } from './companyProfile/strategyProfile';
+
 // ─── Private imports used by this module ─────────────────────────────────────
 import type { CompanyProfile, SaveProfileOptions, CompanyProfileRefinementDetails, ProblemTransformationExistingFields, ProblemTransformationRefinedOutput, CompanyProfileExtractionOutput } from './companyProfile/types';
 import { COMMERCIAL_FIELD_NAMES, MARKETING_INTELLIGENCE_FIELD_NAMES, PROBLEM_TRANSFORMATION_FIELD_NAMES } from './companyProfile/fieldConstants';
@@ -83,6 +86,7 @@ import {
   computeConfidenceScore,
 } from './companyProfile/extractionSchema';
 import { refineProblemTransformationAnswers } from './companyProfile/problemTransformation';
+import { deriveStrategyProfileDraft } from './companyProfile/strategyProfile';
 import { buildSavePayload } from './companyProfile/savePayload';
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
@@ -172,6 +176,10 @@ export async function saveProfile(
     const hasVal = Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && String(val).trim() !== '';
     if (hasVal) { lockedSet.add(key); didLock = true; }
   }
+  if (source === 'user' && (input.strategy_profile !== undefined || input.strategyProfile !== undefined)) {
+    lockedSet.add('strategy_profile');
+    didLock = true;
+  }
   if (didLock) {
     payload.user_locked_fields = Array.from(lockedSet);
     payload.last_edited_by = 'user';
@@ -243,6 +251,55 @@ export async function saveProblemTransformationAnswers(
   merged.field_confidence = fieldConfidence;
 
   return saveProfile({ ...profile, ...merged } as Partial<CompanyProfile>, { source: 'ai_refined' });
+}
+
+export async function saveStrategyProfileOverride(
+  companyId: string,
+  strategyProfile: CompanyProfile['strategy_profile'],
+  options?: { source?: 'user' | 'ai_refined' }
+): Promise<CompanyProfile> {
+  const resolvedId = normalizeCompanyId(companyId);
+  const existing = await fetchProfileRaw(resolvedId);
+  return saveProfile(
+    {
+      ...(existing || { company_id: resolvedId }),
+      company_id: resolvedId,
+      strategy_profile: strategyProfile ?? null,
+      strategyProfile: strategyProfile ?? null,
+    },
+    { source: options?.source ?? 'user' },
+  );
+}
+
+export async function deriveAndStoreStrategyProfile(
+  companyId: string,
+  options?: {
+    sourceSummaries?: Array<{ label: string; url: string; summary: string }>;
+    forceOverride?: boolean;
+  }
+): Promise<CompanyProfile | null> {
+  const resolvedId = normalizeCompanyId(companyId);
+  const profile = await fetchProfileRaw(resolvedId);
+  if (!profile) return null;
+  const locked = Array.isArray(profile.user_locked_fields) && profile.user_locked_fields.includes('strategy_profile');
+  if (locked && !options?.forceOverride) {
+    return profile;
+  }
+  const nextLockedFields = locked && options?.forceOverride
+    ? (profile.user_locked_fields || []).filter((field) => field !== 'strategy_profile')
+    : profile.user_locked_fields;
+  const derived = await deriveStrategyProfileDraft(profile, options?.sourceSummaries ?? []);
+  if (!derived.strategyProfile) return profile;
+  return saveProfile(
+    {
+      ...profile,
+      strategy_profile: derived.strategyProfile,
+      strategyProfile: derived.strategyProfile,
+      user_locked_fields: nextLockedFields,
+      last_edited_by: locked && options?.forceOverride ? null : profile.last_edited_by,
+    },
+    { source: 'ai_refined' },
+  );
 }
 
 // ─── getProfile ───────────────────────────────────────────────────────────────
@@ -397,7 +454,15 @@ const runProfileRefinement = async (
     catch { console.warn('[refine] Missing-field questionnaire generation failed.'); }
   }
 
-  const refinedPayload = buildRefinedPayload(workingProfile, extraction);
+  const derivedStrategyProfile = await deriveStrategyProfileDraft(workingProfile, evidenceForExtraction);
+  const strategyProfileLocked = Array.isArray(workingProfile.user_locked_fields)
+    && workingProfile.user_locked_fields.includes('strategy_profile');
+  const refinedPayload = {
+    ...buildRefinedPayload(workingProfile, extraction),
+    strategy_profile: strategyProfileLocked
+      ? (workingProfile.strategy_profile ?? workingProfile.strategyProfile ?? null)
+      : (derivedStrategyProfile.strategyProfile ?? workingProfile.strategy_profile ?? workingProfile.strategyProfile ?? null),
+  };
 
   const { data, error } = await supabase
     .from('company_profiles')

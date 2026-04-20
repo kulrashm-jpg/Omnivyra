@@ -16,7 +16,7 @@ import type { BOLTProgress } from '../components/BOLTProgressModal';
 import { saveCampaignResume } from '../lib/campaignResumeStore';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
 
-type ContentFormat = 'post' | 'article' | 'blog' | 'newsletter' | 'short_story' | 'white_paper' | 'thread' | 'video' | 'carousel';
+type ContentFormat = 'post' | 'tweet' | 'short_story' | 'article' | 'poll';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
 type OutcomeView = 'week_plan' | 'daily_plan' | 'schedule';
 type SharingMode = 'shared' | 'unique' | 'ai';
@@ -31,14 +31,10 @@ const BOLT_STATE_KEY = 'bolt-text-strategy-state';
 
 const CONTENT_FORMATS: { value: ContentFormat; label: string; icon: string }[] = [
   { value: 'post',        label: 'Post',        icon: '📝' },
-  { value: 'article',     label: 'Article',     icon: '🗞️' },
-  { value: 'blog',        label: 'Blog',        icon: '📰' },
-  { value: 'newsletter',  label: 'Newsletter',  icon: '✉️' },
-  { value: 'thread',      label: 'Thread',      icon: '🧵' },
+  { value: 'tweet',       label: 'Tweet',       icon: '💬' },
   { value: 'short_story', label: 'Short Story', icon: '📖' },
-  { value: 'white_paper', label: 'White Paper', icon: '📄' },
-  { value: 'video',       label: 'Video',       icon: '🎬' },
-  { value: 'carousel',    label: 'Carousel',    icon: '🎠' },
+  { value: 'article',     label: 'Article',     icon: '🗞️' },
+  { value: 'poll',        label: 'Poll Post',   icon: '📊' },
 ];
 
 const DURATION_OPTIONS = [
@@ -886,7 +882,7 @@ export function useBoltStrategy() {
         saveCampaignResume(completedCampaignId, 'campaign-daily-plan', { companyId: companyId ?? '' });
         router.push(`/campaign-daily-plan/${completedCampaignId}?${qs.toString()}`);
       } else if (outcomeView === 'schedule') {
-        saveCampaignResume(completedCampaignId, 'dashboard', { companyId: companyId ?? '' });
+        saveCampaignResume(completedCampaignId, 'campaign-calendar', { companyId: companyId ?? '' });
         router.push(`/dashboard?tab=calendar&${qs.toString()}`);
       } else {
         saveCampaignResume(completedCampaignId, 'campaign-details', { companyId: companyId ?? '', mode: 'fast' });

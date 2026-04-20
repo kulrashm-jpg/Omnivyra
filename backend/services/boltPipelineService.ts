@@ -614,6 +614,27 @@ async function runGenerateWeeklyStructure(
     await updateRun({ current_stage: batchStageName, status: 'running' });
     await logEvent(runId, batchStageName, 'started');
 
+          // Resolve format_frequency: always pass it when available so generateWeeklyStructure
+          // creates daily plans for ALL selected content types (not just the AI plan's content_type_mix).
+          const resolvedFormatFreq = (() => {
+            const ff = options?.execConfig?.format_frequency;
+            if (ff && typeof ff === 'object' && !Array.isArray(ff) && Object.keys(ff as object).length > 0) {
+              return ff as Record<string, number>;
+            }
+            // Fallback: build from content_formats array if format_frequency is missing
+            const cf = options?.execConfig?.content_formats;
+            if (Array.isArray(cf) && cf.length > 0) {
+              const freq: Record<string, number> = {};
+              const perType = Math.max(1, Math.round((options?.postsPerWeek ?? 6) / cf.length));
+              for (const f of cf) freq[String(f).toLowerCase()] = perType;
+              return freq;
+            }
+            return null;
+          })();
+          if (resolvedFormatFreq) {
+            console.log('[bolt] format_frequency resolved for weekly structure:', resolvedFormatFreq);
+          }
+
           const callService = () =>
       generateWeeklyStructure({
         campaignId,
@@ -624,9 +645,7 @@ async function runGenerateWeeklyStructure(
         bolt_text_only: options?.boltTextOnly ?? true,
         ...(options?.postsPerWeek != null ? { posts_per_week: options.postsPerWeek } : {}),
         ...(options?.campaignStartDate ? { campaign_start_date: options.campaignStartDate } : {}),
-        ...(options?.execConfig?.format_frequency && typeof options.execConfig.format_frequency === 'object'
-          ? { format_frequency: options.execConfig.format_frequency as Record<string, number> }
-          : {}),
+        ...(resolvedFormatFreq ? { format_frequency: resolvedFormatFreq } : {}),
         cross_platform_sharing: options?.execConfig?.cross_platform_sharing as boolean | { enabled: boolean } | undefined,
         ...(adaptiveInsights
           ? {

@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
 import type { NewsletterGenerationRequest, NewsletterGenerationResult } from './runNewsletterGeneration';
@@ -400,6 +401,11 @@ export async function runMarketMapGeneration(
   let best: ReturnType<typeof parseMarketMapOutput> | null = null;
   let bestScore = -1;
 
+  const enhancedMapSystemPrompt = await enhanceSystemPromptForNewsletter(
+    'You are a strategy consultant writing a strategic newsletter. Return only valid JSON. Focus on deep strategic logic, not generic commentary.',
+    input.company_id, input.companyContext,
+  );
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const completion = await runCompletionWithOperation({
       operation: 'newsletterGeneration',
@@ -412,7 +418,7 @@ export async function runMarketMapGeneration(
       messages: [
         {
           role: 'system',
-          content: 'You are a strategy consultant writing a strategic newsletter. Return only valid JSON. Focus on deep strategic logic, not generic commentary.',
+          content: enhancedMapSystemPrompt,
         },
         {
           role: 'user',

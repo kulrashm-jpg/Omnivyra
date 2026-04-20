@@ -1,33 +1,17 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { randomBytes, createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { Role, ALL_ROLES } from '../../../backend/services/rbacService';
-
+import { createAndSendInvitation } from '../../../backend/services/invitationService';
+import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { withIdempotency } from '../../../backend/middleware/withIdempotency';
+import { logger } from '../../../backend/services/logger';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 
 const requireSuperAdminAccess = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> => {
-  // Legacy super-admin login: cookie takes precedence
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
-    return true;
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      return false;
-    }
-    return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+  return !!(await requireSuperAdminUser(req, res));
 };
 
 const allowedRoles = ALL_ROLES.filter((role) => role !== Role.SUPER_ADMIN);
@@ -56,7 +40,7 @@ const findOrCreateUserByEmail = async (email: string): Promise<{ id: string; err
     .maybeSingle();
 
   if (selectErr) {
-    console.error('[findOrCreateUserByEmail] select error:', selectErr.message);
+    logger.error('super_admin_users_find_or_create_select_failed', { message: selectErr.message, email });
     return { id: '', error: selectErr.message };
   }
 
@@ -129,51 +113,18 @@ const findOrCreateUserByEmail = async (email: string): Promise<{ id: string; err
             .maybeSingle();
           if (retry2) return { id: (retry2 as any).id, error: null };
         }
-        console.error('[findOrCreateUserByEmail] fallback insert error:', fbErr.message);
+        logger.error('super_admin_users_find_or_create_insert_fallback_failed', { message: fbErr.message, email });
         return { id: '', error: fbErr.message };
       }
 
       return { id: (fb as any).id, error: null };
     }
 
-    console.error('[findOrCreateUserByEmail] insert error:', insertErr.message, '| code:', insertErr.code);
+    logger.error('super_admin_users_find_or_create_insert_failed', { message: insertErr.message, code: insertErr.code, email });
     return { id: '', error: insertErr.message };
   }
 
   return { id: (created as any).id, error: null };
-};
-
-/**
- * Create an invitation record and return the raw token to embed in the email link.
- * Stores only the SHA-256 hash in DB — raw token never persisted.
- */
-const createInvitationToken = async (params: {
-  email: string;
-  companyId: string;
-  role: string;
-  invitedBy: string | null;
-}): Promise<{ rawToken: string; error: string | null }> => {
-  const rawToken = randomBytes(32).toString('hex');
-  const tokenHash = createHash('sha256').update(rawToken).digest('hex');
-  const expiresAt = new Date(Date.now() + 7 * 86_400 * 1_000).toISOString();
-
-  const { error } = await supabase.from('invitations').upsert(
-    {
-      email:      params.email,
-      company_id: params.companyId,
-      role:       params.role,
-      token_hash: tokenHash,
-      invited_by: params.invitedBy,
-      expires_at: expiresAt,
-      // Clear previous accepted/revoked state on re-invite
-      accepted_at: null,
-      revoked_at:  null,
-    },
-    { onConflict: 'token_hash' }
-  );
-
-  if (error) return { rawToken: '', error: error.message };
-  return { rawToken, error: null };
 };
 
 // Columns added by later migrations — included only when they exist.
@@ -262,21 +213,27 @@ const insertAuditLog = async (input: {
   companyId?: string | null;
   metadata?: Record<string, any>;
 }) => {
-  try {
-    await supabase.from('audit_logs').insert({
-      actor_user_id: input.actorUserId,
+  const { error } = await supabase.from('audit_logs').insert({
+    actor_user_id: input.actorUserId,
+    action: input.action,
+    target_user_id: input.targetUserId || null,
+    company_id: input.companyId || null,
+    metadata: input.metadata || null,
+    created_at: new Date().toISOString(),
+  });
+  if (error) {
+    logger.error('super_admin_users_audit_log_failed', {
+      actorUserId: input.actorUserId,
       action: input.action,
-      target_user_id: input.targetUserId || null,
-      company_id: input.companyId || null,
-      metadata: input.metadata || null,
-      created_at: new Date().toISOString(),
+      companyId: input.companyId,
+      message: error.message,
     });
-  } catch (error) {
-    console.warn('AUDIT_LOG_FAILED', error);
+    throw new Error(`AUDIT_LOG_FAILED:${error.message}`);
   }
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:users', 30, 60))) return;
   if (!(await requireSuperAdminAccess(req, res))) return;
 
   if (req.method === 'GET') {
@@ -286,7 +243,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('[super-admin/users] user_company_roles error:', error);
+      logger.error('super_admin_users_list_failed', { message: error.message });
       return res.status(500).json({
         error: 'FAILED_TO_LIST_USERS',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined,
@@ -368,8 +325,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'POST') {
     try {
       const { email, companyId, role } = req.body || {};
-      console.log('[super-admin/users] request body', { email, companyId, role });
-      
       // Validate required parameters
       if (!email) {
         return res.status(400).json({ 
@@ -416,53 +371,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (userErr || !userId) {
         return res.status(500).json({ error: 'FAILED_TO_SAVE_USER', details: userErr });
       }
-      console.log('[super-admin/users] user resolved', { userId, email: normalizedEmail });
-
       // 2. Create/update company role
       const roleResult = await upsertUserCompanyRole(userId, companyId, desiredRole);
       if (!roleResult.ok) {
         return res.status(500).json({ error: 'FAILED_TO_ASSIGN_ROLE', details: roleResult.error });
       }
 
-      // 3. Issue invitation token and send email link
-      const { rawToken, error: invErr } = await createInvitationToken({
-        email:      normalizedEmail,
+      const invitation = await createAndSendInvitation({
+        email: normalizedEmail,
         companyId,
-        role:       desiredRole,
-        invitedBy:  null, // super-admin context — no calling user row
+        role: desiredRole,
+        invitedBy: null,
+        idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
       });
-      if (invErr) {
-        console.warn('[super-admin/users] invitation insert failed:', invErr);
-        // Non-fatal: user row and role are created; email will need resend
-      }
-
-      // Send magic-link invite via Supabase Auth (replaces Firebase email sign-in).
-      try {
-        const reqHost = req.headers.host ?? '';
-        const isLocal = reqHost.startsWith('localhost') || reqHost.startsWith('127.');
-        const appUrl = isLocal
-          ? `http://${reqHost}`
-          : (process.env.NEXT_PUBLIC_APP_URL ?? 'https://www.omnivyra.com').replace(/\/$/, '');
-        const { error: magicErr } = await supabase.auth.admin.generateLink({
-          type: 'magiclink',
-          email: normalizedEmail,
-          options: { redirectTo: `${appUrl}/auth/callback` },
-        });
-        if (magicErr) {
-          console.warn('[super-admin/users] Supabase magic-link send failed:', magicErr.message);
-        } else {
-          console.log(`[super-admin/users] Invite magic-link sent to ${normalizedEmail}`);
-        }
-      } catch (emailErr) {
-        console.warn('[super-admin/users] Failed to send invitation email:', emailErr);
-      }
 
       await insertAuditLog({
         actorUserId: null,
         action: 'SUPER_ADMIN_INVITE',
         targetUserId: userId,
         companyId,
-        metadata: { role: desiredRole },
+        metadata: { role: desiredRole, invitationId: invitation.id },
       });
 
       return res.status(201).json({
@@ -474,7 +402,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
       });
     } catch (error: any) {
-      console.error('[super-admin/users] unexpected error', error);
+      logger.error('super_admin_users_post_failed', { message: error?.message || String(error) });
       return res.status(500).json({
         error: 'INTERNAL_SERVER_ERROR',
         details: error?.message || String(error),
@@ -541,7 +469,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .maybeSingle();
 
     if (error) {
-      console.error('[super-admin/users] PATCH error:', error.message);
+      logger.error('super_admin_users_patch_failed', { userId, companyId, message: error.message });
       return res.status(500).json({ error: 'FAILED_TO_UPDATE_USER', details: error.message });
     }
     if (!data) {
@@ -570,11 +498,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'DELETE') {
     const { userId, companyId } = req.body || {};
-    console.log('[super-admin/users] DELETE request:', { userId, companyId, body: req.body });
-    
     // Validate required parameter
     if (!userId) {
-      console.log('[super-admin/users] DELETE - missing userId');
       return res.status(400).json({ 
         error: 'MISSING_REQUIRED_PARAMETER',
         details: 'userId is required to delete a user',
@@ -590,10 +515,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq('company_id', companyId)
         .select('user_id, company_id');
 
-      console.log('[super-admin/users] DELETE from company result:', { userId, companyId, deletedRows: data?.length || 0, error: error?.message });
-
       if (error) {
-        console.error('[super-admin/users] DELETE error:', { userId, companyId, error: error.message });
+        logger.error('super_admin_users_delete_company_failed', { userId, companyId, message: error.message });
         return res.status(500).json({ 
           error: 'FAILED_TO_DELETE_USER',
           details: error.message
@@ -601,7 +524,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       
       if (!data || data.length === 0) {
-        console.log('[super-admin/users] DELETE - user not found in company');
         return res.status(404).json({ 
           error: 'USER_NOT_FOUND',
           details: `No user record found for userId: ${userId} in companyId: ${companyId}`,
@@ -632,7 +554,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .maybeSingle();
 
       if (lookupError) {
-        console.error('[super-admin/users] DELETE lookup error:', lookupError.message);
+        logger.error('super_admin_users_delete_lookup_failed', { userId, message: lookupError.message });
         return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: lookupError.message });
       }
 
@@ -647,15 +569,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         try {
           const { error: authError } = await supabase.auth.admin.deleteUser(supabaseUid);
           if (authError && !authError.message?.includes('not found')) {
-            console.error('[super-admin/users] DELETE - Supabase Auth deleteUser failed:', authError.message);
+            logger.error('super_admin_users_delete_auth_failed', { userId, supabaseUid, message: authError.message });
             return res.status(500).json({
               error: 'FAILED_TO_DELETE_FROM_AUTH',
               details: authError.message,
             });
           }
-          console.log('[super-admin/users] DELETE - deleted Supabase Auth user', { userId, supabaseUid });
         } catch (authError: any) {
-          console.error('[super-admin/users] DELETE - Supabase Auth operation failed:', authError.message);
+          logger.error('super_admin_users_delete_auth_exception', { userId, supabaseUid, message: authError.message });
           return res.status(500).json({
             error: 'FAILED_TO_DELETE_FROM_AUTH',
             details: authError.message,
@@ -676,14 +597,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // CRITICAL: Supabase Auth user was deleted but the DB soft-delete failed.
         // The user cannot sign in (auth account gone), but the DB row still appears active.
         // This row must be manually soft-deleted to restore data consistency.
-        console.error(JSON.stringify({
-          level:   'CRITICAL',
-          event:   'auth_deleted_db_softdelete_failed',
+        logger.error('super_admin_users_delete_soft_delete_failed', {
           userId,
           supabaseUid,
-          error:   userError.message,
-          action:  `Manual fix: UPDATE users SET is_deleted=true, deleted_at=now() WHERE id='${userId}'`,
-        }));
+          message: userError.message,
+          action: `Manual fix: UPDATE users SET is_deleted=true, deleted_at=now() WHERE id='${userId}'`,
+        });
         return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: userError.message });
       }
 
@@ -702,7 +621,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (rolesError) {
         // Non-fatal: auth + users row are already handled; log and continue.
-        console.warn('[super-admin/users] DELETE - failed to deactivate roles:', rolesError.message);
+        logger.error('super_admin_users_delete_role_deactivate_failed', { userId, message: rolesError.message });
+        return res.status(500).json({ error: 'FAILED_TO_DEACTIVATE_USER_ROLES', details: rolesError.message });
       }
 
       await insertAuditLog({
@@ -717,7 +637,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       return res.status(200).json({ success: true, message: 'User deleted from system' });
     } catch (err: any) {
-      console.error('[super-admin/users] DELETE unassigned exception:', { userId, error: err.message });
+      logger.error('super_admin_users_delete_unassigned_failed', { userId, message: err.message });
       return res.status(500).json({
         error: 'FAILED_TO_DELETE_UNASSIGNED_USER',
         details: err.message,
@@ -727,3 +647,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default withIdempotency(handler, { scope: 'super-admin-users', methods: ['POST', 'PATCH', 'DELETE'] });

@@ -94,7 +94,7 @@ const BLOG_CONTENT_TYPES = new Set(['blog', 'article', 'newsletter', 'white_pape
 
 /** Platform → DB content_type fallback map (mirrors structuredPlanScheduler) */
 const FALLBACK_CT_MAP: Record<string, Record<string, string>> = {
-  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', poll: 'poll', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
+  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'post', white_paper: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
   x:         { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
   twitter:   { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
   instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', newsletter: 'feed_post', short_story: 'feed_post', white_paper: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post', blog: 'feed_post' },
@@ -335,54 +335,92 @@ export async function processBlockSchedule(
   // ── 1. Pre-compute repurpose indices ─────────────────────────────────────
   const repurposeIndex = buildRepurposeIndex(dailyPlans);
 
-  // ── 2. Group by content_type, sort blocks by CONTENT_TYPE_PRIORITY ────────
-  const blockMap = new Map<string, BlockDailyPlanRow[]>();
+  // ── 2. ACTIVITY CARD QUEUE ────────────────────────────────────────────────
+  // Build a flat queue of activity cards. An "activity card" = one unique
+  // (topic, content_type, week) tuple with all platforms that target it.
+  // Each card gets ONE master content generation + N platform repurposes.
+  // Cards are processed sequentially in date order, and previous masters
+  // are tracked to force content diversity (avoid AI producing identical output).
+  type ActivityCard = {
+    key: string;
+    contentType: string;
+    topic: string;
+    rows: BlockDailyPlanRow[];       // one row per platform
+    earliestDate: number;
+  };
+
+  const cardMap = new Map<string, ActivityCard>();
   for (const row of dailyPlans) {
     const ct = String(row.content_type || 'post').toLowerCase().trim();
-    const list = blockMap.get(ct) ?? [];
-    list.push(row);
-    blockMap.set(ct, list);
+    const topicKey = topicGroupKey(row);
+    const cardKey = `${ct}::${topicKey}`;
+    const topic = String(row.topic || row.title || '').trim() || 'Untitled';
+    const existing = cardMap.get(cardKey);
+    const rowDate = new Date(row.date).getTime();
+    if (existing) {
+      existing.rows.push(row);
+      existing.earliestDate = Math.min(existing.earliestDate, rowDate);
+    } else {
+      cardMap.set(cardKey, {
+        key: cardKey,
+        contentType: ct,
+        topic,
+        rows: [row],
+        earliestDate: rowDate,
+      });
+    }
   }
 
-  const sortedBlocks = Array.from(blockMap.entries()).sort(([a], [b]) => {
-    const ia = CONTENT_TYPE_PRIORITY.indexOf(a);
-    const ib = CONTENT_TYPE_PRIORITY.indexOf(b);
-    return (ia >= 0 ? ia : 999) - (ib >= 0 ? ib : 999) || a.localeCompare(b);
+  // Sort activity cards: (1) by date, (2) by CONTENT_TYPE_PRIORITY for tie-break.
+  // Date-first ordering means the calendar fills chronologically; priority only
+  // matters when two cards share a date (long-form first for repurposing context).
+  const activityQueue = Array.from(cardMap.values()).sort((a, b) => {
+    if (a.earliestDate !== b.earliestDate) return a.earliestDate - b.earliestDate;
+    const ia = CONTENT_TYPE_PRIORITY.indexOf(a.contentType);
+    const ib = CONTENT_TYPE_PRIORITY.indexOf(b.contentType);
+    return (ia >= 0 ? ia : 999) - (ib >= 0 ? ib : 999);
   });
 
-  const totalBlocks = sortedBlocks.length;
-  console.log('[block-processor] blocks', sortedBlocks.map(([ct, rows]) => `${ct}(${rows.length})`));
+  const totalCards = activityQueue.length;
+  console.log('[block-processor] activity queue',
+    activityQueue.map((c) => `${c.contentType}:${c.topic.slice(0, 30)}(${c.rows.length}p)`));
   let totalScheduled = 0;
   let totalSkipped = 0;
   const skippedPlatforms: string[] = [];
 
-  // ── 3. Process each content-type block ───────────────────────────────────
-  for (let blockIdx = 0; blockIdx < sortedBlocks.length; blockIdx++) {
-    const [contentType, blockRows] = sortedBlocks[blockIdx]!;
+  // ── 3. Process each activity card in the queue ───────────────────────────
+  // Sequentially, one card at a time. Each card is an atomic unit:
+  // (1) generate master content → (2) repurpose for each platform → (3) insert scheduled_post.
+  // Every activity's outcome is tracked in `activityResults` with a detailed
+  // failure reason if anything goes wrong. No silent skips.
+  type ActivityResult = {
+    cardIndex: number;
+    contentType: string;
+    topic: string;
+    platforms: string[];
+    status: 'succeeded' | 'master_failed' | 'variant_failed' | 'insert_failed' | 'skipped';
+    error?: string;
+    scheduledCount: number;
+  };
+  const activityResults: ActivityResult[] = [];
+  for (let cardIdx = 0; cardIdx < activityQueue.length; cardIdx++) {
+    const card = activityQueue[cardIdx]!;
+    const contentType = card.contentType;
+    const topicRows = card.rows;
 
-    emit?.({ phase: 'block-start', contentType, blockIndex: blockIdx + 1, totalBlocks, activityCount: blockRows.length });
-
-    // Group rows within this block by topic/distribution key
-    const topicMap = new Map<string, BlockDailyPlanRow[]>();
-    for (const row of blockRows) {
-      const k = topicGroupKey(row);
-      const list = topicMap.get(k) ?? [];
-      list.push(row);
-      topicMap.set(k, list);
-    }
-
-    // Sort topics by earliest date within the group
-    const sortedTopics = Array.from(topicMap.entries()).sort(([, rowsA], [, rowsB]) => {
-      const dateA = Math.min(...rowsA.map((r) => new Date(r.date).getTime()));
-      const dateB = Math.min(...rowsB.map((r) => new Date(r.date).getTime()));
-      return dateA - dateB;
+    emit?.({
+      phase: 'block-start',
+      contentType,
+      blockIndex: cardIdx + 1,
+      totalBlocks: totalCards,
+      activityCount: topicRows.length,
     });
 
     let blockScheduled = 0;
     let blockSkipped = 0;
 
-    // ── 4. Process each topic group ────────────────────────────────────────
-    for (const [, topicRows] of sortedTopics) {
+    // Process this single activity card (inline, no inner loop)
+    {
       const firstRow = topicRows[0]!;
       const parsed   = tryParseJson<ParsedContent>(firstRow.content) ?? {};
       const topic    = String(firstRow.topic || firstRow.title || (parsed as any).topicTitle || '').trim() || 'Untitled';
@@ -424,21 +462,46 @@ export async function processBlockSchedule(
             generation_source: 'ai',
           };
         } else {
+          // Each activity card has its own unique topic + content_type.
+          // Process one card at a time — AI gets a fresh context per card.
           const item = buildItemFromEnriched(enriched, platformTargets, companyId) as Parameters<typeof generateMasterContentFromIntent>[0];
+          console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] Generating master for:`, {
+            contentType, topic,
+          });
           master = await generateMasterContentFromIntent(item);
         }
       } catch (err) {
-        console.error('[block-processor] Master generation FAILED', {
-          contentType, topic,
-          error: (err as Error)?.message,
+        const errMsg = (err as Error)?.message ?? 'Master generation failed';
+        console.error(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] MASTER GEN FAILED`, {
+          contentType, topic, error: errMsg,
           stack: (err as Error)?.stack?.split('\n').slice(0, 3).join(' | '),
         });
-        emit?.({ phase: 'error', contentType, topic, message: (err as Error)?.message ?? 'Master generation failed' });
+        emit?.({ phase: 'error', contentType, topic, message: errMsg });
+        activityResults.push({
+          cardIndex: cardIdx + 1, contentType, topic,
+          platforms: platformTargets.map(t => t.platform),
+          status: 'master_failed', error: errMsg, scheduledCount: 0,
+        });
         blockSkipped += topicRows.length;
         continue;
       }
 
       const masterValid = Boolean(master.content) && !isPlaceholder(master.content);
+      if (!masterValid) {
+        const failReason = `Master returned ${!master.content ? 'empty' : 'placeholder'}: "${master.content?.slice(0, 80)}"`;
+        console.error(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] MASTER INVALID`, {
+          contentType, topic, failReason,
+          generation_status: master.generation_status,
+        });
+        activityResults.push({
+          cardIndex: cardIdx + 1, contentType, topic,
+          platforms: platformTargets.map(t => t.platform),
+          status: 'master_failed', error: failReason, scheduledCount: 0,
+        });
+        blockSkipped += topicRows.length;
+        continue;
+      }
+      console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] ✓ Master generated (${master.content.length} chars)`);
       console.log('[block-processor] master', {
         topic,
         generation_status: master.generation_status,
@@ -543,6 +606,30 @@ export async function processBlockSchedule(
         const scheduledFor = buildScheduledFor(row.date, row.scheduled_time);
         const repurpose    = repurposeIndex.get(row.id) ?? { index: 1, total: 1 };
 
+        // Enforce platform content-length limits so scheduled_posts inserts
+        // don't fail on chk_linkedin_content / chk_twitter_content / etc.
+        // Short stories and articles can generate 3000+ chars, exceeding limits.
+        const PLATFORM_CHAR_LIMITS: Record<string, number> = {
+          linkedin: 3000,
+          twitter: 280,
+          x: 280,
+          instagram: 2200,
+          facebook: 63000,
+          youtube: 5000,
+        };
+        const charLimit = PLATFORM_CHAR_LIMITS[platform];
+        let finalContent = content;
+        if (charLimit && finalContent.length > charLimit) {
+          // Truncate at word boundary, leave room for "..."
+          const cut = finalContent.slice(0, charLimit - 4);
+          const lastSpace = cut.lastIndexOf(' ');
+          finalContent = (lastSpace > charLimit - 100 ? cut.slice(0, lastSpace) : cut).trim() + '...';
+          console.log('[block-processor] Content truncated to platform limit', {
+            platform, topic: topic.slice(0, 50),
+            originalLen: content.length, truncatedLen: finalContent.length, limit: charLimit,
+          });
+        }
+
         // ── Insert scheduled_post immediately ───────────────────────────────
         const { data: inserted, error: insertError } = await supabase.from('scheduled_posts').insert({
           user_id:           campaign.user_id,
@@ -551,7 +638,7 @@ export async function processBlockSchedule(
           platform:          toDbPlatform(platform),
           content_type:      toDbContentType(platform, rowContentType, typeMapByPlatform),
           title:             topic || undefined,
-          content,
+          content:           finalContent,
           scheduled_for:     scheduledFor.toISOString(),
           status:            postStatus,
           repurpose_index:   repurpose.index,
@@ -619,16 +706,53 @@ export async function processBlockSchedule(
           )
         );
       }
-    } // end topic loop
+    } // end card block
+
+    // Record successful activities that weren't already recorded as failures
+    const alreadyRecorded = activityResults.some(r => r.cardIndex === cardIdx + 1);
+    if (!alreadyRecorded && blockScheduled > 0) {
+      activityResults.push({
+        cardIndex: cardIdx + 1,
+        contentType,
+        topic: card.topic,
+        platforms: card.rows.map(r => r.platform),
+        status: 'succeeded',
+        scheduledCount: blockScheduled,
+      });
+    }
 
     totalScheduled += blockScheduled;
     totalSkipped   += blockSkipped;
-    emit?.({ phase: 'block-complete', contentType, blockIndex: blockIdx + 1, scheduled: blockScheduled, skipped: blockSkipped });
-  } // end block loop
+    emit?.({ phase: 'block-complete', contentType, blockIndex: cardIdx + 1, scheduled: blockScheduled, skipped: blockSkipped });
+  } // end activity queue loop
+
+  // ── 4. ACTIVITY-LEVEL SUMMARY ──────────────────────────────────────────────
+  // Print one line per activity showing exactly what happened. No silent skips.
+  console.log(`\n[block-processor] ═══ ACTIVITY SUMMARY (${activityQueue.length} cards) ═══`);
+  for (const r of activityResults) {
+    const icon = r.status === 'succeeded' ? '✓' : '✗';
+    console.log(`[block-processor] ${icon} Card ${r.cardIndex}/${activityQueue.length} [${r.contentType}] "${r.topic.slice(0, 60)}" → ${r.status}${r.scheduledCount ? ` (${r.scheduledCount} posts)` : ''}${r.error ? ` — ${r.error.slice(0, 120)}` : ''}`);
+  }
+  // Flag any cards that were processed but produced no result entry (shouldn't happen)
+  for (let i = 0; i < activityQueue.length; i++) {
+    const card = activityQueue[i]!;
+    if (!activityResults.some(r => r.cardIndex === i + 1)) {
+      console.error(`[block-processor] ✗ Card ${i + 1}/${activityQueue.length} [${card.contentType}] "${card.topic.slice(0, 60)}" → SKIPPED WITHOUT RESULT`);
+      activityResults.push({
+        cardIndex: i + 1, contentType: card.contentType, topic: card.topic,
+        platforms: card.rows.map(r => r.platform),
+        status: 'skipped', error: 'Activity processed but no result recorded', scheduledCount: 0,
+      });
+    }
+  }
+  const succeeded = activityResults.filter(r => r.status === 'succeeded').length;
+  const failed = activityResults.length - succeeded;
+  console.log(`[block-processor] ═══ RESULT: ${succeeded}/${activityQueue.length} succeeded, ${failed} failed, ${totalScheduled} posts scheduled ═══\n`);
 
   return {
     scheduled_count:  totalScheduled,
     skipped_count:    totalSkipped,
     skipped_platforms: Array.from(new Set(skippedPlatforms)),
-  };
+    activity_results:  activityResults,
+  } as BlockScheduleResult & { activity_results: ActivityResult[] };
 }

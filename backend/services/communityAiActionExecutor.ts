@@ -223,41 +223,43 @@ export const executeAction = async (
     return { ok: false, status: 'failed', error: validation.error };
   }
 
-  if (!action.playbook_id) {
-    return { ok: false, status: 'failed', error: 'PLAYBOOK_REQUIRED' };
-  }
-  let playbook = null;
-  try {
-    playbook = await getPlaybookById(action.playbook_id, action.tenant_id, action.organization_id);
-  } catch (error: any) {
-    return { ok: false, status: 'failed', error: 'PLAYBOOK_NOT_FOUND' };
-  }
-
-  const historyMetrics = await loadHistoryMetrics(
-    action.tenant_id,
-    action.organization_id,
-    action.playbook_id
-  );
-  const playbookValidation = validateActionAgainstPlaybook(
-    {
-      action_type: action.action_type,
-      text: action.suggested_text,
-      execution_mode: action.execution_mode || 'manual',
-      risk_level: action.risk_level,
-    },
-    playbook,
-    historyMetrics
-  );
-  if (!playbookValidation.allowed) {
-    return {
-      ok: false,
-      status: 'failed',
-      error: playbookValidation.reason || 'PLAYBOOK_VIOLATION',
-    };
-  }
-
   if (requiresApproval(action, approved)) {
     return { ok: false, status: 'failed', error: 'APPROVAL_REQUIRED' };
+  }
+
+  const executionMode = action.execution_mode || 'manual';
+  let playbook = null;
+  if (action.playbook_id) {
+    try {
+      playbook = await getPlaybookById(action.playbook_id, action.tenant_id, action.organization_id);
+    } catch (error: any) {
+      return { ok: false, status: 'failed', error: 'PLAYBOOK_NOT_FOUND' };
+    }
+
+    const historyMetrics = await loadHistoryMetrics(
+      action.tenant_id,
+      action.organization_id,
+      action.playbook_id
+    );
+    const playbookValidation = validateActionAgainstPlaybook(
+      {
+        action_type: action.action_type,
+        text: action.suggested_text,
+        execution_mode: executionMode,
+        risk_level: action.risk_level,
+      },
+      playbook,
+      historyMetrics
+    );
+    if (!playbookValidation.allowed) {
+      return {
+        ok: false,
+        status: 'failed',
+        error: playbookValidation.reason || 'PLAYBOOK_VIOLATION',
+      };
+    }
+  } else if (executionMode !== 'manual') {
+    return { ok: false, status: 'failed', error: 'PLAYBOOK_REQUIRED' };
   }
 
   const enforcement = await checkUsageBeforeExecution({
@@ -273,7 +275,6 @@ export const executeAction = async (
     };
   }
 
-  const executionMode = action.execution_mode || 'manual';
   if (executionMode === 'manual') {
     const simulated = simulateManualExecution(action);
     if (options?.notify !== false) {

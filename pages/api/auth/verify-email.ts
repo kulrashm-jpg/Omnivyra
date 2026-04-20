@@ -17,6 +17,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { logger } from '../../../backend/services/logger';
+import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse   = { error: string; code?: string };
@@ -26,9 +28,11 @@ export default async function handler(
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  seedRequestContextFromRequest(req);
 
   // ── 1. Verify Bearer token & resolve user ─────────────────────────────────
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
+  if (user) seedRequestContextFromRequest(req, { userId: user.id });
 
   if (userErr === 'ACCOUNT_DELETED') {
     return res.status(403).json({ error: 'Account has been deactivated.', code: 'ACCOUNT_DELETED' });
@@ -46,7 +50,7 @@ export default async function handler(
     const rawToken = (req.headers.authorization ?? '').replace('Bearer ', '').trim();
     const { data: { user: authUser }, error: authErr } = await supabase.auth.getUser(rawToken);
     if (authErr || !authUser) {
-      return res.status(401).json({ error: 'Invalid or expired session' });
+      return res.status(401).json({ error: 'Invalid or expired session', code: 'INVALID_SESSION' });
     }
 
     const email = authUser.email?.toLowerCase() ?? '';
@@ -114,15 +118,17 @@ export default async function handler(
     .eq('id', resolvedUserId);
 
   // ── 3. Complete any pending signup_intent for this email ──────────────────
-  // Wrapped in try-catch so a missing signup_intents table never blocks routing.
   if (resolvedEmail) {
-    try {
-      await supabase
-        .from('signup_intents')
-        .update({ status: 'completed', completed_at: now })
-        .eq('email', resolvedEmail.toLowerCase())
-        .eq('status', 'pending');
-    } catch { /* non-fatal — table may not exist yet */ }
+    const { error: signupIntentError } = await supabase
+      .from('signup_intents')
+      .update({ status: 'completed', completed_at: now })
+      .eq('email', resolvedEmail.toLowerCase())
+      .eq('status', 'pending');
+
+    if (signupIntentError) {
+      logger.error('auth_verify_email_signup_intent_failed', { email: resolvedEmail, message: signupIntentError.message });
+      return res.status(500).json({ error: 'Failed to finalize signup intent' });
+    }
   }
 
   // ── 4. Determine routing ──────────────────────────────────────────────────

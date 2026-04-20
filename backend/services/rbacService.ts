@@ -274,10 +274,6 @@ export const enforceRole = async (input: {
   companyId?: string | null;
   allowedRoles: Role[];
 }): Promise<{ userId: string; role: Role } | null> => {
-  const hasLegacySuperAdmin = input.req.cookies?.super_admin_session === '1';
-  if (hasLegacySuperAdmin && input.allowedRoles.includes(Role.SUPER_ADMIN)) {
-    return { userId: 'super_admin_session', role: Role.SUPER_ADMIN };
-  }
   const user = await resolveUserContext(input.req);
   const companyId = input.companyId;
   if (!companyId) {

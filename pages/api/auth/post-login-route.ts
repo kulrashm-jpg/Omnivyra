@@ -36,7 +36,7 @@ export default async function handler(
     supabaseUid = verified.id;
     email       = verified.email;
   } catch {
-    return res.status(401).json({ error: 'Invalid or missing session token' });
+    return res.status(401).json({ error: 'Invalid or missing session token', code: 'INVALID_SESSION' });
   }
 
   // ── 2. Look up user row ───────────────────────────────────────────────────
@@ -53,7 +53,7 @@ export default async function handler(
     void logAuthEvent('ghost_session_detected', {
       metadata: { reason: 'user_not_found_in_db', endpoint: 'post-login-route' },
     });
-    return res.status(401).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
+    return res.status(401).json({ error: 'Invalid or missing session token', code: 'INVALID_SESSION' });
   }
 
   if ((userRow as any).is_deleted) {
@@ -62,7 +62,7 @@ export default async function handler(
       userId:   (userRow as any).id,
       metadata: { reason: 'user_is_soft_deleted', endpoint: 'post-login-route' },
     });
-    return res.status(401).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
+    return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
   }
 
   const userId: string = (userRow as any).id;
@@ -100,15 +100,10 @@ export default async function handler(
   const preferredRoute = await getUserPreferenceRoute(userId);
 
   // Create/update preferences if this is first time (auto-upsert)
-  try {
-    await upsertUserPreferences(userId, {
-      default_landing: preferredRoute === '/command-center' ? 'command_center' : 'dashboard',
-      command_center_pinned: preferredRoute === '/command-center',
-    });
-  } catch (err) {
-    // Silently fail — preference creation is nice-to-have, not critical
-    console.warn('[post-login-route] Failed to upsert preferences:', err);
-  }
+  await upsertUserPreferences(userId, {
+    default_landing: preferredRoute === '/command-center' ? 'command_center' : 'dashboard',
+    command_center_pinned: preferredRoute === '/command-center',
+  });
 
   return res.status(200).json({ route: preferredRoute });
 }

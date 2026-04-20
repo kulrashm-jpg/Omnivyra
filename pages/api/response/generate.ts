@@ -59,14 +59,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .maybeSingle();
 
     const { data: leadSignal } = await supabase
-      .from('engagement_lead_signals')
-      .select('lead_intent')
-      .eq('message_id', messageId)
+      .from('lead_signals')
+      .select('metadata')
+      .eq('source_id', messageId)
       .eq('organization_id', organizationId)
+      .eq('source_type', 'engagement')
       .maybeSingle();
 
     const intentOverride =
-      (leadSignal as { lead_intent?: string } | null)?.lead_intent
+      ((leadSignal as { metadata?: { lead_intent?: string } } | null)?.metadata?.lead_intent ?? null)
         ? 'lead_interest'
         : null;
 

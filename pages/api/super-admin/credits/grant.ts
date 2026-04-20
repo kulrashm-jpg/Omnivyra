@@ -27,9 +27,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase as sb } from '@/backend/db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
-import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
+import { requireAdminRateLimit, requireSuperAdminUser } from '@/backend/services/requestAccessService';
+import { recordAdminAudit } from '@/backend/services/adminAuditService';
+import { logger } from '@/backend/services/logger';
+import { withIdempotency } from '@/backend/middleware/withIdempotency';
 
 // ── Valid categories for admin-driven grants ───────────────────────────────────
 
@@ -38,18 +39,9 @@ type GrantCategory = typeof GRANT_CATEGORIES[number];
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-async function requireSuperAdmin(
-  req: NextApiRequest,
-  res: NextApiResponse,
-  sb: SupabaseClient,
-): Promise<string | null> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) {
-    return 'cookie';
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return user.id;
-  res.status(403).json({ error: 'Super admin access required' });
-  return null;
+async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
+  const user = await requireSuperAdminUser(req, res);
+  return user?.id ?? null;
 }
 
 // ── Notify org admin (best-effort, non-blocking) ──────────────────────────────
@@ -86,10 +78,11 @@ async function notifyOrgAdmin(
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:credits-grant', 20, 60))) return;
 
-  const adminId = await requireSuperAdmin(req, res, sb as any);
+  const adminId = await requireSuperAdmin(req, res);
   if (!adminId) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -122,7 +115,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
-  const grantedBy = adminId === 'cookie' ? null : adminId;
+  const grantedBy = adminId;
+  const requestIdempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
 
   // ── STEP 3: Log grant FIRST — grantId is the idempotency anchor ────────────
   // If this endpoint is retried (network error, duplicate submission), the same
@@ -136,12 +130,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       credits_amount: credits,
       category,
       reason:         reason.trim(),
+      idempotency_key: requestIdempotencyKey || null,
     })
     .select('id')
     .single();
 
   if (logErr || !grant?.id) {
-    console.error('[credits/grant] log failed:', logErr?.message);
+    if (logErr?.code === '23505' && requestIdempotencyKey) {
+      const { data: existingGrant, error: existingGrantError } = await sb
+        .from('manual_credit_grants')
+        .select('id')
+        .eq('idempotency_key', requestIdempotencyKey)
+        .maybeSingle();
+      if (existingGrantError) {
+        logger.error('super_admin_credit_grant_lookup_failed', { message: existingGrantError.message, idempotencyKey: requestIdempotencyKey });
+        return res.status(500).json({ error: 'Failed to resolve existing grant' });
+      }
+      if (existingGrant?.id) {
+        return res.status(200).json({
+          success: true,
+          grant_id: existingGrant.id,
+          credits_added: credits,
+        });
+      }
+    }
+    logger.error('super_admin_credit_grant_log_failed', { message: logErr?.message ?? 'unknown' });
     return res.status(500).json({ error: 'Failed to record grant: ' + (logErr?.message ?? 'unknown') });
   }
 
@@ -166,7 +179,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ),
     });
   } catch (txErr: any) {
-    console.error('[credits/grant] createCredit failed:', txErr.message);
+    logger.error('super_admin_credit_grant_failed', { organizationId: organization_id, grantId, message: txErr.message });
     // Grant row is already logged — do not return 500 silently.
     // Surface the error so the admin knows to investigate.
     return res.status(500).json({
@@ -177,8 +190,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ── STEP 6: Notify org admin (non-blocking) ────────────────────────────────
   notifyOrgAdmin(sb as any, organization_id, credits, reason.trim(), grantId).catch(err =>
-    console.warn('[credits/grant] notification failed (non-fatal):', err?.message),
+    logger.warn('super_admin_credit_grant_notification_failed', { organizationId: organization_id, grantId, message: err?.message ?? 'unknown' }),
   );
+
+  await recordAdminAudit({
+    actorUserId: adminId,
+    action: 'SUPER_ADMIN_CREDITS_GRANT',
+    targetType: 'organization',
+    targetId: organization_id,
+    metadata: { grantId, credits, category, reason: reason.trim() },
+    idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+  });
 
   // ── STEP 5: Respond ────────────────────────────────────────────────────────
   return res.status(200).json({
@@ -187,3 +209,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     credits_added: credits,
   });
 }
+
+export default withIdempotency(handler, { scope: 'super-admin-credits-grant' });

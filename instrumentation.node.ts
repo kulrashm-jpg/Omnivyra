@@ -17,7 +17,9 @@
 export async function register() {
   const monitoringFlag = process.env.ENABLE_REDIS_USAGE_MONITORING;
   const isProduction =
-    process.env.DRISHIQ_ENV === 'production' || process.env.NODE_ENV === 'production';
+    process.env.OMNIVYRA_ENV === 'production' ||
+    process.env.DRISHIQ_ENV === 'production' ||
+    process.env.NODE_ENV === 'production';
 
   const redisMonitoringEnabled =
     monitoringFlag === '1' ||

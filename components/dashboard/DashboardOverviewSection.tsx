@@ -282,7 +282,7 @@ export default function DashboardOverviewSection({ d }: { d: DashboardState }) {
                   Bring together strategic intelligence, market pulse, and active leads in one place
                 </p>
                 <button
-                  onClick={() => openIntelligenceTab('intelligence')}
+                  onClick={() => openIntelligenceTab('market-pulse')}
                   className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
                   Open Intelligence

@@ -1,14 +1,8 @@
-
-/**
- * GET /api/credits/transactions?org_id=<uuid>&limit=<n>
- *
- * Returns recent credit transactions for the given organization.
- */
-
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { withOrgAccess } from '../../../backend/middleware/withOrgAccess';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
   const orgId = req.query.org_id as string;
@@ -30,3 +24,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message });
   }
 }
+
+export default withOrgAccess(handler);

@@ -50,6 +50,7 @@ import {
 } from '../content/contentGenerationOrchestrator';
 import { getDefaultBlogTemplates, instantiateBlogTemplate } from './defaultBlogTemplates';
 import { deriveTemplateDepthGuidance } from './runBlogGenerationPureHelpers';
+import { buildStrategyInstructions } from '../content/companyStrategyPerspective';
 import {
   defaultFetchAngleData,
   defaultFetchSeriesData,
@@ -243,6 +244,13 @@ export async function runBlogGeneration(
     }
     if (objParts.length > 0) {
       contextualAnswers.campaign_objective = objParts.join('. ');
+    }
+  }
+
+  if (!contextualAnswers.strategy_perspective && companyContext?.strategyProfile) {
+    const strategyInstructions = buildStrategyInstructions(companyContext.strategyProfile);
+    if (strategyInstructions) {
+      contextualAnswers.strategy_perspective = strategyInstructions;
     }
   }
 

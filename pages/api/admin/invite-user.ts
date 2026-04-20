@@ -1,22 +1,10 @@
-
-/**
- * POST /api/admin/invite-user
- *
- * Protected endpoint. Creates a team invitation for the caller's company.
- * Requires COMPANY_ADMIN role (or SUPER_ADMIN with companyId in body).
- *
- * This is the admin-facing invite endpoint. See also /api/team/invite
- * which handles the same operation with rate limiting and email delivery.
- *
- * Body: { email: string, role?: string, companyId?: string }
- * Auth: Bearer <supabase_access_token>
- * Returns: { invitationId: string }
- */
-
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createHash, randomBytes } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { createAndSendInvitation } from '../../../backend/services/invitationService';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import { withIdempotency } from '../../../backend/middleware/withIdempotency';
+import { logger } from '../../../backend/services/logger';
 
 const VALID_ROLES = new Set([
   'COMPANY_ADMIN',
@@ -26,25 +14,22 @@ const VALID_ROLES = new Set([
   'VIEW_ONLY',
 ]);
 
-const INVITE_EXPIRY_DAYS = 7;
-
 type SuccessResponse = { invitationId: string };
-type ErrorResponse   = { error: string; code?: string };
+type ErrorResponse = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (!(await requireAdminRateLimit(req, res, 'rl:admin:invite-user', 20, 60))) return;
 
-  // ── 1. Verify Bearer token & resolve user ─────────────────────────────────
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) {
     const status = userErr === 'ACCOUNT_DELETED' ? 403 : 401;
     return res.status(status).json({ error: userErr ?? 'Invalid session', code: userErr ?? undefined });
   }
 
-  // ── 2. Parse and validate body ────────────────────────────────────────────
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { email, role = 'CONTENT_CREATOR', companyId: bodyCompanyId } = body as {
     email?: string;
@@ -61,7 +46,6 @@ export default async function handler(
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  // ── 3. Resolve caller's company & verify COMPANY_ADMIN role ───────────────
   const { data: superAdminRow } = await supabase
     .from('user_company_roles')
     .select('id')
@@ -71,11 +55,8 @@ export default async function handler(
     .limit(1)
     .maybeSingle();
 
-  const isSuperAdmin = !!superAdminRow;
-
   let companyId: string;
-
-  if (isSuperAdmin) {
+  if (superAdminRow) {
     if (!bodyCompanyId) {
       return res.status(400).json({ error: 'companyId is required for super admin invitations' });
     }
@@ -96,7 +77,6 @@ export default async function handler(
     companyId = (roleRow as any).company_id;
   }
 
-  // ── 4. Check for existing active invite ───────────────────────────────────
   const { data: existing } = await supabase
     .from('invitations')
     .select('id')
@@ -108,38 +88,23 @@ export default async function handler(
     .maybeSingle();
 
   if (existing) {
-    return res.status(409).json({
-      error: `An active invitation for ${normalizedEmail} already exists.`,
-      code: 'INVITE_EXISTS',
-    });
+    return res.status(409).json({ error: `An active invitation for ${normalizedEmail} already exists.`, code: 'INVITE_EXISTS' });
   }
 
-  // ── 5. Generate secure token ──────────────────────────────────────────────
-  const rawToken  = randomBytes(32).toString('hex');
-  const tokenHash = createHash('sha256').update(rawToken).digest('hex');
-  const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 86_400_000).toISOString();
-
-  // ── 6. Insert invitation ──────────────────────────────────────────────────
-  const { data: invitation, error: insertErr } = await supabase
-    .from('invitations')
-    .insert({
-      email:      normalizedEmail,
-      company_id: companyId,
+  try {
+    const invitation = await createAndSendInvitation({
+      email: normalizedEmail,
+      companyId,
       role,
-      token_hash: tokenHash,
-      invited_by: user.id,
-      expires_at: expiresAt,
-    })
-    .select('id')
-    .single();
+      invitedBy: user.id,
+      idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+    });
 
-  if (insertErr) {
-    if (insertErr.code === '23505') {
-      return res.status(409).json({ error: 'An invitation for this email already exists', code: 'INVITE_EXISTS' });
-    }
-    console.error('[admin/invite-user] insert error:', insertErr.message);
-    return res.status(500).json({ error: 'Failed to create invitation' });
+    return res.status(201).json({ invitationId: invitation.id });
+  } catch (error: any) {
+    logger.error('admin_invite_user_failed', { userId: user.id, companyId, email: normalizedEmail, message: error?.message || String(error) });
+    return res.status(500).json({ error: 'Failed to create and send invitation' });
   }
-
-  return res.status(201).json({ invitationId: invitation.id });
 }
+
+export default withIdempotency(handler, { scope: 'admin-invite-user' });

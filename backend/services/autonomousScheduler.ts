@@ -15,7 +15,7 @@ import { supabase } from '../db/supabaseClient';
 import { generateNextCampaign, getAutonomousSettings } from './autonomousCampaignAgent';
 import { distilCampaignLearnings } from './campaignLearningsStore';
 import { logDecision } from './autonomousDecisionLogger';
-import { hasEnoughCredits, CREDIT_COSTS } from './creditDeductionService';
+import { getCreditCost, hasEnoughCredits } from './creditDeductionService';
 
 export type SchedulerRunResult = {
   companies_evaluated: number;
@@ -138,6 +138,7 @@ export async function runAutonomousScheduler(): Promise<SchedulerRunResult> {
   };
 
   try {
+    const campaignGenerationCost = await getCreditCost('campaign_generation');
     // ── 1. Expire stale pending campaigns ─────────────────────────────────
     result.expired_pending = await expireOldPending();
 
@@ -173,7 +174,7 @@ export async function runAutonomousScheduler(): Promise<SchedulerRunResult> {
           continue;
         }
         // Warn mode: <20% of a typical campaign budget signals to reduce extras
-        const LOW_CREDIT_THRESHOLD = CREDIT_COSTS.campaign_generation * 5; // 250 credits
+        const LOW_CREDIT_THRESHOLD = campaignGenerationCost * 5;
         const creditIsLow = (creditCheck.balance ?? 0) < LOW_CREDIT_THRESHOLD;
 
         // ── Generate next campaign ─────────────────────────────────────────

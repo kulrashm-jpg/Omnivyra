@@ -20,6 +20,7 @@ import {
   ensureClassicSummaryBlock,
   stripHtmlForWordCount,
   deriveTemplateDepthGuidance,
+  auditDepthCoverage,
 } from './runBlogGenerationPureHelpers';
 import {
   checkHookStrength,
@@ -39,6 +40,9 @@ import { injectInternalLinks } from './runBlogGenerationDataAccess';
 import { deepenTemplateParagraphsIndividually } from './runTemplateDeepening';
 import type { OrchestratorResult } from '../content/contentGenerationOrchestrator';
 import type { BlogGenerationResult } from './blogRunnerTypes';
+import { buildRepairContextAnchor, extractCompanyIdentity, scoreCompanyContext, type CompanyIdentity } from '../content/companyContextBlock';
+import { validateContentVariation } from '../content/contentVariationValidator';
+import { getProfile } from '../../backend/services/companyProfileService';
 
 export interface TemplateBlogGenerationParams {
   company_id: string;
@@ -79,6 +83,38 @@ export async function runTemplateBlogGenerationPath(
 
   const { buildTemplateAwareSystemPromptV2, buildTemplateAwareUserPrompt, parseTemplateOutput } =
     await import('./blogGenerationEngine');
+
+  // Build company identity for repair context anchoring.
+  // must_include_points is auto-enriched from company profile in runBlogGeneration.ts
+  // and contains serialized pain points, problem statement, and authority domains.
+  const a = generationInput.answers || {};
+  const mustInclude = a.must_include_points || '';
+  const extractedPainPoints = mustInclude
+    .split(';')
+    .map(s => s.trim())
+    .filter(s => s.length > 10 && (
+      s.toLowerCase().includes('pain') ||
+      s.toLowerCase().includes('problem') ||
+      s.toLowerCase().includes('challenge') ||
+      s.toLowerCase().includes('struggle') ||
+      s.toLowerCase().startsWith('key pain') ||
+      s.toLowerCase().startsWith('the core')
+    ))
+    .slice(0, 3);
+  const profileIdentity = extractCompanyIdentity(
+    await getProfile(company_id, { autoRefine: false, languageRefine: false }).catch(() => null),
+  );
+  const _identity: CompanyIdentity = {
+    ...profileIdentity,
+    companyName: a.companyName || profileIdentity.companyName || undefined,
+    industry: a.industry || profileIdentity.industry || undefined,
+    targetAudience: a.audience || a.target_audience || profileIdentity.targetAudience || undefined,
+    coreProblem: a.campaign_objective || profileIdentity.coreProblem || undefined,
+    painPoints: extractedPainPoints.length > 0 ? extractedPainPoints : profileIdentity.painPoints,
+    uniqueValue: a.uniqueness_directive || profileIdentity.uniqueValue || undefined,
+  };
+  const repairAnchor = buildRepairContextAnchor(_identity);
+
   const normalizedTemplateName = normalizeTemplateName(effectiveTemplateName);
   const templateDepthGuidance = deriveTemplateDepthGuidance(
     contentType as any, effectiveTemplateName, formatType as any, targetWc ?? 0,
@@ -422,6 +458,15 @@ export async function runTemplateBlogGenerationPath(
       });
     };
 
+    const getVariationValidation = (parsed: typeof bestParsed | null) => {
+      if (!parsed) return null;
+      const contentText = flattenBlocks(parsed.content_blocks)
+        .filter((block): block is Extract<typeof block, { type: 'paragraph' }> => block.type === 'paragraph')
+        .map((block) => ('html' in block ? String(block.html || '') : ''))
+        .join('\n\n');
+      return contentText.trim().length > 0 ? validateContentVariation(contentText, { contentType }) : null;
+    };
+
     const candidateScore = (
       analysis: typeof bestAnalysis,
       blockCount: number | null,
@@ -448,6 +493,13 @@ export async function runTemplateBlogGenerationPath(
       analysis: typeof bestAnalysis,
       blockCount: number | null,
     ): boolean => {
+      const depthAudit = parsed
+        ? auditDepthCoverage(parsed.content_blocks, {
+            targetWords: targetWc ?? 1200,
+            mustIncludePoints: mustInclude,
+          })
+        : null;
+
       if (
         !analysis ||
         analysis.wordCount < minAcceptable ||
@@ -464,6 +516,12 @@ export async function runTemplateBlogGenerationPath(
 
       const qualityScore = getTemplateQualityScore(parsed);
       if (qualityScore && qualityScore.total < 75) return true;
+
+      const variationValidation = getVariationValidation(parsed);
+      const duplicateContentDetected = Boolean(variationValidation?.duplicateContentDetected);
+      const lowVariationDetected = Boolean(variationValidation?.lowVariationDetected);
+      if (duplicateContentDetected || lowVariationDetected) return true;
+      if (depthAudit?.missingDepth) return true;
 
       if (isNewsletterTemplate) {
         if (analysis.emptyKeyInsights > 0 || analysis.emptySummaries > 0) return true;
@@ -596,6 +654,24 @@ export async function runTemplateBlogGenerationPath(
         if (analysis.paragraphCount < 5) return true;
       }
 
+      // Company context enforcement: reject structurally valid but generic content
+      if (_identity.companyName && parsed) {
+        const contentText = flattenBlocks(parsed.content_blocks)
+          .filter((b): b is Extract<typeof b, { type: 'paragraph' }> => b.type === 'paragraph')
+          .map(b => ('html' in b ? String(b.html || '') : ''))
+          .join(' ');
+        if (contentText.length > 100) {
+          const ctxScore = scoreCompanyContext(contentText, _identity, { contentType });
+          const duplicateContentDetected = ctxScore.duplicateContentDetected;
+          const lowVariationDetected = ctxScore.lowVariationDetected;
+          if (isNewsletterTemplate) {
+            if (duplicateContentDetected || ctxScore.perspectiveMismatch || !ctxScore.scenarioPresent || ctxScore.score < 50) return true;
+          } else if (duplicateContentDetected || lowVariationDetected || ctxScore.perspectiveMismatch || !ctxScore.scenarioPresent || ctxScore.score < 55) {
+            return true;
+          }
+        }
+      }
+
       return false;
     };
 
@@ -610,6 +686,13 @@ export async function runTemplateBlogGenerationPath(
             retryIssues.push('template JSON could not be parsed into valid filled blocks');
           } else {
             const qualityScore = getTemplateQualityScore(bestParsed);
+            const variationValidation = getVariationValidation(bestParsed);
+            const depthAudit = bestParsed
+              ? auditDepthCoverage(bestParsed.content_blocks, {
+                  targetWords: targetWc ?? 1200,
+                  mustIncludePoints: mustInclude,
+                })
+              : null;
             if (bestAnalysis.wordCount < minAcceptable) retryIssues.push(`word count too low (${bestAnalysis.wordCount} words, minimum ${minAcceptable})`);
             if (bestAnalysis.emptyParagraphs > 0) retryIssues.push(`${bestAnalysis.emptyParagraphs} empty paragraph block(s)`);
             if (bestAnalysis.thinParagraphs > 0) retryIssues.push(`${bestAnalysis.thinParagraphs} thin paragraph block(s) under 70 words`);
@@ -747,10 +830,55 @@ export async function runTemplateBlogGenerationPath(
               retryIssues.push(`quality panel score is still below threshold (${qualityScore.total}/100)`);
               retryIssues.push(...qualityScore.issues.slice(0, 6).map((issue) => issue.message));
             }
+            if (variationValidation?.duplicateContentDetected) {
+              retryIssues.push(
+                `duplicate sections detected above 70% similarity (${variationValidation.duplicateSectionPairs.length} pair(s))`,
+              );
+            }
+            if (variationValidation?.lowVariationDetected) {
+              retryIssues.push(
+                `${variationValidation.lowVariationSections.length} section(s) fail the variation check and do not introduce a new concept`,
+              );
+            }
+            if (depthAudit?.missingMustIncludePoints.length) {
+              retryIssues.push(
+                `missing must_include_points: ${depthAudit.missingMustIncludePoints.slice(0, 5).join('; ')}`,
+              );
+            }
+            if (depthAudit?.missingDepthElements.length) {
+              retryIssues.push(
+                `missing required depth elements: ${depthAudit.missingDepthElements.join(', ')}`,
+              );
+            }
+            if (depthAudit?.shallowDepthElements.length) {
+              retryIssues.push(
+                `shallow depth elements detected: ${depthAudit.shallowDepthElements.join(', ')}`,
+              );
+            }
+            if (depthAudit?.sectionCount && depthAudit.thinSectionRatio > 0.3) {
+              retryIssues.push(
+                `${depthAudit.thinSectionCount}/${depthAudit.sectionCount} sections are still thin and lack explanation or example depth`,
+              );
+            }
           }
           if (bestBlockCount !== templateLength) {
             retryIssues.push(`blocks array length mismatch (${bestBlockCount ?? 0} returned, expected ${templateLength})`);
           }
+
+          const depthAudit = bestParsed
+            ? auditDepthCoverage(bestParsed.content_blocks, {
+                targetWords: targetWc ?? 1200,
+                mustIncludePoints: mustInclude,
+              })
+            : null;
+          const missingDepthLines = [
+            ...((depthAudit?.missingMustIncludePoints ?? []).slice(0, 6).map((point) => `- ${point}`)),
+            ...((depthAudit?.missingDepthElements ?? []).map((item) => `- ${item}`)),
+            ...((depthAudit?.shallowDepthElements ?? []).map((item) => `- ${item} is present but still generic or placeholder-like`)),
+            ...(depthAudit?.sectionCount && depthAudit.thinSectionRatio > 0.3
+              ? [`- Too many thin sections (${depthAudit.thinSectionCount}/${depthAudit.sectionCount}) that lack explanation or example depth`]
+              : []),
+          ];
 
           const retryResult = await runCompletionWithOperation({
             operation:       'blogGeneration',
@@ -768,7 +896,11 @@ export async function runTemplateBlogGenerationPath(
                 role: 'user',
                 content:
                   `REJECTED TEMPLATE FILL: ${retryIssues.join('; ')}.\n\n` +
+                  (missingDepthLines.length > 0
+                    ? `The previous draft is invalid because it failed to cover:\n${missingDepthLines.join('\n')}\n\nYou must explicitly include these in the revised draft.\n\n`
+                    : '') +
                   `${retryInstruction}\n` +
+                  repairAnchor + '\n' +
                   `Requirements:\n` +
                   `- Reach at least ${minAcceptable} words for this ${targetWc}-word target\n` +
                   `- Return exactly ${templateLength} top-level block entries in the blocks array\n` +
@@ -862,6 +994,7 @@ export async function runTemplateBlogGenerationPath(
                 role: 'user',
                 content:
                   `CLASSIC TEMPLATE REPAIR PASS ${repairAttempt + 1}.\n\n` +
+                  repairAnchor + '\n\n' +
                   `The current Classic article is still underfilled for a ${targetWc}-word brief.\n` +
                   `Current state: ${currentWordCount} words; ${currentH2Count} filled H2 sections; ${currentSummaryState}; ${currentKeyInsightsState}; ${currentRefsCount} references; average paragraph depth ${currentAvgParagraphWords} words.\n\n` +
                   `Rewrite the SAME Classic template blocks from scratch while keeping the exact same block order and total block count.\n\n` +
@@ -947,6 +1080,7 @@ export async function runTemplateBlogGenerationPath(
               role: 'user',
               content:
                 `Repair this Classic blog draft for topic "${topic.trim()}".\n\n` +
+                repairAnchor + '\n\n' +
                 `Current weak state:\n` +
                 `- words: ${currentAnalysis.wordCount}\n` +
                 `- H2 sections: ${currentAnalysis.h2Count}\n` +
@@ -1010,6 +1144,7 @@ export async function runTemplateBlogGenerationPath(
               role: 'user',
               content:
                 `${repairLabel.toUpperCase()} TEMPLATE REPAIR PASS.\n\n` +
+                repairAnchor + '\n\n' +
                 `Current draft quality is still too weak for the visible quality panel.\n` +
                 `Current state: ${currentAnalysis.wordCount} words, ${currentAnalysis.h2Count} filled H2 sections, ${currentAnalysis.refsCount} references, average paragraph depth ${currentAnalysis.averageParagraphWords} words.\n\n` +
                 `${repairFocus}\n\n` +
@@ -1096,6 +1231,7 @@ export async function runTemplateBlogGenerationPath(
               role: 'user',
               content:
                 `Repair this Tutorial blog draft for topic "${topic.trim()}".\n\n` +
+                repairAnchor + '\n\n' +
                 `Current weak state:\n` +
                 `- words: ${currentAnalysis.wordCount}\n` +
                 `- average paragraph words: ${currentAnalysis.averageParagraphWords}\n` +

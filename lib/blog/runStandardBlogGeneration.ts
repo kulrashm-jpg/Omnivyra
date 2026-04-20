@@ -29,10 +29,13 @@ import {
   ensureClassicSummaryBlock,
   ensureGeneratedMetadata,
   assessBlogQualityScore,
+  auditDepthCoverage,
 } from './runBlogGenerationPureHelpers';
 import { injectInternalLinks } from './runBlogGenerationDataAccess';
 import type { OrchestratorResult } from '../content/contentGenerationOrchestrator';
 import type { BlogGenerationResult } from './blogRunnerTypes';
+import { getProfile } from '../../backend/services/companyProfileService';
+import { extractCompanyIdentity, scoreCompanyContext } from '../content/companyContextBlock';
 
 export interface StandardBlogGenerationParams {
   company_id: string;
@@ -94,6 +97,10 @@ export async function runStandardHtmlBlogGeneration(
     contentType === 'whitepaper';
 
   if (targetWc && targetWc >= 300) {
+    const profileIdentity = extractCompanyIdentity(
+      await getProfile(company_id, { autoRefine: false, languageRefine: false }).catch(() => null),
+    );
+    const mustIncludePoints = generationInput.answers?.must_include_points || '';
     const htmlText = generated.content_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     const actualWords = htmlText.split(/\s+/).filter(Boolean).length;
     const minAcceptable = Math.round(targetWc * 0.85);
@@ -113,9 +120,16 @@ export async function runStandardHtmlBlogGeneration(
       if (block.type !== 'references') return count;
       return count + block.items.filter((ref) => String(ref.title ?? '').trim() || String(ref.url ?? '').trim()).length;
     }, 0);
+    const depthAudit = auditDepthCoverage(initialBlocks, {
+      targetWords: targetWc,
+      mustIncludePoints,
+    });
+    const initialContextScore = scoreCompanyContext(htmlText, profileIdentity, { contentType });
     const classicDepthWeak =
       isClassicTemplate && (
         summaryCount === 0 ||
+        depthAudit.missingDepth ||
+        initialContextScore.perspectiveMismatch ||
         refsCount < 3 ||
         (targetWc >= 2000 && (avgParagraphWords < 95 || shortParagraphs >= 3 || h2Count < 5)) ||
         (targetWc >= 1600 && targetWc < 2000 && (avgParagraphWords < 85 || shortParagraphs >= 3 || h2Count < 4)) ||
@@ -126,6 +140,8 @@ export async function runStandardHtmlBlogGeneration(
       isManagedLongformStandard && (
         usedDeterministicFallback ||
         summaryCount === 0 ||
+        depthAudit.missingDepth ||
+        initialContextScore.perspectiveMismatch ||
         (contentType !== 'story' && refsCount < (contentType === 'whitepaper' ? 5 : 3)) ||
         (contentType === 'whitepaper' && (avgParagraphWords < 85 || h2Count < 4 || shortParagraphs >= 2)) ||
         (contentType === 'guide' && (avgParagraphWords < 75 || h2Count < 3 || shortParagraphs >= 2)) ||
@@ -150,6 +166,15 @@ export async function runStandardHtmlBlogGeneration(
           : managedLongformWeak
             ? `Your ${contentLabel} is still incomplete for the requested depth. It currently has ${actualWords} words, ${h2Count} H2 section(s), ${summaryCount} summary block(s), ${refsCount} reference entries, and ${shortParagraphs} thin paragraph(s).`
           : `Your article reaches ${actualWords} words, but the Classic draft is still incomplete or too thin. Average paragraph length is ${avgParagraphWords} words, there are ${shortParagraphs} thin paragraph(s), ${h2Count} H2 section(s), ${summaryCount} filled summary block(s), and ${refsCount} reference entries.`;
+        const initialMissingDepthLines = [
+          ...depthAudit.missingMustIncludePoints.slice(0, 6).map((point) => `- ${point}`),
+          ...depthAudit.missingDepthElements.map((item) => `- ${item}`),
+          ...depthAudit.shallowDepthElements.map((item) => `- ${item} is present but still generic or placeholder-like`),
+          ...(initialContextScore.perspectiveMismatch ? ['- The strategic perspective is still generic or interchangeable'] : []),
+          ...(depthAudit.sectionCount > 0 && depthAudit.thinSectionRatio > 0.3
+            ? [`- Too many thin sections (${depthAudit.thinSectionCount}/${depthAudit.sectionCount}) that lack explanation or example depth`]
+            : []),
+        ];
         let bestGenerated = generated;
         let bestWords = actualWords;
         let bestAvgParagraphWords = avgParagraphWords;
@@ -157,6 +182,8 @@ export async function runStandardHtmlBlogGeneration(
         let bestH2Count = h2Count;
         let bestSummaryCount = summaryCount;
         let bestRefsCount = refsCount;
+        let bestDepthAudit = depthAudit;
+        let bestContextScore = initialContextScore;
         let previousAssistantOutput = aiResult.output ?? '';
 
         const retryAttempts = isManagedLongformStandard ? 3 : (targetWc < 1200 ? 3 : 2);
@@ -166,6 +193,8 @@ export async function runStandardHtmlBlogGeneration(
               ? (
                   bestWords < minAcceptable ||
                   bestSummaryCount === 0 ||
+                  bestDepthAudit.missingDepth ||
+                  bestContextScore.perspectiveMismatch ||
                   bestRefsCount < minimumRefs ||
                   (contentType === 'whitepaper' && (bestAvgParagraphWords < 85 || bestShortParagraphs >= 2 || bestH2Count < 4)) ||
                   (contentType === 'guide' && (bestAvgParagraphWords < 75 || bestShortParagraphs >= 2 || bestH2Count < 3)) ||
@@ -174,6 +203,8 @@ export async function runStandardHtmlBlogGeneration(
                 )
               : (
                   bestSummaryCount === 0 ||
+                  bestDepthAudit.missingDepth ||
+                  bestContextScore.perspectiveMismatch ||
                   bestRefsCount < 3 ||
                   (targetWc >= 2000 && (bestAvgParagraphWords < 95 || bestShortParagraphs >= 3 || bestH2Count < 5)) ||
                   (targetWc >= 1600 && targetWc < 2000 && (bestAvgParagraphWords < 85 || bestShortParagraphs >= 3 || bestH2Count < 4)) ||
@@ -182,6 +213,17 @@ export async function runStandardHtmlBlogGeneration(
                 );
 
           if (bestWords >= minAcceptable && !currentWeak) break;
+
+          const missingDepthLines = [
+            ...bestDepthAudit.missingMustIncludePoints.slice(0, 6).map((point) => `- ${point}`),
+            ...bestDepthAudit.missingDepthElements.map((item) => `- ${item}`),
+            ...bestDepthAudit.shallowDepthElements.map((item) => `- ${item} is present but still generic or placeholder-like`),
+            ...(bestContextScore.perspectiveMismatch ? ['- The strategic perspective is still generic or interchangeable'] : []),
+            ...(bestDepthAudit.sectionCount > 0 && bestDepthAudit.thinSectionRatio > 0.3
+              ? [`- Too many thin sections (${bestDepthAudit.thinSectionCount}/${bestDepthAudit.sectionCount}) that lack explanation or example depth`]
+              : []),
+          ];
+          const depthFailureLines = missingDepthLines.length > 0 ? missingDepthLines : initialMissingDepthLines;
 
           const retryResult = await runCompletionWithOperation({
             operation:       'blogGeneration',
@@ -196,6 +238,14 @@ export async function runStandardHtmlBlogGeneration(
               { role: 'user',   content: buildGenerationUserPrompt(generationInput) },
               ...(previousAssistantOutput ? [{ role: 'assistant' as const, content: previousAssistantOutput }] : []),
               { role: 'user', content: `REJECTED: ${retryReason}\n\nRegenerate the COMPLETE ${contentLabel} from scratch with:\n- ${targetWc} words minimum\n- At least ${targetWc >= 1200 ? 4 : 3} strong H2 sections${contentType === 'story' ? '' : ', each with 3–5 full paragraphs (60–120 words per paragraph)'}\n- A fully written Summary that synthesizes the argument instead of repeating section labels\n- At least ${minimumRefs} credible reference entries for GEO authority${contentType === 'story' ? ' where appropriate' : ''}\n- Provide a real excerpt suitable for listings and a real meta description suitable for search engines\n- Use concrete examples, data, practitioner implications, and actionable analysis to fill each section\n- Make every major section feel complete, not merely adequate\n- Do NOT pad with filler — add genuine depth and detail\n- Do NOT create more than 6 H2 sections — make each section deeper instead of adding more thin sections\n- End each H2 section with a clear takeaway sentence\n\nReturn the same JSON format. The full ${contentLabel} must be ${targetWc}+ words and substantively deeper.` },
+              ...(depthFailureLines.length > 0
+                ? [{
+                    role: 'user' as const,
+                    content:
+                      `The previous draft is invalid because it failed to cover:\n${depthFailureLines.join('\n')}\n\n` +
+                      `You must explicitly include these in the revised draft.`,
+                  }]
+                : []),
             ],
           });
           previousAssistantOutput = retryResult.output ?? previousAssistantOutput;
@@ -221,10 +271,15 @@ export async function runStandardHtmlBlogGeneration(
             if (block.type !== 'references') return count;
             return count + block.items.filter((ref) => String(ref.title ?? '').trim() || String(ref.url ?? '').trim()).length;
           }, 0);
+          const retryDepthAudit = auditDepthCoverage(retryBlocks, {
+            targetWords: targetWc,
+            mustIncludePoints,
+          });
+          const retryContextScore = scoreCompanyContext(retryText, profileIdentity, { contentType });
           const currentDepthScore =
-            bestWords + bestAvgParagraphWords * 4 + bestH2Count * 40 + bestSummaryCount * 90 + bestRefsCount * 30 - bestShortParagraphs * 80;
+            bestWords + bestAvgParagraphWords * 4 + bestH2Count * 40 + bestSummaryCount * 90 + bestRefsCount * 30 - bestShortParagraphs * 80 - (bestDepthAudit.missingDepth ? 400 : 0) - (bestContextScore.perspectiveMismatch ? 250 : 0);
           const retryDepthScore =
-            retryWords + retryAvgParagraphWords * 4 + retryH2Count * 40 + retrySummaryCount * 90 + retryRefsCount * 30 - retryShortParagraphs * 80;
+            retryWords + retryAvgParagraphWords * 4 + retryH2Count * 40 + retrySummaryCount * 90 + retryRefsCount * 30 - retryShortParagraphs * 80 - (retryDepthAudit.missingDepth ? 400 : 0) - (retryContextScore.perspectiveMismatch ? 250 : 0);
 
           if (retryDepthScore > currentDepthScore) {
             bestGenerated = retryGen;
@@ -234,6 +289,8 @@ export async function runStandardHtmlBlogGeneration(
             bestH2Count = retryH2Count;
             bestSummaryCount = retrySummaryCount;
             bestRefsCount = retryRefsCount;
+            bestDepthAudit = retryDepthAudit;
+            bestContextScore = retryContextScore;
           }
         }
 

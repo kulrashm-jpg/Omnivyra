@@ -48,6 +48,7 @@ import { recordAnomalyEvent } from './anomalyDetector';
 import { detectAnomaly } from '../anomaly/detectionEngine';
 import { createInstrumentedClient } from '../redis/instrumentation';
 import { getRateLimitAdminConfig, getRateLimitOverride } from '../../backend/services/adminRuntimeConfig';
+import { logger } from '../../backend/services/logger';
 
 // ── In-memory fallback limiter ────────────────────────────────────────────────
 // Used ONLY when Redis is unavailable (fail-open path).
@@ -198,14 +199,11 @@ export async function checkRateLimit(
 }
 
 function logBypass(identifier: string, prefix: string, reason: string) {
-  console.warn(JSON.stringify({
-    level: 'WARN',
-    event: 'RATE_LIMIT_REDIS_DOWN',
+  logger.warn('RATE_LIMIT_REDIS_DOWN', {
     prefix,
     identifier: identifier.slice(0, 64),  // truncate for log safety
     reason,
-    ts: new Date().toISOString(),
-  }));
+  });
 }
 
 // ── Pre-configured limiters for auth endpoints ────────────────────────────────

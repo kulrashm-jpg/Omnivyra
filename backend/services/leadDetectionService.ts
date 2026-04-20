@@ -4,6 +4,9 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import {
+  writeLeadSignal,
+} from './canonicalLeadSignalService';
 
 const LEAD_PATTERNS: Array<{ pattern: RegExp; intent: string; score: number }> = [
   { pattern: /\b(exploring solutions?|exploring options?)\b/i, intent: 'solution_exploration', score: 70 },
@@ -125,9 +128,9 @@ export function detectLeadSignals(input: DetectInput): LeadSignal | null {
 }
 
 /**
- * Process a message and upsert lead signal to engagement_lead_signals.
- * Uses onConflict: 'message_id'. Updates lead_score, confidence_score, lead_intent
- * only when the new signal is better than existing.
+ * Process a message and write a normalized lead signal through the shared write path.
+ * The shared writer enforces canonical-first behavior, optional legacy mirroring,
+ * and invalid flag-state protection.
  */
 export async function processMessageForLeads(input: {
   organization_id: string;
@@ -142,16 +145,6 @@ export async function processMessageForLeads(input: {
   if (input.content == null || String(input.content).trim().length === 0) {
     return { detected: false };
   }
-
-  const { data: existing } = await supabase
-    .from('engagement_lead_signals')
-    .select('lead_score, confidence_score, lead_intent')
-    .eq('message_id', input.message_id)
-    .maybeSingle();
-
-  const existingRow = existing as { lead_score?: number; confidence_score?: number; lead_intent?: string } | null;
-  const existingScore = existingRow?.lead_score ?? 0;
-  const existingConf = existingRow?.confidence_score ?? 0;
 
   let threadContext = input.thread_context ?? null;
   if (!threadContext) {
@@ -185,74 +178,65 @@ export async function processMessageForLeads(input: {
     return { detected: false };
   }
 
-  const shouldInsert = !existingRow;
-  const shouldUpdate =
-    existingRow &&
-    (signal.lead_score > existingScore ||
-      (signal.lead_score === existingScore && signal.confidence_score > existingConf));
-
-  if (!shouldInsert && !shouldUpdate) {
-    return { detected: true, lead_intent: existingRow?.lead_intent ?? signal.lead_intent };
+  const [{ data: message }, { data: thread }, { data: author }] = await Promise.all([
+    supabase
+      .from('engagement_messages')
+      .select('content, platform')
+      .eq('id', input.message_id)
+      .maybeSingle(),
+    supabase
+      .from('engagement_threads')
+      .select('platform')
+      .eq('id', input.thread_id)
+      .maybeSingle(),
+    input.author_id
+      ? supabase
+          .from('engagement_authors')
+          .select('platform_user_id')
+          .eq('id', input.author_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null as { platform_user_id?: string | null } | null }),
+  ]);
+  const platform =
+    ((message as { platform?: string | null } | null)?.platform ??
+      (thread as { platform?: string | null } | null)?.platform ??
+      '')
+      .toString()
+      .trim()
+      .toLowerCase();
+  if (!platform) {
+    throw new Error(`Missing platform for engagement lead signal message ${input.message_id}`);
   }
 
-  if (shouldInsert) {
-    const { error } = await supabase.from('engagement_lead_signals').insert({
+  const writeResult = await writeLeadSignal({
+    debugContext: 'leadDetectionService.processMessageForLeads',
+    canonical: {
       organization_id: input.organization_id,
-      message_id: input.message_id,
+      source_type: 'engagement',
+      source_id: input.message_id,
       thread_id: input.thread_id,
-      author_id: input.author_id ?? null,
-      lead_intent: signal.lead_intent,
-      lead_score: signal.lead_score,
+      platform,
+      platform_user_id:
+        ((author as { platform_user_id?: string | null } | null)?.platform_user_id ?? null) || null,
+      content_text:
+        ((message as { content?: string | null } | null)?.content ?? input.content ?? '').toString(),
+      intent_score: signal.lead_score / 100,
+      urgency_score: null,
+      icp_score: null,
       confidence_score: signal.confidence_score,
+      total_score: signal.lead_score / 100,
       detected_at: new Date().toISOString(),
-    });
-    if (error?.code === '23505') {
-      const { data: raced } = await supabase
-        .from('engagement_lead_signals')
-        .select('lead_score, confidence_score')
-        .eq('message_id', input.message_id)
-        .maybeSingle();
-      const racedRow = raced as { lead_score?: number; confidence_score?: number } | null;
-      const racedScore = racedRow?.lead_score ?? 0;
-      const racedConf = racedRow?.confidence_score ?? 0;
-      const isBetter =
-        signal.lead_score > racedScore ||
-        (signal.lead_score === racedScore && signal.confidence_score > racedConf);
-      if (isBetter) {
-        const orFilter = `lead_score.lt.${signal.lead_score},and(lead_score.eq.${signal.lead_score},confidence_score.lt.${signal.confidence_score})`;
-        await supabase
-          .from('engagement_lead_signals')
-          .update({
-            lead_intent: signal.lead_intent,
-            lead_score: signal.lead_score,
-            confidence_score: signal.confidence_score,
-            detected_at: new Date().toISOString(),
-          })
-          .eq('message_id', input.message_id)
-          .or(orFilter);
-      }
-    }
-  } else if (shouldUpdate) {
-    const orFilter = `lead_score.lt.${signal.lead_score},and(lead_score.eq.${signal.lead_score},confidence_score.lt.${signal.confidence_score})`;
-    await supabase
-      .from('engagement_lead_signals')
-      .update({
+      migration_source: 'native',
+      metadata: {
         lead_intent: signal.lead_intent,
-        lead_score: signal.lead_score,
-        confidence_score: signal.confidence_score,
-        detected_at: new Date().toISOString(),
-      })
-      .eq('message_id', input.message_id)
-      .or(orFilter);
-  }
+        author_id: input.author_id ?? null,
+      },
+    },
+  });
 
-  const shouldRecompute =
-    !existingRow || signal.lead_score !== existingScore;
-  if (shouldRecompute) {
-    void import('./leadThreadScoring').then(({ scheduleThreadScoreUpdate }) =>
-      scheduleThreadScoreUpdate(input.thread_id, input.organization_id)
-    );
-  }
+  void import('./leadThreadScoring').then(({ scheduleThreadScoreUpdate }) =>
+    scheduleThreadScoreUpdate(input.thread_id, input.organization_id)
+  );
 
   void import('./responsePerformanceService').then(({ markLeadConversion }) =>
     markLeadConversion(input.thread_id).catch((err) =>

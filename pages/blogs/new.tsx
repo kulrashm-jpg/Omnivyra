@@ -16,6 +16,7 @@ import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
+import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 
 const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
 
@@ -29,6 +30,7 @@ type PrefillPayload = {
 export default function BlogNewPage() {
   const router = useRouter();
   const { selectedCompanyId } = useCompanyContext();
+  const companyIdentity = useCompanyIdentity(selectedCompanyId);
   const editId = typeof router.query.edit === 'string' ? router.query.edit : null;
   const isEditing = Boolean(editId);
   const [isSaving, setIsSaving] = useState(false);
@@ -481,6 +483,7 @@ export default function BlogNewPage() {
                   onAutoImprove={autoImproveArea}
                   improvingArea={improvingArea}
                   onCreateCampaign={handleCreateCampaign}
+                  companyIdentity={companyIdentity}
                 />
               )}
             </div>

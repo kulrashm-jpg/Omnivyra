@@ -1,26 +1,14 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:audit-logs', 20, 60))) return;
 
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    }
-  } else {
-    const hasSession = req.cookies?.super_admin_session === '1';
-    if (!hasSession) {
-      return res.status(403).json({ error: 'NOT_AUTHORIZED' });
-    }
-    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
-  }
+  if (!(await requireSuperAdminUser(req, res))) return;
 
   const { data, error: dbError } = await supabase
     .from('super_admin_audit_logs')

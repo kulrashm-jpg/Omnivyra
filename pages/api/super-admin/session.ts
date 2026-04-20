@@ -10,22 +10,9 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
-import { supabase as adminSupabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) return res.status(200).json({ isSuperAdmin: false });
-
-  // Check profiles.is_super_admin via service role (bypasses RLS)
-  const { data: profile } = await adminSupabase
-    .from('profiles')
-    .select('is_super_admin')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  return res.status(200).json({ isSuperAdmin: profile?.is_super_admin === true });
+  return res.status(200).json({ isSuperAdmin: !!(await requireSuperAdminUser(req, res)) });
 }

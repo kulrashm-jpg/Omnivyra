@@ -14,17 +14,9 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-import { isContentArchitectSession } from '../../../../backend/services/contentArchitectService';
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { requireAdminRateLimit, requireSuperAdminUser } from '../../../../backend/services/requestAccessService';
+import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
+import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 
 type UpdateEntry = {
   action_type: string;
@@ -33,8 +25,10 @@ type UpdateEntry = {
   smart_dedup_seconds?: number;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireSuperAdmin(req, res))) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:credit-cost-config', 20, 60))) return;
+  const admin = await requireSuperAdminUser(req, res);
+  if (!admin) return;
 
   // ── GET: return all current costs ──────────────────────────────────────────
   if (req.method === 'GET') {
@@ -80,8 +74,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: 'All updates failed', results });
     }
 
+    await recordAdminAudit({
+      actorUserId: admin.id,
+      action: 'SUPER_ADMIN_CREDIT_COST_CONFIG_UPDATE',
+      targetType: 'credit_cost_config',
+      metadata: { results },
+      idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+    });
     return res.status(200).json({ success: true, results });
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default withIdempotency(handler, { scope: 'super-admin-credit-cost-config', methods: ['POST'] });

@@ -54,6 +54,105 @@ describe('Unified Content Generation System', () => {
       expect(result.issues).toBeUndefined();
     });
 
+    it('rejects a generic short-form hook for posts', () => {
+      const blueprint = {
+        hook: 'Marketing is changing rapidly',
+        key_points: [
+          'Generic point about content performance',
+        ],
+        cta: 'Learn more',
+        metadata: {
+          company_context: {
+            companyName: 'Acme Growth',
+            targetAudience: 'B2B marketers',
+            industry: 'SaaS marketing',
+          },
+          decision_trace: {
+            source_topic: 'content budget efficiency',
+          },
+        },
+      };
+
+      const result = validateContentQuality(blueprint as any, 'post');
+
+      expect(result.pass).toBe(false);
+      expect(result.severity).toBe('blocking');
+      expect(result.issues).toContain('Hook is too generic for short-form content');
+    });
+
+    it('rejects vague audience-plus-problem hooks for posts', () => {
+      const blueprint = {
+        hook: 'Many marketers struggle with content',
+        key_points: [
+          'Content teams need better distribution',
+        ],
+        cta: 'Learn more',
+        metadata: {
+          company_context: {
+            companyName: 'Acme Growth',
+            targetAudience: 'B2B marketers',
+            industry: 'SaaS marketing',
+          },
+          decision_trace: {
+            source_topic: 'content budget efficiency',
+          },
+        },
+      };
+
+      const result = validateContentQuality(blueprint as any, 'post');
+
+      expect(result.pass).toBe(false);
+      expect(result.issues).toContain('Hook is too generic for short-form content');
+    });
+
+    it('accepts a specific short-form hook for posts', () => {
+      const blueprint = {
+        hook: 'Most B2B marketers waste 60% of their content budget on the wrong channels',
+        key_points: [
+          'Channel mismatch quietly drains pipeline efficiency',
+        ],
+        cta: 'Audit your channel mix',
+        metadata: {
+          company_context: {
+            companyName: 'Acme Growth',
+            targetAudience: 'B2B marketers',
+            industry: 'SaaS marketing',
+          },
+          decision_trace: {
+            source_topic: 'content budget efficiency',
+          },
+        },
+      };
+
+      const result = validateContentQuality(blueprint as any, 'post');
+
+      expect(result.issues || []).not.toContain('Hook is too generic for short-form content');
+    });
+
+    it('accepts a concrete short-form situation hook for posts', () => {
+      const blueprint = {
+        hook: 'Most B2B SaaS teams publishing 3 blogs a week still get zero traffic',
+        key_points: [
+          'Publishing volume alone does not create demand',
+        ],
+        cta: 'Fix the distribution gap',
+        metadata: {
+          company_context: {
+            companyName: 'Acme Growth',
+            targetAudience: 'B2B SaaS growth teams',
+            industry: 'SaaS marketing',
+          },
+          decision_trace: {
+            source_topic: 'content distribution for pipeline',
+          },
+        },
+      };
+
+      const result = validateContentQuality(blueprint as any, 'post');
+
+      expect(result.issues || []).not.toContain('Hook is too generic for short-form content');
+    });
+
     it('should score content quality', () => {
       const blueprint = {
         hook: 'The marketing landscape is changing rapidly with AI.',

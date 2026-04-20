@@ -51,9 +51,10 @@ export async function generateTopicPlaybook(
   const msgList = (messages ?? []) as Array<{ id: string; thread_id: string; content: string | null; author_id: string | null }>;
 
   const { data: leads } = await supabase
-    .from('engagement_lead_signals')
+    .from('lead_signals')
     .select('thread_id')
     .eq('organization_id', organizationId)
+    .eq('source_type', 'engagement')
     .in('thread_id', limitedIds);
   const leadThreads = new Set((leads ?? []).map((r: { thread_id: string }) => r.thread_id));
 

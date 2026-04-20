@@ -53,7 +53,6 @@ export async function trackUsage(params: TrackUsageParams): Promise<void> {
       // Duplicate confirm_transaction_id — idempotent, ignore
       return;
     }
-    // Log but do not throw — usage tracking failure must never break the caller
-    console.error('[usageTracking] insert failed:', error.message);
+    throw new Error(`[usageTracking] insert failed: ${error.message}`);
   }
 }

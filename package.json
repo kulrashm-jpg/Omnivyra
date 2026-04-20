@@ -1,5 +1,5 @@
 {
-  "name": "drishiq-admin-ui",
+  "name": "omnivyra-admin-ui",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -24,6 +24,7 @@
     "intelligence:enqueue": "npx ts-node backend/scripts/triggerIntelligenceEnqueue.ts",
     "start:cron": "node -r ts-node/register backend/scheduler/cron.ts",
     "test": "jest backend/tests --runInBand --forceExit",
+    "test:lead-signals": "tsx scripts/validate_signal_flow.ts",
     "setup:env": "node scripts/setup-helpers/setup-env.js",
     "setup:key": "node scripts/setup-helpers/generate-encryption-key.js",
     "setup:verify": "node scripts/setup-helpers/verify-setup.js",
@@ -37,6 +38,15 @@
     "audit:newsletter-matrix": "node -e \"process.env.TS_NODE_COMPILER_OPTIONS='{\\\"module\\\":\\\"commonjs\\\"}'; require('ts-node/register/transpile-only'); require('tsconfig-paths/register'); require('./scripts/audit-newsletter-combinations.js');\"",
     "migrate:quick-fix": "echo 'Please run scripts/quick-fix-migration.sql in Supabase SQL Editor, then run: npm run test:all'",
     "backfill:signal-embeddings": "npx ts-node scripts/backfill-signal-embeddings.ts",
+    "backfill:lead-signals": "tsx scripts/backfill_lead_signals.ts",
+    "backfill:contacts": "tsx scripts/backfill_contacts.ts",
+    "verify:lead-signal-cutover": "tsx scripts/verify_lead_signal_cutover.ts",
+    "backfill": "tsx scripts/backfill_lead_signals.ts",
+    "verify": "tsx scripts/verify_lead_signal_cutover.ts",
+    "check": "tsx scripts/canonical_readiness_check.ts",
+    "inject:test-signal": "tsx scripts/inject_test_signal.ts",
+    "env:validate": "tsx scripts/validate_startup_env.ts",
+    "lint:lead-signal-boundary": "node scripts/check_lead_signal_write_boundaries.js",
     "lint": "eslint . --max-warnings 200",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
@@ -100,6 +110,7 @@
     "postcss": "^8.5.6",
     "ts-jest": "^29.1.2",
     "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typescript": "5.9.2"
   }
 }

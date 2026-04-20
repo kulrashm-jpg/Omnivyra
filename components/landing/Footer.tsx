@@ -52,10 +52,19 @@ function IconInstagram() {
   );
 }
 
+function IconYouTube() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5" aria-hidden="true">
+      <path d="M23.498 6.186a2.997 2.997 0 0 0-2.11-2.12C19.53 3.563 12 3.563 12 3.563s-7.53 0-9.388.503a2.997 2.997 0 0 0-2.11 2.12A31.2 31.2 0 0 0 0 12a31.2 31.2 0 0 0 .502 5.814 2.997 2.997 0 0 0 2.11 2.12c1.858.503 9.388.503 9.388.503s7.53 0 9.388-.503a2.997 2.997 0 0 0 2.11-2.12A31.2 31.2 0 0 0 24 12a31.2 31.2 0 0 0-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+    </svg>
+  );
+}
+
 const SOCIALS = [
-  { label: 'LinkedIn', href: 'https://linkedin.com', Icon: IconLinkedIn },
-  { label: 'X / Twitter', href: 'https://x.com', Icon: IconTwitterX },
-  { label: 'Instagram', href: 'https://instagram.com', Icon: IconInstagram },
+  { label: 'LinkedIn', href: 'https://www.linkedin.com/company/omnivyra', Icon: IconLinkedIn },
+  { label: 'X / Twitter', href: 'https://x.com/omnivyra', Icon: IconTwitterX },
+  { label: 'Instagram', href: 'https://www.instagram.com/omni_vyra/', Icon: IconInstagram },
+  { label: 'YouTube', href: 'https://www.youtube.com/channel/UCxpWKtJTiCo-okeB9_TCZRQ', Icon: IconYouTube },
 ];
 
 export default function Footer() {

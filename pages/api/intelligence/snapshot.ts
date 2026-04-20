@@ -508,9 +508,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         .select('id', { count: 'exact', head: true })
         .eq('organization_id', companyContext.companyId),
       supabase
-        .from('engagement_lead_signals')
+        .from('lead_signals')
         .select('id', { count: 'exact', head: true })
-        .eq('organization_id', companyContext.companyId),
+        .eq('organization_id', companyContext.companyId)
+        .eq('source_type', 'engagement'),
       supabase
         .from('active_leads')
         .select('id, bucket, created_at')
@@ -815,6 +816,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const contentTypeMix = [...contentTypeMixMap.entries()]
       .map(([type, stats]) => ({ type, count: stats.count, recent_count: stats.recent_count }))
       .sort((left, right) => right.count - left.count);
+    const stageCoverage = contentTypeMix.reduce(
+      (acc, item) => {
+        const stage = mapContentTypeToStage(item.type);
+        acc[stage] += item.count;
+        return acc;
+      },
+      { awareness: 0, consideration: 0, decision: 0 },
+    );
+    const weakestStage = (Object.entries(stageCoverage).sort((left, right) => left[1] - right[1])[0]?.[0] ?? null) as SnapshotResponse['knowledge_graph_summary']['weakest_stage'];
+    const reportDepth: SnapshotResponse['knowledge_graph_summary']['report_depth'] =
+      reportTypeMix.some((item) => item.type === 'growth')
+        ? 'growth'
+        : reportTypeMix.some((item) => item.type === 'performance')
+          ? 'operational'
+          : 'baseline';
+    const knowledgeGraphSummary: SnapshotResponse['knowledge_graph_summary'] = {
+      status: deriveKnowledgeGraphStatus({
+        topicClusterCount: topicClusters.length,
+        formatDiversity: contentTypeMix.length,
+        stageCoverage,
+      }),
+      topic_cluster_count: topicClusters.length,
+      dominant_cluster: memory.dominant_topic_cluster,
+      supporting_cluster_count: Math.max(topicClusters.length - (memory.dominant_topic_cluster ? 1 : 0), 0),
+      format_diversity: contentTypeMix.length,
+      stage_coverage: stageCoverage,
+      weakest_stage: weakestStage,
+      report_depth: reportDepth,
+    };
     const contentActivityDates = blogs
       .map((row) => row.created_at)
       .filter((value): value is string => typeof value === 'string' && value >= sinceIso);
@@ -979,6 +1009,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         portfolio_avg_score: memory.portfolio_avg_score,
         decision_summary: actionDistribution,
       },
+      knowledge_graph_summary: knowledgeGraphSummary,
       next_actions: nextActions,
       reports_summary: {
         total_reports: reports.length + analyticsReports.length,

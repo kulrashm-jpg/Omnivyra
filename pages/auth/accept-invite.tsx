@@ -70,17 +70,6 @@ export default function AcceptInvitePage() {
     setStage('sending');
 
     // Step 2: Send magic link to the invited email
-    const { error: otpErr } = await getSupabaseBrowser().auth.signInWithOtp({
-      email: inviteEmail,
-      options: { emailRedirectTo: `${origin}/auth/callback` },
-    });
-
-    if (otpErr) {
-      setErrorMsg(otpErr.message);
-      setStage('error');
-      return;
-    }
-
     setStage('sent');
   }
 

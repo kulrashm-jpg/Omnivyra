@@ -240,7 +240,7 @@ async function generateWeeklyPlan(context: any, provider: string) {
       },
       contentGuidelines: `Focus on ${weekData?.focus?.toLowerCase() || 'strategic content'}. Maintain consistent brand voice and visual identity. Use platform-specific best practices for optimal engagement.`,
       hashtagSuggestions: [
-        '#DrishiqMusic',
+        '#OmnivyraMusic',
         '#NewMusic',
         '#IndieMusic',
         '#MusicDiscovery',
@@ -349,7 +349,7 @@ async function generatePlatformStrategy(context: any, provider: string) {
 async function generateHashtagStrategy(context: any, provider: string) {
   if (provider === 'demo') {
     return {
-      branded: ['#DrishiqMusic', '#DrishiqVibes', '#DrishiqCommunity'],
+      branded: ['#OmnivyraMusic', '#OmnivyraVibes', '#OmnivyraCommunity'],
       industry: ['#IndieMusic', '#NewMusic', '#MusicDiscovery', '#EmergingArtist'],
       trending: ['#MusicTok', '#NewMusicFriday', '#IndieMusic', '#MusicLovers'],
       platformSpecific: {

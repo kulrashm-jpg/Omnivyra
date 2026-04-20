@@ -9,6 +9,32 @@ import { validateContentBlueprint } from '../aiOutputValidationService';
 import { nonEmpty, asObject, sanitizeIdPart, getContentTypeSystemPrompt, getContentTypeCategory, getContentTypeMaxWords } from './contentTypeHelpers';
 import { isMediaDependentContentType } from './executionHelpers';
 import type { MasterContentPayload, DailyExecutionItemLike } from './types';
+import { getProfile } from '../companyProfileService';
+import {
+  extractCompanyIdentity,
+  buildCompanyContextBlockShort,
+  buildIdentityLock,
+  buildAntiGenericRules,
+  type CompanyIdentity,
+} from '../../../lib/content/companyContextBlock';
+
+// ── Company identity cache (5-min TTL, matches aiModelRouter pattern) ────────
+const _identityCache = new Map<string, { identity: CompanyIdentity; at: number }>();
+const IDENTITY_CACHE_TTL = 5 * 60 * 1000;
+
+async function resolveCompanyIdentity(companyId: string | null | undefined): Promise<CompanyIdentity> {
+  if (!companyId) return {};
+  const cached = _identityCache.get(companyId);
+  if (cached && Date.now() - cached.at < IDENTITY_CACHE_TTL) return cached.identity;
+  try {
+    const profile = await getProfile(companyId, { autoRefine: false });
+    const identity = extractCompanyIdentity(profile);
+    _identityCache.set(companyId, { identity, at: Date.now() });
+    return identity;
+  } catch {
+    return {};
+  }
+}
 
 /**
  * Generates structured content blueprint (hook, key_points, cta) instead of full master content.
@@ -28,11 +54,14 @@ export async function generateContentBlueprint(item: DailyExecutionItemLike): Pr
   const cached = getCachedBlueprint(companyId, theme, contentType, audience);
   if (cached) return cached;
 
-  const contextPayload = {
+  // Resolve company identity for context enforcement
+  const identity = await resolveCompanyIdentity(companyId === 'default' ? null : companyId);
+
+  const contextPayload: Record<string, unknown> = {
     topic: theme,
     objective: nonEmpty(intent?.objective) || nonEmpty(brief?.whatShouldReaderLearn) || 'TBD objective',
-    target_audience: audience,
-    pain_point: nonEmpty(intent?.pain_point) || nonEmpty(brief?.whatProblemAreWeAddressing) || 'Audience challenge',
+    target_audience: identity.idealCustomerProfile || identity.targetAudience || audience,
+    pain_point: nonEmpty(intent?.pain_point) || nonEmpty(brief?.whatProblemAreWeAddressing) || identity.painPoints?.[0] || 'Audience challenge',
     outcome_promise: nonEmpty(intent?.outcome_promise) || nonEmpty(brief?.expectedOutcome) || 'Clear improvement',
     tone: nonEmpty(brief?.narrativeStyle) || nonEmpty(brief?.toneGuidance) || 'Neutral, practical',
     cta_type: nonEmpty(intent?.cta_type) || 'Soft CTA',
@@ -41,7 +70,16 @@ export async function generateContentBlueprint(item: DailyExecutionItemLike): Pr
       : [],
   };
 
+  // Inject company identity into context payload
+  const shortContext = buildCompanyContextBlockShort(identity);
+  if (shortContext) {
+    contextPayload.company_context = shortContext;
+  }
+
   const { content: systemPrompt, template_name, template_version, template_hash } = getContentBlueprintPromptWithFingerprint();
+  const effectiveSystemPrompt = identity.companyName
+    ? `${buildIdentityLock(identity, 'content blueprint')}\n\n${systemPrompt}\n${buildAntiGenericRules(identity)}`
+    : systemPrompt;
   console.info('Prompt executed', { prompt: 'content_blueprint', version: CONTENT_GENERATION_PROMPT_VERSION });
   const result = await runCompletionWithOperation({
     companyId: (item as any)?.company_id ?? null,
@@ -51,7 +89,7 @@ export async function generateContentBlueprint(item: DailyExecutionItemLike): Pr
     response_format: { type: 'json_object' },
     operation: 'generateContentBlueprint',
     messages: [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: effectiveSystemPrompt },
       { role: 'user', content: JSON.stringify(contextPayload) },
     ],
     prompt_template_name: template_name,
@@ -72,7 +110,7 @@ export async function generateContentBlueprint(item: DailyExecutionItemLike): Pr
     hook: nonEmpty(parsed.hook) || `Topic: ${theme}`,
     key_points: Array.isArray(parsed.key_points)
       ? parsed.key_points.map((v) => String(v ?? '')).filter(Boolean)
-      : [contextPayload.objective],
+      : [String(contextPayload.objective ?? 'Key point')],
     cta: nonEmpty(parsed.cta) || '— Learn more when you\'re ready.',
   };
 
@@ -160,18 +198,26 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
       : null,
   };
 
+  // Resolve company identity for context enforcement
+  const identity = await resolveCompanyIdentity((item as any)?.company_id);
+  const shortContext = buildCompanyContextBlockShort(identity);
+
   if (isMediaDependentContentType(item?.content_type)) {
     const ctCategory = getContentTypeCategory(nonEmpty(item?.content_type));
-    const productionSystemPrompt = getContentTypeSystemPrompt(ctCategory);
-    const productionContext = {
+    const productionSystemPromptBase = getContentTypeSystemPrompt(ctCategory);
+    // Append anti-generic enforcement so company context is binding, not metadata
+    const antiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
+    const productionSystemPrompt = productionSystemPromptBase + antiGeneric;
+    const productionContext: Record<string, unknown> = {
       topic,
       objective,
       core_message: coreMessage,
-      target_audience: nonEmpty(intent?.target_audience) || nonEmpty((asObject(item?.writer_content_brief) as any)?.whoAreWeWritingFor) || 'Campaign audience',
+      target_audience: identity.idealCustomerProfile || identity.targetAudience || nonEmpty(intent?.target_audience) || nonEmpty((asObject(item?.writer_content_brief) as any)?.whoAreWeWritingFor) || 'Campaign audience',
       tone: nonEmpty((asObject(item?.writer_content_brief) as any)?.narrativeStyle) || nonEmpty(intent?.tone) || 'Professional and engaging',
       cta: nonEmpty(intent?.cta_type) || 'Follow for more',
       creator_instruction: nonEmpty((item as any)?.creatorInstruction) || nonEmpty((item as any)?.creator_instruction) || '',
     };
+    if (shortContext) productionContext.company_context = shortContext;
     try {
       const productionResult = await runCompletionWithOperation({
         companyId: (item as any)?.company_id ?? null,
@@ -211,11 +257,12 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
   }
 
   const ctCategory = getContentTypeCategory(nonEmpty(item?.content_type));
-  const contextPayload = {
+  const contextPayload: Record<string, unknown> = {
     content_type: nonEmpty(item?.content_type).toLowerCase() || 'post',
     topic,
     objective,
     target_audience:
+      identity.idealCustomerProfile || identity.targetAudience ||
       nonEmpty(intent?.target_audience) ||
       nonEmpty(brief?.whoAreWeWritingFor) ||
       'General audience aligned to campaign context',
@@ -250,36 +297,55 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
       : {}),
   };
 
-  const contentTypeSystemPrompt = getContentTypeSystemPrompt(ctCategory);
+  // Inject company context for content specificity
+  if (shortContext) {
+    contextPayload.company_context = shortContext;
+  }
+
+  const contentTypeSystemPromptBase = getContentTypeSystemPrompt(ctCategory);
+  // Append anti-generic enforcement so company context is binding, not metadata
+  const textAntiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
+    const contentTypeSystemPrompt = identity.companyName
+      ? `${buildIdentityLock(identity, contextPayload.content_type as string)}\n\n${contentTypeSystemPromptBase}${textAntiGeneric}`
+      : contentTypeSystemPromptBase + textAntiGeneric;
   const contentTypeMaxWords = getContentTypeMaxWords(ctCategory, nonEmpty(item?.content_type));
 
   try {
     console.info('Prompt executed', { prompt: 'content_generation', version: CONTENT_GENERATION_PROMPT_VERSION, content_type: contextPayload.content_type });
-    // Add a uniqueness seed so the AI generates distinct content for similar topics
-    const uniqueSeed = `IMPORTANT: This is post #${contextPayload.global_progression_index ?? 'unknown'} in the campaign. ` +
-      `Write UNIQUE content specifically about "${contextPayload.topic}" — do NOT produce generic content about the broader theme. ` +
-      `Focus on the specific angle implied by this exact title. Each post in this campaign must be completely different.`;
-
-    const aiResult = await runCompletionWithOperation({
+    const callAi = async (systemPromptForCall: string) => runCompletionWithOperation({
       companyId: (item as any)?.company_id ?? null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       operation: 'generateMasterContent',
-      temperature: 0.85,
+      temperature: 0.7,
       messages: [
-        {
-          role: 'system',
-          content: contentTypeSystemPrompt,
-        },
-        {
-          role: 'user',
-          content: JSON.stringify({ ...contextPayload, max_words: contentTypeMaxWords, diversity_instruction: uniqueSeed }),
-        },
+        { role: 'system', content: systemPromptForCall },
+        { role: 'user', content: JSON.stringify({ ...contextPayload, max_words: contentTypeMaxWords }) },
       ],
     });
+
+    let aiResult = await callAi(contentTypeSystemPrompt);
     let aiContent = nonEmpty(aiResult?.output);
+
+    // Retry with a simplified system prompt if first attempt returned empty.
+    // gpt-4o-mini sometimes balks at long compound instructions (identity lock
+    // + anti-generic rules + detailed format guide). A leaner prompt usually works.
     if (!aiContent) {
-      console.warn('[content-generation-pipeline][empty-ai-master-content]', {
+      console.warn('[content-generation-pipeline][empty-ai-master-content][retry-with-simpler-prompt]', {
         execution_id: item.execution_id ?? null,
+        content_type: contextPayload.content_type,
+        topic,
+      });
+      const simpleSystemPrompt = getContentTypeSystemPrompt(ctCategory);
+      aiResult = await callAi(simpleSystemPrompt);
+      aiContent = nonEmpty(aiResult?.output);
+    }
+
+    if (!aiContent) {
+      console.error('[content-generation-pipeline][empty-ai-master-content][both-attempts-failed]', {
+        execution_id: item.execution_id ?? null,
+        content_type: contextPayload.content_type,
+        topic,
+        systemPromptLength: contentTypeSystemPrompt.length,
       });
       return {
         id: `master-${itemId}`,
